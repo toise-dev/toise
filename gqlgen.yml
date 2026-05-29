@@ -1,0 +1,17 @@
+schema:
+  - internal/graphql/schema.graphql
+
+exec:
+  filename: internal/graphql/generated/generated.go
+  package: generated
+
+model:
+  filename: internal/graphql/generated/models_gen.go
+  package: generated
+
+# Resolvers are implemented by hand in internal/graphql/resolvers; gqlgen only
+# generates the executable schema and the model types.
+autobind: []
+
+omit_slice_element_pointers: true
+struct_tag: json

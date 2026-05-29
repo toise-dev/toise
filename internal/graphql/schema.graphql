@@ -1,0 +1,212 @@
+"""
+The kind of a typed attribute value. Toise attribute values are scalars: a
+string, a 64-bit integer, a double, or a boolean.
+"""
+enum ValueType {
+  STRING
+  INT
+  DOUBLE
+  BOOL
+}
+
+"""
+A single attribute: a key paired with a typed value. The value is rendered as a
+string for transport; `type` tells you how to interpret it (e.g. the string
+`"8"` with type INT is the integer 8). Example: { key: "status", value: "up",
+type: STRING }.
+"""
+type Attribute {
+  "The attribute key, e.g. `host.name` or `status`."
+  key: String!
+  "The value rendered as a string. Interpret it according to `type`."
+  value: String!
+  "How to interpret `value`."
+  type: ValueType!
+}
+
+"""
+The classification of a change, per the Toise change taxonomy. Use this to ask
+'what kind of change happened', e.g. filter recent changes to state flips or to
+structural relation changes.
+"""
+enum ChangeType {
+  "The entity did not exist before this event."
+  ENTITY_CREATED
+  "The entity existed and is now soft-deleted; the log retains its history."
+  ENTITY_DELETED
+  "An identifying attribute mutated (anomalous; the logical id is preserved)."
+  ENTITY_IDENTITY_CHANGED
+  "A descriptive (non-identifying) attribute changed."
+  ENTITY_ATTRIBUTE_UPDATED
+  "A state-flagged attribute (oper_state, admin_state, status) flipped value."
+  ENTITY_STATE_CHANGED
+  "A heartbeat: the entity is alive but nothing changed."
+  ENTITY_UNCHANGED
+  "A new relation (edge) appeared."
+  RELATION_ADDED
+  "A relation (edge) disappeared."
+  RELATION_REMOVED
+  "Relation metadata mutated."
+  RELATION_ATTRIBUTE_CHANGED
+}
+
+"""
+An infrastructure entity (a host, process, network interface, address, route,
+or service listener) aligned with the OpenTelemetry entity data model. The `id`
+is a stable logical identifier that survives identity changes.
+"""
+type Entity {
+  "Stable logical identifier (a ULID). Survives identity changes."
+  id: ID!
+  "Entity type, e.g. `host`, `process`, `network.interface`."
+  type: String!
+  "Identifying attributes — their values together identify the entity."
+  identity: [Attribute!]!
+  "Descriptive (non-identifying) attributes, e.g. `status`, `os`."
+  attributes: [Attribute!]!
+  "URL versioning the entity definition (may be empty)."
+  schemaUrl: String!
+  "True if the entity has been soft-deleted (its history is retained)."
+  deleted: Boolean!
+}
+
+"""
+A typed, directed edge between two entities (referenced by their logical ids).
+`structural: true` means the relation's appearance/disappearance is significant
+(suitable for alerting), e.g. `runs_on`, `has_interface`.
+"""
+type Relation {
+  "Deterministic identifier derived from type and endpoints."
+  id: ID!
+  "Relation type, e.g. `runs_on`, `has_interface`, `listens_on`."
+  type: String!
+  "Logical id of the source entity."
+  fromId: ID!
+  "Logical id of the target entity."
+  toId: ID!
+  "Optional edge metadata, e.g. `port` on `listens_on`."
+  attributes: [Attribute!]!
+  "Whether the relation is structural (its add/remove is significant)."
+  structural: Boolean!
+}
+
+"""
+A qualified, bi-temporal change event from the log. Exactly one of `entity` or
+`relation` is set. `eventTime` is when the fact became true in the real world
+(from the producer); `recordedAt` is when Toise recorded it. They differ for
+late or retroactive events — query history in eventTime space, audit with
+recordedAt.
+"""
+type ChangeEvent {
+  "Event identifier (a ULID, time-sortable)."
+  id: ID!
+  "The classification of this change."
+  changeType: ChangeType!
+  "When the fact became true in the real world (RFC 3339)."
+  eventTime: String!
+  "When Toise recorded the event (RFC 3339)."
+  recordedAt: String!
+  "Toise schema version of the event, e.g. `1.0`."
+  schemaVersion: String!
+  "For attribute/state changes, the keys that changed."
+  changedKeys: [String!]!
+  "The entity this event is about, if it is an entity event."
+  entity: Entity
+  "The relation this event is about, if it is a relation event."
+  relation: Relation
+}
+
+"Relay-style pagination metadata."
+type PageInfo {
+  "True if more results follow the current page."
+  hasNextPage: Boolean!
+  "Opaque cursor of the last edge; pass as `after` to fetch the next page."
+  endCursor: String
+}
+
+type EntityEdge {
+  cursor: String!
+  node: Entity!
+}
+
+"A paginated list of entities."
+type EntityConnection {
+  edges: [EntityEdge!]!
+  pageInfo: PageInfo!
+  "Total number of entities matching the filter, across all pages."
+  totalCount: Int!
+}
+
+type RelationEdge {
+  cursor: String!
+  node: Relation!
+}
+
+"A paginated list of relations."
+type RelationConnection {
+  edges: [RelationEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type ChangeEdge {
+  cursor: String!
+  node: ChangeEvent!
+}
+
+"A paginated list of change events."
+type ChangeConnection {
+  edges: [ChangeEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+"Filter for the entities query."
+input EntityFilter {
+  "Restrict to this entity type, e.g. `host`."
+  type: String
+}
+
+"Filter for the relations query."
+input RelationFilter {
+  "Restrict to this relation type, e.g. `runs_on`."
+  type: String
+  "Restrict to relations originating from this entity id."
+  fromId: ID
+  "Restrict to relations targeting this entity id."
+  toId: ID
+}
+
+type Query {
+  "Fetch a single entity by its logical id. Returns null if unknown."
+  entity(id: ID!): Entity
+
+  """
+  List entities (current state), newest-first, with Relay pagination. Use
+  `first` (default 50) and `after` (an `endCursor` from a previous page).
+  """
+  entities(filter: EntityFilter, first: Int = 50, after: String): EntityConnection!
+
+  "List relations (current state) with Relay pagination."
+  relations(filter: RelationFilter, first: Int = 50, after: String): RelationConnection!
+
+  """
+  The timeline of change events for one entity. `since`/`until` (RFC 3339) bound
+  the query in eventTime space (reality). Provide `asKnownAt` (RFC 3339) to
+  switch to the audit view: only events Toise had recorded by that instant.
+  """
+  entityHistory(id: ID!, since: String, until: String, asKnownAt: String, first: Int = 100, after: String): ChangeConnection!
+
+  """
+  Recent change events across all entities within `window` (a Go duration like
+  `15m`, `2h`, `24h`), newest-first, with Relay pagination.
+  """
+  recentChanges(window: String!, first: Int = 100, after: String): ChangeConnection!
+}
+
+type Subscription {
+  "Stream entity change events as they are classified."
+  entityChanged: ChangeEvent!
+  "Stream relation change events as they are classified."
+  relationChanged: ChangeEvent!
+}
