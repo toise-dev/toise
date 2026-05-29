@@ -1,15 +1,15 @@
 # Toise — Makefile
 # Run `make help` (the default target) to list available targets.
 
-BINARY      := toise
+BINARY      := toise-server
 BIN_DIR     := bin
-CMD_PKG     := ./cmd/toise
+CMD_PKG     := ./cmd/toise-server
 COVERAGE    := coverage.out
 COVERAGE_HTML := coverage.html
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build test test-coverage lint fmt tidy proto clean
+.PHONY: help build test test-coverage bench lint fmt tidy proto clean
 
 help: ## Show this help
 	@echo "Toise — available targets:"
@@ -17,7 +17,7 @@ help: ## Show this help
 		| sort \
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 
-build: ## Build the toise binary into bin/
+build: ## Build the toise-server binary into bin/
 	@mkdir -p $(BIN_DIR)
 	go build -o $(BIN_DIR)/$(BINARY) $(CMD_PKG)
 
@@ -29,6 +29,9 @@ test-coverage: ## Run tests and produce an HTML coverage report
 	go tool cover -html=$(COVERAGE) -o $(COVERAGE_HTML)
 	@echo "Coverage report written to $(COVERAGE_HTML)"
 
+bench: ## Run all benchmarks
+	go test -run '^$$' -bench=. -benchmem ./...
+
 lint: ## Run golangci-lint
 	golangci-lint run ./...
 
@@ -39,9 +42,8 @@ fmt: ## Format the code (gofmt -s + goimports)
 tidy: ## Tidy go.mod / go.sum
 	go mod tidy
 
-proto: ## (placeholder) Generate code from .proto definitions
-	@echo "proto generation is not wired up yet."
-	@echo "It will be added once the .proto definitions land in proto/toise/v1/."
+proto: ## Generate Go code from proto/ definitions (requires buf)
+	buf generate
 
 clean: ## Remove build artifacts and coverage files
 	rm -rf $(BIN_DIR) dist $(COVERAGE) $(COVERAGE_HTML)

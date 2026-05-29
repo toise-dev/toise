@@ -1,0 +1,109 @@
+syntax = "proto3";
+
+package toise.v1;
+
+option go_package = "github.com/toise-dev/toise/proto/toise/v1;toisev1";
+
+// Value is a typed attribute value: a deliberate subset of the OpenTelemetry
+// AnyValue (string, int64, double, bool). Nested kvlist/array/bytes are not
+// supported in phase 1. See ADR 0004.
+message Value {
+  oneof value {
+    string string_value = 1;
+    int64 int_value = 2;
+    double double_value = 3;
+    bool bool_value = 4;
+  }
+}
+
+// KeyValue is a single attribute.
+message KeyValue {
+  string key = 1;
+  Value value = 2;
+}
+
+// ChangeType classifies an event per the Toise change taxonomy. See ADR 0006.
+enum ChangeType {
+  CHANGE_TYPE_UNSPECIFIED = 0;
+  CHANGE_TYPE_ENTITY_CREATED = 1;
+  CHANGE_TYPE_ENTITY_DELETED = 2;
+  CHANGE_TYPE_ENTITY_IDENTITY_CHANGED = 3;
+  CHANGE_TYPE_ENTITY_ATTRIBUTE_UPDATED = 4;
+  CHANGE_TYPE_ENTITY_STATE_CHANGED = 5;
+  CHANGE_TYPE_ENTITY_UNCHANGED = 6;
+  CHANGE_TYPE_RELATION_ADDED = 7;
+  CHANGE_TYPE_RELATION_REMOVED = 8;
+  CHANGE_TYPE_RELATION_ATTRIBUTE_CHANGED = 9;
+}
+
+// Entity is an infrastructure entity aligned with the OpenTelemetry entity data
+// model. See ADR 0004 and ADR 0017.
+message Entity {
+  // entity_id is the stable logical ID (a ULID), assigned on first sight and
+  // stable across identity changes. See ADR 0017.
+  string entity_id = 1;
+  // identity_hash is a deterministic hash (SHA-256, 128-bit, type-prefixed hex)
+  // of the current identifying attributes. It changes when identity changes;
+  // entity_id does not. See ADR 0017.
+  string identity_hash = 2;
+  // type is the entity type, e.g. "host", "process". See ADR 0004.
+  string type = 3;
+  // identity holds the identifying attributes (their values together identify
+  // the entity).
+  repeated KeyValue identity = 4;
+  // attributes holds descriptive (non-identifying) attributes.
+  repeated KeyValue attributes = 5;
+  // schema_url versions the entity definition.
+  string schema_url = 6;
+}
+
+// Relation is a typed directed edge between two entities. See ADR 0004.
+message Relation {
+  // relation_id is a deterministic hash of (type, from_entity_id, to_entity_id).
+  string relation_id = 1;
+  string type = 2;
+  // from_entity_id and to_entity_id reference logical entity IDs.
+  string from_entity_id = 3;
+  string to_entity_id = 4;
+  repeated KeyValue attributes = 5;
+  // structural indicates the relation's appearance/disappearance is significant
+  // (suitable for alerting) rather than merely descriptive.
+  bool structural = 6;
+}
+
+// EntityEvent is a classified change about an entity. Bi-temporal: see ADR 0005.
+message EntityEvent {
+  // event_id is a ULID identifying this event.
+  string event_id = 1;
+  ChangeType change_type = 2;
+  Entity entity = 3;
+  // event_time_unix_nano is when the fact became true in the real world,
+  // provided by the producer.
+  int64 event_time_unix_nano = 4;
+  // recorded_at_unix_nano is when Toise recorded the event, set at ingestion.
+  int64 recorded_at_unix_nano = 5;
+  // schema_version is the Toise schema version, e.g. "1.0".
+  string schema_version = 6;
+  // changed_keys lists the attribute keys that changed, for
+  // attribute_updated/state_changed events.
+  repeated string changed_keys = 7;
+}
+
+// RelationEvent is a classified change about a relation. Bi-temporal: ADR 0005.
+message RelationEvent {
+  string event_id = 1;
+  ChangeType change_type = 2;
+  Relation relation = 3;
+  int64 event_time_unix_nano = 4;
+  int64 recorded_at_unix_nano = 5;
+  string schema_version = 6;
+  repeated string changed_keys = 7;
+}
+
+// Event is the envelope stored in the append-only event log.
+message Event {
+  oneof event {
+    EntityEvent entity_event = 1;
+    RelationEvent relation_event = 2;
+  }
+}

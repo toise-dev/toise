@@ -35,6 +35,10 @@ linters-settings:
     disabled-checks:
       # Allow the occasional explanatory comment block without nagging.
       - commentFormatting
+      # Domain types (Entity, Event, ...) use value receivers deliberately for
+      # value semantics and to avoid mixing pointer/value receivers. They are
+      # not on a proven hot path that warrants pointer receivers in phase 1.
+      - hugeParam
   misspell:
     locale: US
 
