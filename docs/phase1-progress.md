@@ -14,7 +14,7 @@ Status legend: `not started` · `in progress` · `awaiting checkpoint` · `done`
 | 2 | Event log store on Pebble (+ retention) | B | awaiting checkpoint |
 | 3 | Projection engine and change detection | C | awaiting checkpoint |
 | 4 | OTLP ingestion receiver | D | awaiting checkpoint |
-| 5 | GraphQL API (+ pagination/limits) | E | not started |
+| 5 | GraphQL API (+ pagination/limits) | E | awaiting checkpoint |
 | 6 | MCP server | F | not started |
 | 7 | Debug UI | G | not started |
 | 8 | Temporal fixtures and demo scenario | H | not started |
@@ -60,6 +60,15 @@ Status legend: `not started` · `in progress` · `awaiting checkpoint` · `done`
 - ADR 0009 written; LogRecord convention documented (otel-mapping.md / ADR 0009).
 - Benchmark `RouteEntityState` ~90 ns/op (conversion only; gRPC excluded). build/vet/gofmt/golangci-lint/`go test -race`/govulncheck all clean.
 
+## Milestone 5 — GraphQL API (awaiting Checkpoint E)
+
+- `internal/graphql`: schema-first gqlgen API with **rich descriptions on every type/field/arg** (LLM reads them via introspection). Queries `entity`, `entities`, `relations`, `entityHistory`, `recentChanges`; subscriptions `entityChanged`, `relationChanged`.
+- **Relay cursor pagination** on all list queries (`first`/`after`, `Connection`/`edges`/`pageInfo`/`totalCount`). Generated code in `generated/`; hand-written `resolvers/` over the projection (current state) + store (history). `entityHistory` honours `since`/`until` (event_time) and `asKnownAt` (audit view, ADR 0005).
+- HTTP handler with POST/GET + **WebSocket subscriptions**; **complexity limit** (default 1000), **per-request timeout** (default 10s), introspection on; LLM-friendly limit/cursor/window errors.
+- ADR 0010 written. Coverage: graphql 92 %, combined resolvers+graphql 79 %.
+- **Classification fix (found by GraphQL tests):** tolerant identity matching now requires an unchanged identifying value as an anchor (`diffs < len(identity)`), so a single-key identity no longer over-merges distinct entities.
+- build/vet/gofmt/golangci-lint/`go test -race`/govulncheck all clean.
+
 ## Key cross-cutting rules (brief v2)
 
 - **Bi-temporality (patch 2):** default queries operate in `event_time` space (reality view). `asKnownAt` opt-in constrains to `recorded_at <= t` (audit view). Every event exposes both `eventTime` and `recordedAt`. Schema descriptions must teach the LLM which mode to pick.
@@ -81,7 +90,7 @@ Status legend: `not started` · `in progress` · `awaiting checkpoint` · `done`
 | 0007 | pebble-as-event-log-store | M2 | written |
 | 0008 | in-memory-projection-from-event-log | M3 | written |
 | 0009 | otlp-ingestion-via-entity-events | M4 | written |
-| 0010 | graphql-as-primary-query-language | M5 | planned |
+| 0010 | graphql-as-primary-query-language | M5 | written |
 | 0011 | mcp-server-design | M6 | planned |
 | 0012 | debug-ui-minimal-html | M7 | planned |
 | 0013 | event-log-retention-strategy | M2 | written |
