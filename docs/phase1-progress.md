@@ -11,7 +11,7 @@ Status legend: `not started` · `in progress` · `awaiting checkpoint` · `done`
 |---|-----------|------------|--------|
 | 0 | Prerequisites validation | 0 | awaiting checkpoint |
 | 1 | Data model and proto contract | A | awaiting checkpoint |
-| 2 | Event log store on Pebble (+ retention) | B | not started |
+| 2 | Event log store on Pebble (+ retention) | B | awaiting checkpoint |
 | 3 | Projection engine and change detection | C | not started |
 | 4 | OTLP ingestion receiver | D | not started |
 | 5 | GraphQL API (+ pagination/limits) | E | not started |
@@ -36,6 +36,14 @@ Status legend: `not started` · `in progress` · `awaiting checkpoint` · `done`
 - ADRs 0004, 0005, 0006, 0015, 0017 written; data-model docs refreshed (`README.md`, `otel-mapping.md`).
 - `go build`/`go vet`/`gofmt`/`golangci-lint`/`go test -race` clean; `govulncheck` 0 affecting.
 
+## Milestone 2 — Event log store on Pebble (awaiting Checkpoint B)
+
+- `internal/store`: Pebble-backed append-only log. Sequence-keyed primary records + secondary indexes (entity / change-type / event_time); relation events indexed under both endpoints. Atomic durable `Append(...)` (one Sync'd batch). Reads: `Scan` (append order), `ReadByEntity`, `ReadByType`, `ReadByTimeRange`.
+- Crash recovery test (subprocess writes with Sync then exits without Close; reopen recovers all events + sequence from the WAL). **Coverage 84 %**.
+- Retention (ADR 0013): `CoalesceHeartbeats` collapses consecutive `entity.unchanged` runs to first+last; `Config{RetentionMaxAge, CompactionInterval}` + `--retention-*` flags on `toise-server`. Snapshot stub interface only (phase 2).
+- ADRs 0007, 0013 written; `docs/operations/storage-sizing.md` + `performance.md` added.
+- Benchmark `AppendBatch100` ~4.1 ms (under the 10 ms target on dev HW). `go build`/`vet`/`gofmt`/`golangci-lint`/`go test -race` clean; `govulncheck` 0 affecting.
+
 ## Key cross-cutting rules (brief v2)
 
 - **Bi-temporality (patch 2):** default queries operate in `event_time` space (reality view). `asKnownAt` opt-in constrains to `recorded_at <= t` (audit view). Every event exposes both `eventTime` and `recordedAt`. Schema descriptions must teach the LLM which mode to pick.
@@ -54,13 +62,13 @@ Status legend: `not started` · `in progress` · `awaiting checkpoint` · `done`
 | 0004 | data-model-aligned-with-otel-entities | M1 | written |
 | 0005 | bi-temporal-event-model (revised query semantics) | M1 | written |
 | 0006 | change-taxonomy | M1 | written |
-| 0007 | pebble-as-event-log-store | M2 | planned |
+| 0007 | pebble-as-event-log-store | M2 | written |
 | 0008 | in-memory-projection-from-event-log | M3 | planned |
 | 0009 | otlp-ingestion-via-entity-events | M4 | planned |
 | 0010 | graphql-as-primary-query-language | M5 | planned |
 | 0011 | mcp-server-design | M6 | planned |
 | 0012 | debug-ui-minimal-html | M7 | planned |
-| 0013 | event-log-retention-strategy | M2 | planned |
+| 0013 | event-log-retention-strategy | M2 | written |
 | 0014 | no-authentication-in-phase-1 | M0 | written |
 | 0015 | tracking-otel-entity-events-spec | M1 | written |
 | 0016 | pebble-validation (PoC results) — *was patch-1 "0007", reassigned* | M0 | written |
