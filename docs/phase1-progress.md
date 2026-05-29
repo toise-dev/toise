@@ -10,7 +10,7 @@ Status legend: `not started` · `in progress` · `awaiting checkpoint` · `done`
 | # | Milestone | Checkpoint | Status |
 |---|-----------|------------|--------|
 | 0 | Prerequisites validation | 0 | awaiting checkpoint |
-| 1 | Data model and proto contract | A | not started |
+| 1 | Data model and proto contract | A | awaiting checkpoint |
 | 2 | Event log store on Pebble (+ retention) | B | not started |
 | 3 | Projection engine and change detection | C | not started |
 | 4 | OTLP ingestion receiver | D | not started |
@@ -28,6 +28,14 @@ Status legend: `not started` · `in progress` · `awaiting checkpoint` · `done`
 - [x] MCP Go SDK availability — **official `github.com/modelcontextprotocol/go-sdk` is GA (v1.6.1)** and will be used at M6 (no hand-rolled protocol). `…/sdk-go` (brief guess) does not exist; `mark3labs/mcp-go` (community) exists but the official SDK is preferred. To be recorded in ADR 0011 (M6).
 - [x] ADR 0003 (deps strategy), ADR 0014 (no auth), ADR 0016 (pebble validation) written.
 
+## Milestone 1 — Data model & proto contract (awaiting Checkpoint A)
+
+- Layout realigned to brief Part 5: `cmd/toise` → `cmd/toise-server`; bootstrap placeholders (`internal/core,query,reconciler`, `receivers`, `pkg`) removed; added `internal/model`, `internal/version`.
+- Proto contract `proto/toise/v1/events.proto` (`Value`, `KeyValue`, `ChangeType`, `Entity`, `Relation`, `EntityEvent`, `RelationEvent`, `Event`); codegen via **buf** (`buf.yaml`/`buf.gen.yaml`, `make proto`), generated `events.pb.go`.
+- `internal/model`: hand-written domain types + `ToProto`/`FromProto`, typed `Value`, ULID logical IDs + 128-bit SHA-256 identity hash, validation, type registry. **Coverage 91 %**. Benchmarks: `IdentityHash` ~284 ns/op, `EntityToProto` ~486 ns/op.
+- ADRs 0004, 0005, 0006, 0015, 0017 written; data-model docs refreshed (`README.md`, `otel-mapping.md`).
+- `go build`/`go vet`/`gofmt`/`golangci-lint`/`go test -race` clean; `govulncheck` 0 affecting.
+
 ## Key cross-cutting rules (brief v2)
 
 - **Bi-temporality (patch 2):** default queries operate in `event_time` space (reality view). `asKnownAt` opt-in constrains to `recorded_at <= t` (audit view). Every event exposes both `eventTime` and `recordedAt`. Schema descriptions must teach the LLM which mode to pick.
@@ -42,10 +50,10 @@ Status legend: `not started` · `in progress` · `awaiting checkpoint` · `done`
 
 | ADR | Title | Milestone | Status |
 |-----|-------|-----------|--------|
-| 0003 | keeping-dependencies-current | M0 | planned |
-| 0004 | data-model-aligned-with-otel-entities | M1 | planned |
-| 0005 | bi-temporal-event-model (revised query semantics) | M1 | planned |
-| 0006 | change-taxonomy | M1 | planned |
+| 0003 | keeping-dependencies-current | M0 | written |
+| 0004 | data-model-aligned-with-otel-entities | M1 | written |
+| 0005 | bi-temporal-event-model (revised query semantics) | M1 | written |
+| 0006 | change-taxonomy | M1 | written |
 | 0007 | pebble-as-event-log-store | M2 | planned |
 | 0008 | in-memory-projection-from-event-log | M3 | planned |
 | 0009 | otlp-ingestion-via-entity-events | M4 | planned |
@@ -53,10 +61,10 @@ Status legend: `not started` · `in progress` · `awaiting checkpoint` · `done`
 | 0011 | mcp-server-design | M6 | planned |
 | 0012 | debug-ui-minimal-html | M7 | planned |
 | 0013 | event-log-retention-strategy | M2 | planned |
-| 0014 | no-authentication-in-phase-1 | M0 | planned |
-| 0015 | tracking-otel-entity-events-spec | M1 | planned |
-| 0016 | pebble-validation (PoC results) — *was patch-1 "0007", reassigned* | M0 | planned |
-| 0017 | entity-identity-and-stability — *was patch-3 "0006", reassigned* | M1 | planned |
+| 0014 | no-authentication-in-phase-1 | M0 | written |
+| 0015 | tracking-otel-entity-events-spec | M1 | written |
+| 0016 | pebble-validation (PoC results) — *was patch-1 "0007", reassigned* | M0 | written |
+| 0017 | entity-identity-and-stability — *was patch-3 "0006", reassigned* | M1 | written |
 
 ## Demo scenario (patch 9)
 
