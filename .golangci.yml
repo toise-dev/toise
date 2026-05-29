@@ -1,0 +1,50 @@
+# golangci-lint configuration
+# Docs: https://golangci-lint.run/usage/configuration/
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  disable-all: true
+  enable:
+    - govet
+    - errcheck
+    - staticcheck
+    - unused
+    - gosimple
+    - ineffassign
+    - gofmt
+    - goimports
+    - misspell
+    - unconvert
+    - prealloc
+    - gocritic
+
+linters-settings:
+  goimports:
+    local-prefixes: github.com/toise-dev/toise
+  govet:
+    enable:
+      - shadow
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - performance
+      - style
+    disabled-checks:
+      # Allow the occasional explanatory comment block without nagging.
+      - commentFormatting
+  misspell:
+    locale: US
+
+issues:
+  # Keep the bootstrap friendly: surface everything rather than capping counts.
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  exclude-rules:
+    # Test files may favor readability over some lint rules.
+    - path: _test\.go
+      linters:
+        - prealloc
+        - gocritic
