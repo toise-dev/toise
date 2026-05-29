@@ -1,6 +1,7 @@
 package projection
 
 import (
+	"sort"
 	"sync"
 
 	"github.com/toise-dev/toise/internal/model"
@@ -221,6 +222,47 @@ func (g *Graph) visitNeighbor(nb model.EntityID, relType, edgeType string, visit
 	}
 }
 
+// ListEntities returns the live (non-deleted) entities, optionally filtered by
+// type, sorted by logical id for stable pagination.
+func (g *Graph) ListEntities(typ string) []model.Entity {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	out := make([]model.Entity, 0, len(g.entities))
+	for id, e := range g.entities {
+		if g.deleted[id] {
+			continue
+		}
+		if typ != "" && e.Type != typ {
+			continue
+		}
+		out = append(out, e)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+// ListRelations returns relations filtered by type and/or endpoints (empty
+// arguments match any), sorted by id for stable pagination.
+func (g *Graph) ListRelations(typ string, from, to model.EntityID) []model.Relation {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	out := make([]model.Relation, 0, len(g.relations))
+	for _, r := range g.relations {
+		if typ != "" && r.Type != typ {
+			continue
+		}
+		if from != "" && r.From != from {
+			continue
+		}
+		if to != "" && r.To != to {
+			continue
+		}
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
 // MatchIdentity finds the logical entity ID for an observed identity. It returns
 // (id, exact, found): an exact hash match (exact=true), or a tolerant match
 // (exact=false) where the identity differs from a live entity of the same type
@@ -241,7 +283,10 @@ func (g *Graph) MatchIdentity(typ string, identity []model.KeyValue, maxDiff int
 			continue
 		}
 		same, diffs := identityDiff(g.entities[id].Identity, identity)
-		if same && diffs >= 1 && diffs <= maxDiff {
+		// Require at least one unchanged identifying value as an anchor: a
+		// single-key identity has no anchor, so any different value is a new
+		// entity, not an identity change.
+		if same && diffs >= 1 && diffs <= maxDiff && diffs < len(identity) {
 			return id, false, true
 		}
 	}
