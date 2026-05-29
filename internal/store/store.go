@@ -1,0 +1,225 @@
+package store
+
+import (
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"sync"
+
+	"github.com/cockroachdb/pebble"
+	"google.golang.org/protobuf/proto"
+
+	"github.com/toise-dev/toise/internal/model"
+	toisev1 "github.com/toise-dev/toise/proto/toise/v1"
+)
+
+// Key prefixes. Primary records hold the serialized event; the others are
+// secondary indexes whose values are empty and whose key suffix is the
+// 8-byte big-endian sequence of the primary record.
+const (
+	primaryPrefix = "evt/"
+	entityPrefix  = "ent/"
+	typePrefix    = "typ/"
+	timePrefix    = "tim/"
+)
+
+var metaSeqKey = []byte("meta/seq")
+
+// Store is the append-only event log backed by Pebble. It is safe for
+// concurrent use; appends are serialized.
+type Store struct {
+	db  *pebble.DB
+	cfg Config
+
+	mu  sync.Mutex // guards seq and serializes appends
+	seq uint64     // last assigned sequence
+}
+
+// Open opens (creating if needed) the event log at dir.
+func Open(dir string, cfg Config) (*Store, error) {
+	db, err := pebble.Open(dir, &pebble.Options{})
+	if err != nil {
+		return nil, fmt.Errorf("opening pebble at %s: %w", dir, err)
+	}
+	s := &Store{db: db, cfg: cfg}
+	if err := s.recoverSeq(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
+// Close closes the underlying database.
+func (s *Store) Close() error {
+	return s.db.Close()
+}
+
+// recoverSeq loads the persisted sequence so appends continue monotonically
+// after a restart or crash.
+func (s *Store) recoverSeq() error {
+	v, closer, err := s.db.Get(metaSeqKey)
+	if errors.Is(err, pebble.ErrNotFound) {
+		s.seq = 0
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("reading sequence: %w", err)
+	}
+	defer func() { _ = closer.Close() }()
+	if len(v) == 8 {
+		s.seq = binary.BigEndian.Uint64(v)
+	}
+	return nil
+}
+
+// Append durably writes the given events to the log in a single atomic batch
+// (committed with Sync). Each event is validated first.
+func (s *Store) Append(events ...model.Event) error {
+	if len(events) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	batch := s.db.NewBatch()
+	defer func() { _ = batch.Close() }()
+
+	localSeq := s.seq
+	for i := range events {
+		ev := events[i]
+		if err := ev.Validate(); err != nil {
+			return fmt.Errorf("event %d invalid: %w", i, err)
+		}
+		localSeq++
+		data, err := proto.Marshal(ev.ToProto())
+		if err != nil {
+			return fmt.Errorf("marshaling event %d: %w", i, err)
+		}
+		if err := batch.Set(primaryKey(localSeq), data, nil); err != nil {
+			return fmt.Errorf("staging event %d: %w", i, err)
+		}
+		if err := indexEvent(batch, ev, localSeq); err != nil {
+			return fmt.Errorf("indexing event %d: %w", i, err)
+		}
+	}
+	if err := batch.Set(metaSeqKey, encodeU64(localSeq), nil); err != nil {
+		return fmt.Errorf("staging sequence: %w", err)
+	}
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return fmt.Errorf("committing %d events: %w", len(events), err)
+	}
+	s.seq = localSeq
+	return nil
+}
+
+// Sequence returns the last assigned sequence (the number of records ever
+// appended, modulo coalescing).
+func (s *Store) Sequence() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.seq
+}
+
+// indexEvent stages the secondary index entries for an event. Relation events
+// are indexed under both endpoint entity IDs.
+func indexEvent(batch *pebble.Batch, ev model.Event, seq uint64) error {
+	var (
+		ct       model.ChangeType
+		eventNs  int64
+		entities []string
+	)
+	switch {
+	case ev.Entity != nil:
+		ct = ev.Entity.ChangeType
+		eventNs = ev.Entity.EventTime.UnixNano()
+		entities = []string{string(ev.Entity.Entity.ID)}
+	case ev.Relation != nil:
+		ct = ev.Relation.ChangeType
+		eventNs = ev.Relation.EventTime.UnixNano()
+		entities = []string{string(ev.Relation.Relation.From), string(ev.Relation.Relation.To)}
+	default:
+		return errors.New("store: empty event envelope")
+	}
+	for _, id := range entities {
+		if id == "" {
+			continue
+		}
+		if err := batch.Set(entityKey(id, seq), nil, nil); err != nil {
+			return err
+		}
+	}
+	if err := batch.Set(typeKey(ct, seq), nil, nil); err != nil {
+		return err
+	}
+	return batch.Set(timeKey(eventNs, seq), nil, nil)
+}
+
+// getBySeq fetches and decodes the primary record for seq.
+func (s *Store) getBySeq(seq uint64) (model.Event, error) {
+	v, closer, err := s.db.Get(primaryKey(seq))
+	if err != nil {
+		return model.Event{}, fmt.Errorf("reading seq %d: %w", seq, err)
+	}
+	defer func() { _ = closer.Close() }()
+	var pe toisev1.Event
+	if err := proto.Unmarshal(v, &pe); err != nil {
+		return model.Event{}, fmt.Errorf("decoding seq %d: %w", seq, err)
+	}
+	return model.EventFromProto(&pe), nil
+}
+
+// --- key helpers ---
+
+func encodeU64(n uint64) []byte {
+	b := make([]byte, 8)
+	binary.BigEndian.PutUint64(b, n)
+	return b
+}
+
+func primaryKey(seq uint64) []byte {
+	return append([]byte(primaryPrefix), encodeU64(seq)...)
+}
+
+func entityKey(id string, seq uint64) []byte {
+	k := make([]byte, 0, len(entityPrefix)+len(id)+1+8)
+	k = append(k, entityPrefix...)
+	k = append(k, id...)
+	k = append(k, '/')
+	return append(k, encodeU64(seq)...)
+}
+
+func typeKey(ct model.ChangeType, seq uint64) []byte {
+	k := make([]byte, 0, len(typePrefix)+1+8)
+	k = append(k, typePrefix...)
+	k = append(k, byte(ct))
+	return append(k, encodeU64(seq)...)
+}
+
+func timeKey(eventNano int64, seq uint64) []byte {
+	k := make([]byte, 0, len(timePrefix)+8+8)
+	k = append(k, timePrefix...)
+	k = append(k, encodeU64(uint64(eventNano))...)
+	return append(k, encodeU64(seq)...)
+}
+
+// seqFromKeySuffix extracts the trailing 8-byte sequence from an index key.
+func seqFromKeySuffix(key []byte) uint64 {
+	if len(key) < 8 {
+		return 0
+	}
+	return binary.BigEndian.Uint64(key[len(key)-8:])
+}
+
+// prefixUpperBound returns the smallest key greater than every key with the
+// given prefix, for use as an iterator UpperBound.
+func prefixUpperBound(prefix []byte) []byte {
+	end := make([]byte, len(prefix))
+	copy(end, prefix)
+	for i := len(end) - 1; i >= 0; i-- {
+		if end[i] != 0xff {
+			end[i]++
+			return end[:i+1]
+		}
+	}
+	return nil // prefix is all 0xff: no upper bound
+}
