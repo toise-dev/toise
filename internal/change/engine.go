@@ -173,6 +173,36 @@ func (e *Engine) ObserveEntity(obs EntityObservation) (model.Event, error) {
 	return ev, nil
 }
 
+// DeleteEntity emits entity.deleted for an entity matched by identity. If no
+// matching entity exists, no event is emitted (emitted=false).
+func (e *Engine) DeleteEntity(obs EntityObservation) (ev model.Event, emitted bool, err error) {
+	e.obsMu.Lock()
+	defer e.obsMu.Unlock()
+
+	id, _, found := e.graph.MatchIdentity(obs.Type, obs.Identity, maxIdentityDiff)
+	if !found {
+		return model.Event{}, false, nil
+	}
+	ev = model.Event{Entity: &model.EntityEvent{
+		EventID:    model.NewEventID(),
+		ChangeType: model.EntityDeleted,
+		Entity: model.Entity{
+			ID:         id,
+			Type:       obs.Type,
+			Identity:   obs.Identity,
+			Attributes: obs.Attributes,
+			SchemaURL:  obs.SchemaURL,
+		},
+		EventTime:     obs.EventTime,
+		RecordedAt:    e.now(),
+		SchemaVersion: model.SchemaVersion,
+	}}
+	if err := e.commit(ev, false); err != nil {
+		return model.Event{}, false, err
+	}
+	return ev, true, nil
+}
+
 // ObserveRelation classifies an observed relation. It emits relation.added for a
 // new relation or relation.attribute_changed when an existing relation's
 // attributes differ. If the relation already exists unchanged, no event is

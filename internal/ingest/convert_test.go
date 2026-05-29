@@ -1,0 +1,159 @@
+package ingest
+
+import (
+	"testing"
+	"time"
+
+	"go.opentelemetry.io/collector/pdata/pcommon"
+	"go.opentelemetry.io/collector/pdata/plog"
+
+	"github.com/toise-dev/toise/internal/change"
+	"github.com/toise-dev/toise/internal/model"
+)
+
+type fakeEngine struct {
+	entities, deletes, relAdds, relRemoves int
+	lastEntity                             change.EntityObservation
+	lastRelation                           change.RelationObservation
+}
+
+func (f *fakeEngine) ObserveEntity(o change.EntityObservation) (model.Event, error) {
+	f.entities++
+	f.lastEntity = o
+	return model.Event{}, nil
+}
+
+func (f *fakeEngine) DeleteEntity(o change.EntityObservation) (model.Event, bool, error) {
+	f.deletes++
+	f.lastEntity = o
+	return model.Event{}, true, nil
+}
+
+func (f *fakeEngine) ObserveRelation(o change.RelationObservation) (model.Event, bool, error) {
+	f.relAdds++
+	f.lastRelation = o
+	return model.Event{}, true, nil
+}
+
+func (f *fakeEngine) RemoveRelation(o change.RelationObservation) (model.Event, bool, error) {
+	f.relRemoves++
+	f.lastRelation = o
+	return model.Event{}, true, nil
+}
+
+func newRecord(eventType string) plog.LogRecord {
+	lr := plog.NewLogRecord()
+	lr.SetTimestamp(pcommon.NewTimestampFromTime(time.Unix(1_700_000_000, 0)))
+	if eventType != "" {
+		lr.Attributes().PutStr(attrEventType, eventType)
+	}
+	return lr
+}
+
+func TestRouteEntityState(t *testing.T) {
+	lr := newRecord(evEntityState)
+	a := lr.Attributes()
+	a.PutStr(attrEntityType, model.TypeHost)
+	id := a.PutEmptyMap(attrEntityID)
+	id.PutStr("host.id", "h1")
+	attrs := a.PutEmptyMap(attrEntityAttrs)
+	attrs.PutInt("cpu.count", 8)
+	attrs.PutBool("up", true)
+	attrs.PutDouble("load", 0.5)
+
+	f := &fakeEngine{}
+	handled, err := routeRecord(f, lr)
+	if !handled || err != nil {
+		t.Fatalf("routeRecord handled=%v err=%v", handled, err)
+	}
+	if f.entities != 1 {
+		t.Fatalf("entities = %d, want 1", f.entities)
+	}
+	if f.lastEntity.Type != model.TypeHost || len(f.lastEntity.Identity) != 1 {
+		t.Errorf("observation = %+v", f.lastEntity)
+	}
+	// typed values survive conversion
+	kinds := map[string]model.ValueKind{}
+	for _, kv := range f.lastEntity.Attributes {
+		kinds[kv.Key] = kv.Value.Kind()
+	}
+	if kinds["cpu.count"] != model.KindInt || kinds["up"] != model.KindBool || kinds["load"] != model.KindDouble {
+		t.Errorf("attribute kinds = %+v", kinds)
+	}
+}
+
+func TestRouteIgnoresNonEntity(t *testing.T) {
+	lr := newRecord("") // no otel.entity.event.type
+	lr.Body().SetStr("plain log")
+	f := &fakeEngine{}
+	handled, err := routeRecord(f, lr)
+	if handled || err != nil {
+		t.Errorf("non-entity record: handled=%v err=%v, want false,nil", handled, err)
+	}
+
+	// unknown event type is also ignored
+	if handled, err := routeRecord(f, newRecord("something_else")); handled || err != nil {
+		t.Errorf("unknown event type: handled=%v err=%v", handled, err)
+	}
+}
+
+func TestRouteEntityMissingID(t *testing.T) {
+	lr := newRecord(evEntityState)
+	lr.Attributes().PutStr(attrEntityType, model.TypeHost)
+	// no otel.entity.id
+	f := &fakeEngine{}
+	handled, err := routeRecord(f, lr)
+	if !handled || err == nil {
+		t.Errorf("missing id: handled=%v err=%v, want true,err", handled, err)
+	}
+}
+
+func TestRouteEntityDelete(t *testing.T) {
+	lr := newRecord(evEntityDelete)
+	a := lr.Attributes()
+	a.PutStr(attrEntityType, model.TypeHost)
+	a.PutEmptyMap(attrEntityID).PutStr("host.id", "h1")
+	f := &fakeEngine{}
+	if handled, err := routeRecord(f, lr); !handled || err != nil || f.deletes != 1 {
+		t.Errorf("delete: handled=%v err=%v deletes=%d", handled, err, f.deletes)
+	}
+}
+
+func TestRouteRelation(t *testing.T) {
+	lr := newRecord(evRelationState)
+	a := lr.Attributes()
+	a.PutStr(attrRelType, model.RelRunsOn)
+	a.PutStr(attrRelFromType, model.TypeProcess)
+	a.PutEmptyMap(attrRelFromID).PutStr("pid", "100")
+	a.PutStr(attrRelToType, model.TypeHost)
+	a.PutEmptyMap(attrRelToID).PutStr("host.id", "h1")
+	f := &fakeEngine{}
+	if handled, err := routeRecord(f, lr); !handled || err != nil || f.relAdds != 1 {
+		t.Errorf("relation: handled=%v err=%v relAdds=%d", handled, err, f.relAdds)
+	}
+	if f.lastRelation.From.Type != model.TypeProcess || f.lastRelation.To.Type != model.TypeHost {
+		t.Errorf("relation obs = %+v", f.lastRelation)
+	}
+
+	// relation_delete
+	lr2 := newRecord(evRelationDelete)
+	a2 := lr2.Attributes()
+	a2.PutStr(attrRelType, model.RelRunsOn)
+	a2.PutStr(attrRelFromType, model.TypeProcess)
+	a2.PutEmptyMap(attrRelFromID).PutStr("pid", "100")
+	a2.PutStr(attrRelToType, model.TypeHost)
+	a2.PutEmptyMap(attrRelToID).PutStr("host.id", "h1")
+	if handled, err := routeRecord(f, lr2); !handled || err != nil || f.relRemoves != 1 {
+		t.Errorf("relation delete: handled=%v err=%v relRemoves=%d", handled, err, f.relRemoves)
+	}
+}
+
+func TestRouteRelationMissingEndpoint(t *testing.T) {
+	lr := newRecord(evRelationState)
+	lr.Attributes().PutStr(attrRelType, model.RelRunsOn)
+	// no endpoints
+	f := &fakeEngine{}
+	if handled, err := routeRecord(f, lr); !handled || err == nil {
+		t.Errorf("missing endpoints: handled=%v err=%v", handled, err)
+	}
+}
