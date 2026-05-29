@@ -24,9 +24,9 @@ directional signals.
 | Identity hash | — | ~284 ns/op | M1 |
 | Entity → proto | — | ~486 ns/op | M2 (model) |
 | Projection rebuild (1M events) | ≤ 30 s | ~0.44 s (extrapolated) | M3 ✅ |
-| GraphQL entity(id) | ≤ 10 ms p99 | — | M5 |
-| GraphQL getNeighbors(depth=2) | ≤ 100 ms p99 | — | M5 |
-| GraphQL entityHistory(1h) | ≤ 200 ms p99 | — | M5 |
+| GraphQL entity(id) | ≤ 10 ms p99 | functional, bench TBD | M5 |
+| GraphQL getNeighbors(depth=2) | ≤ 100 ms p99 | — (MCP, M6) | M6 |
+| GraphQL entityHistory(1h) | ≤ 200 ms p99 | functional, bench TBD | M5 |
 | Memory footprint (100k entities) | ≤ 1 GB RSS | — | M3 |
 | Cold start to ready (100k events) | ≤ 10 s | — | M3 |
 
@@ -51,6 +51,11 @@ directional signals.
   the ≥ 1,000 evts/s target is comfortably met with batched appends. (*) A full
   end-to-end gRPC throughput benchmark is still to be run on the reference
   profile.
+
+- **M5**: GraphQL `entity`/`entities`/`relations` read the in-memory projection
+  (O(1)/O(n) over a snapshot); `entityHistory`/`recentChanges` read the log.
+  All are functionally validated; a formal p99 latency benchmark on the
+  reference profile is still to be run.
 
 When a target is missed, an issue is opened and the architectural cause is
 investigated before proceeding (brief, patch 6).
