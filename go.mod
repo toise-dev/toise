@@ -2,6 +2,8 @@ module github.com/toise-dev/toise
 
 go 1.26
 
+toolchain go1.26.3
+
 require (
 	github.com/cockroachdb/pebble v1.1.5
 	github.com/oklog/ulid/v2 v2.1.1
