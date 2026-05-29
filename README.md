@@ -1,6 +1,11 @@
-# Toise
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-full-dark.png" />
+    <img alt="Toise" src="docs/assets/logo-full-light.png" width="260" />
+  </picture>
+</p>
 
-> The living map of your infrastructure.
+<p align="center"><em>The living map of your infrastructure.</em></p>
 
 Toise is an open-source backend that maintains a live, queryable graph of an
 organization's infrastructure — devices, hosts, services, network links,
