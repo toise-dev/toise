@@ -17,7 +17,7 @@ directional signals.
 
 | Metric | Target | Latest | Milestone |
 |--------|--------|--------|-----------|
-| Ingestion rate (OTLP/gRPC) | ≥ 1,000 evts/s | — | M4 |
+| Ingestion rate (OTLP/gRPC) | ≥ 1,000 evts/s | conv ~90 ns/op | M4 ✅* |
 | Event log append (batch of 100, Sync) | ≤ 10 ms p99 | ~4.1 ms/batch (mean) | M2 ✅ |
 | Pebble write throughput (PoC) | — | ~20,900 evts/s | M0 |
 | Pebble full-scan read (PoC) | — | ~8.6M evts/s | M0 |
@@ -44,6 +44,13 @@ directional signals.
   events in ~22 ms (~440 ns/event), i.e. ~0.44 s extrapolated for 1M events —
   well under the 30 s target on dev hardware. Re-measure with a realistic event
   mix (relations, updates) and from the on-disk log.
+
+- **M4**: `BenchmarkRouteEntityState` converts+dispatches a LogRecord in
+  ~90 ns/op (2 allocs), **excluding gRPC transport**. End-to-end OTLP ingestion
+  is bounded by the store's Sync'd append (~4.1 ms per 100-event batch, M2), so
+  the ≥ 1,000 evts/s target is comfortably met with batched appends. (*) A full
+  end-to-end gRPC throughput benchmark is still to be run on the reference
+  profile.
 
 When a target is missed, an issue is opened and the architectural cause is
 investigated before proceeding (brief, patch 6).

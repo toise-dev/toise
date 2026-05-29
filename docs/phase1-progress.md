@@ -13,7 +13,7 @@ Status legend: `not started` · `in progress` · `awaiting checkpoint` · `done`
 | 1 | Data model and proto contract | A | awaiting checkpoint |
 | 2 | Event log store on Pebble (+ retention) | B | awaiting checkpoint |
 | 3 | Projection engine and change detection | C | awaiting checkpoint |
-| 4 | OTLP ingestion receiver | D | not started |
+| 4 | OTLP ingestion receiver | D | awaiting checkpoint |
 | 5 | GraphQL API (+ pagination/limits) | E | not started |
 | 6 | MCP server | F | not started |
 | 7 | Debug UI | G | not started |
@@ -52,6 +52,14 @@ Status legend: `not started` · `in progress` · `awaiting checkpoint` · `done`
 - ADR 0008 written. Benchmark `Replay`: ~0.44 s extrapolated for 1M events (target ≤30 s).
 - **Toolchain bump go1.26.1 → go1.26.3** (`toolchain go1.26.3` in go.mod) resolving 4 stdlib `crypto/x509`/`crypto/tls` advisories (fixed in 1.26.2). govulncheck now **0 affecting**.
 
+## Milestone 4 — OTLP ingestion receiver (awaiting Checkpoint D)
+
+- `internal/ingest`: OTLP/gRPC logs server (collector `pdata` `plog`/`plogotlp`). Filters entity-event LogRecords by `otel.entity.event.type`, converts them to change-engine observations, routes them; non-entity records ignored. Supports `entity_state`, `entity_delete`, and the Toise `relation_state`/`relation_delete` extensions. **Coverage 90 %**.
+- Added `change.Engine.DeleteEntity` (emits `entity.deleted` for a matched entity).
+- Integration test: a real OTLP gRPC client exports entity + relation LogRecords over loopback; the projection reflects them (entities, relation, attributes), and `entity_delete` soft-deletes. Unit tests cover conversion error paths and typed values.
+- ADR 0009 written; LogRecord convention documented (otel-mapping.md / ADR 0009).
+- Benchmark `RouteEntityState` ~90 ns/op (conversion only; gRPC excluded). build/vet/gofmt/golangci-lint/`go test -race`/govulncheck all clean.
+
 ## Key cross-cutting rules (brief v2)
 
 - **Bi-temporality (patch 2):** default queries operate in `event_time` space (reality view). `asKnownAt` opt-in constrains to `recorded_at <= t` (audit view). Every event exposes both `eventTime` and `recordedAt`. Schema descriptions must teach the LLM which mode to pick.
@@ -72,7 +80,7 @@ Status legend: `not started` · `in progress` · `awaiting checkpoint` · `done`
 | 0006 | change-taxonomy | M1 | written |
 | 0007 | pebble-as-event-log-store | M2 | written |
 | 0008 | in-memory-projection-from-event-log | M3 | written |
-| 0009 | otlp-ingestion-via-entity-events | M4 | planned |
+| 0009 | otlp-ingestion-via-entity-events | M4 | written |
 | 0010 | graphql-as-primary-query-language | M5 | planned |
 | 0011 | mcp-server-design | M6 | planned |
 | 0012 | debug-ui-minimal-html | M7 | planned |
