@@ -12,7 +12,7 @@ Status legend: `not started` · `in progress` · `awaiting checkpoint` · `done`
 | 0 | Prerequisites validation | 0 | awaiting checkpoint |
 | 1 | Data model and proto contract | A | awaiting checkpoint |
 | 2 | Event log store on Pebble (+ retention) | B | awaiting checkpoint |
-| 3 | Projection engine and change detection | C | not started |
+| 3 | Projection engine and change detection | C | awaiting checkpoint |
 | 4 | OTLP ingestion receiver | D | not started |
 | 5 | GraphQL API (+ pagination/limits) | E | not started |
 | 6 | MCP server | F | not started |
@@ -44,6 +44,14 @@ Status legend: `not started` · `in progress` · `awaiting checkpoint` · `done`
 - ADRs 0007, 0013 written; `docs/operations/storage-sizing.md` + `performance.md` added.
 - Benchmark `AppendBatch100` ~4.1 ms (under the 10 ms target on dev HW). `go build`/`vet`/`gofmt`/`golangci-lint`/`go test -race` clean; `govulncheck` 0 affecting.
 
+## Milestone 3 — Projection engine & change detection (awaiting Checkpoint C)
+
+- `internal/projection`: in-memory graph (entities, relations, in/out adjacency, identity-hash + type indexes), concurrent-safe (`RWMutex`). `Apply` per change type, `Replay` from the log, reads (`GetEntity`, `Neighbors` bounded BFS, counts), `MatchIdentity` (exact + tolerant). **Coverage 89 %**.
+- `internal/change`: classifies observations into all nine taxonomy types; tolerant identity matching (ADR 0017) keeps the logical ID stable across `entity.identity_changed`; appends to store, applies to projection, notifies subscribers; **structural relation add/remove flagged high-priority**. Injectable clock. **Coverage 91 %**.
+- Integration test: engine + real store, then a fresh graph rebuilt via `Replay` matches.
+- ADR 0008 written. Benchmark `Replay`: ~0.44 s extrapolated for 1M events (target ≤30 s).
+- **Toolchain bump go1.26.1 → go1.26.3** (`toolchain go1.26.3` in go.mod) resolving 4 stdlib `crypto/x509`/`crypto/tls` advisories (fixed in 1.26.2). govulncheck now **0 affecting**.
+
 ## Key cross-cutting rules (brief v2)
 
 - **Bi-temporality (patch 2):** default queries operate in `event_time` space (reality view). `asKnownAt` opt-in constrains to `recorded_at <= t` (audit view). Every event exposes both `eventTime` and `recordedAt`. Schema descriptions must teach the LLM which mode to pick.
@@ -63,7 +71,7 @@ Status legend: `not started` · `in progress` · `awaiting checkpoint` · `done`
 | 0005 | bi-temporal-event-model (revised query semantics) | M1 | written |
 | 0006 | change-taxonomy | M1 | written |
 | 0007 | pebble-as-event-log-store | M2 | written |
-| 0008 | in-memory-projection-from-event-log | M3 | planned |
+| 0008 | in-memory-projection-from-event-log | M3 | written |
 | 0009 | otlp-ingestion-via-entity-events | M4 | planned |
 | 0010 | graphql-as-primary-query-language | M5 | planned |
 | 0011 | mcp-server-design | M6 | planned |

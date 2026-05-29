@@ -23,7 +23,7 @@ directional signals.
 | Pebble full-scan read (PoC) | — | ~8.6M evts/s | M0 |
 | Identity hash | — | ~284 ns/op | M1 |
 | Entity → proto | — | ~486 ns/op | M2 (model) |
-| Projection rebuild (1M events) | ≤ 30 s | — | M3 |
+| Projection rebuild (1M events) | ≤ 30 s | ~0.44 s (extrapolated) | M3 ✅ |
 | GraphQL entity(id) | ≤ 10 ms p99 | — | M5 |
 | GraphQL getNeighbors(depth=2) | ≤ 100 ms p99 | — | M5 |
 | GraphQL entityHistory(1h) | ≤ 200 ms p99 | — | M5 |
@@ -39,6 +39,11 @@ directional signals.
 - **M2**: `BenchmarkAppendBatch100` ~4.1 ms to append+index+Sync a batch of 100
   events (~109 KB, ~1,900 allocs). Comfortably under the 10 ms target on dev
   hardware; re-measure p99 under sustained load on the reference profile.
+
+- **M3**: `BenchmarkReplay` rebuilds the projection from 50k entity-creation
+  events in ~22 ms (~440 ns/event), i.e. ~0.44 s extrapolated for 1M events —
+  well under the 30 s target on dev hardware. Re-measure with a realistic event
+  mix (relations, updates) and from the on-disk log.
 
 When a target is missed, an issue is opened and the architectural cause is
 investigated before proceeding (brief, patch 6).
