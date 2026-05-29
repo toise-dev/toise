@@ -25,6 +25,8 @@ bin/
 dist/
 # Binary produced by `go build .` at the module root (module name == toise)
 /toise
+# Compiled binary of the throwaway Pebble PoC (scratch module)
+/scratch/pebble-poc/pebble-poc
 
 # Editors / IDEs
 .idea/
