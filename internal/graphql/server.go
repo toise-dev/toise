@@ -4,6 +4,8 @@ package graphql
 
 import (
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/99designs/gqlgen/graphql/handler"
@@ -23,6 +25,34 @@ type Config struct {
 	ComplexityLimit int
 	// Timeout bounds each request (default 10s).
 	Timeout time.Duration
+	// AllowedOrigins is the WebSocket Origin allowlist. Same-origin requests and
+	// non-browser clients (no Origin header) are always allowed; any other
+	// browser Origin must appear here. Empty means same-origin only — this
+	// prevents cross-site WebSocket hijacking.
+	AllowedOrigins []string
+}
+
+// originChecker enforces same-origin WebSocket connections plus an optional
+// allowlist. Requests with no Origin header (non-browser clients) are allowed.
+func originChecker(allowed []string) func(*http.Request) bool {
+	set := make(map[string]struct{}, len(allowed))
+	for _, o := range allowed {
+		set[o] = struct{}{}
+	}
+	return func(r *http.Request) bool {
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return true
+		}
+		if _, ok := set[origin]; ok {
+			return true
+		}
+		u, err := url.Parse(origin)
+		if err != nil {
+			return false
+		}
+		return strings.EqualFold(u.Host, r.Host)
+	}
 }
 
 // timeoutBody is returned (HTTP 503) when a request exceeds the timeout.
@@ -45,7 +75,7 @@ func NewHandler(r *resolvers.Resolver, cfg Config) http.Handler {
 	srv.AddTransport(transport.Websocket{
 		KeepAlivePingInterval: 10 * time.Second,
 		Upgrader: websocket.Upgrader{
-			CheckOrigin: func(*http.Request) bool { return true },
+			CheckOrigin: originChecker(cfg.AllowedOrigins),
 		},
 	})
 	srv.SetQueryCache(lru.New[*ast.QueryDocument](100))
