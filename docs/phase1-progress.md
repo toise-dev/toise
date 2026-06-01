@@ -9,15 +9,15 @@ Status legend: `not started` · `in progress` · `awaiting checkpoint` · `done`
 
 | # | Milestone | Checkpoint | Status |
 |---|-----------|------------|--------|
-| 0 | Prerequisites validation | 0 | awaiting checkpoint |
-| 1 | Data model and proto contract | A | awaiting checkpoint |
-| 2 | Event log store on Pebble (+ retention) | B | awaiting checkpoint |
-| 3 | Projection engine and change detection | C | awaiting checkpoint |
-| 4 | OTLP ingestion receiver | D | awaiting checkpoint |
-| 5 | GraphQL API (+ pagination/limits) | E | awaiting checkpoint |
+| 0 | Prerequisites validation | 0 | done |
+| 1 | Data model and proto contract | A | done |
+| 2 | Event log store on Pebble (+ retention) | B | done |
+| 3 | Projection engine and change detection | C | done |
+| 4 | OTLP ingestion receiver | D | done |
+| 5 | GraphQL API (+ pagination/limits) | E | done |
 | 6 | MCP server | F | done |
-| 7 | Debug UI | G | awaiting checkpoint |
-| 8 | Temporal fixtures and demo scenario | H | awaiting checkpoint |
+| 7 | Debug UI | G | done |
+| 8 | Temporal fixtures and demo scenario | H | done |
 
 ## Milestone 0 — Prerequisites (brief v2, patch 1)
 
@@ -28,7 +28,7 @@ Status legend: `not started` · `in progress` · `awaiting checkpoint` · `done`
 - [x] MCP Go SDK availability — **official `github.com/modelcontextprotocol/go-sdk` is GA (v1.6.1)** and will be used at M6 (no hand-rolled protocol). `…/sdk-go` (brief guess) does not exist; `mark3labs/mcp-go` (community) exists but the official SDK is preferred. To be recorded in ADR 0011 (M6).
 - [x] ADR 0003 (deps strategy), ADR 0014 (no auth), ADR 0016 (pebble validation) written.
 
-## Milestone 1 — Data model & proto contract (awaiting Checkpoint A)
+## Milestone 1 — Data model & proto contract (done, Checkpoint A passed)
 
 - Layout realigned to brief Part 5: `cmd/toise` → `cmd/toise-server`; bootstrap placeholders (`internal/core,query,reconciler`, `receivers`, `pkg`) removed; added `internal/model`, `internal/version`.
 - Proto contract `proto/toise/v1/events.proto` (`Value`, `KeyValue`, `ChangeType`, `Entity`, `Relation`, `EntityEvent`, `RelationEvent`, `Event`); codegen via **buf** (`buf.yaml`/`buf.gen.yaml`, `make proto`), generated `events.pb.go`.
@@ -36,7 +36,7 @@ Status legend: `not started` · `in progress` · `awaiting checkpoint` · `done`
 - ADRs 0004, 0005, 0006, 0015, 0017 written; data-model docs refreshed (`README.md`, `otel-mapping.md`).
 - `go build`/`go vet`/`gofmt`/`golangci-lint`/`go test -race` clean; `govulncheck` 0 affecting.
 
-## Milestone 2 — Event log store on Pebble (awaiting Checkpoint B)
+## Milestone 2 — Event log store on Pebble (done, Checkpoint B passed)
 
 - `internal/store`: Pebble-backed append-only log. Sequence-keyed primary records + secondary indexes (entity / change-type / event_time); relation events indexed under both endpoints. Atomic durable `Append(...)` (one Sync'd batch). Reads: `Scan` (append order), `ReadByEntity`, `ReadByType`, `ReadByTimeRange`.
 - Crash recovery test (subprocess writes with Sync then exits without Close; reopen recovers all events + sequence from the WAL). **Coverage 84 %**.
@@ -44,7 +44,7 @@ Status legend: `not started` · `in progress` · `awaiting checkpoint` · `done`
 - ADRs 0007, 0013 written; `docs/operations/storage-sizing.md` + `performance.md` added.
 - Benchmark `AppendBatch100` ~4.1 ms (under the 10 ms target on dev HW). `go build`/`vet`/`gofmt`/`golangci-lint`/`go test -race` clean; `govulncheck` 0 affecting.
 
-## Milestone 3 — Projection engine & change detection (awaiting Checkpoint C)
+## Milestone 3 — Projection engine & change detection (done, Checkpoint C passed)
 
 - `internal/projection`: in-memory graph (entities, relations, in/out adjacency, identity-hash + type indexes), concurrent-safe (`RWMutex`). `Apply` per change type, `Replay` from the log, reads (`GetEntity`, `Neighbors` bounded BFS, counts), `MatchIdentity` (exact + tolerant). **Coverage 89 %**.
 - `internal/change`: classifies observations into all nine taxonomy types; tolerant identity matching (ADR 0017) keeps the logical ID stable across `entity.identity_changed`; appends to store, applies to projection, notifies subscribers; **structural relation add/remove flagged high-priority**. Injectable clock. **Coverage 91 %**.
@@ -52,7 +52,7 @@ Status legend: `not started` · `in progress` · `awaiting checkpoint` · `done`
 - ADR 0008 written. Benchmark `Replay`: ~0.44 s extrapolated for 1M events (target ≤30 s).
 - **Toolchain bump go1.26.1 → go1.26.3** (`toolchain go1.26.3` in go.mod) resolving 4 stdlib `crypto/x509`/`crypto/tls` advisories (fixed in 1.26.2). govulncheck now **0 affecting**.
 
-## Milestone 4 — OTLP ingestion receiver (awaiting Checkpoint D)
+## Milestone 4 — OTLP ingestion receiver (done, Checkpoint D passed)
 
 - `internal/ingest`: OTLP/gRPC logs server (collector `pdata` `plog`/`plogotlp`). Filters entity-event LogRecords by `otel.entity.event.type`, converts them to change-engine observations, routes them; non-entity records ignored. Supports `entity_state`, `entity_delete`, and the Toise `relation_state`/`relation_delete` extensions. **Coverage 90 %**.
 - Added `change.Engine.DeleteEntity` (emits `entity.deleted` for a matched entity).
@@ -60,7 +60,7 @@ Status legend: `not started` · `in progress` · `awaiting checkpoint` · `done`
 - ADR 0009 written; LogRecord convention documented (otel-mapping.md / ADR 0009).
 - Benchmark `RouteEntityState` ~90 ns/op (conversion only; gRPC excluded). build/vet/gofmt/golangci-lint/`go test -race`/govulncheck all clean.
 
-## Milestone 5 — GraphQL API (awaiting Checkpoint E)
+## Milestone 5 — GraphQL API (done, Checkpoint E passed)
 
 - `internal/graphql`: schema-first gqlgen API with **rich descriptions on every type/field/arg** (LLM reads them via introspection). Queries `entity`, `entities`, `relations`, `entityHistory`, `recentChanges`; subscriptions `entityChanged`, `relationChanged`.
 - **Relay cursor pagination** on all list queries (`first`/`after`, `Connection`/`edges`/`pageInfo`/`totalCount`). Generated code in `generated/`; hand-written `resolvers/` over the projection (current state) + store (history). `entityHistory` honours `since`/`until` (event_time) and `asKnownAt` (audit view, ADR 0005).
@@ -77,7 +77,7 @@ Status legend: `not started` · `in progress` · `awaiting checkpoint` · `done`
 - End-to-end test exercises the real MCP protocol over an in-memory transport (tool discovery, structured-content round-trip, tool-error vs transport-error). **Coverage 90 %.**
 - Benchmarks: `FindEntities` over 10k hosts ~1.86 ms/op (target ≤10 ms); `GetNeighbors(depth=2)` ~330 ns/op (target ≤100 ms). build/vet/gofmt/golangci-lint/`go test -race`/govulncheck all clean.
 
-## Milestone 7 — Debug UI (awaiting Checkpoint G)
+## Milestone 7 — Debug UI (done, Checkpoint G passed)
 
 - `internal/debugui`: minimal **server-rendered HTML** over the same read model as GraphQL/MCP (projection + log, via narrow `Graph`/`EventReader` interfaces). `html/template` embedded with `//go:embed`; **no client framework, no external assets/fonts, no JS** beyond one progressive-enhancement filter submit (`<noscript>` fallback). ADR 0012.
 - Four read-only pages: **dashboard** (entity/relation type counts, totals, recent changes), **entity list** (filter by type, capped at 500), **entity detail** (identity, attributes, directly-connected neighbors with the linking relation + structural flag, full history oldest-first), **changes** (duration window + entity/relation/**structural** filter).
@@ -85,7 +85,7 @@ Status legend: `not started` · `in progress` · `awaiting checkpoint` · `done`
 - **Routing**: debug UI at `/`, GraphQL stays `/graphql`, playground moved to `/playground`, MCP at `/mcp` (Go 1.22+ `ServeMux` routes specific API paths first, everything else to the UI). Live smoke confirms `/`,`/entities`,`/changes`,`/playground` → 200; `/entity?id=<unknown>` → 404.
 - `httptest` handler tests per page (status, content, type filter, not-found/bad-request, escaping, unknown-path 404). **Coverage 84 %.** build/vet/gofmt/golangci-lint/`go test -race`/govulncheck all clean.
 
-## Milestone 8 — Temporal fixtures & demo scenario (awaiting Checkpoint H)
+## Milestone 8 — Temporal fixtures & demo scenario (done, Checkpoint H passed)
 
 - `internal/demo`: the **"a day in the life of web-server-1"** fixture — a 24h simulated host evolution applied **through the change engine** exactly as live OTLP ingestion would be (classification → log → projection), with a settable bi-temporal `Clock` so one fact (eth0 going down) is **recorded 20 min late** for a meaningful `asKnownAt` audit. The eight beats (discovery, dockerd start, eth0 down, eth0 back on a new subnet, postgres start, gateway change, nginx restart, container crash) exercise **all nine change types**, incl. `entity.identity_changed` on the nginx restart (tolerant identity, ADR 0017).
 - **Classification finding (caught while building the fixture):** two service listeners with identity `{host.name, service.port}` over-merged — they differ in a single identifying value, which is within the tolerant-matching budget. Fixed in the fixture by giving listeners a **single composite identity key** (`service.endpoint`), forcing exact matches. (A latent trap for any type whose instances differ in exactly one identifying value; noted for phase 2.)
