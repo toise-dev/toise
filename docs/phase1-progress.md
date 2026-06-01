@@ -15,7 +15,7 @@ Status legend: `not started` · `in progress` · `awaiting checkpoint` · `done`
 | 3 | Projection engine and change detection | C | awaiting checkpoint |
 | 4 | OTLP ingestion receiver | D | awaiting checkpoint |
 | 5 | GraphQL API (+ pagination/limits) | E | awaiting checkpoint |
-| 6 | MCP server | F | not started |
+| 6 | MCP server | F | awaiting checkpoint |
 | 7 | Debug UI | G | not started |
 | 8 | Temporal fixtures and demo scenario | H | not started |
 
@@ -69,6 +69,14 @@ Status legend: `not started` · `in progress` · `awaiting checkpoint` · `done`
 - **Classification fix (found by GraphQL tests):** tolerant identity matching now requires an unchanged identifying value as an anchor (`diffs < len(identity)`), so a single-key identity no longer over-merges distinct entities.
 - build/vet/gofmt/golangci-lint/`go test -race`/govulncheck all clean.
 
+## Milestone 6 — MCP server (awaiting Checkpoint F)
+
+- `internal/mcp`: MCP server on the **official Go SDK** (`modelcontextprotocol/go-sdk` v1.6.1, ADR 0011), exposing six **typed tools** via `mcp.AddTool[In, Out]` — input validation is a property of the Go struct + inferred JSON schema, not hand-written checks. Tools: `find_entities` (type + attribute filter + limit), `get_entity`, `get_neighbors` (**depth capped at 5**, friendly over-limit error), `entity_history` (`since`/`until` in event-time + optional `as_known_at` audit view, ADR 0005), `recent_changes` (Go-duration window + entity/relation/**structural** filter), `describe_schema` (NL summary + per-type counts to bootstrap the LLM).
+- **Same read model as GraphQL**: tools read the in-memory projection (current state, ADR 0008) and event log (history, ADR 0007) through narrow `Graph`/`EventReader` interfaces, so the two surfaces stay consistent. Outputs are **name-bearing** (each entity carries a human-readable `label` derived from its identity, types alongside ids) so the model reasons without a second lookup; errors are plain messages.
+- Served over **two transports**: Streamable HTTP mounted at `/mcp` on the existing server, and **stdio** via `--mcp-stdio` (Claude Desktop drives the binary as a subprocess; HTTP/OTLP servers are skipped). Sample config in `docs/demo/claude-desktop-config.json`.
+- End-to-end test exercises the real MCP protocol over an in-memory transport (tool discovery, structured-content round-trip, tool-error vs transport-error). **Coverage 90 %.**
+- Benchmarks: `FindEntities` over 10k hosts ~1.86 ms/op (target ≤10 ms); `GetNeighbors(depth=2)` ~330 ns/op (target ≤100 ms). build/vet/gofmt/golangci-lint/`go test -race`/govulncheck all clean.
+
 ## Key cross-cutting rules (brief v2)
 
 - **Bi-temporality (patch 2):** default queries operate in `event_time` space (reality view). `asKnownAt` opt-in constrains to `recorded_at <= t` (audit view). Every event exposes both `eventTime` and `recordedAt`. Schema descriptions must teach the LLM which mode to pick.
@@ -91,7 +99,7 @@ Status legend: `not started` · `in progress` · `awaiting checkpoint` · `done`
 | 0008 | in-memory-projection-from-event-log | M3 | written |
 | 0009 | otlp-ingestion-via-entity-events | M4 | written |
 | 0010 | graphql-as-primary-query-language | M5 | written |
-| 0011 | mcp-server-design | M6 | planned |
+| 0011 | mcp-server-design | M6 | written |
 | 0012 | debug-ui-minimal-html | M7 | planned |
 | 0013 | event-log-retention-strategy | M2 | written |
 | 0014 | no-authentication-in-phase-1 | M0 | written |
