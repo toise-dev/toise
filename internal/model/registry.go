@@ -11,6 +11,22 @@ const (
 	TypeServiceListener  = "service.listener"
 )
 
+// Producer-vocabulary entity types, agreed with the senhub-agent producer for
+// the first real-producer integration. See docs/data-model/senhub-agent-contract.md.
+// Adding them is non-breaking (the phase-1 types are unchanged).
+const (
+	// TypeServiceInstance is an OTel service instance (e.g. the agent itself, or
+	// a monitored service). Identity: a single service.instance.id.
+	TypeServiceInstance = "service.instance"
+	// TypeDatabase is a database instance. Identity SHOULD be a single composite
+	// key (e.g. db.instance.id), not {system, address, port}: two databases that
+	// differ only by port would otherwise be merged by tolerant identity matching
+	// (ADR 0017). See the contract doc.
+	TypeDatabase = "db"
+	// TypeNetworkDevice is a discovered network asset (switch, router, …).
+	TypeNetworkDevice = "network.device"
+)
+
 // Phase-1 relation types. See ADR 0004.
 const (
 	RelRunsOn       = "runs_on"
@@ -18,6 +34,17 @@ const (
 	RelBoundTo      = "bound_to"
 	RelNextHopVia   = "next_hop_via"
 	RelListensOn    = "listens_on"
+)
+
+// Producer-vocabulary relation types (senhub-agent integration). The From/To
+// entity types are the canonical pairing and are advisory — they are not
+// enforced at runtime, so a relation may legitimately connect other registered
+// types (notably `monitors`, whose target may be a host, db, or network.device).
+const (
+	RelMonitors   = "monitors"    // a service.instance monitors a target entity
+	RelRoutesVia  = "routes_via"  // a network.device routes traffic via another
+	RelForwardsTo = "forwards_to" // a network.device forwards traffic to another
+	RelAdjacentTo = "adjacent_to" // two network.devices are link-layer adjacent
 )
 
 // RelationTypeDef describes a known relation type and its constraints.
@@ -38,6 +65,10 @@ var entityTypes = map[string]struct{}{
 	TypeNetworkAddress:   {},
 	TypeNetworkRoute:     {},
 	TypeServiceListener:  {},
+	// producer vocabulary
+	TypeServiceInstance: {},
+	TypeDatabase:        {},
+	TypeNetworkDevice:   {},
 }
 
 var relationTypes = map[string]RelationTypeDef{
@@ -46,6 +77,11 @@ var relationTypes = map[string]RelationTypeDef{
 	RelBoundTo:      {Type: RelBoundTo, From: TypeNetworkAddress, To: TypeNetworkInterface, Structural: true},
 	RelNextHopVia:   {Type: RelNextHopVia, From: TypeNetworkRoute, To: TypeNetworkAddress, Structural: true},
 	RelListensOn:    {Type: RelListensOn, From: TypeServiceListener, To: TypeNetworkInterface, Structural: true},
+	// producer vocabulary (From/To advisory, not runtime-enforced)
+	RelMonitors:   {Type: RelMonitors, From: TypeServiceInstance, To: TypeHost, Structural: true},
+	RelRoutesVia:  {Type: RelRoutesVia, From: TypeNetworkDevice, To: TypeNetworkDevice, Structural: true},
+	RelForwardsTo: {Type: RelForwardsTo, From: TypeNetworkDevice, To: TypeNetworkDevice, Structural: true},
+	RelAdjacentTo: {Type: RelAdjacentTo, From: TypeNetworkDevice, To: TypeNetworkDevice, Structural: true},
 }
 
 // IsKnownEntityType reports whether t is a registered entity type.
