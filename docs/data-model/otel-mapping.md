@@ -40,41 +40,45 @@ Notes:
 - A `schema_url` is part of the model but is **not currently read** at the OTLP
   boundary; entities ingested via OTLP carry an empty schema URL for now.
 
-### Relation events — the `toise.relation.*` extension (non-standard)
+### Relation events — the `entity.relation.*` extension (non-standard)
 
 The OTel Entity Data Model does **not yet model entity-to-entity relationships**;
 [OTEP 0256](https://github.com/open-telemetry/oteps/blob/main/text/entities/0256-entities-data-model.md)
 lists relationships as explicit *Future Work* (citing exactly cases like
 "Process runs on Host"). Toise needs a temporal **graph**, so it ingests edges
-today via a clearly-namespaced, **non-standard extension** that never pretends to
-be standard OTel. It rides the same LogRecord convention:
+today via a **vendor-neutral, non-standard extension** that never pretends to be
+standard OTel. It rides the same LogRecord convention:
 
-| LogRecord attribute          | Type    | Required | Meaning                                              |
-| ---------------------------- | ------- | -------- | ---------------------------------------------------- |
-| `otel.entity.event.type`     | string  | yes      | `relation_state` (upsert) or `relation_delete`       |
-| `toise.relation.type`        | string  | yes      | the relation type — **must be in Toise's registry**  |
-| `toise.relation.from.type`   | string  | yes      | source endpoint entity type                          |
-| `toise.relation.from.id`     | **map** | yes      | source endpoint identity                             |
-| `toise.relation.to.type`     | string  | yes      | target endpoint entity type                          |
-| `toise.relation.to.id`       | **map** | yes      | target endpoint identity                             |
-| `toise.relation.attributes`  | **map** | no       | descriptive edge attributes                          |
+| LogRecord attribute            | Type    | Required | Meaning                                              |
+| ------------------------------ | ------- | -------- | ---------------------------------------------------- |
+| `otel.entity.event.type`       | string  | yes      | `relation_state` (upsert) or `relation_delete`       |
+| `entity.relation.type`         | string  | yes      | the relation type — **must be in Toise's registry**  |
+| `entity.relation.from.type`    | string  | yes      | source endpoint entity type                          |
+| `entity.relation.from.id`      | **map** | yes      | source endpoint identity                             |
+| `entity.relation.to.type`      | string  | yes      | target endpoint entity type                          |
+| `entity.relation.to.id`        | **map** | yes      | target endpoint identity                             |
+| `entity.relation.attributes`   | **map** | no       | descriptive edge attributes                          |
 
-**Why `toise.relation.*` and not a producer namespace (e.g. `senhub.*`):** the
-relation wire format is the **consumer's** contract. senhub-agent is one producer
-among potentially many; every producer feeds the *same* boundary, so the keys are
-namespaced to the format Toise parses, not to any one producer. The extension is
-designed to be **retired in favour of the OTel standard** once relationships land
-in the spec — both sides migrate together at that point.
+**Why `entity.relation.*` (vendor-neutral), not `toise.*` or `senhub.*`:** the
+extension carries neither a consumer prefix (`toise.*`) nor a producer prefix
+(`senhub.*`). A neutral name lets any producer and any consumer speak it, and is
+shaped to map **1:1 onto the eventual OTel relationships standard**, so migration
+is trivial for everyone. We deliberately avoid `otel.entity.relationship.*` too —
+that would squat the reserved OTel namespace before the spec exists. The extension
+is explicitly **transitional** and both sides commit to migrating to the standard
+once it lands. *(The upsert/delete discriminator currently rides the existing
+`otel.entity.event.type` key for a single routing key at the boundary; making it
+a neutral `entity.relation.event.type` is an open, trivial follow-up if producers
+prefer strict purity.)*
 
-**Endpoint resolution is by exact identity.** Each endpoint is matched to a
-**live** entity by `(type, identity)` using an **exact** match (no tolerance). So:
-
-- both endpoint entities must already exist when the relation event is processed —
-  emit the `entity_state` events for the endpoints **before** the
-  `relation_state` that connects them (a relation to an unknown endpoint is a
-  retriable ingest error, failing that export batch);
-- endpoint identities must be the entity's **current** identity (after an
-  identity change, reference the new identifying values).
+**Endpoint resolution is by exact identity**, against a **live** entity by
+`(type, identity)`. Endpoint identities must be the entity's current identity.
+Ordering: emit the endpoint `entity_state` events **before** the edge. Today an
+edge whose endpoint is not yet present is a **retriable ingest error** (loud, not
+silent — the batch is retried), but OTLP guarantees no inter-batch order, so a
+**reconciliation buffer** (park an unresolved edge briefly and flush it when its
+endpoints arrive) is a planned hardening so out-of-order edges are not lost; see
+*Robustness backstops* below.
 
 ## Mapping table
 
@@ -96,59 +100,108 @@ scalar kinds — `string`, `int64`, `double`, `bool` — are supported in phase 
 The `id` / `attributes` (and relation-endpoint id) attributes are themselves
 **maps**, and Toise reads them structurally: it iterates the **top-level**
 map and keeps each entry whose **leaf value is one of the four scalars**. A
-non-scalar leaf (a nested `kvlist`/`array`/`bytes`) is **silently dropped — not
-flattened**. The boundary does **not** recurse into nested structures.
+non-scalar leaf (a nested `kvlist`/`array`/`bytes`) is dropped — the boundary does
+**not** recurse into nested structures.
 
 The practical contract for producers: the `id` and `attributes` maps must be
 **flat maps of scalars**. Pre-flatten any structure with dotted keys before
 emitting — send `{"server.address": "10.0.0.1", "server.port": 5432}`, never
 `{"server": {"address": "10.0.0.1", "port": 5432}}` (the nested `server` value
-would be discarded). This is revisited only if a later phase needs richer values.
+would be discarded).
 
-### Entity liveness — no interval-based expiry
+**No silent loss (planned):** dropping a nested value must be **surfaced**, not
+silent — the boundary will log a `Warn` naming the dropped key so the data loss
+is observable. Pre-flattening remains the producer's contract; the requirement is
+only that the consumer never drops data quietly. *(Status: agreed; the explicit
+warning is a small ingest follow-up — today the drop is silent.)*
 
-Toise tracks liveness by **events, not by a TTL**. An entity stays live until an
-explicit `entity_delete` (a soft delete) arrives; the OTel `otel.entity.interval`
-is **not** consumed and does **not** expire entities in phase 1. A heartbeat is a
-re-emitted `entity_state` with unchanged identity/attributes, which Toise
-classifies as `entity.unchanged` and coalesces under retention (ADR 0013).
-**Producers must emit an explicit `entity_delete` when an entity disappears**;
-they cannot rely on letting an interval lapse. (Interval-driven expiry is a
-candidate for a later phase.)
+### Entity liveness — explicit delete primary, interval backstop
 
-### Identity and the matching constraint (read this before choosing identities)
+Liveness uses **two mechanisms, not one**:
 
-Toise assigns a stable logical id on first sight and matches later observations
-to it **tolerantly**: an observation may differ from a live entity in **at most
-one** identifying value (same key set) and still be treated as the *same* entity
-that changed identity (ADR 0017). This is what lets a process keep its logical id
-across a restart that changes its pid.
+1. **Explicit `entity_delete` is the primary signal.** When a producer knows an
+   entity is gone, it emits `entity_delete` and Toise soft-deletes it. A heartbeat
+   is a re-emitted `entity_state` (unchanged → `entity.unchanged`, coalesced under
+   retention, ADR 0013).
+2. **`otel.entity.interval` is a backstop (planned).** A producer often *misses*
+   the clean delete — `kill -9`, crash, host powered off, network partition — so
+   relying on the explicit delete alone accumulates zombie entities. OTel's
+   `Interval` exists exactly for this ("resilient to event losses"): an entity not
+   re-asserted within `last_seen + interval + margin` is expired by a background
+   sweeper. The same applies to edges (`relation_delete` + a TTL backstop).
 
-The consequence for producers: **two genuinely distinct entities must differ in
-at least two identifying values, or use a single composite identity key.** If two
-distinct instances differ in exactly one identifying value, Toise will mistake the
-second for an identity-change of the first and merge them. For example, an identity
-of `{db.system.name, server.address, server.port}` makes two databases on the same
-host that differ only by port collapse into one. Prefer a single composite key
-(e.g. a synthesised `db.instance.id`) or guarantee ≥2 distinguishing values.
+Producers should emit **both**: the explicit delete *and* the interval. *(Status:
+agreed. Today Toise consumes neither the interval nor runs a sweeper — explicit
+delete only; parsing/storing the interval and the TTL sweeper are the next
+ingest-hardening item; see* Robustness backstops *below.)*
+
+### Identity matching — moving to exact (immutable Id)
+
+**Decision (accepted, implementation pending):** entity identity is matched
+**exactly** against the producer-declared Id, in line with the OTel model where an
+entity's Id is **immutable**.
+
+Background: phase-1 Toise matched *tolerantly* (an observation differing in at
+most one identifying value was treated as the same entity that "changed identity",
+ADR 0017). That conflates two cases the data cannot distinguish — "same entity,
+attribute changed" vs "a different, similar entity" — and causes **silent
+over-merges** (two databases on a host differing only by port; two NICs; two jobs
+collapse into one). For an infrastructure source of truth that is the wrong
+trade-off.
+
+Under exact matching:
+
+- An entity keeps its Id; descriptive attributes change → `entity.attribute_updated`
+  / `state_changed` (already exact-Id matched).
+- The Id changes → a *different* entity (delete-and-create from the consumer's
+  view). Fuzzy "identity changed" detection is dropped; if continuity across an Id
+  change is ever needed, the producer signals it explicitly.
+- A single-key identity (`host.id`, the agent key) is **valid again** — no need for
+  the "≥2 values / composite key" rule. A composite `db.instance.id` remains a good
+  convention by *choice* (one clean immutable key), not to dodge a fuzzy merge.
+
+The corollary for producers: **Ids must be immutable** — never put a mutable value
+(a pid, a leased IP) in the identity; those are descriptive attributes.
+
+*(Status: this supersedes the tolerant-matching behaviour of ADR 0017; it requires
+an ADR revision and a change-engine update — `entity.identity_changed` is retired
+as a fuzzy-detected type — tracked as a dedicated change.)*
 
 ### Type registry — types must be known
 
-`otel.entity.type` and `toise.relation.type` are validated against Toise's
+`otel.entity.type` and `entity.relation.type` are validated against Toise's
 **type registry**; an unregistered type is **rejected** at the boundary. The
-phase-1 registry is:
+registry is:
 
 - **entities:** `host`, `process`, `network.interface`, `network.address`,
-  `network.route`, `service.listener`;
+  `network.route`, `service.listener`, and the producer vocabulary
+  `service.instance`, `db`, `network.device`;
 - **relations:** `runs_on`, `has_interface`, `bound_to`, `next_hop_via`,
-  `listens_on` (each with declared endpoint types and a structural flag).
+  `listens_on`, and the producer vocabulary `monitors`, `routes_via`,
+  `forwards_to`, `adjacent_to` (each with declared endpoint types and a
+  structural flag).
 
-A producer that introduces new types (e.g. `service.instance`, `db`,
-`network.device`, or relations like `monitors`, `adjacent_to`, `routes_via`,
-`forwards_to`) requires a corresponding **registry extension in Toise** before
-those events are accepted. New types are added to the registry without breaking
-existing ones; this vocabulary is the explicit coordination point between Toise
-and a producer (see `senhub-agent-contract.md`).
+`runs_on` is the foundational producer edge — `service.instance --runs_on--> host`
+as well as the existing `process --runs_on--> host`. Endpoint-type pairings are
+**advisory** (not runtime-enforced), so `monitors` may target a host, db, or
+network.device. Further monitored-system types (e.g. those discovered by later
+collection lots) are added to the registry when introduced — the vocabulary is the
+explicit coordination point with a producer (see `senhub-agent-contract.md`).
+
+### Robustness backstops (the "no silent loss" principle)
+
+A graph that aims to be an infrastructure source of truth must not lose or merge
+data **silently**, and must not assume fragile invariants (event ordering, a
+reliably-delivered delete). The agreed backstops, some implemented and some
+planned:
+
+| Concern | Decision | Status |
+| ------- | -------- | ------ |
+| Entity collisions | exact-Id matching (no fuzzy merge) | accepted; engine change pending |
+| Missed deletes | explicit `entity_delete` + `interval` TTL backstop | accepted; sweeper pending |
+| Out-of-order edges | reconciliation buffer (park & flush) | accepted; today a retriable error |
+| Nested values | explicit `Warn` on drop (never silent) | accepted; warning pending |
+| Scope flag `otel.entity.entity_event=true` | accepted and ignored (never rejected) — interop fast-path for other OTel producers | done |
 
 ### Timestamps
 
