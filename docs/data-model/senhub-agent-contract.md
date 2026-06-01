@@ -38,98 +38,114 @@ attribute set, and an `event_time` — plus relation edges via the Toise extensi
 The exact wire mapping is in [`otel-mapping.md`](./otel-mapping.md); the agreed
 shape and conventions are below.
 
-## Producer ↔ consumer contract (agreed 2026-06-01)
+## Producer ↔ consumer contract (converged 2026-06)
 
 Negotiated against the implemented ingest boundary (`internal/ingest`). Both
-sides implement the *same* wire shape so the contract is symmetric.
+sides implement the *same* wire shape. Round 2 incorporates the senhub-agent
+feedback on #185; the guiding principle is **no silent loss or collision** for an
+infrastructure source of truth.
 
 ### Nodes — standard OTel entity events
 
-senhub-agent emits **`entity_state` / `entity_delete`** LogRecords using the
-standard `otel.entity.*` attributes (`type`, `id` map, `attributes` map; event
-type in `otel.entity.event.type`). Toise classifies a record by the **presence of
-`otel.entity.event.type`** and does **not** require the `otel.entity.entity_event`
-scope flag — the agent may emit it for spec fidelity; Toise ignores it. We never
-bend `otel.entity.*` to carry anything non-standard.
+senhub-agent emits **`entity_state` / `entity_delete`** LogRecords with the
+standard `otel.entity.*` attributes (`type`, `id` map, `attributes` map; lifecycle
+in `otel.entity.event.type`). Toise classifies a record by the **presence of
+`otel.entity.event.type`**. The `otel.entity.entity_event=true` scope flag is
+**accepted and ignored** — never required, never rejected (it is an interop
+fast-path for other OTel producers/collectors). `otel.entity.*` is never bent to
+carry non-standard data.
 
-### Relations — the `toise.relation.*` extension (not `senhub.*`)
+### Relations — the vendor-neutral `entity.relation.*` extension
 
-OTel does not model entity relationships yet (OTEP 0256 *Future Work*). Edges are
-emitted via a clearly non-standard extension that never poses as standard OTel.
+OTel does not model relationships yet (OTEP 0256 *Future Work*, which cites exactly
+`process runs_on host`). Edges use a **vendor-neutral** extension — neither
+`toise.*` (consumer) nor `senhub.*` (producer) — chosen so any producer/consumer
+can speak it and it maps **1:1 onto the future OTel standard**, making migration
+trivial for everyone. `otel.entity.relationship.*` is deliberately avoided (it
+would squat the reserved OTel namespace before the spec exists).
 
-**Decision:** the on-the-wire relation keys are **`toise.relation.*`**, *not*
-`senhub.relationship.*`. Rationale: the relation format is the **consumer's**
-contract and must be **producer-agnostic** — senhub-agent is one producer among
-potentially many feeding the same boundary, so the keys belong to the format
-Toise parses, not to a single producer. (senhub-agent may keep a `senhub.*`
-concept internally, but what crosses the wire is `toise.relation.*`.) Each edge is
-a `relation_state` / `relation_delete` LogRecord carrying `toise.relation.type`,
-`toise.relation.from.{type,id}`, `toise.relation.to.{type,id}`, and optional
-`toise.relation.attributes`. Both sides commit to **migrating to the OTel standard
-together** once relationships land in the spec.
+Each edge is a `relation_state` / `relation_delete` LogRecord carrying
+`entity.relation.type`, `entity.relation.from.{type,id}`,
+`entity.relation.to.{type,id}`, and optional `entity.relation.attributes`. The
+upsert/delete discriminator currently rides `otel.entity.event.type`
+(`relation_state`/`relation_delete`) for a single routing key; a neutral
+`entity.relation.event.type=state|delete` is an open, trivial switch if the agent
+prefers strict purity. Both sides commit to migrating to the OTel standard once it
+lands.
 
-**Endpoints resolve by exact identity against live entities:** emit the endpoint
-entities **before** the relation that connects them, and reference each endpoint
-by its **current** identity (after an identity change, use the new values).
+Endpoints resolve by **exact identity** against live entities; reference each by
+its current identity. Emit endpoints **before** their edge. Out-of-order edges are
+handled by a reconciliation buffer rather than required ordering — see *Robustness*.
 
-### Values — flat maps of scalars
+### Values — flat maps of scalars, no silent drop
 
-`id` and `attributes` are OTLP maps. Toise keeps only **scalar leaves**
+`id` and `attributes` are OTLP maps. Toise keeps **scalar leaves**
 (`string`/`int64`/`double`/`bool`) of the **top-level** map; nested values are
-**dropped, not flattened**. The agent must **pre-flatten** with dotted keys
-(`server.address`, `server.port`), not nest sub-maps.
+dropped. The agent **pre-flattens** with dotted keys (`server.address`,
+`server.port`). The drop is **surfaced** (a `Warn` naming the dropped key), never
+silent.
 
-### Time & liveness
+### Identity — exact match, immutable Id
 
-`event_time` = the LogRecord `Timestamp` (producer/reality); `recorded_at` is
-stamped by Toise at ingest and never taken from the producer. **Liveness is
-event-driven, not interval-driven:** `otel.entity.interval` is not consumed; the
-agent must send an explicit **`entity_delete`** when an entity disappears, and a
-periodic re-emitted `entity_state` serves as a heartbeat (`entity.unchanged`).
-
-### Identity conventions & the matching constraint
-
-Immutable identities, descriptive everything-else. Agreed starting set:
+**Matching is exact** on the producer-declared Id (OTel-aligned: Ids are
+**immutable**). No fuzzy/tolerant matching, so two distinct entities are never
+silently merged; a single unique key is valid. Never put a mutable value (pid,
+leased IP) in the identity — those are descriptive attributes. Agreed identities:
 
 | Entity | Identity (`otel.entity.id`) | Notes |
 | ------ | --------------------------- | ----- |
-| `host` | `{host.id}` (machine-id) | `host.name` is descriptive |
-| `service.instance` | `{service.instance.id}` | = agent key |
-| `db` | a **single composite key** (e.g. `{db.instance.id}` synthesised from system+address+port) | see constraint |
-| `network.device` | `{<stable device id>}` (e.g. `host.id`-scoped asset id) | discovered network asset |
+| `host` | `{host.id}` (machine-id) | `host.name` descriptive |
+| `service.instance` | `{service.instance.id}` (agent key) | the agent |
+| `db` | `{db.instance.id}` — single composite key (system+address+port) | a clean immutable key, by choice |
+| `network.device` | `{net.device.id}` = LLDP chassis-id (`lldpLoc/RemChassisId`), fallback management IP | frozen at the SNMP collection lot; not emitted before then |
 
-**Constraint (important):** Toise matches identity *tolerantly* — two entities
-that differ in **exactly one** identifying value are treated as the **same** one
-that changed identity (ADR 0017). So distinct instances must differ in **≥2**
-identifying values **or** use a **single composite key**. This is why `db` should
-*not* use `{db.system.name, server.address, server.port}` directly (two DBs on one
-host differing only by port would merge): prefer a single composite `db.instance.id`.
+### Time & liveness — explicit delete + interval backstop
 
-### Type vocabulary — registry coordination
+`event_time` = LogRecord `Timestamp`; `recorded_at` stamped by Toise. Liveness uses
+**both**: an explicit **`entity_delete`** as the primary signal **and** the OTel
+`interval` as a TTL backstop (for missed deletes — `kill -9`, crash, host off, net
+partition). The agent emits both; Toise expires entities not re-asserted within
+`last_seen + interval + margin`. Same for edges (`relation_delete` + TTL).
 
-`host` is already in Toise's registry. **`service.instance`, `db`,
-`network.device`, and relations `monitors` / `adjacent_to` / `routes_via` /
-`forwards_to` are not yet registered and would be rejected** at the boundary.
-Adding them (entity types; relation types with their endpoint-type constraints
-and structural flags) is a small, non-breaking **Toise registry change**, and is
-the explicit coordination point: the agent and Toise agree the vocabulary, Toise
-lands the registry extension, then the agent emits.
+### Vocabulary & rollout lots
 
-### Planning
+The registry already holds the agreed vocabulary (Toise PR #16): entities
+`service.instance`, `db`, `network.device`; relations `monitors`, `routes_via`,
+`forwards_to`, `adjacent_to`. **`runs_on`** (already registered) is the foundational
+edge: `service.instance --runs_on--> host`. `monitors` source is the
+`service.instance` (the agent); targets are the monitored entity — `host`, `db`,
+and later `netscaler`, `veeam`, `redfish`, `citrix`, `ibmi`, `network.device`
+(those further types are registered when their collection lot lands). Rollout:
 
-`#185` is **non-blocking** for Toise phase 1, which shipped using a synthetic OTel
-SDK client as the reference producer (M4) and is feature-complete. The **real
-senhub-agent producer is a phase-2 integration** ("first real producer"); the wire
-contract above is stable to build against now, with the registry-vocabulary
-extension as the one Toise-side prerequisite.
+- **Lot 1:** entities `host` + `service.instance`; relation `runs_on`.
+- **Lot 2:** monitored systems (`db` first); relation `monitors`.
+- **Lot 5 (SNMP):** `network.device` and `routes_via`/`forwards_to`/`adjacent_to`.
+
+### Planning & status
+
+`#185` is **non-blocking** for Toise phase 1 (shipped with a synthetic producer,
+feature-complete). The real senhub-agent producer is a phase-2 integration. The
+wire shape and vocabulary are stable to build against now. Toise-side work items
+from this round:
+
+| Item | Status |
+| ---- | ------ |
+| Vendor-neutral `entity.relation.*` keys | **done** (PR #17) |
+| Producer vocabulary in the registry | **done** (PR #16) |
+| Conformance fixture / contract test | **done** (PR #17) |
+| Exact-Id matching (retire fuzzy `identity_changed`) | accepted — ADR 0017 revision + engine change pending |
+| Interval TTL sweeper (entity + edge expiry) | accepted — pending |
+| Out-of-order edge reconciliation buffer | accepted — pending |
+| Explicit `Warn` on dropped nested value | accepted — pending |
 
 ## Follow-up
 
-- **senhub-agent #185** implements the emitter against the contract above; the
-  node side is standard OTel and unblocked today, the relation side uses
-  `toise.relation.*`.
-- **Toise (this repo)** lands the **type-registry extension** for the agreed
-  producer vocabulary (`service.instance`, `db`, `network.device`; relations
-  `monitors`, `adjacent_to`, `routes_via`, `forwards_to`) — the one Toise-side
-  prerequisite — as part of the phase-2 first-real-producer integration. Until
-  then, only the phase-1 registry types are accepted.
+- **senhub-agent #185** implements the emitter against the converged contract:
+  standard OTel nodes (unblocked today) and `entity.relation.*` edges. Emit to
+  reproduce the shared conformance fixture
+  (`internal/ingest/testdata/conformance/entity-events.json`).
+- **Toise (this repo)** ships the remaining accepted items from the *Planning &
+  status* table — exact-Id matching (ADR 0017 revision), the interval TTL sweeper,
+  the edge reconciliation buffer, and the explicit drop warning — as the phase-2
+  first-real-producer hardening. The wire shape and vocabulary are already in
+  place to build against.
