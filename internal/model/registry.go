@@ -19,9 +19,8 @@ const (
 	// a monitored service). Identity: a single service.instance.id.
 	TypeServiceInstance = "service.instance"
 	// TypeDatabase is a database instance. Identity SHOULD be a single composite
-	// key (e.g. db.instance.id), not {system, address, port}: two databases that
-	// differ only by port would otherwise be merged by tolerant identity matching
-	// (ADR 0017). See the contract doc.
+	// immutable key (e.g. db.instance.id). See the contract doc and ADR 0018
+	// (exact identity matching).
 	TypeDatabase = "db"
 	// TypeNetworkDevice is a discovered network asset (switch, router, …).
 	TypeNetworkDevice = "network.device"

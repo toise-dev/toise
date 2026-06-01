@@ -9,12 +9,6 @@ import (
 	"github.com/toise-dev/toise/internal/projection"
 )
 
-// maxIdentityDiff is the conservative tolerance for identity matching: an
-// observation may differ from a live entity in at most this many identifying
-// values (with the same key set) and still be treated as the same entity. See
-// ADR 0017.
-const maxIdentityDiff = 1
-
 // stateKeys are the descriptive attribute keys whose change is classified as a
 // state change rather than a plain attribute update. See ADR 0006.
 var stateKeys = map[string]struct{}{
@@ -122,7 +116,7 @@ func (e *Engine) ObserveEntity(obs EntityObservation) (model.Event, error) {
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()
 
-	id, exact, found := e.graph.MatchIdentity(obs.Type, obs.Identity, maxIdentityDiff)
+	id, found := e.graph.MatchIdentity(obs.Type, obs.Identity)
 
 	var (
 		ct          model.ChangeType
@@ -132,11 +126,6 @@ func (e *Engine) ObserveEntity(obs EntityObservation) (model.Event, error) {
 	switch {
 	case !found:
 		ct, entityID = model.EntityCreated, model.NewEntityID()
-	case !exact:
-		ct, entityID = model.EntityIdentityChanged, id
-		if existing, ok, _ := e.graph.GetEntity(id); ok {
-			changedKeys = differingKeys(existing.Identity, obs.Identity)
-		}
 	default:
 		entityID = id
 		existing, _, _ := e.graph.GetEntity(id)
@@ -179,7 +168,7 @@ func (e *Engine) DeleteEntity(obs EntityObservation) (ev model.Event, emitted bo
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()
 
-	id, _, found := e.graph.MatchIdentity(obs.Type, obs.Identity, maxIdentityDiff)
+	id, found := e.graph.MatchIdentity(obs.Type, obs.Identity)
 	if !found {
 		return model.Event{}, false, nil
 	}
@@ -272,11 +261,11 @@ func (e *Engine) relationEvent(ct model.ChangeType, rel model.Relation, eventTim
 
 func (e *Engine) resolveEndpoints(from, to EndpointRef) (fromID, toID model.EntityID, err error) {
 	var ok bool
-	fromID, _, ok = e.graph.MatchIdentity(from.Type, from.Identity, 0)
+	fromID, ok = e.graph.MatchIdentity(from.Type, from.Identity)
 	if !ok {
 		return "", "", fmt.Errorf("relation from-endpoint not found: type %q", from.Type)
 	}
-	toID, _, ok = e.graph.MatchIdentity(to.Type, to.Identity, 0)
+	toID, ok = e.graph.MatchIdentity(to.Type, to.Identity)
 	if !ok {
 		return "", "", fmt.Errorf("relation to-endpoint not found: type %q", to.Type)
 	}
@@ -314,17 +303,6 @@ func diffAttributes(oldAttrs, newAttrs []model.KeyValue) (changed []string, stat
 		}
 	}
 	return changed, stateChanged
-}
-
-func differingKeys(oldKV, newKV []model.KeyValue) []string {
-	om := canonMap(oldKV)
-	var out []string
-	for _, kv := range newKV {
-		if v, ok := om[kv.Key]; !ok || v != kv.Value.String() {
-			out = append(out, kv.Key)
-		}
-	}
-	return out
 }
 
 func canonMap(kvs []model.KeyValue) map[string]string {

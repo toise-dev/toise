@@ -70,14 +70,16 @@ func TestObserveEntityClassification(t *testing.T) {
 		t.Errorf("attr add = %s, want entity.attribute_updated", ev.Entity.ChangeType)
 	}
 
-	// one identifying value changes -> identity_changed, same logical ID
-	tol := []model.KeyValue{kv("host.id", "h1"), kv("host.name", "web-2")}
-	ev, _ = e.ObserveEntity(EntityObservation{Type: model.TypeHost, Identity: tol, Attributes: []model.KeyValue{kv("status", "down"), kv("os", "linux")}, EventTime: t0})
-	if ev.Entity.ChangeType != model.EntityIdentityChanged {
-		t.Errorf("identity change = %s, want entity.identity_changed", ev.Entity.ChangeType)
+	// a differing identifying value is a DIFFERENT entity under exact matching
+	// (ADR 0018): a new logical ID, classified as created — never a fuzzy
+	// identity-change merge.
+	diff := []model.KeyValue{kv("host.id", "h1"), kv("host.name", "web-2")}
+	ev, _ = e.ObserveEntity(EntityObservation{Type: model.TypeHost, Identity: diff, Attributes: []model.KeyValue{kv("status", "down")}, EventTime: t0})
+	if ev.Entity.ChangeType != model.EntityCreated {
+		t.Errorf("differing identity = %s, want entity.created", ev.Entity.ChangeType)
 	}
-	if ev.Entity.Entity.ID != id {
-		t.Errorf("logical ID changed across identity_changed: %s != %s", ev.Entity.Entity.ID, id)
+	if ev.Entity.Entity.ID == id {
+		t.Error("a differing identity must get a new logical ID, not reuse the original")
 	}
 }
 

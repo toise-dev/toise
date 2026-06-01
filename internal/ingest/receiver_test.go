@@ -114,7 +114,7 @@ func TestReceiverEntityAndRelation(t *testing.T) {
 		t.Errorf("relations = %d, want 1", g.RelationCount())
 	}
 	// the host carries its descriptive attribute
-	id, _, found := g.MatchIdentity(model.TypeHost, []model.KeyValue{{Key: "host.id", Value: model.StringValue("h1")}}, 0)
+	id, found := g.MatchIdentity(model.TypeHost, []model.KeyValue{{Key: "host.id", Value: model.StringValue("h1")}})
 	if !found {
 		t.Fatal("host not found in projection")
 	}
