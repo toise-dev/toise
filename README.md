@@ -39,9 +39,28 @@ operator's questions about it directly.
 
 ## Status
 
-Toise is in early development. The core architecture, data model, OTLP
-ingestion, and MCP server are under active design. We are not yet ready for
-production use. Expect breaking changes.
+Toise is in early development. **Phase 1 is feature-complete**: it ingests OTLP
+entity events, maintains a bi-temporal event log and an in-memory graph with
+change classification, and serves that one read model through three surfaces —
+
+- a **GraphQL** API (`/graphql`, with a playground at `/playground`),
+- a native **MCP** server (`/mcp` and stdio) for LLM assistants, and
+- a minimal **debug UI** (`/`) for operators —
+
+all from a single Go binary with no external runtime dependencies. We are not yet
+ready for production use, and there is no authentication yet (see below). Expect
+breaking changes.
+
+## Quickstart
+
+```bash
+make build                                  # builds bin/toise-server and bin/toise-demo
+./bin/toise-demo --data-dir ./demo-data     # seed the "day in the life of web-server-1" demo
+./bin/toise-server --data-dir ./demo-data   # then open http://127.0.0.1:8080/
+```
+
+The demo scenario and a set of example LLM prompts (with the MCP tool calls they
+map to) are in [`docs/demo/`](./docs/demo).
 
 ## Security (phase 1)
 

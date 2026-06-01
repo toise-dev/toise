@@ -17,7 +17,7 @@ Status legend: `not started` · `in progress` · `awaiting checkpoint` · `done`
 | 5 | GraphQL API (+ pagination/limits) | E | awaiting checkpoint |
 | 6 | MCP server | F | done |
 | 7 | Debug UI | G | awaiting checkpoint |
-| 8 | Temporal fixtures and demo scenario | H | not started |
+| 8 | Temporal fixtures and demo scenario | H | awaiting checkpoint |
 
 ## Milestone 0 — Prerequisites (brief v2, patch 1)
 
@@ -84,6 +84,25 @@ Status legend: `not started` · `in progress` · `awaiting checkpoint` · `done`
 - **Safe by construction**: read-only (no mutation endpoints); all dynamic values render through `html/template` contextual auto-escaping — a test asserts an attribute value containing `<script>` is escaped, not rendered.
 - **Routing**: debug UI at `/`, GraphQL stays `/graphql`, playground moved to `/playground`, MCP at `/mcp` (Go 1.22+ `ServeMux` routes specific API paths first, everything else to the UI). Live smoke confirms `/`,`/entities`,`/changes`,`/playground` → 200; `/entity?id=<unknown>` → 404.
 - `httptest` handler tests per page (status, content, type filter, not-found/bad-request, escaping, unknown-path 404). **Coverage 84 %.** build/vet/gofmt/golangci-lint/`go test -race`/govulncheck all clean.
+
+## Milestone 8 — Temporal fixtures & demo scenario (awaiting Checkpoint H)
+
+- `internal/demo`: the **"a day in the life of web-server-1"** fixture — a 24h simulated host evolution applied **through the change engine** exactly as live OTLP ingestion would be (classification → log → projection), with a settable bi-temporal `Clock` so one fact (eth0 going down) is **recorded 20 min late** for a meaningful `asKnownAt` audit. The eight beats (discovery, dockerd start, eth0 down, eth0 back on a new subnet, postgres start, gateway change, nginx restart, container crash) exercise **all nine change types**, incl. `entity.identity_changed` on the nginx restart (tolerant identity, ADR 0017).
+- **Classification finding (caught while building the fixture):** two service listeners with identity `{host.name, service.port}` over-merged — they differ in a single identifying value, which is within the tolerant-matching budget. Fixed in the fixture by giving listeners a **single composite identity key** (`service.endpoint`), forcing exact matches. (A latent trap for any type whose instances differ in exactly one identifying value; noted for phase 2.)
+- `cmd/toise-demo`: seeds a fresh data dir with the scenario (default start = now−24h so windows are live; `--start` for reproducible stamps), refuses a non-empty dir, prints a summary + next steps. Added to `make build` (now builds both binaries).
+- Docs: `docs/demo/scenario.md` (24h timeline + final state) and `docs/demo/llm-prompts.md` (**12 example prompts** across current-state, topology traversal, recent-changes, history, causal, anomaly, and `asKnownAt` audit — each with the expected MCP tool call(s) and answer shape).
+- Tests assert the expected final graph (9 live entities, nginx identity-changed to pid 1010, deletions), coverage of all nine change types, and the late-recorded fact. **Coverage 84 %.** Live end-to-end validated: seed → `toise-server` → GraphQL (9 entities, 22 changes/24h) and the debug UI render the populated graph correctly.
+- build/vet/gofmt/golangci-lint/`go test -race`/govulncheck all clean.
+
+## Phase 1 — complete (pending Checkpoint H validation)
+
+All eight milestones (M0–M8) implemented behind their checkpoints. The phase-1
+backend ingests OTLP entity events, maintains a bi-temporal event log and an
+in-memory projection with change classification, and serves three consumer
+surfaces over one read model — GraphQL, MCP, and a debug UI — plus a runnable
+demo. Checkpoint H is the phase-1 completion gate: on validation, cut **v0.1.0**
+(CHANGELOG + README phase-1 summary updated; tag **not** pushed without explicit
+approval).
 
 ## Key cross-cutting rules (brief v2)
 
