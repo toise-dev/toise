@@ -199,8 +199,22 @@ func TestRegistry(t *testing.T) {
 	if def, ok := RelationDef(RelListensOn); !ok || def.From != TypeServiceListener || def.To != TypeNetworkInterface {
 		t.Error("relation def wrong")
 	}
-	if len(EntityTypes()) != 6 || len(RelationTypes()) != 5 {
+	if len(EntityTypes()) != 9 || len(RelationTypes()) != 9 {
 		t.Errorf("registry counts: %d entity, %d relation", len(EntityTypes()), len(RelationTypes()))
+	}
+	// producer-vocabulary types are registered
+	for _, typ := range []string{TypeServiceInstance, TypeDatabase, TypeNetworkDevice} {
+		if !IsKnownEntityType(typ) {
+			t.Errorf("producer entity type %q not registered", typ)
+		}
+	}
+	if def, ok := RelationDef(RelMonitors); !ok || def.From != TypeServiceInstance || !def.Structural {
+		t.Error("monitors relation def wrong")
+	}
+	for _, rel := range []string{RelRoutesVia, RelForwardsTo, RelAdjacentTo} {
+		if def, ok := RelationDef(rel); !ok || def.From != TypeNetworkDevice || def.To != TypeNetworkDevice {
+			t.Errorf("network relation %q def wrong", rel)
+		}
 	}
 }
 
