@@ -2,7 +2,8 @@
 // web-server-1", a 24-hour simulated evolution of one host's infrastructure.
 // The scenario is applied through the change engine exactly as live OTLP
 // ingestion would be, so it exercises the full pipeline (classification, event
-// log, projection) and every change type in the taxonomy (ADR 0006). It is the
+// log, projection) and every change type the engine emits (eight of the nine
+// taxonomy types, ADR 0006; identity_changed is retired under ADR 0018). It is the
 // fixture behind the LLM example prompts in docs/demo/llm-prompts.md.
 package demo
 
@@ -80,8 +81,14 @@ func kvs(items ...model.KeyValue) []model.KeyValue { return items }
 // --- identities --------------------------------------------------------------
 
 func hostID() []model.KeyValue { return kvs(str("host.name", host1)) }
-func procID(exe string, pid int64) []model.KeyValue {
-	return kvs(str("process.executable.name", exe), num("process.pid", pid))
+
+// procID identifies a process by its immutable executable name (unique per host
+// in this scenario). The pid is a *descriptive* attribute, not part of the
+// identity: under exact matching (ADR 0018) a mutable value like a pid must never
+// be an identifying attribute, so a restart that changes the pid is an attribute
+// update on the same entity, not a new entity.
+func procID(exe string) []model.KeyValue {
+	return kvs(str("process.executable.name", exe))
 }
 func ifaceID(name string) []model.KeyValue {
 	return kvs(str("host.name", host1), str("interface.name", name))
@@ -92,9 +99,8 @@ func routeID(dst string) []model.KeyValue {
 }
 func listenerID(port int64) []model.KeyValue {
 	// A single composite identity key: two listeners on the same host differ
-	// only in their port, which is within the tolerant identity-matching budget
-	// (ADR 0017). A single key forces an exact match, so distinct ports stay
-	// distinct entities instead of being mistaken for one that changed identity.
+	// only in their port. A single composite key is a clean immutable identity
+	// (ADR 0018); under exact matching distinct ports are distinct entities.
 	return kvs(str("service.endpoint", fmt.Sprintf("%s:%d", host1, port)))
 }
 
@@ -173,8 +179,8 @@ const (
 func (s *seeder) play() {
 	// 1. Discovery (t+0): the host and its initial topology come into view.
 	s.observe(0, 0, model.TypeHost, hostID(), kvs(str("os.type", "linux"), str("os.description", "Ubuntu 24.04")))
-	s.observe(0, 0, model.TypeProcess, procID("nginx", 1001), kvs(str("status", "running")))
-	s.relate(0, model.RelRunsOn, ep(model.TypeProcess, procID("nginx", 1001)), ep(model.TypeHost, hostID()), nil)
+	s.observe(0, 0, model.TypeProcess, procID("nginx"), kvs(str("status", "running"), num("process.pid", 1001)))
+	s.relate(0, model.RelRunsOn, ep(model.TypeProcess, procID("nginx")), ep(model.TypeHost, hostID()), nil)
 
 	s.observe(0, 0, model.TypeNetworkInterface, ifaceID("eth0"), kvs(str("oper_state", "up"), str("mac.address", "02:42:ac:11:00:05")))
 	s.relate(0, model.RelHasInterface, ep(model.TypeHost, hostID()), ep(model.TypeNetworkInterface, ifaceID("eth0")), nil)
@@ -190,8 +196,8 @@ func (s *seeder) play() {
 	s.relate(0, model.RelListensOn, ep(model.TypeServiceListener, listenerID(80)), ep(model.TypeNetworkInterface, ifaceID("eth0")), nil)
 
 	// 2. New container daemon (t+2h): dockerd starts.
-	s.observe(2*h, 2*h, model.TypeProcess, procID("dockerd", 2002), kvs(str("status", "running")))
-	s.relate(2*h, model.RelRunsOn, ep(model.TypeProcess, procID("dockerd", 2002)), ep(model.TypeHost, hostID()), nil)
+	s.observe(2*h, 2*h, model.TypeProcess, procID("dockerd"), kvs(str("status", "running"), num("process.pid", 2002)))
+	s.relate(2*h, model.RelRunsOn, ep(model.TypeProcess, procID("dockerd")), ep(model.TypeHost, hostID()), nil)
 
 	// 3. eth0 goes down (t+6h) — but this fact is only RECORDED 20 minutes later
 	//    (a late-arriving observation), so an asKnownAt audit before t+6h20 still
@@ -207,8 +213,8 @@ func (s *seeder) play() {
 	s.relate(6*h+30*mn, model.RelBoundTo, ep(model.TypeNetworkAddress, addrID("10.0.2.7")), ep(model.TypeNetworkInterface, ifaceID("eth0")), kvs(boolean("preferred", true)))
 
 	// 5. postgres starts (t+9h) and listens on :5432.
-	s.observe(9*h, 9*h, model.TypeProcess, procID("postgres", 3003), kvs(str("status", "running")))
-	s.relate(9*h, model.RelRunsOn, ep(model.TypeProcess, procID("postgres", 3003)), ep(model.TypeHost, hostID()), nil)
+	s.observe(9*h, 9*h, model.TypeProcess, procID("postgres"), kvs(str("status", "running"), num("process.pid", 3003)))
+	s.relate(9*h, model.RelRunsOn, ep(model.TypeProcess, procID("postgres")), ep(model.TypeHost, hostID()), nil)
 	s.observe(9*h, 9*h, model.TypeServiceListener, listenerID(5432), kvs(str("process.executable.name", "postgres"), str("transport", "tcp")))
 	s.relate(9*h, model.RelListensOn, ep(model.TypeServiceListener, listenerID(5432)), ep(model.TypeNetworkInterface, ifaceID("eth0")), nil)
 
@@ -223,13 +229,14 @@ func (s *seeder) play() {
 	s.deleteEntity(12*h, model.TypeNetworkAddress, addrID("10.0.1.1"))
 	s.relate(12*h, model.RelBoundTo, ep(model.TypeNetworkAddress, addrID("10.0.2.7")), ep(model.TypeNetworkInterface, ifaceID("eth0")), kvs(boolean("preferred", false)))
 
-	// 7. nginx restarts (t+18h): same logical process, new pid. Tolerant
-	//    identity matching keeps the logical id stable → entity.identity_changed.
-	s.observe(18*h, 18*h, model.TypeProcess, procID("nginx", 1010), kvs(str("status", "running")))
+	// 7. nginx restarts (t+18h): same logical process (exact identity match on the
+	//    executable name), new pid. Because the pid is a descriptive attribute, the
+	//    restart is an entity.attribute_updated — not an identity change (ADR 0018).
+	s.observe(18*h, 18*h, model.TypeProcess, procID("nginx"), kvs(str("status", "running"), num("process.pid", 1010)))
 
 	// 8. The container crashes (t+22h): dockerd disappears and stops running on
 	//    the host. A host heartbeat confirms the host is otherwise unchanged.
-	s.unrelate(22*h, model.RelRunsOn, ep(model.TypeProcess, procID("dockerd", 2002)), ep(model.TypeHost, hostID()))
-	s.deleteEntity(22*h, model.TypeProcess, procID("dockerd", 2002))
+	s.unrelate(22*h, model.RelRunsOn, ep(model.TypeProcess, procID("dockerd")), ep(model.TypeHost, hostID()))
+	s.deleteEntity(22*h, model.TypeProcess, procID("dockerd"))
 	s.observe(22*h, 22*h, model.TypeHost, hostID(), kvs(str("os.type", "linux"), str("os.description", "Ubuntu 24.04")))
 }
