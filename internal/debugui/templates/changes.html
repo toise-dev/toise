@@ -1,0 +1,14 @@
+{{define "changes"}}{{template "head" .}}
+<h1>Recent changes</h1>
+<form class="filter" method="get" action="/changes">
+  <label>Window <input name="window" value="{{.Window}}" size="6"></label>
+  <label>Kind
+    <select name="kind">
+      {{range .Kinds}}<option value="{{.}}"{{if eq . $.Kind}} selected{{end}}>{{if .}}{{.}}{{else}}all{{end}}</option>{{end}}
+    </select>
+  </label>
+  <button type="submit">Filter</button>
+</form>
+<p class="muted">{{.Count}} change{{if ne .Count 1}}s{{end}} in the last {{.Window}}{{if .Kind}} ({{.Kind}}){{end}}, newest first.</p>
+{{template "changerows" .Recent}}
+{{template "foot" .}}{{end}}

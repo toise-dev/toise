@@ -1,0 +1,33 @@
+{{define "dashboard"}}{{template "head" .}}
+<h1>Live graph overview</h1>
+<div class="cards">
+  <div class="card"><div class="n">{{.TotalEntities}}</div><div class="l">entities</div></div>
+  <div class="card"><div class="n">{{.TotalRelations}}</div><div class="l">relations</div></div>
+  <div class="card"><div class="n">{{len .EntityTypes}}</div><div class="l">entity types</div></div>
+  <div class="card"><div class="n">{{len .RelationTypes}}</div><div class="l">relation types</div></div>
+</div>
+
+<h2>Entity types</h2>
+{{if .EntityTypes}}
+<table>
+<tr><th>Type</th><th>Count</th><th></th></tr>
+{{range .EntityTypes}}
+<tr><td class="ct">{{.Type}}</td><td>{{.Count}}</td><td><a href="/entities?type={{.Type}}">browse →</a></td></tr>
+{{end}}
+</table>
+{{else}}<p class="empty">No entities observed yet.</p>{{end}}
+
+<h2>Relation types</h2>
+{{if .RelationTypes}}
+<table>
+<tr><th>Type</th><th>Count</th></tr>
+{{range .RelationTypes}}
+<tr><td class="ct">{{.Type}}</td><td>{{.Count}}</td></tr>
+{{end}}
+</table>
+{{else}}<p class="empty">No relations observed yet.</p>{{end}}
+
+<h2>Recent changes <span class="muted">(last {{.Window}})</span></h2>
+{{template "changerows" .Recent}}
+<p><a href="/changes">All changes →</a></p>
+{{template "foot" .}}{{end}}

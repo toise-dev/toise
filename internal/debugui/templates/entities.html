@@ -1,0 +1,29 @@
+{{define "entities"}}{{template "head" .}}
+<h1>Entities</h1>
+<form class="filter" method="get" action="/entities">
+  <label>Type
+    <select name="type" onchange="this.form.submit()">
+      <option value="">all types</option>
+      {{range .Types}}<option value="{{.}}"{{if eq . $.Type}} selected{{end}}>{{.}}</option>{{end}}
+    </select>
+  </label>
+  <noscript><button type="submit">Filter</button></noscript>
+</form>
+
+{{if .Entities}}
+<p class="muted">{{.Total}} matching{{if .Truncated}}, showing first {{len .Entities}}{{end}}.</p>
+<table>
+<tr><th>Label</th><th>Type</th><th>ID</th><th>Attrs</th></tr>
+{{range .Entities}}
+<tr>
+  <td><a href="/entity?id={{.ID}}">{{.Label}}</a>{{if .Deleted}} <span class="pill del">deleted</span>{{end}}</td>
+  <td class="ct">{{.Type}}</td>
+  <td class="k"><code>{{.ID}}</code></td>
+  <td>{{.AttrCount}}</td>
+</tr>
+{{end}}
+</table>
+{{else}}
+<p class="empty">No entities match this filter.</p>
+{{end}}
+{{template "foot" .}}{{end}}

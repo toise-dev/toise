@@ -1,0 +1,15 @@
+{{define "changerows"}}
+{{if .}}
+<table>
+<tr><th>Event time</th><th>Change</th><th>Subject</th><th></th></tr>
+{{range .}}
+<tr>
+  <td class="k">{{.EventTime}}</td>
+  <td><span class="pill{{if .Structural}} struct{{end}}">{{.ChangeType}}</span></td>
+  <td>{{if .EntityID}}<a href="/entity?id={{.EntityID}}">{{.Subject}}</a>{{else}}{{.Subject}}{{end}}{{if .ChangedKeys}} <span class="muted">[{{.ChangedKeys}}]</span>{{end}}</td>
+  <td class="muted">{{if .Recorded}}rec {{.RecordedAt}}{{end}}</td>
+</tr>
+{{end}}
+</table>
+{{else}}<p class="empty">No changes in this window.</p>{{end}}
+{{end}}
