@@ -25,7 +25,8 @@ directional signals.
 | Entity → proto | — | ~486 ns/op | M2 (model) |
 | Projection rebuild (1M events) | ≤ 30 s | ~0.44 s (extrapolated) | M3 ✅ |
 | GraphQL entity(id) | ≤ 10 ms p99 | functional, bench TBD | M5 |
-| GraphQL getNeighbors(depth=2) | ≤ 100 ms p99 | — (MCP, M6) | M6 |
+| getNeighbors(depth=2) (GraphQL/MCP) | ≤ 100 ms p99 | MCP ~330 ns/op | M6 ✅ |
+| MCP find_entities (10k hosts) | ≤ 10 ms p99 | ~1.86 ms/op | M6 ✅ |
 | GraphQL entityHistory(1h) | ≤ 200 ms p99 | functional, bench TBD | M5 |
 | Memory footprint (100k entities) | ≤ 1 GB RSS | — | M3 |
 | Cold start to ready (100k events) | ≤ 10 s | — | M3 |
@@ -56,6 +57,12 @@ directional signals.
   (O(1)/O(n) over a snapshot); `entityHistory`/`recentChanges` read the log.
   All are functionally validated; a formal p99 latency benchmark on the
   reference profile is still to be run.
+
+- **M6**: `BenchmarkFindEntities` filters and renders 200 of 10k host entities
+  in ~1.86 ms/op (~806 allocs) — the MCP layer adds only struct conversion over
+  the projection snapshot. `BenchmarkGetNeighbors` traverses depth 2 and renders
+  the result in ~330 ns/op (8 allocs). Both share the same read model as GraphQL,
+  so the latency picture matches M5; re-measure p99 on the reference profile.
 
 When a target is missed, an issue is opened and the architectural cause is
 investigated before proceeding (brief, patch 6).
