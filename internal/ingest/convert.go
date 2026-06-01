@@ -19,12 +19,16 @@ const (
 	attrEntityID    = "otel.entity.id"
 	attrEntityAttrs = "otel.entity.attributes"
 
-	attrRelType     = "toise.relation.type"
-	attrRelFromType = "toise.relation.from.type"
-	attrRelFromID   = "toise.relation.from.id"
-	attrRelToType   = "toise.relation.to.type"
-	attrRelToID     = "toise.relation.to.id"
-	attrRelAttrs    = "toise.relation.attributes"
+	// The relation extension uses a vendor-neutral namespace (neither a producer
+	// nor a consumer prefix) so any producer/consumer can speak it and it maps
+	// 1:1 onto the future OTel relationships standard (OTEP 0256 Future Work).
+	// It is explicitly transitional. See docs/data-model/otel-mapping.md.
+	attrRelType     = "entity.relation.type"
+	attrRelFromType = "entity.relation.from.type"
+	attrRelFromID   = "entity.relation.from.id"
+	attrRelToType   = "entity.relation.to.type"
+	attrRelToID     = "entity.relation.to.id"
+	attrRelAttrs    = "entity.relation.attributes"
 )
 
 // Event type values for the otel.entity.event.type attribute.

@@ -148,6 +148,12 @@
                     "kvlistValue": {
                       "values": [
                         {
+                          "key": "server.port",
+                          "value": {
+                            "intValue": "5432"
+                          }
+                        },
+                        {
                           "key": "db.system.name",
                           "value": {
                             "stringValue": "postgresql"
@@ -157,12 +163,6 @@
                           "key": "server.address",
                           "value": {
                             "stringValue": "10.0.1.5"
-                          }
-                        },
-                        {
-                          "key": "server.port",
-                          "value": {
-                            "intValue": "5432"
                           }
                         }
                       ]
@@ -182,19 +182,19 @@
                   }
                 },
                 {
-                  "key": "toise.relation.type",
+                  "key": "entity.relation.type",
                   "value": {
                     "stringValue": "monitors"
                   }
                 },
                 {
-                  "key": "toise.relation.from.type",
+                  "key": "entity.relation.from.type",
                   "value": {
                     "stringValue": "service.instance"
                   }
                 },
                 {
-                  "key": "toise.relation.from.id",
+                  "key": "entity.relation.from.id",
                   "value": {
                     "kvlistValue": {
                       "values": [
@@ -209,13 +209,13 @@
                   }
                 },
                 {
-                  "key": "toise.relation.to.type",
+                  "key": "entity.relation.to.type",
                   "value": {
                     "stringValue": "host"
                   }
                 },
                 {
-                  "key": "toise.relation.to.id",
+                  "key": "entity.relation.to.id",
                   "value": {
                     "kvlistValue": {
                       "values": [
@@ -242,19 +242,19 @@
                   }
                 },
                 {
-                  "key": "toise.relation.type",
+                  "key": "entity.relation.type",
                   "value": {
                     "stringValue": "monitors"
                   }
                 },
                 {
-                  "key": "toise.relation.from.type",
+                  "key": "entity.relation.from.type",
                   "value": {
                     "stringValue": "service.instance"
                   }
                 },
                 {
-                  "key": "toise.relation.from.id",
+                  "key": "entity.relation.from.id",
                   "value": {
                     "kvlistValue": {
                       "values": [
@@ -269,13 +269,13 @@
                   }
                 },
                 {
-                  "key": "toise.relation.to.type",
+                  "key": "entity.relation.to.type",
                   "value": {
                     "stringValue": "db"
                   }
                 },
                 {
-                  "key": "toise.relation.to.id",
+                  "key": "entity.relation.to.id",
                   "value": {
                     "kvlistValue": {
                       "values": [
@@ -328,12 +328,6 @@
                     "kvlistValue": {
                       "values": [
                         {
-                          "key": "db.connection.count",
-                          "value": {
-                            "intValue": "12"
-                          }
-                        },
-                        {
                           "key": "db.system.name",
                           "value": {
                             "stringValue": "postgresql"
@@ -349,6 +343,12 @@
                           "key": "server.port",
                           "value": {
                             "intValue": "5432"
+                          }
+                        },
+                        {
+                          "key": "db.connection.count",
+                          "value": {
+                            "intValue": "12"
                           }
                         }
                       ]
@@ -368,19 +368,19 @@
                   }
                 },
                 {
-                  "key": "toise.relation.type",
+                  "key": "entity.relation.type",
                   "value": {
                     "stringValue": "monitors"
                   }
                 },
                 {
-                  "key": "toise.relation.from.type",
+                  "key": "entity.relation.from.type",
                   "value": {
                     "stringValue": "service.instance"
                   }
                 },
                 {
-                  "key": "toise.relation.from.id",
+                  "key": "entity.relation.from.id",
                   "value": {
                     "kvlistValue": {
                       "values": [
@@ -395,13 +395,13 @@
                   }
                 },
                 {
-                  "key": "toise.relation.to.type",
+                  "key": "entity.relation.to.type",
                   "value": {
                     "stringValue": "db"
                   }
                 },
                 {
-                  "key": "toise.relation.to.id",
+                  "key": "entity.relation.to.id",
                   "value": {
                     "kvlistValue": {
                       "values": [
@@ -557,19 +557,19 @@
                   }
                 },
                 {
-                  "key": "toise.relation.type",
+                  "key": "entity.relation.type",
                   "value": {
                     "stringValue": "adjacent_to"
                   }
                 },
                 {
-                  "key": "toise.relation.from.type",
+                  "key": "entity.relation.from.type",
                   "value": {
                     "stringValue": "network.device"
                   }
                 },
                 {
-                  "key": "toise.relation.from.id",
+                  "key": "entity.relation.from.id",
                   "value": {
                     "kvlistValue": {
                       "values": [
@@ -584,13 +584,13 @@
                   }
                 },
                 {
-                  "key": "toise.relation.to.type",
+                  "key": "entity.relation.to.type",
                   "value": {
                     "stringValue": "network.device"
                   }
                 },
                 {
-                  "key": "toise.relation.to.id",
+                  "key": "entity.relation.to.id",
                   "value": {
                     "kvlistValue": {
                       "values": [

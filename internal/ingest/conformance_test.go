@@ -28,8 +28,8 @@ const conformanceFile = "testdata/conformance/entity-events.json"
 // senhub-agent-contract.md). The marshaled OTLP/JSON is the shared conformance
 // artifact: senhub-agent (#185) emits to reproduce it, Toise ingests it here and
 // asserts the resulting graph. Every record uses the agreed conventions — the
-// standard otel.entity.* shape for nodes, the toise.relation.* extension for
-// edges, flat scalar maps, exact-identity endpoints emitted before their edges,
+// standard otel.entity.* shape for nodes, the vendor-neutral entity.relation.*
+// extension for edges, flat scalar maps, endpoints emitted before their edges,
 // and an explicit entity_delete.
 func buildConformanceLogs() plog.Logs {
 	logs := plog.NewLogs()
@@ -71,7 +71,7 @@ func buildConformanceLogs() plog.Logs {
 	entity(evEntityState, model.TypeHost, hostID, map[string]any{"host.name": "web-server-1", "os.type": "linux"})
 	entity(evEntityState, model.TypeServiceInstance, agentID, map[string]any{"service.name": "senhub-agent", "service.version": "1.0.0"})
 	entity(evEntityState, model.TypeDatabase, dbID, map[string]any{"db.system.name": "postgresql", "server.address": "10.0.1.5", "server.port": int64(5432)})
-	// 4-5: edges (toise.relation.* extension). monitors targets a host and a db.
+	// 4-5: edges (entity.relation.* extension). monitors targets a host and a db.
 	relation(evRelationState, model.RelMonitors, model.TypeServiceInstance, agentID, model.TypeHost, hostID)
 	relation(evRelationState, model.RelMonitors, model.TypeServiceInstance, agentID, model.TypeDatabase, dbID)
 	// 6: descriptive attribute added -> entity.attribute_updated.
