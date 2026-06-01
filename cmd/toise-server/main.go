@@ -1,12 +1,14 @@
 // Command toise-server is the main entry point for the Toise server. It opens
 // the event log, rebuilds the in-memory projection, starts the OTLP/gRPC
-// ingestion receiver and the GraphQL HTTP API (with a built-in playground), and
-// runs until interrupted. The MCP server is mounted at /mcp (Streamable HTTP)
-// and can alternatively be run over stdio with --mcp-stdio (for Claude Desktop).
+// ingestion receiver and an HTTP server, and runs until interrupted. The HTTP
+// server exposes the GraphQL API at /graphql (with a playground at /playground),
+// the MCP server at /mcp (Streamable HTTP), and a minimal debug UI at /. The MCP
+// server can alternatively be run over stdio with --mcp-stdio (for Claude
+// Desktop).
 //
 // Phase 1 has no authentication: the servers default to loopback addresses and
 // are intended for trusted networks only (see the README security note and ADR
-// 0014). The debug UI is added in a later milestone.
+// 0014).
 package main
 
 import (
@@ -25,6 +27,7 @@ import (
 	"github.com/99designs/gqlgen/graphql/playground"
 
 	"github.com/toise-dev/toise/internal/change"
+	"github.com/toise-dev/toise/internal/debugui"
 	"github.com/toise-dev/toise/internal/graphql"
 	"github.com/toise-dev/toise/internal/graphql/resolvers"
 	"github.com/toise-dev/toise/internal/ingest"
@@ -99,11 +102,17 @@ func run(listen, otlpListen, dataDir string, mcpStdio bool, cfg store.Config, lo
 	}()
 	defer receiver.Stop()
 
+	ui, err := debugui.New(graph, st)
+	if err != nil {
+		return fmt.Errorf("building debug UI: %w", err)
+	}
+
 	res := &resolvers.Resolver{Graph: graph, Store: st, Engine: engine}
 	mux := http.NewServeMux()
 	mux.Handle("/graphql", graphql.NewHandler(res, graphql.Config{}))
 	mux.Handle("/mcp", mcp.New(graph, st).HTTPHandler())
-	mux.Handle("/", playground.Handler("Toise", "/graphql"))
+	mux.Handle("/playground", playground.Handler("Toise", "/graphql"))
+	mux.Handle("/", ui)
 	httpSrv := &http.Server{Addr: listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -111,7 +120,8 @@ func run(listen, otlpListen, dataDir string, mcpStdio bool, cfg store.Config, lo
 
 	fmt.Printf("Toise %s — the living map of your infrastructure\n", version.String())
 	logger.Info("toise-server ready",
-		"graphql", "http://"+listen+"/",
+		"debug_ui", "http://"+listen+"/",
+		"graphql", "http://"+listen+"/graphql",
 		"mcp", "http://"+listen+"/mcp",
 		"otlp_grpc", otlpListen,
 		"data_dir", dataDir)

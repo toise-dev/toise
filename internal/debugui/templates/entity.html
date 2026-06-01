@@ -1,0 +1,43 @@
+{{define "entity"}}{{template "head" .}}
+<h1>{{.Label}} {{if .Deleted}}<span class="pill del">deleted</span>{{end}}</h1>
+<p class="muted"><span class="ct">{{.Type}}</span> · <code>{{.ID}}</code></p>
+
+<h2>Identity</h2>
+{{template "attrtable" .Identity}}
+
+<h2>Attributes</h2>
+{{template "attrtable" .Attributes}}
+
+<h2>Neighbors</h2>
+{{if .Neighbors}}
+<table>
+<tr><th>Label</th><th>Type</th><th>Via</th></tr>
+{{range .Neighbors}}
+<tr><td><a href="/entity?id={{.ID}}">{{.Label}}</a></td><td class="ct">{{.Type}}</td><td class="muted">{{.Via}}{{if .Structural}} <span class="pill struct">structural</span>{{end}}</td></tr>
+{{end}}
+</table>
+{{else}}<p class="empty">No directly connected entities.</p>{{end}}
+
+<h2>History <span class="muted">({{len .History}} change{{if ne (len .History) 1}}s{{end}}, oldest first)</span></h2>
+{{if .History}}
+<table>
+<tr><th>Event time</th><th>Change</th><th>Changed keys</th><th>Recorded</th></tr>
+{{range .History}}
+<tr>
+  <td class="k">{{.EventTime}}</td>
+  <td><span class="pill{{if .Structural}} struct{{end}}">{{.ChangeType}}</span></td>
+  <td>{{if .ChangedKeys}}{{.ChangedKeys}}{{else}}<span class="muted">—</span>{{end}}</td>
+  <td class="muted">{{.RecordedAt}}</td>
+</tr>
+{{end}}
+</table>
+{{else}}<p class="empty">No recorded history for this entity.</p>{{end}}
+{{template "foot" .}}{{end}}
+
+{{define "attrtable"}}
+{{if .}}
+<table>
+{{range .}}<tr><td class="k">{{.Key}}</td><td>{{.Value}}</td><td class="muted">{{.Type}}</td></tr>{{end}}
+</table>
+{{else}}<p class="empty">None.</p>{{end}}
+{{end}}
