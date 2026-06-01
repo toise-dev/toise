@@ -15,7 +15,7 @@ Status legend: `not started` · `in progress` · `awaiting checkpoint` · `done`
 | 3 | Projection engine and change detection | C | awaiting checkpoint |
 | 4 | OTLP ingestion receiver | D | awaiting checkpoint |
 | 5 | GraphQL API (+ pagination/limits) | E | awaiting checkpoint |
-| 6 | MCP server | F | awaiting checkpoint |
+| 6 | MCP server | F | done |
 | 7 | Debug UI | G | not started |
 | 8 | Temporal fixtures and demo scenario | H | not started |
 
@@ -69,7 +69,7 @@ Status legend: `not started` · `in progress` · `awaiting checkpoint` · `done`
 - **Classification fix (found by GraphQL tests):** tolerant identity matching now requires an unchanged identifying value as an anchor (`diffs < len(identity)`), so a single-key identity no longer over-merges distinct entities.
 - build/vet/gofmt/golangci-lint/`go test -race`/govulncheck all clean.
 
-## Milestone 6 — MCP server (awaiting Checkpoint F)
+## Milestone 6 — MCP server (done, Checkpoint F passed)
 
 - `internal/mcp`: MCP server on the **official Go SDK** (`modelcontextprotocol/go-sdk` v1.6.1, ADR 0011), exposing six **typed tools** via `mcp.AddTool[In, Out]` — input validation is a property of the Go struct + inferred JSON schema, not hand-written checks. Tools: `find_entities` (type + attribute filter + limit), `get_entity`, `get_neighbors` (**depth capped at 5**, friendly over-limit error), `entity_history` (`since`/`until` in event-time + optional `as_known_at` audit view, ADR 0005), `recent_changes` (Go-duration window + entity/relation/**structural** filter), `describe_schema` (NL summary + per-type counts to bootstrap the LLM).
 - **Same read model as GraphQL**: tools read the in-memory projection (current state, ADR 0008) and event log (history, ADR 0007) through narrow `Graph`/`EventReader` interfaces, so the two surfaces stay consistent. Outputs are **name-bearing** (each entity carries a human-readable `label` derived from its identity, types alongside ids) so the model reasons without a second lookup; errors are plain messages.
