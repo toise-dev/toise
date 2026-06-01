@@ -132,7 +132,8 @@ approval).
 | 0014 | no-authentication-in-phase-1 | M0 | written |
 | 0015 | tracking-otel-entity-events-spec | M1 | written |
 | 0016 | pebble-validation (PoC results) — *was patch-1 "0007", reassigned* | M0 | written |
-| 0017 | entity-identity-and-stability — *was patch-3 "0006", reassigned* | M1 | written |
+| 0017 | entity-identity-and-stability — *was patch-3 "0006", reassigned* | M1 | superseded by 0018 |
+| 0018 | exact-identity-matching (supersedes 0017's tolerant matching) | post-phase-1 | written |
 
 ## Demo scenario (patch 9)
 

@@ -135,11 +135,11 @@ agreed. Today Toise consumes neither the interval nor runs a sweeper — explici
 delete only; parsing/storing the interval and the TTL sweeper are the next
 ingest-hardening item; see* Robustness backstops *below.)*
 
-### Identity matching — moving to exact (immutable Id)
+### Identity matching — exact (immutable Id)
 
-**Decision (accepted, implementation pending):** entity identity is matched
-**exactly** against the producer-declared Id, in line with the OTel model where an
-entity's Id is **immutable**.
+Entity identity is matched **exactly** against the producer-declared Id, in line
+with the OTel model where an entity's Id is **immutable** (ADR 0018, superseding
+the tolerant matching of ADR 0017).
 
 Background: phase-1 Toise matched *tolerantly* (an observation differing in at
 most one identifying value was treated as the same entity that "changed identity",
@@ -163,9 +163,9 @@ Under exact matching:
 The corollary for producers: **Ids must be immutable** — never put a mutable value
 (a pid, a leased IP) in the identity; those are descriptive attributes.
 
-*(Status: this supersedes the tolerant-matching behaviour of ADR 0017; it requires
-an ADR revision and a change-engine update — `entity.identity_changed` is retired
-as a fuzzy-detected type — tracked as a dedicated change.)*
+*(Implemented: ADR 0017 is superseded by ADR 0018; the change engine matches
+exactly and no longer emits `entity.identity_changed`, though the type is retained
+in the taxonomy for replay/wire compatibility.)*
 
 ### Type registry — types must be known
 
@@ -197,7 +197,7 @@ planned:
 
 | Concern | Decision | Status |
 | ------- | -------- | ------ |
-| Entity collisions | exact-Id matching (no fuzzy merge) | accepted; engine change pending |
+| Entity collisions | exact-Id matching (no fuzzy merge) | **done** (ADR 0018) |
 | Missed deletes | explicit `entity_delete` + `interval` TTL backstop | accepted; sweeper pending |
 | Out-of-order edges | reconciliation buffer (park & flush) | accepted; today a retriable error |
 | Nested values | explicit `Warn` on drop (never silent) | accepted; warning pending |
