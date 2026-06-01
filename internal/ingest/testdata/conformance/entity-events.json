@@ -1,0 +1,617 @@
+{
+  "resourceLogs": [
+    {
+      "resource": {},
+      "scopeLogs": [
+        {
+          "logRecords": [
+            {
+              "attributes": [
+                {
+                  "key": "otel.entity.event.type",
+                  "value": {
+                    "stringValue": "entity_state"
+                  }
+                },
+                {
+                  "key": "otel.entity.type",
+                  "value": {
+                    "stringValue": "host"
+                  }
+                },
+                {
+                  "key": "otel.entity.id",
+                  "value": {
+                    "kvlistValue": {
+                      "values": [
+                        {
+                          "key": "host.id",
+                          "value": {
+                            "stringValue": "h-001"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "otel.entity.attributes",
+                  "value": {
+                    "kvlistValue": {
+                      "values": [
+                        {
+                          "key": "host.name",
+                          "value": {
+                            "stringValue": "web-server-1"
+                          }
+                        },
+                        {
+                          "key": "os.type",
+                          "value": {
+                            "stringValue": "linux"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "body": {},
+              "timeUnixNano": "1780272000000000000"
+            },
+            {
+              "attributes": [
+                {
+                  "key": "otel.entity.event.type",
+                  "value": {
+                    "stringValue": "entity_state"
+                  }
+                },
+                {
+                  "key": "otel.entity.type",
+                  "value": {
+                    "stringValue": "service.instance"
+                  }
+                },
+                {
+                  "key": "otel.entity.id",
+                  "value": {
+                    "kvlistValue": {
+                      "values": [
+                        {
+                          "key": "service.instance.id",
+                          "value": {
+                            "stringValue": "agent-7f3a"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "otel.entity.attributes",
+                  "value": {
+                    "kvlistValue": {
+                      "values": [
+                        {
+                          "key": "service.name",
+                          "value": {
+                            "stringValue": "senhub-agent"
+                          }
+                        },
+                        {
+                          "key": "service.version",
+                          "value": {
+                            "stringValue": "1.0.0"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "body": {},
+              "timeUnixNano": "1780272060000000000"
+            },
+            {
+              "attributes": [
+                {
+                  "key": "otel.entity.event.type",
+                  "value": {
+                    "stringValue": "entity_state"
+                  }
+                },
+                {
+                  "key": "otel.entity.type",
+                  "value": {
+                    "stringValue": "db"
+                  }
+                },
+                {
+                  "key": "otel.entity.id",
+                  "value": {
+                    "kvlistValue": {
+                      "values": [
+                        {
+                          "key": "db.instance.id",
+                          "value": {
+                            "stringValue": "pg@web-server-1:5432"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "otel.entity.attributes",
+                  "value": {
+                    "kvlistValue": {
+                      "values": [
+                        {
+                          "key": "db.system.name",
+                          "value": {
+                            "stringValue": "postgresql"
+                          }
+                        },
+                        {
+                          "key": "server.address",
+                          "value": {
+                            "stringValue": "10.0.1.5"
+                          }
+                        },
+                        {
+                          "key": "server.port",
+                          "value": {
+                            "intValue": "5432"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "body": {},
+              "timeUnixNano": "1780272120000000000"
+            },
+            {
+              "attributes": [
+                {
+                  "key": "otel.entity.event.type",
+                  "value": {
+                    "stringValue": "relation_state"
+                  }
+                },
+                {
+                  "key": "toise.relation.type",
+                  "value": {
+                    "stringValue": "monitors"
+                  }
+                },
+                {
+                  "key": "toise.relation.from.type",
+                  "value": {
+                    "stringValue": "service.instance"
+                  }
+                },
+                {
+                  "key": "toise.relation.from.id",
+                  "value": {
+                    "kvlistValue": {
+                      "values": [
+                        {
+                          "key": "service.instance.id",
+                          "value": {
+                            "stringValue": "agent-7f3a"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "toise.relation.to.type",
+                  "value": {
+                    "stringValue": "host"
+                  }
+                },
+                {
+                  "key": "toise.relation.to.id",
+                  "value": {
+                    "kvlistValue": {
+                      "values": [
+                        {
+                          "key": "host.id",
+                          "value": {
+                            "stringValue": "h-001"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "body": {},
+              "timeUnixNano": "1780272180000000000"
+            },
+            {
+              "attributes": [
+                {
+                  "key": "otel.entity.event.type",
+                  "value": {
+                    "stringValue": "relation_state"
+                  }
+                },
+                {
+                  "key": "toise.relation.type",
+                  "value": {
+                    "stringValue": "monitors"
+                  }
+                },
+                {
+                  "key": "toise.relation.from.type",
+                  "value": {
+                    "stringValue": "service.instance"
+                  }
+                },
+                {
+                  "key": "toise.relation.from.id",
+                  "value": {
+                    "kvlistValue": {
+                      "values": [
+                        {
+                          "key": "service.instance.id",
+                          "value": {
+                            "stringValue": "agent-7f3a"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "toise.relation.to.type",
+                  "value": {
+                    "stringValue": "db"
+                  }
+                },
+                {
+                  "key": "toise.relation.to.id",
+                  "value": {
+                    "kvlistValue": {
+                      "values": [
+                        {
+                          "key": "db.instance.id",
+                          "value": {
+                            "stringValue": "pg@web-server-1:5432"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "body": {},
+              "timeUnixNano": "1780272240000000000"
+            },
+            {
+              "attributes": [
+                {
+                  "key": "otel.entity.event.type",
+                  "value": {
+                    "stringValue": "entity_state"
+                  }
+                },
+                {
+                  "key": "otel.entity.type",
+                  "value": {
+                    "stringValue": "db"
+                  }
+                },
+                {
+                  "key": "otel.entity.id",
+                  "value": {
+                    "kvlistValue": {
+                      "values": [
+                        {
+                          "key": "db.instance.id",
+                          "value": {
+                            "stringValue": "pg@web-server-1:5432"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "otel.entity.attributes",
+                  "value": {
+                    "kvlistValue": {
+                      "values": [
+                        {
+                          "key": "db.connection.count",
+                          "value": {
+                            "intValue": "12"
+                          }
+                        },
+                        {
+                          "key": "db.system.name",
+                          "value": {
+                            "stringValue": "postgresql"
+                          }
+                        },
+                        {
+                          "key": "server.address",
+                          "value": {
+                            "stringValue": "10.0.1.5"
+                          }
+                        },
+                        {
+                          "key": "server.port",
+                          "value": {
+                            "intValue": "5432"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "body": {},
+              "timeUnixNano": "1780272300000000000"
+            },
+            {
+              "attributes": [
+                {
+                  "key": "otel.entity.event.type",
+                  "value": {
+                    "stringValue": "relation_delete"
+                  }
+                },
+                {
+                  "key": "toise.relation.type",
+                  "value": {
+                    "stringValue": "monitors"
+                  }
+                },
+                {
+                  "key": "toise.relation.from.type",
+                  "value": {
+                    "stringValue": "service.instance"
+                  }
+                },
+                {
+                  "key": "toise.relation.from.id",
+                  "value": {
+                    "kvlistValue": {
+                      "values": [
+                        {
+                          "key": "service.instance.id",
+                          "value": {
+                            "stringValue": "agent-7f3a"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "toise.relation.to.type",
+                  "value": {
+                    "stringValue": "db"
+                  }
+                },
+                {
+                  "key": "toise.relation.to.id",
+                  "value": {
+                    "kvlistValue": {
+                      "values": [
+                        {
+                          "key": "db.instance.id",
+                          "value": {
+                            "stringValue": "pg@web-server-1:5432"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "body": {},
+              "timeUnixNano": "1780272360000000000"
+            },
+            {
+              "attributes": [
+                {
+                  "key": "otel.entity.event.type",
+                  "value": {
+                    "stringValue": "entity_delete"
+                  }
+                },
+                {
+                  "key": "otel.entity.type",
+                  "value": {
+                    "stringValue": "db"
+                  }
+                },
+                {
+                  "key": "otel.entity.id",
+                  "value": {
+                    "kvlistValue": {
+                      "values": [
+                        {
+                          "key": "db.instance.id",
+                          "value": {
+                            "stringValue": "pg@web-server-1:5432"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "body": {},
+              "timeUnixNano": "1780272420000000000"
+            },
+            {
+              "attributes": [
+                {
+                  "key": "otel.entity.event.type",
+                  "value": {
+                    "stringValue": "entity_state"
+                  }
+                },
+                {
+                  "key": "otel.entity.type",
+                  "value": {
+                    "stringValue": "network.device"
+                  }
+                },
+                {
+                  "key": "otel.entity.id",
+                  "value": {
+                    "kvlistValue": {
+                      "values": [
+                        {
+                          "key": "network.device.id",
+                          "value": {
+                            "stringValue": "sw-01"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "otel.entity.attributes",
+                  "value": {
+                    "kvlistValue": {
+                      "values": [
+                        {
+                          "key": "device.role",
+                          "value": {
+                            "stringValue": "switch"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "body": {},
+              "timeUnixNano": "1780272480000000000"
+            },
+            {
+              "attributes": [
+                {
+                  "key": "otel.entity.event.type",
+                  "value": {
+                    "stringValue": "entity_state"
+                  }
+                },
+                {
+                  "key": "otel.entity.type",
+                  "value": {
+                    "stringValue": "network.device"
+                  }
+                },
+                {
+                  "key": "otel.entity.id",
+                  "value": {
+                    "kvlistValue": {
+                      "values": [
+                        {
+                          "key": "network.device.id",
+                          "value": {
+                            "stringValue": "sw-02"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "otel.entity.attributes",
+                  "value": {
+                    "kvlistValue": {
+                      "values": [
+                        {
+                          "key": "device.role",
+                          "value": {
+                            "stringValue": "switch"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "body": {},
+              "timeUnixNano": "1780272540000000000"
+            },
+            {
+              "attributes": [
+                {
+                  "key": "otel.entity.event.type",
+                  "value": {
+                    "stringValue": "relation_state"
+                  }
+                },
+                {
+                  "key": "toise.relation.type",
+                  "value": {
+                    "stringValue": "adjacent_to"
+                  }
+                },
+                {
+                  "key": "toise.relation.from.type",
+                  "value": {
+                    "stringValue": "network.device"
+                  }
+                },
+                {
+                  "key": "toise.relation.from.id",
+                  "value": {
+                    "kvlistValue": {
+                      "values": [
+                        {
+                          "key": "network.device.id",
+                          "value": {
+                            "stringValue": "sw-01"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "toise.relation.to.type",
+                  "value": {
+                    "stringValue": "network.device"
+                  }
+                },
+                {
+                  "key": "toise.relation.to.id",
+                  "value": {
+                    "kvlistValue": {
+                      "values": [
+                        {
+                          "key": "network.device.id",
+                          "value": {
+                            "stringValue": "sw-02"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "body": {},
+              "timeUnixNano": "1780272600000000000"
+            }
+          ],
+          "scope": {}
+        }
+      ]
+    }
+  ]
+}
