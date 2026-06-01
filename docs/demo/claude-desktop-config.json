@@ -1,0 +1,13 @@
+{
+  "//": "Sample Claude Desktop configuration for the Toise MCP server (ADR 0011). Copy the 'toise' entry into your claude_desktop_config.json (mcpServers), replacing the absolute paths. Claude Desktop launches toise-server as a subprocess and speaks MCP over stdio; --mcp-stdio disables the HTTP and OTLP servers so the process is a pure local MCP server reading the given data directory.",
+  "mcpServers": {
+    "toise": {
+      "command": "/usr/local/bin/toise-server",
+      "args": [
+        "--mcp-stdio",
+        "--data-dir",
+        "/var/lib/toise/toise-data"
+      ]
+    }
+  }
+}

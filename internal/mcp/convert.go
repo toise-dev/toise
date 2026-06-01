@@ -1,0 +1,171 @@
+package mcp
+
+import (
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/toise-dev/toise/internal/model"
+)
+
+// Attribute is a single typed attribute rendered for an LLM: the key, its value
+// as a string, and the value's type so the model knows how to read it.
+type Attribute struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+	Type  string `json:"type" jsonschema:"the value's type: string, int, double, or bool"`
+}
+
+// Entity is an entity rendered for an LLM. Label is a short human-readable
+// summary derived from the identifying attributes so the model can refer to the
+// entity without re-deriving it.
+type Entity struct {
+	ID         string      `json:"id" jsonschema:"the stable logical entity id (a ULID), stable across identity changes"`
+	Type       string      `json:"type" jsonschema:"the entity type, e.g. host, process, network_interface"`
+	Label      string      `json:"label" jsonschema:"a short human-readable label derived from the identifying attributes"`
+	Identity   []Attribute `json:"identity" jsonschema:"the identifying attributes that together identify this entity"`
+	Attributes []Attribute `json:"attributes" jsonschema:"descriptive, non-identifying attributes"`
+	Deleted    bool        `json:"deleted" jsonschema:"true if the entity has been observed deleted"`
+}
+
+// Relation is a typed directed edge rendered for an LLM.
+type Relation struct {
+	ID         string      `json:"id"`
+	Type       string      `json:"type" jsonschema:"the relation type, e.g. runs_on, connected_to"`
+	FromID     string      `json:"from_id" jsonschema:"logical id of the source entity"`
+	ToID       string      `json:"to_id" jsonschema:"logical id of the target entity"`
+	Structural bool        `json:"structural" jsonschema:"true if appearance/disappearance of this edge is significant (alert-worthy)"`
+	Attributes []Attribute `json:"attributes"`
+}
+
+// Change is one classified event rendered for an LLM. It is bi-temporal:
+// EventTime is when the fact became true in the world, RecordedAt is when Toise
+// learned it (ADR 0005). Exactly one of Entity or Relation is set.
+type Change struct {
+	EventID     string    `json:"event_id"`
+	ChangeType  string    `json:"change_type" jsonschema:"the taxonomy name, e.g. entity.created, relation.added"`
+	EventTime   string    `json:"event_time" jsonschema:"RFC 3339; when the change became true in the real world"`
+	RecordedAt  string    `json:"recorded_at" jsonschema:"RFC 3339; when Toise recorded the change"`
+	ChangedKeys []string  `json:"changed_keys" jsonschema:"the attribute keys that changed, for update/state-change events"`
+	Entity      *Entity   `json:"entity,omitempty"`
+	Relation    *Relation `json:"relation,omitempty"`
+}
+
+func valueString(v model.Value) (str, typ string) {
+	switch v.Kind() {
+	case model.KindInt:
+		return strconv.FormatInt(v.Int(), 10), "int"
+	case model.KindDouble:
+		return strconv.FormatFloat(v.Double(), 'g', -1, 64), "double"
+	case model.KindBool:
+		return strconv.FormatBool(v.Bool()), "bool"
+	default:
+		return v.Str(), "string"
+	}
+}
+
+func attrsOut(kvs []model.KeyValue) []Attribute {
+	out := make([]Attribute, len(kvs))
+	for i, kv := range kvs {
+		val, typ := valueString(kv.Value)
+		out[i] = Attribute{Key: kv.Key, Value: val, Type: typ}
+	}
+	return out
+}
+
+// label builds a compact, human-readable identifier from the entity's
+// identifying attributes, e.g. "host hostname=web-server-1".
+func label(e model.Entity) string {
+	var b strings.Builder
+	b.WriteString(e.Type)
+	for _, kv := range e.Identity {
+		val, _ := valueString(kv.Value)
+		b.WriteByte(' ')
+		b.WriteString(kv.Key)
+		b.WriteByte('=')
+		b.WriteString(val)
+	}
+	return b.String()
+}
+
+func entityOut(e model.Entity, deleted bool) Entity {
+	return Entity{
+		ID:         string(e.ID),
+		Type:       e.Type,
+		Label:      label(e),
+		Identity:   attrsOut(e.Identity),
+		Attributes: attrsOut(e.Attributes),
+		Deleted:    deleted,
+	}
+}
+
+func relationOut(r model.Relation) Relation {
+	return Relation{
+		ID:         string(r.ID),
+		Type:       r.Type,
+		FromID:     string(r.From),
+		ToID:       string(r.To),
+		Structural: r.Structural,
+		Attributes: attrsOut(r.Attributes),
+	}
+}
+
+func changeOut(ev model.Event) Change {
+	c := Change{ChangedKeys: []string{}}
+	switch {
+	case ev.Entity != nil:
+		ee := ev.Entity
+		c.EventID = ee.EventID
+		c.ChangeType = ee.ChangeType.String()
+		c.EventTime = formatTime(ee.EventTime)
+		c.RecordedAt = formatTime(ee.RecordedAt)
+		if ee.ChangedKeys != nil {
+			c.ChangedKeys = ee.ChangedKeys
+		}
+		ent := entityOut(ee.Entity, ee.ChangeType == model.EntityDeleted)
+		c.Entity = &ent
+	case ev.Relation != nil:
+		re := ev.Relation
+		c.EventID = re.EventID
+		c.ChangeType = re.ChangeType.String()
+		c.EventTime = formatTime(re.EventTime)
+		c.RecordedAt = formatTime(re.RecordedAt)
+		if re.ChangedKeys != nil {
+			c.ChangedKeys = re.ChangedKeys
+		}
+		rel := relationOut(re.Relation)
+		c.Relation = &rel
+	}
+	return c
+}
+
+func formatTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339Nano)
+}
+
+// matches reports whether every wanted key/value is present (as a string-equal
+// attribute) in the entity's identity or attributes.
+func matches(e model.Entity, want map[string]string) bool {
+	for k, v := range want {
+		if !hasAttr(e.Identity, k, v) && !hasAttr(e.Attributes, k, v) {
+			return false
+		}
+	}
+	return true
+}
+
+func hasAttr(kvs []model.KeyValue, key, val string) bool {
+	for _, kv := range kvs {
+		if kv.Key != key {
+			continue
+		}
+		s, _ := valueString(kv.Value)
+		if s == val {
+			return true
+		}
+	}
+	return false
+}
