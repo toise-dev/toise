@@ -16,7 +16,7 @@ Status legend: `not started` · `in progress` · `awaiting checkpoint` · `done`
 | 4 | OTLP ingestion receiver | D | awaiting checkpoint |
 | 5 | GraphQL API (+ pagination/limits) | E | awaiting checkpoint |
 | 6 | MCP server | F | done |
-| 7 | Debug UI | G | not started |
+| 7 | Debug UI | G | awaiting checkpoint |
 | 8 | Temporal fixtures and demo scenario | H | not started |
 
 ## Milestone 0 — Prerequisites (brief v2, patch 1)
@@ -77,6 +77,14 @@ Status legend: `not started` · `in progress` · `awaiting checkpoint` · `done`
 - End-to-end test exercises the real MCP protocol over an in-memory transport (tool discovery, structured-content round-trip, tool-error vs transport-error). **Coverage 90 %.**
 - Benchmarks: `FindEntities` over 10k hosts ~1.86 ms/op (target ≤10 ms); `GetNeighbors(depth=2)` ~330 ns/op (target ≤100 ms). build/vet/gofmt/golangci-lint/`go test -race`/govulncheck all clean.
 
+## Milestone 7 — Debug UI (awaiting Checkpoint G)
+
+- `internal/debugui`: minimal **server-rendered HTML** over the same read model as GraphQL/MCP (projection + log, via narrow `Graph`/`EventReader` interfaces). `html/template` embedded with `//go:embed`; **no client framework, no external assets/fonts, no JS** beyond one progressive-enhancement filter submit (`<noscript>` fallback). ADR 0012.
+- Four read-only pages: **dashboard** (entity/relation type counts, totals, recent changes), **entity list** (filter by type, capped at 500), **entity detail** (identity, attributes, directly-connected neighbors with the linking relation + structural flag, full history oldest-first), **changes** (duration window + entity/relation/**structural** filter).
+- **Safe by construction**: read-only (no mutation endpoints); all dynamic values render through `html/template` contextual auto-escaping — a test asserts an attribute value containing `<script>` is escaped, not rendered.
+- **Routing**: debug UI at `/`, GraphQL stays `/graphql`, playground moved to `/playground`, MCP at `/mcp` (Go 1.22+ `ServeMux` routes specific API paths first, everything else to the UI). Live smoke confirms `/`,`/entities`,`/changes`,`/playground` → 200; `/entity?id=<unknown>` → 404.
+- `httptest` handler tests per page (status, content, type filter, not-found/bad-request, escaping, unknown-path 404). **Coverage 84 %.** build/vet/gofmt/golangci-lint/`go test -race`/govulncheck all clean.
+
 ## Key cross-cutting rules (brief v2)
 
 - **Bi-temporality (patch 2):** default queries operate in `event_time` space (reality view). `asKnownAt` opt-in constrains to `recorded_at <= t` (audit view). Every event exposes both `eventTime` and `recordedAt`. Schema descriptions must teach the LLM which mode to pick.
@@ -100,7 +108,7 @@ Status legend: `not started` · `in progress` · `awaiting checkpoint` · `done`
 | 0009 | otlp-ingestion-via-entity-events | M4 | written |
 | 0010 | graphql-as-primary-query-language | M5 | written |
 | 0011 | mcp-server-design | M6 | written |
-| 0012 | debug-ui-minimal-html | M7 | planned |
+| 0012 | debug-ui-minimal-html | M7 | written |
 | 0013 | event-log-retention-strategy | M2 | written |
 | 0014 | no-authentication-in-phase-1 | M0 | written |
 | 0015 | tracking-otel-entity-events-spec | M1 | written |

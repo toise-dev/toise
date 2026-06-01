@@ -64,5 +64,11 @@ directional signals.
   the result in ~330 ns/op (8 allocs). Both share the same read model as GraphQL,
   so the latency picture matches M5; re-measure p99 on the reference profile.
 
+- **M7**: the debug UI is server-rendered HTML over the *same* read model as
+  GraphQL/MCP (projection + log) plus `html/template` rendering. It is a
+  read-only debug surface, not a hot path, so it carries no separate target or
+  benchmark; its read cost is bounded by the M5/M6 numbers above and the entity
+  list is capped at 500 rows to keep page rendering bounded on large graphs.
+
 When a target is missed, an issue is opened and the architectural cause is
 investigated before proceeding (brief, patch 6).
