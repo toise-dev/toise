@@ -9,6 +9,13 @@ import (
 	"go.opentelemetry.io/collector/pdata/plog/plogotlp"
 	"google.golang.org/grpc"
 
+	// Register the gzip decompressor so the server can accept gzip-encoded
+	// OTLP exports. gRPC-Go does not install it by default, yet gzip is the
+	// OTel ecosystem default (the OTel SDK and senhub-agent compress with it):
+	// without this, gzip'd exports fail at the transport with "Decompressor is
+	// not installed" before reaching the handler — a silent drop on the wire.
+	_ "google.golang.org/grpc/encoding/gzip"
+
 	"github.com/toise-dev/toise/internal/change"
 )
 
