@@ -9,6 +9,14 @@ DEMO_PKG    := ./cmd/toise-demo
 COVERAGE    := coverage.out
 COVERAGE_HTML := coverage.html
 
+# Version stamped into the binaries. Defaults derive from git: on a tagged
+# commit, VERSION is the tag (e.g. 0.1.0, no "v" prefix); otherwise the short
+# commit. Override with `make build VERSION=0.1.0`.
+VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 0.0.0-dev)
+COMMIT      ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+VERSION_PKG := github.com/toise-dev/toise/internal/version
+LDFLAGS     := -X $(VERSION_PKG).Version=$(VERSION) -X $(VERSION_PKG).Commit=$(COMMIT)
+
 .DEFAULT_GOAL := help
 
 .PHONY: help build test test-coverage bench lint fmt tidy proto clean
@@ -21,8 +29,8 @@ help: ## Show this help
 
 build: ## Build the toise-server and toise-demo binaries into bin/
 	@mkdir -p $(BIN_DIR)
-	go build -o $(BIN_DIR)/$(BINARY) $(CMD_PKG)
-	go build -o $(BIN_DIR)/$(DEMO_BINARY) $(DEMO_PKG)
+	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(BINARY) $(CMD_PKG)
+	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(DEMO_BINARY) $(DEMO_PKG)
 
 test: ## Run all tests
 	go test ./...
