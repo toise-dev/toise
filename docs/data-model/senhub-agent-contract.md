@@ -113,14 +113,14 @@ alive and the edges live with them. `relation_delete` retires an edge while both
 endpoints live; an *optional* `entity.relation.interval` exists as a backstop for a
 missed such delete, but the agent can ignore it.
 
-**Multi-producer delete — known phase-1 limitation (decided Q1):** `entity_delete`
-is per-**identity**, not per-producer. Several agents on the same entity converge,
-but an explicit delete by one removes it globally (the others re-create it next
-heartbeat — a ~1-cadence flap). The crash case is handled by the interval. The
-intended fix is **per-producer reference counting keyed by the Resource
-`service.instance.id`** (which the agent already sets) — a future *Toise-only*
-change, no wire impact. For now: single-owner entities are unaffected; the limit is
-documented and accepted.
+**Multi-producer liveness — per-producer reference counting (Q1, done):** liveness
+is reference-counted **per producer**, keyed by the Resource `service.instance.id`
+(ADR 0019). Several agents on the same entity converge; an explicit `entity_delete`
+(or an interval lapse) by one is a **silent release** — the entity stays live while
+any other producer references it, and is deleted only when the **last** reference
+goes. No flap, and no producer change beyond keeping `service.instance.id` on the
+Resource (the agent already does). An observation with no producer counts as one
+anonymous producer.
 
 **Shared-entity attribute rule (design note, agreed):** a shared entity carries only
 **observer-independent** attributes (system name, version…). Anything per-observer
@@ -158,7 +158,7 @@ from this round:
 | Edge liveness derived from endpoints (cascade) + optional per-edge TTL | **done** |
 | Out-of-order edge reconciliation buffer | **done** (opt-in, `--relation-buffer-ttl`) |
 | Explicit `Warn` on dropped nested value | **done** |
-| Multi-producer delete (per-producer ref-counting) | **planned** — flap documented as a phase-1 limit |
+| Multi-producer liveness (per-producer ref-counting) | **done** (ADR 0019) |
 
 ## Follow-up
 

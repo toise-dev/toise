@@ -71,7 +71,7 @@ func TestRouteEntityState(t *testing.T) {
 	attrs.PutDouble("load", 0.5)
 
 	f := &fakeEngine{}
-	handled, _, err := routeRecord(f, lr)
+	handled, _, err := routeRecord(f, lr, "")
 	if !handled || err != nil {
 		t.Fatalf("routeRecord handled=%v err=%v", handled, err)
 	}
@@ -95,13 +95,13 @@ func TestRouteIgnoresNonEntity(t *testing.T) {
 	lr := newRecord("") // no otel.entity.event.type
 	lr.Body().SetStr("plain log")
 	f := &fakeEngine{}
-	handled, _, err := routeRecord(f, lr)
+	handled, _, err := routeRecord(f, lr, "")
 	if handled || err != nil {
 		t.Errorf("non-entity record: handled=%v err=%v, want false,nil", handled, err)
 	}
 
 	// unknown event type is also ignored
-	if handled, _, err := routeRecord(f, newRecord("something_else")); handled || err != nil {
+	if handled, _, err := routeRecord(f, newRecord("something_else"), ""); handled || err != nil {
 		t.Errorf("unknown event type: handled=%v err=%v", handled, err)
 	}
 }
@@ -116,7 +116,7 @@ func TestRouteSurfacesDroppedNonScalar(t *testing.T) {
 	attrs.PutEmptyMap("nested")      // non-scalar: dropped and reported
 	attrs.PutEmptySlice("tags")      // non-scalar: dropped and reported
 	f := &fakeEngine{}
-	handled, dropped, err := routeRecord(f, lr)
+	handled, dropped, err := routeRecord(f, lr, "")
 	if !handled || err != nil {
 		t.Fatalf("handled=%v err=%v", handled, err)
 	}
@@ -139,7 +139,7 @@ func TestRouteParsesInterval(t *testing.T) {
 	a.PutEmptyMap(attrEntityID).PutStr("host.id", "h1")
 	a.PutInt(attrEntityInterval, 60_000) // 60s in milliseconds
 	f := &fakeEngine{}
-	if _, _, err := routeRecord(f, lr); err != nil {
+	if _, _, err := routeRecord(f, lr, ""); err != nil {
 		t.Fatal(err)
 	}
 	if f.lastEntity.Interval != time.Minute {
@@ -157,11 +157,25 @@ func TestRouteParsesRelationInterval(t *testing.T) {
 	a.PutEmptyMap(attrRelToID).PutStr("host.id", "h1")
 	a.PutInt(attrRelInterval, 60_000) // 60s in milliseconds
 	f := &fakeEngine{}
-	if _, _, err := routeRecord(f, lr); err != nil {
+	if _, _, err := routeRecord(f, lr, ""); err != nil {
 		t.Fatal(err)
 	}
 	if f.lastRelation.Interval != time.Minute {
 		t.Errorf("relation interval = %v, want 1m", f.lastRelation.Interval)
+	}
+}
+
+func TestRouteSetsProducer(t *testing.T) {
+	lr := newRecord(evEntityState)
+	a := lr.Attributes()
+	a.PutStr(attrEntityType, model.TypeHost)
+	a.PutEmptyMap(attrEntityID).PutStr("host.id", "h1")
+	f := &fakeEngine{}
+	if _, _, err := routeRecord(f, lr, "agent-7f3a"); err != nil {
+		t.Fatal(err)
+	}
+	if f.lastEntity.Producer != "agent-7f3a" {
+		t.Errorf("producer = %q, want agent-7f3a", f.lastEntity.Producer)
 	}
 }
 
@@ -170,7 +184,7 @@ func TestRouteEntityMissingID(t *testing.T) {
 	lr.Attributes().PutStr(attrEntityType, model.TypeHost)
 	// no otel.entity.id
 	f := &fakeEngine{}
-	handled, _, err := routeRecord(f, lr)
+	handled, _, err := routeRecord(f, lr, "")
 	if !handled || err == nil {
 		t.Errorf("missing id: handled=%v err=%v, want true,err", handled, err)
 	}
@@ -182,7 +196,7 @@ func TestRouteEntityDelete(t *testing.T) {
 	a.PutStr(attrEntityType, model.TypeHost)
 	a.PutEmptyMap(attrEntityID).PutStr("host.id", "h1")
 	f := &fakeEngine{}
-	if handled, _, err := routeRecord(f, lr); !handled || err != nil || f.deletes != 1 {
+	if handled, _, err := routeRecord(f, lr, ""); !handled || err != nil || f.deletes != 1 {
 		t.Errorf("delete: handled=%v err=%v deletes=%d", handled, err, f.deletes)
 	}
 }
@@ -196,7 +210,7 @@ func TestRouteRelation(t *testing.T) {
 	a.PutStr(attrRelToType, model.TypeHost)
 	a.PutEmptyMap(attrRelToID).PutStr("host.id", "h1")
 	f := &fakeEngine{}
-	if handled, _, err := routeRecord(f, lr); !handled || err != nil || f.relAdds != 1 {
+	if handled, _, err := routeRecord(f, lr, ""); !handled || err != nil || f.relAdds != 1 {
 		t.Errorf("relation: handled=%v err=%v relAdds=%d", handled, err, f.relAdds)
 	}
 	if f.lastRelation.From.Type != model.TypeProcess || f.lastRelation.To.Type != model.TypeHost {
@@ -211,7 +225,7 @@ func TestRouteRelation(t *testing.T) {
 	a2.PutEmptyMap(attrRelFromID).PutStr("pid", "100")
 	a2.PutStr(attrRelToType, model.TypeHost)
 	a2.PutEmptyMap(attrRelToID).PutStr("host.id", "h1")
-	if handled, _, err := routeRecord(f, lr2); !handled || err != nil || f.relRemoves != 1 {
+	if handled, _, err := routeRecord(f, lr2, ""); !handled || err != nil || f.relRemoves != 1 {
 		t.Errorf("relation delete: handled=%v err=%v relRemoves=%d", handled, err, f.relRemoves)
 	}
 }
@@ -221,7 +235,7 @@ func TestRouteRelationMissingEndpoint(t *testing.T) {
 	lr.Attributes().PutStr(attrRelType, model.RelRunsOn)
 	// no endpoints
 	f := &fakeEngine{}
-	if handled, _, err := routeRecord(f, lr); !handled || err == nil {
+	if handled, _, err := routeRecord(f, lr, ""); !handled || err == nil {
 		t.Errorf("missing endpoints: handled=%v err=%v", handled, err)
 	}
 }

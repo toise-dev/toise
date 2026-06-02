@@ -243,6 +243,80 @@ func TestLivenessSweepExpiresStaleEntities(t *testing.T) {
 	}
 }
 
+func TestMultiProducerRefCounting(t *testing.T) {
+	e, g, _ := newEngine(t)
+	ident := []model.KeyValue{kv("db.instance.id", "pg:1")}
+	obs := func(producer string) EntityObservation {
+		return EntityObservation{Type: model.TypeDatabase, Identity: ident, Producer: producer, EventTime: t0}
+	}
+	// two agents observe the same db
+	if _, err := e.ObserveEntity(obs("agent-A")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.ObserveEntity(obs("agent-B")); err != nil {
+		t.Fatal(err)
+	}
+	if g.EntityCount() != 1 {
+		t.Fatalf("the shared db should be one entity; count=%d", g.EntityCount())
+	}
+
+	// agent A releases its view — the db survives (B still references it), no event
+	if _, em, err := e.DeleteEntity(obs("agent-A")); err != nil || em {
+		t.Fatalf("A delete: emitted=%v err=%v, want false (not the last reference)", em, err)
+	}
+	if _, found := g.MatchIdentity(model.TypeDatabase, ident); !found {
+		t.Error("db must survive while agent B still references it")
+	}
+
+	// agent B releases — the last reference is gone, the db is actually deleted
+	if _, em, err := e.DeleteEntity(obs("agent-B")); err != nil || !em {
+		t.Fatalf("B delete: emitted=%v err=%v, want true (the last reference)", em, err)
+	}
+	if _, found := g.MatchIdentity(model.TypeDatabase, ident); found {
+		t.Error("db must be deleted once the last producer releases it")
+	}
+}
+
+func TestMultiProducerIntervalExpiry(t *testing.T) {
+	g := projection.New()
+	now := t0
+	e := New(g, &fakeAppender{},
+		WithClock(func() time.Time { return now }),
+		WithLogger(slog.New(slog.DiscardHandler)))
+	ident := []model.KeyValue{kv("db.instance.id", "pg:1")}
+	obs := func(producer string) EntityObservation {
+		return EntityObservation{Type: model.TypeDatabase, Identity: ident, Producer: producer, Interval: time.Minute, EventTime: now}
+	}
+	if _, err := e.ObserveEntity(obs("A")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.ObserveEntity(obs("B")); err != nil {
+		t.Fatal(err)
+	}
+
+	// B heartbeats again (extends its deadline); A goes quiet
+	now = now.Add(50 * time.Second)
+	if _, err := e.ObserveEntity(obs("B")); err != nil {
+		t.Fatal(err)
+	}
+	// past A's deadline (t0+60) but not B's (t0+110): A's ref lapses, db survives
+	now = now.Add(40 * time.Second) // t0+90s
+	if n := e.Sweep(); n != 0 {
+		t.Fatalf("db must survive while B's heartbeat is fresh; swept %d", n)
+	}
+	if _, found := g.MatchIdentity(model.TypeDatabase, ident); !found {
+		t.Error("db must survive A's lapse while B heartbeats")
+	}
+	// past B's deadline too: the db expires
+	now = now.Add(40 * time.Second) // t0+130s, past B's t0+110
+	if n := e.Sweep(); n != 1 {
+		t.Fatalf("db must expire once all producers lapse; swept %d, want 1", n)
+	}
+	if _, found := g.MatchIdentity(model.TypeDatabase, ident); found {
+		t.Error("db must be deleted once the last producer's interval lapses")
+	}
+}
+
 func TestDeleteCascadesIncidentRelations(t *testing.T) {
 	e, g, _ := newEngine(t)
 	procRef := EndpointRef{Type: model.TypeProcess, Identity: []model.KeyValue{kv("process.executable.name", "nginx")}}
