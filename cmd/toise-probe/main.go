@@ -47,10 +47,15 @@ func run() error {
 	interval := flag.Duration("interval", 30*time.Second, "otel.entity.interval emitted (liveness TTL)")
 	heartbeat := flag.Duration("heartbeat", 0, "re-emit period; default interval/3 so entities stay live")
 	once := flag.Bool("once", false, "emit one batch and exit (no heartbeat, no scenario)")
+	hosts := flag.Int("hosts", 1, "number of hosts; 1 plays the narrative scenario, >1 generates a multi-machine fabric")
+	devices := flag.Int("devices", 0, "number of network.device switches in the fabric; default ~hosts/10")
 	flag.Parse()
 
 	if *heartbeat <= 0 {
 		*heartbeat = *interval / 3
+	}
+	if *devices <= 0 {
+		*devices = max(2, *hosts/10)
 	}
 
 	p, err := newProducer(*addr)
@@ -59,7 +64,10 @@ func run() error {
 	}
 	defer p.close()
 
-	topo := initialTopology(*producer)
+	topo, step := initialTopology(*producer), scenarioStep
+	if *hosts > 1 {
+		topo, step = fabricTopology(*producer, *hosts, *devices), scaleStep
+	}
 
 	if *once {
 		if err := p.emit(*producer, topo, nil, *interval); err != nil {
@@ -72,13 +80,13 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	fmt.Printf("producer %q: heartbeating every %s (interval %s) -> %s; Ctrl-C to stop\n",
-		*producer, *heartbeat, *interval, *addr)
+	fmt.Printf("producer %q: heartbeating every %s (interval %s); %d entities, %d relations -> %s; Ctrl-C to stop\n",
+		*producer, *heartbeat, *interval, len(topo.order), len(topo.relOrder), *addr)
 
 	ticker := time.NewTicker(*heartbeat)
 	defer ticker.Stop()
 	for tick := 0; ; tick++ {
-		deleted, note := scenarioStep(topo, tick)
+		deleted, note := step(topo, tick)
 		if err := p.emit(*producer, topo, deleted, *interval); err != nil {
 			log.Printf("emit (tick %d): %v", tick, err)
 		} else if note != "" {
@@ -114,6 +122,7 @@ type topo struct {
 	order    []string
 	rels     map[string]relation
 	relOrder []string
+	hosts    int // number of hosts in a fabric topology (0 for the narrative one)
 }
 
 func (t *topo) addEntity(handle string, e *entity) {
@@ -216,6 +225,104 @@ func scenarioStep(t *topo, tick int) (deleted []*entity, note string) {
 	}
 }
 
+// --- fabric topology (multi-machine, hundreds of entities) --------------------
+
+const subnetSize = 24 // hosts sharing one gateway address
+
+// fabricTopology generates `hosts` machines (each: host + interface + address +
+// route + a listener, a db on every 8th), grouped into subnets that share a
+// gateway address, plus a ring of `devices` network switches. The agent monitors
+// every host, db and switch. It produces several hundred entities and relations.
+func fabricTopology(producer string, hosts, devices int) *topo {
+	t := &topo{ents: map[string]*entity{}, rels: map[string]relation{}, hosts: hosts}
+	agentID := id("service.instance.id", producer)
+	t.addEntity("agent", &entity{model.TypeServiceInstance, agentID, attr("service.name", "senhub-agent", "service.version", "1.4.0")})
+
+	gateways := map[int]bool{}
+	for i := 0; i < hosts; i++ {
+		s := i / subnetSize
+		gwHandle := fmt.Sprintf("gw-%d", s)
+		gwAddr := id("network.address", fmt.Sprintf("10.%d.0.1", s+1))
+		if !gateways[s] {
+			gateways[s] = true
+			t.addEntity(gwHandle, &entity{model.TypeNetworkAddress, gwAddr, attr("role", "gateway")})
+		}
+
+		hostID := id("host.id", fmt.Sprintf("srv-%04d", i))
+		ifID := id("host.id", fmt.Sprintf("srv-%04d", i), "interface.name", "eth0")
+		addrID := id("network.address", fmt.Sprintf("10.%d.%d.%d", s+1, (i%subnetSize)/250+1, i%subnetSize+10))
+		routeID := id("host.id", fmt.Sprintf("srv-%04d", i), "network.route.destination", "0.0.0.0/0")
+		listenID := id("service.endpoint", fmt.Sprintf("srv-%04d:80", i))
+
+		t.addEntity(fmt.Sprintf("host-%d", i), &entity{model.TypeHost, hostID, attr("host.name", fmt.Sprintf("host-%04d", i), "os.type", "linux", "zone", fmt.Sprintf("rack-%02d", s))})
+		t.addEntity(fmt.Sprintf("iface-%d", i), &entity{model.TypeNetworkInterface, ifID, attr("oper_state", "up", "mac.address", fmt.Sprintf("02:42:ac:%02x:%02x:01", s, i%subnetSize))})
+		t.addEntity(fmt.Sprintf("addr-%d", i), &entity{model.TypeNetworkAddress, addrID, attr("prefix.length", int64(24))})
+		t.addEntity(fmt.Sprintf("route-%d", i), &entity{model.TypeNetworkRoute, routeID, attr("next_hop", fmt.Sprintf("10.%d.0.1", s+1))})
+		t.addEntity(fmt.Sprintf("listener-%d", i), &entity{model.TypeServiceListener, listenID, attr("process.executable.name", "nginx", "process.pid", int64(1000+i), "transport", "tcp")})
+
+		t.addRel(fmt.Sprintf("hi-%d", i), relation{model.RelHasInterface, model.TypeHost, model.TypeNetworkInterface, hostID, ifID})
+		t.addRel(fmt.Sprintf("bt-%d", i), relation{model.RelBoundTo, model.TypeNetworkAddress, model.TypeNetworkInterface, addrID, ifID})
+		t.addRel(fmt.Sprintf("nh-%d", i), relation{model.RelNextHopVia, model.TypeNetworkRoute, model.TypeNetworkAddress, routeID, gwAddr})
+		t.addRel(fmt.Sprintf("lo-%d", i), relation{model.RelListensOn, model.TypeServiceListener, model.TypeNetworkInterface, listenID, ifID})
+		t.addRel(fmt.Sprintf("mon-h-%d", i), relation{model.RelMonitors, model.TypeServiceInstance, model.TypeHost, agentID, hostID})
+
+		if i%8 == 0 {
+			dbID := id("db.instance.id", fmt.Sprintf("postgresql:%d", 7311168095704935000+i))
+			t.addEntity(fmt.Sprintf("db-%d", i), &entity{model.TypeDatabase, dbID, attr("db.system.name", "postgresql", "server.address", fmt.Sprintf("10.%d.0.%d", s+1, i%subnetSize+10), "server.port", int64(5432), "db.connection.count", int64(7))})
+			t.addRel(fmt.Sprintf("mon-db-%d", i), relation{model.RelMonitors, model.TypeServiceInstance, model.TypeDatabase, agentID, dbID})
+		}
+	}
+
+	for m := 0; m < devices; m++ {
+		dID := id("net.device.id", fmt.Sprintf("sw-%03d", m))
+		t.addEntity(fmt.Sprintf("dev-%d", m), &entity{model.TypeNetworkDevice, dID, attr("device.role", "switch", "vendor", "acme")})
+		t.addRel(fmt.Sprintf("mon-dev-%d", m), relation{model.RelMonitors, model.TypeServiceInstance, model.TypeNetworkDevice, agentID, dID})
+		if devices > 1 {
+			next := id("net.device.id", fmt.Sprintf("sw-%03d", (m+1)%devices))
+			t.addRel(fmt.Sprintf("adj-%d", m), relation{model.RelAdjacentTo, model.TypeNetworkDevice, model.TypeNetworkDevice, dID, next})
+		}
+	}
+	return t
+}
+
+// scaleStep applies a few bounded, deterministic mutations per tick so a large
+// fabric's change feed keeps moving (interface flaps, pid restarts, db-stat
+// drift) without flooding it.
+func scaleStep(t *topo, tick int) (deleted []*entity, note string) {
+	n := t.hosts
+	if n == 0 {
+		return nil, ""
+	}
+	if tick == 0 {
+		return nil, fmt.Sprintf("fabric online: %d hosts, %d entities, %d relations", n, len(t.order), len(t.relOrder))
+	}
+	for k := 0; k < 4; k++ {
+		i := (tick*5 + k*97) % n
+		switch (tick + k) % 3 {
+		case 0:
+			if e := t.ents[fmt.Sprintf("iface-%d", i)]; e != nil {
+				if e.attrs["oper_state"] == "up" {
+					e.attrs["oper_state"] = "down"
+				} else {
+					e.attrs["oper_state"] = "up"
+				}
+			}
+		case 1:
+			if e := t.ents[fmt.Sprintf("listener-%d", i)]; e != nil {
+				e.attrs["process.pid"] = int64(1000 + tick + i)
+			}
+		case 2:
+			if e := t.ents[fmt.Sprintf("db-%d", i)]; e != nil {
+				e.attrs["db.connection.count"] = int64(3 + (tick+i)%50)
+			}
+		}
+	}
+	if tick%10 == 0 {
+		return nil, fmt.Sprintf("steady: %d hosts live, churn on a few interfaces/pids/db-stats", n)
+	}
+	return nil, ""
+}
+
 // --- OTLP producer ------------------------------------------------------------
 
 type producerConn struct {
@@ -272,7 +379,9 @@ func (p *producerConn) emit(producer string, t *topo, deleted []*entity, interva
 		putMap(a.PutEmptyMap("entity.relation.to.id"), r.toID)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// A large fabric is a big batch; the ingest boundary commits each record with
+	// its own durable append, so give a generous deadline.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	_, err := p.client.Export(ctx, plogotlp.NewExportRequestFromLogs(logs))
 	return err

@@ -70,5 +70,32 @@ directional signals.
   benchmark; its read cost is bounded by the M5/M6 numbers above and the entity
   list is capped at 500 rows to keep page rendering bounded on large graphs.
 
+## Scale characterization — real OTLP, multi-machine fabric (`toise-probe`)
+
+Measured end-to-end over OTLP/gRPC with `toise-probe --hosts N` (a generated
+fabric: hosts + interfaces/addresses/routes/listeners, ~1 db per 8 hosts, a ring
+of network switches, all monitored by one agent), on Apple Silicon dev hardware:
+
+| Fabric | Entities | Relations | Initial ingest |
+|--------|----------|-----------|----------------|
+| 120 hosts | 633 | 639 | ~5.4 s (≈ 235 records/s) |
+| 250 hosts | 1319 | 1333 | ~8 s (≈ 330 records/s) |
+
+Two clear signals:
+
+- **The read model scales effortlessly.** With 1.3k entities / 1.3k relations in
+  the projection, a host detail page (identity + attributes + neighbours +
+  history) renders in **< 1 ms** — reads are O(1)/O(n) over the in-memory snapshot
+  regardless of graph size. GraphQL, MCP, and the debug UI all sit on this.
+- **Ingestion is fsync-bound on bursts.** The OTLP boundary routes record by
+  record and the engine commits **one durable (Sync'd) Pebble append per record**,
+  so a large single export (≈ 1.3k records) is **fsync-limited to ~250–330
+  records/s** — a burst takes seconds, and a client must allow a generous deadline
+  (`toise-probe` uses 2 min). This is fine for steady heartbeating at a sane
+  cadence, but is the throughput ceiling. **Optimization opportunity:** batch the
+  commits within a single `Export` into one Sync'd `store.AppendBatch` (the store
+  already supports batched durable appends — see M2) rather than one Sync per
+  event. Tracked as a post-0.1.0 ingestion-throughput improvement.
+
 When a target is missed, an issue is opened and the architectural cause is
 investigated before proceeding (brief, patch 6).
