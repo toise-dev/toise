@@ -243,6 +243,51 @@ func TestLivenessSweepExpiresStaleEntities(t *testing.T) {
 	}
 }
 
+func TestLivenessSweepExpiresStaleRelations(t *testing.T) {
+	g := projection.New()
+	now := t0
+	e := New(g, &fakeAppender{},
+		WithClock(func() time.Time { return now }),
+		WithLogger(slog.New(slog.DiscardHandler)))
+
+	procRef := EndpointRef{Type: model.TypeProcess, Identity: []model.KeyValue{kv("process.executable.name", "nginx")}}
+	hostRef := EndpointRef{Type: model.TypeHost, Identity: []model.KeyValue{kv("host.id", "h1")}}
+	mustObserve(t, e, model.TypeProcess, procRef.Identity)
+	mustObserve(t, e, model.TypeHost, hostRef.Identity)
+
+	edge := RelationObservation{Type: model.RelRunsOn, From: procRef, To: hostRef, Interval: time.Minute, EventTime: t0}
+	if _, em, err := e.ObserveRelation(edge); err != nil || !em {
+		t.Fatalf("relation add: emitted=%v err=%v", em, err)
+	}
+	if g.RelationCount() != 1 {
+		t.Fatalf("relation should exist; count=%d", g.RelationCount())
+	}
+
+	now = now.Add(30 * time.Second)
+	if n := e.Sweep(); n != 0 {
+		t.Fatalf("premature edge expiry: swept %d", n)
+	}
+	// re-asserting (even unchanged) resets the deadline
+	edge.EventTime = now
+	if _, _, err := e.ObserveRelation(edge); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(45 * time.Second)
+	if n := e.Sweep(); n != 0 {
+		t.Fatalf("heartbeat should reset the edge deadline; swept %d", n)
+	}
+	now = now.Add(time.Minute)
+	if n := e.Sweep(); n != 1 {
+		t.Fatalf("stale edge should expire; swept %d, want 1", n)
+	}
+	if g.RelationCount() != 0 {
+		t.Errorf("expired edge should be removed; count=%d", g.RelationCount())
+	}
+	if n := e.Sweep(); n != 0 {
+		t.Errorf("re-sweep should be a no-op; swept %d", n)
+	}
+}
+
 func mustObserve(t *testing.T, e *Engine, typ string, ident []model.KeyValue) {
 	t.Helper()
 	if _, err := e.ObserveEntity(EntityObservation{Type: typ, Identity: ident, EventTime: t0}); err != nil {

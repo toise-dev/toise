@@ -53,6 +53,7 @@ standard OTel. It rides the same LogRecord convention:
 | LogRecord attribute            | Type    | Required | Meaning                                              |
 | ------------------------------ | ------- | -------- | ---------------------------------------------------- |
 | `entity.relation.event.type`   | string  | yes      | `state` (upsert) or `delete`                         |
+| `entity.relation.interval`     | int     | no       | heartbeat cadence in **milliseconds**; arms the edge liveness backstop |
 | `entity.relation.type`         | string  | yes      | the relation type — **must be in Toise's registry**  |
 | `entity.relation.from.type`    | string  | yes      | source endpoint entity type                          |
 | `entity.relation.from.id`      | **map** | yes      | source endpoint identity                             |
@@ -142,9 +143,12 @@ Liveness uses **two mechanisms, not one**:
    so a single late heartbeat does not expire a live entity.
 
 Producers emit **both**: the explicit delete *and* the interval. Only entities that
-carry an interval are ever expired, so the sweeper is safe to leave on. *(Edge
-TTL expiry — `relation_delete` plus a per-edge backstop — remains a smaller
-follow-up.)*
+carry an interval are ever expired, so the sweeper is safe to leave on.
+
+The **same backstop applies to edges**: a relation observed with an
+`entity.relation.interval` (ms) is armed with its own deadline, and the sweeper
+expires it with `relation.removed` if it is not re-asserted in time. `relation_delete`
+remains the primary signal; only edges that carry an interval are ever expired.
 
 ### Identity matching — exact (immutable Id)
 
@@ -214,7 +218,7 @@ planned:
 | Concern | Decision | Status |
 | ------- | -------- | ------ |
 | Entity collisions | exact-Id matching (no fuzzy merge) | **done** (ADR 0018) |
-| Missed deletes | explicit `entity_delete` + `interval` TTL backstop | **done** (entity expiry; edge TTL is a follow-up) |
+| Missed deletes | explicit `entity_delete`/`relation_delete` + `interval` TTL backstop | **done** (entity + edge expiry) |
 | Out-of-order edges | reconciliation buffer (park & flush, opt-in) | **done** |
 | Nested values | explicit `Warn` on drop (never silent) | **done** |
 | Scope flag `otel.entity.entity_event=true` | accepted and ignored (never rejected) — interop fast-path for other OTel producers | done |
