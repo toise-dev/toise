@@ -135,7 +135,7 @@
                         {
                           "key": "db.instance.id",
                           "value": {
-                            "stringValue": "pg@web-server-1:5432"
+                            "stringValue": "postgresql:7311168095704935424"
                           }
                         }
                       ]
@@ -282,7 +282,7 @@
                         {
                           "key": "db.instance.id",
                           "value": {
-                            "stringValue": "pg@web-server-1:5432"
+                            "stringValue": "postgresql:7311168095704935424"
                           }
                         }
                       ]
@@ -315,7 +315,7 @@
                         {
                           "key": "db.instance.id",
                           "value": {
-                            "stringValue": "pg@web-server-1:5432"
+                            "stringValue": "postgresql:7311168095704935424"
                           }
                         }
                       ]
@@ -408,7 +408,7 @@
                         {
                           "key": "db.instance.id",
                           "value": {
-                            "stringValue": "pg@web-server-1:5432"
+                            "stringValue": "postgresql:7311168095704935424"
                           }
                         }
                       ]
@@ -441,7 +441,7 @@
                         {
                           "key": "db.instance.id",
                           "value": {
-                            "stringValue": "pg@web-server-1:5432"
+                            "stringValue": "postgresql:7311168095704935424"
                           }
                         }
                       ]

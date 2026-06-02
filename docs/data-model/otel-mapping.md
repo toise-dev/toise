@@ -165,11 +165,16 @@ Under exact matching:
   view). Fuzzy "identity changed" detection is dropped; if continuity across an Id
   change is ever needed, the producer signals it explicitly.
 - A single-key identity (`host.id`, the agent key) is **valid again** — no need for
-  the "≥2 values / composite key" rule. A composite `db.instance.id` remains a good
-  convention by *choice* (one clean immutable key), not to dodge a fuzzy merge.
+  the "≥2 values / composite key" rule.
 
 The corollary for producers: **Ids must be immutable** — never put a mutable value
-(a pid, a leased IP) in the identity; those are descriptive attributes.
+(a pid, a leased IP, a **network address**) in the identity; those are descriptive
+attributes. In particular a `db` identity must be a **stable source identifier**
+(PostgreSQL `system_identifier`, MySQL `server_uuid`, or an operator-configured
+logical instance name), **not** a network-derived composite like
+`host:port` — the address moves under DHCP/failover/VIP, which would make the
+instance look like a brand-new entity and orphan its edges. `server.address` /
+`server.port` / `db.system.name` stay descriptive attributes.
 
 *(Implemented: ADR 0017 is superseded by ADR 0018; the change engine matches
 exactly and no longer emits `entity.identity_changed`, though the type is retained

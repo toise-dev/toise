@@ -95,7 +95,7 @@ leased IP) in the identity — those are descriptive attributes. Agreed identiti
 | ------ | --------------------------- | ----- |
 | `host` | `{host.id}` (machine-id) | `host.name` descriptive |
 | `service.instance` | `{service.instance.id}` (agent key) | the agent |
-| `db` | `{db.instance.id}` — single composite key (system+address+port) | a clean immutable key, by choice |
+| `db` | `{db.instance.id}` — a **stable source identifier**: PostgreSQL `system_identifier`, MySQL `server_uuid`, else an operator-configured logical instance name | **never network-derived** — `server.address`/`server.port` are mutable (DHCP/failover/VIP) so they stay descriptive attributes |
 | `network.device` | `{net.device.id}` = LLDP chassis-id (`lldpLoc/RemChassisId`), fallback management IP | frozen at the SNMP collection lot; not emitted before then |
 
 ### Time & liveness — explicit delete + interval backstop
