@@ -6,7 +6,7 @@ author: >-
   [Matthieu Noirbusson](https://github.com/<your-github-handle>) (Sensor
   Factory)
 issue: 0000 # replace with the pre-submission issue number
-sig: Entities # confirm the exact SIG name when you raise the issue
+sig: "Specification: Entities" # verified against open-telemetry/community SIG list
 draft: true
 # cSpell:ignore Noirbusson Toise Pebble gqlgen bitemporal semconv kvlist
 ---

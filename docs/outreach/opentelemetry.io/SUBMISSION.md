@@ -21,13 +21,17 @@ before the PR. Use the repo's "Blog post" issue template with:
   resulting graph via GraphQL and MCP. Uses one Apache-2.0 consumer (Toise) as a
   worked example, with a disclosure line; vendor-neutral throughout. Closes with
   the open relationships question (OTEP 0256 Future Work).
-- **Technologies:** OpenTelemetry entity events (Entities SIG), OTLP logs, MCP,
-  GraphQL. All open source / CNCF-aligned.
-- **Related SIG:** Entities (Semantic Conventions). Confirm the exact SIG name in
-  the issue and update the `sig:` front-matter field to match.
+- **Technologies:** OpenTelemetry entity events, OTLP logs, MCP, GraphQL. All
+  open source / CNCF-aligned.
+- **Related SIG:** **Specification: Entities** (the spec-level SIG that owns the
+  entity data model — not Semantic Conventions itself, though entity attribute
+  conventions live in `semantic-conventions` under `area:entities`).
 - **Sponsor:** optional but recommended — ideally a maintainer from a _different_
-  company. Ask in the Entities SIG / Semantic Conventions channel. It speeds up
-  review.
+  company than yours. The SIG meets **Mondays 09:00 PT**; ask in Slack
+  **[#otel-entities](https://cloud-native.slack.com/archives/C06QEG97W7L)** or at
+  the meeting. Current SIG leads: **Tigran Najaryan**
+  ([@tigrannajaryan](https://github.com/tigrannajaryan)) and **Severin Neumann**
+  ([@svrnm](https://github.com/svrnm)).
 
 Put the resulting issue number into the post's `issue:` front-matter field.
 
@@ -36,7 +40,9 @@ Put the resulting issue number into the post's `issue:` front-matter field.
 - `author:` — replace `<your-github-handle>` with your GitHub username (org is
   already "Sensor Factory").
 - `issue:` — the pre-submission issue number (currently `0000`).
-- `sig:` — confirm the exact SIG name (currently `Entities`).
+- `sig:` — set to `"Specification: Entities"` (verified against the
+  `open-telemetry/community` SIG list). Reviewers will adjust if their convention
+  differs.
 - `date:` — a target date; reviewers usually set the real date at merge.
 - Keep `draft: true` until it is approved — a maintainer flips it on merge.
 
@@ -80,3 +86,6 @@ npx hugo server
   0256 (GitHub). Both were valid at preparation time.
 - Content verified against the Toise implementation on 2026-06-02; see
   `../otel-blog-draft.md` for the working draft and its provenance notes.
+- SIG name/leads/channel verified 2026-06-02 from the
+  [open-telemetry/community SIG list](https://github.com/open-telemetry/community/blob/main/README.md)
+  (row "Specification: Entities", anchor `#sig-entities`).
