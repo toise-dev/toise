@@ -104,7 +104,7 @@ demo. Checkpoint H is the phase-1 completion gate: on validation, cut **v0.1.0**
 (CHANGELOG + README phase-1 summary updated; tag **not** pushed without explicit
 approval).
 
-## Post-0.1.0 real-world hardening
+## Post-0.1.0 real-world hardening — released as 0.1.1
 
 Validation against the **real senhub-agent** (not just the synthetic
 `toise-probe`): the agent's OTLP entities signal was pointed at a live
@@ -122,6 +122,13 @@ the actual producer.
   (`TestReceiverAcceptsGzip`) that references the codec by name only so the
   production import is the sole registrant. See `docs/data-model/otel-mapping.md`
   (*Transport*).
+- **Lint CI (PR #34, #37):** the Lint job had been failing at config load on every
+  merge — the prebuilt golangci-lint was built with an older Go than the module's
+  `go 1.26` target. Fixed by building golangci-lint from source on the runner
+  (`install-mode: goinstall`), then migrating golangci-lint v1 → **v2**.
+- **Released 0.1.1** (2026-06-02): CHANGELOG `[0.1.1]` (PR #40), annotated tag
+  `0.1.1` (no `v` prefix), GitHub Release "0.1.1 — gzip OTLP fix" published. The
+  producer↔consumer contract issue (senhub-agent #185) is **closed as converged**.
 
 ## Key cross-cutting rules (brief v2)
 
