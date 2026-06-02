@@ -5,7 +5,7 @@ date: 2026-06-15
 author: >-
   [Matthieu Noirbusson](https://github.com/MatthieuNoirbusson) (Sensor
   Factory)
-issue: 0000 # replace with the pre-submission issue number
+issue: 10115
 sig: "Specification: Entities" # verified against open-telemetry/community SIG list
 draft: true
 # cSpell:ignore Noirbusson Toise Pebble gqlgen bitemporal semconv kvlist
@@ -54,7 +54,11 @@ LogRecord
 
 Producers emit these — a host agent, a network agent, anything that speaks OTLP.
 The consumer's job is to turn a sequence of such observations into something you
-can _ask questions of_.
+can _ask questions of_. The shape is a pipeline:
+
+![A pipeline: OpenTelemetry producers emit entity events over OTLP into a durable, event-sourced log; a projection replays the log into a live, bi-temporal entity graph, exposed through a GraphQL API for humans and tools and an MCP server for an AI assistant.](pipeline.svg)
+
+The rest of this post is the four steps in that pipeline.
 
 ## Step 1 — Don't store state, store the stream
 
@@ -183,6 +187,24 @@ standard, not a proprietary protocol — it runs no collectors of its own and po
 no devices directly. Emitting entity events from hosts, network gear, or cloud
 APIs is the producers' job. Keeping the producer side generic is what keeps the
 ecosystem open.
+
+## A few operational notes
+
+A consumer that wants to be a source of truth has to face some realities:
+
+- **Clock skew.** Event time comes from producers, whose clocks drift relative to
+  each other. Don't assume a single global order across producers; reason on
+  per-entity timelines, and keep your own recorded time as the tiebreaker for
+  "what did we know, and when."
+- **Volume and heartbeats.** Producers re-assert entities periodically, so most
+  events say "nothing changed." Coalesce consecutive unchanged observations (keep
+  the first and last of a run) so steady-state traffic doesn't balloon the log —
+  while keeping structural changes, like a relationship appearing or disappearing,
+  verbatim.
+- **Silent merges.** The flip side of exact identity: if two distinct entities
+  accidentally share an identifying key, they collapse into one. Treat identity
+  keys as a contract with producers, and prefer failing loudly — a rejected or
+  flagged observation — over a quiet merge.
 
 ## Takeaways
 
