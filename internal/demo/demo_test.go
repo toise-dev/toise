@@ -38,7 +38,8 @@ func TestScenarioFinalGraph(t *testing.T) {
 		t.Errorf("EntityCount = %d, want 9", got)
 	}
 
-	// nginx survived a restart as one logical entity with its new pid.
+	// nginx survived a restart as one logical entity: identity is its executable
+	// name, the pid is a descriptive attribute that the restart updated to 1010.
 	var nginx []model.Entity
 	for _, e := range graph.ListEntities(model.TypeProcess) {
 		for _, kv := range e.Identity {
@@ -50,8 +51,8 @@ func TestScenarioFinalGraph(t *testing.T) {
 	if len(nginx) != 1 {
 		t.Fatalf("want exactly one nginx process, got %d", len(nginx))
 	}
-	if pid := identityInt(nginx[0], "process.pid"); pid != 1010 {
-		t.Errorf("nginx pid = %d, want 1010 (identity changed on restart)", pid)
+	if pid := attrInt(nginx[0], "process.pid"); pid != 1010 {
+		t.Errorf("nginx pid attribute = %d, want 1010 (updated on restart)", pid)
 	}
 
 	// dockerd crashed and is gone; the old addresses/gateway are gone.
@@ -75,8 +76,13 @@ func TestScenarioCoversEveryChangeType(t *testing.T) {
 			seen[ev.Relation.ChangeType.String()] = true
 		}
 	}
+	// Exact matching (ADR 0018) retires fuzzy entity.identity_changed; the engine
+	// never emits it, and the scenario covers the other eight change types.
+	if seen[model.EntityIdentityChanged.String()] {
+		t.Error("engine should not emit entity.identity_changed under exact matching")
+	}
 	for _, ct := range []model.ChangeType{
-		model.EntityCreated, model.EntityDeleted, model.EntityIdentityChanged,
+		model.EntityCreated, model.EntityDeleted,
 		model.EntityAttributeUpdated, model.EntityStateChanged, model.EntityUnchanged,
 		model.RelationAdded, model.RelationRemoved, model.RelationAttributeChanged,
 	} {
@@ -110,8 +116,8 @@ func TestScenarioLateRecordedFact(t *testing.T) {
 	}
 }
 
-func identityInt(e model.Entity, key string) int64 {
-	for _, kv := range e.Identity {
+func attrInt(e model.Entity, key string) int64 {
+	for _, kv := range e.Attributes {
 		if kv.Key == key {
 			return kv.Value.Int()
 		}

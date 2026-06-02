@@ -5,6 +5,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 	"time"
 
@@ -51,9 +52,11 @@ func buildConformanceLogs() plog.Logs {
 			putMap(a.PutEmptyMap(attrEntityAttrs), attrs)
 		}
 	}
+	// relation carries only the neutral relation lifecycle key (strict purity):
+	// no otel.entity.* attribute, so a standard OTel entity consumer ignores it.
 	relation := func(event, relType, fromType string, fromID map[string]any, toType string, toID map[string]any) {
 		a := rec().Attributes()
-		a.PutStr(attrEventType, event)
+		a.PutStr(attrRelEventType, event)
 		a.PutStr(attrRelType, relType)
 		a.PutStr(attrRelFromType, fromType)
 		putMap(a.PutEmptyMap(attrRelFromID), fromID)
@@ -71,25 +74,31 @@ func buildConformanceLogs() plog.Logs {
 	entity(evEntityState, model.TypeHost, hostID, map[string]any{"host.name": "web-server-1", "os.type": "linux"})
 	entity(evEntityState, model.TypeServiceInstance, agentID, map[string]any{"service.name": "senhub-agent", "service.version": "1.0.0"})
 	entity(evEntityState, model.TypeDatabase, dbID, map[string]any{"db.system.name": "postgresql", "server.address": "10.0.1.5", "server.port": int64(5432)})
-	// 4-5: edges (entity.relation.* extension). monitors targets a host and a db.
-	relation(evRelationState, model.RelMonitors, model.TypeServiceInstance, agentID, model.TypeHost, hostID)
-	relation(evRelationState, model.RelMonitors, model.TypeServiceInstance, agentID, model.TypeDatabase, dbID)
+	// 4-5: edges. The agent runs_on the host (Lot 1, deployment) and monitors the
+	// db (Lot 2, observation) — distinct relation types.
+	relation(evRelState, model.RelRunsOn, model.TypeServiceInstance, agentID, model.TypeHost, hostID)
+	relation(evRelState, model.RelMonitors, model.TypeServiceInstance, agentID, model.TypeDatabase, dbID)
 	// 6: descriptive attribute added -> entity.attribute_updated.
 	entity(evEntityState, model.TypeDatabase, dbID, map[string]any{"db.system.name": "postgresql", "server.address": "10.0.1.5", "server.port": int64(5432), "db.connection.count": int64(12)})
 	// 7-8: the db goes away — remove its edge first (endpoints must be live), then delete it.
-	relation(evRelationDelete, model.RelMonitors, model.TypeServiceInstance, agentID, model.TypeDatabase, dbID)
+	relation(evRelDelete, model.RelMonitors, model.TypeServiceInstance, agentID, model.TypeDatabase, dbID)
 	entity(evEntityDelete, model.TypeDatabase, dbID, nil)
 	// 9-11: discovered network assets and a link-layer adjacency.
 	entity(evEntityState, model.TypeNetworkDevice, sw1, map[string]any{"device.role": "switch"})
 	entity(evEntityState, model.TypeNetworkDevice, sw2, map[string]any{"device.role": "switch"})
-	relation(evRelationState, model.RelAdjacentTo, model.TypeNetworkDevice, sw1, model.TypeNetworkDevice, sw2)
+	relation(evRelState, model.RelAdjacentTo, model.TypeNetworkDevice, sw1, model.TypeNetworkDevice, sw2)
 
 	return logs
 }
 
 func putMap(m pcommon.Map, kvs map[string]any) {
-	for k, v := range kvs {
-		switch x := v.(type) {
+	keys := make([]string, 0, len(kvs)) // sort for a reproducible fixture
+	for k := range kvs {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		switch x := kvs[k].(type) {
 		case string:
 			m.PutStr(k, x)
 		case int64:
@@ -161,10 +170,13 @@ func TestConformanceFixture(t *testing.T) {
 		t.Errorf("db should be deleted, but %d live", counts[model.TypeDatabase])
 	}
 	if got := graph.RelationCount(); got != 2 {
-		t.Errorf("RelationCount = %d, want 2 (monitors->host, adjacent_to)", got)
+		t.Errorf("RelationCount = %d, want 2 (runs_on->host, adjacent_to)", got)
 	}
-	if n := len(graph.ListRelations(model.RelMonitors, "", "")); n != 1 {
-		t.Errorf("monitors relations = %d, want 1 (the one to db was removed)", n)
+	if n := len(graph.ListRelations(model.RelRunsOn, "", "")); n != 1 {
+		t.Errorf("runs_on relations = %d, want 1 (agent runs on the host)", n)
+	}
+	if n := len(graph.ListRelations(model.RelMonitors, "", "")); n != 0 {
+		t.Errorf("monitors relations = %d, want 0 (the one to db was removed)", n)
 	}
 	if n := len(graph.ListRelations(model.RelAdjacentTo, "", "")); n != 1 {
 		t.Errorf("adjacent_to relations = %d, want 1", n)

@@ -15,12 +15,13 @@ OTel wire shape is translated into the internal Toise event model.
 
 ## Wire shape: the exact LogRecord attributes Toise reads
 
-The ingest boundary classifies each `LogRecord` **solely by the presence of the
-`otel.entity.event.type` attribute**. A record without it is ignored (it is
-treated as an ordinary log). The scope is **not** inspected — Toise does not
-require the experimental `otel.entity.entity_event=true` instrumentation-scope
-flag; a producer may set it for spec fidelity, but Toise neither reads nor
-requires it.
+The ingest boundary classifies each `LogRecord` by **which lifecycle key is
+present**: `otel.entity.event.type` marks an **entity event** (standard OTel),
+`entity.relation.event.type` marks a **relation event** (the extension). A record
+with neither is ignored (treated as an ordinary log). The scope is **not**
+inspected — Toise does not require the experimental `otel.entity.entity_event=true`
+instrumentation-scope flag; a producer may set it for spec fidelity, but Toise
+neither reads nor requires it.
 
 ### Entity events (standard OTel convention)
 
@@ -51,7 +52,7 @@ standard OTel. It rides the same LogRecord convention:
 
 | LogRecord attribute            | Type    | Required | Meaning                                              |
 | ------------------------------ | ------- | -------- | ---------------------------------------------------- |
-| `otel.entity.event.type`       | string  | yes      | `relation_state` (upsert) or `relation_delete`       |
+| `entity.relation.event.type`   | string  | yes      | `state` (upsert) or `delete`                         |
 | `entity.relation.type`         | string  | yes      | the relation type — **must be in Toise's registry**  |
 | `entity.relation.from.type`    | string  | yes      | source endpoint entity type                          |
 | `entity.relation.from.id`      | **map** | yes      | source endpoint identity                             |
@@ -66,10 +67,16 @@ shaped to map **1:1 onto the eventual OTel relationships standard**, so migratio
 is trivial for everyone. We deliberately avoid `otel.entity.relationship.*` too —
 that would squat the reserved OTel namespace before the spec exists. The extension
 is explicitly **transitional** and both sides commit to migrating to the standard
-once it lands. *(The upsert/delete discriminator currently rides the existing
-`otel.entity.event.type` key for a single routing key at the boundary; making it
-a neutral `entity.relation.event.type` is an open, trivial follow-up if producers
-prefer strict purity.)*
+once it lands.
+
+**Strict purity:** a relation record carries **no `otel.entity.*` attribute at
+all** — its lifecycle is the neutral `entity.relation.event.type` (`state` /
+`delete`), never `otel.entity.event.type`. This matters for interop: a record with
+`otel.entity.event.type=relation_state` but no `otel.entity.type`/`id` would look
+like a *malformed* entity event to a standard OTel entity-events consumer; carrying
+no `otel.entity.*`, the relation record is instead cleanly ignored by such a
+consumer. The boundary routes by which lifecycle key is present:
+`otel.entity.event.type` → entity event, `entity.relation.event.type` → relation.
 
 **Endpoint resolution is by exact identity**, against a **live** entity by
 `(type, identity)`. Endpoint identities must be the entity's current identity.
@@ -135,11 +142,11 @@ agreed. Today Toise consumes neither the interval nor runs a sweeper — explici
 delete only; parsing/storing the interval and the TTL sweeper are the next
 ingest-hardening item; see* Robustness backstops *below.)*
 
-### Identity matching — moving to exact (immutable Id)
+### Identity matching — exact (immutable Id)
 
-**Decision (accepted, implementation pending):** entity identity is matched
-**exactly** against the producer-declared Id, in line with the OTel model where an
-entity's Id is **immutable**.
+Entity identity is matched **exactly** against the producer-declared Id, in line
+with the OTel model where an entity's Id is **immutable** (ADR 0018, superseding
+the tolerant matching of ADR 0017).
 
 Background: phase-1 Toise matched *tolerantly* (an observation differing in at
 most one identifying value was treated as the same entity that "changed identity",
@@ -163,9 +170,9 @@ Under exact matching:
 The corollary for producers: **Ids must be immutable** — never put a mutable value
 (a pid, a leased IP) in the identity; those are descriptive attributes.
 
-*(Status: this supersedes the tolerant-matching behaviour of ADR 0017; it requires
-an ADR revision and a change-engine update — `entity.identity_changed` is retired
-as a fuzzy-detected type — tracked as a dedicated change.)*
+*(Implemented: ADR 0017 is superseded by ADR 0018; the change engine matches
+exactly and no longer emits `entity.identity_changed`, though the type is retained
+in the taxonomy for replay/wire compatibility.)*
 
 ### Type registry — types must be known
 
@@ -197,7 +204,7 @@ planned:
 
 | Concern | Decision | Status |
 | ------- | -------- | ------ |
-| Entity collisions | exact-Id matching (no fuzzy merge) | accepted; engine change pending |
+| Entity collisions | exact-Id matching (no fuzzy merge) | **done** (ADR 0018) |
 | Missed deletes | explicit `entity_delete` + `interval` TTL backstop | accepted; sweeper pending |
 | Out-of-order edges | reconciliation buffer (park & flush) | accepted; today a retriable error |
 | Nested values | explicit `Warn` on drop (never silent) | accepted; warning pending |

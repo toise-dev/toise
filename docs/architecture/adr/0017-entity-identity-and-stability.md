@@ -1,7 +1,12 @@
 # 17. Entity identity and stability
 
-- Status: Accepted
+- Status: Superseded by [ADR 0018](0018-exact-identity-matching.md) (2026-06)
 - Date: 2026-05-29
+
+> **Superseded.** The tolerant identity matching described here proved to cause
+> silent entity over-merges and is replaced by exact-identity matching in
+> ADR 0018. The dual logical-ID / identity-hash concept and the immutable-Id
+> principle remain; only the *fuzzy matching* of close identities is removed.
 
 ## Context
 

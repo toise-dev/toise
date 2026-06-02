@@ -11,6 +11,9 @@ const (
 	ChangeUnspecified ChangeType = iota
 	EntityCreated
 	EntityDeleted
+	// EntityIdentityChanged is retained for wire compatibility and for replaying
+	// historical logs, but the change engine no longer emits it under exact
+	// identity matching (ADR 0018).
 	EntityIdentityChanged
 	EntityAttributeUpdated
 	EntityStateChanged

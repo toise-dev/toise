@@ -90,33 +90,31 @@ func TestRelationsAndNeighbors(t *testing.T) {
 	}
 }
 
-func TestMatchIdentityExactTolerantAndRehash(t *testing.T) {
+func TestMatchIdentityExact(t *testing.T) {
 	g := New()
 	a := model.NewEntityID()
 	ident := []model.KeyValue{kv("host.id", "h1"), kv("host.name", "web-1")}
 	g.Apply(entityCreated(a, model.TypeHost, ident...))
 
-	// exact
-	if id, exact, found := g.MatchIdentity(model.TypeHost, ident, 1); !found || !exact || id != a {
-		t.Errorf("exact match = (%s,%v,%v)", id, exact, found)
+	// exact match
+	if id, found := g.MatchIdentity(model.TypeHost, ident); !found || id != a {
+		t.Errorf("exact match = (%s,%v)", id, found)
 	}
-	// tolerant: one identifying value differs
-	tol := []model.KeyValue{kv("host.id", "h1"), kv("host.name", "web-2")}
-	if id, exact, found := g.MatchIdentity(model.TypeHost, tol, 1); !found || exact || id != a {
-		t.Errorf("tolerant match = (%s,%v,%v), want (a,false,true)", id, exact, found)
-	}
-	// no tolerance -> not found
-	if _, _, found := g.MatchIdentity(model.TypeHost, tol, 0); found {
-		t.Error("maxDiff 0 should not tolerate a difference")
+	// any difference in an identifying value is a different entity (no tolerance)
+	diff := []model.KeyValue{kv("host.id", "h1"), kv("host.name", "web-2")}
+	if _, found := g.MatchIdentity(model.TypeHost, diff); found {
+		t.Error("a differing identity must not match (exact matching, ADR 0018)")
 	}
 
-	// identity_changed rehashes: old identity no longer matches, new does
+	// The engine no longer emits entity.identity_changed (ADR 0018), but the
+	// projection must still replay it from historical logs: applying one rehashes
+	// the index so the new identity matches and the old no longer does.
 	g.Apply(model.Event{Entity: &model.EntityEvent{ChangeType: model.EntityIdentityChanged,
-		Entity: model.Entity{ID: a, Type: model.TypeHost, Identity: tol}}})
-	if _, exact, found := g.MatchIdentity(model.TypeHost, tol, 0); !found || !exact {
-		t.Error("new identity should match exactly after identity_changed")
+		Entity: model.Entity{ID: a, Type: model.TypeHost, Identity: diff}}})
+	if _, found := g.MatchIdentity(model.TypeHost, diff); !found {
+		t.Error("new identity should match exactly after rehash")
 	}
-	if _, _, found := g.MatchIdentity(model.TypeHost, ident, 0); found {
+	if _, found := g.MatchIdentity(model.TypeHost, ident); found {
 		t.Error("old identity should no longer match exactly")
 	}
 }

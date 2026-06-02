@@ -263,54 +263,17 @@ func (g *Graph) ListRelations(typ string, from, to model.EntityID) []model.Relat
 	return out
 }
 
-// MatchIdentity finds the logical entity ID for an observed identity. It returns
-// (id, exact, found): an exact hash match (exact=true), or a tolerant match
-// (exact=false) where the identity differs from a live entity of the same type
-// in at most maxDiff identifying values (same key set). See ADR 0017.
-func (g *Graph) MatchIdentity(typ string, identity []model.KeyValue, maxDiff int) (model.EntityID, bool, bool) {
+// MatchIdentity finds the logical entity ID for an observed identity by an
+// exact identity-hash match against a live entity of the same type. Identity is
+// immutable (ADR 0018, superseding ADR 0017): an observation whose identity does
+// not match exactly is a different entity, never a tolerant/fuzzy match.
+func (g *Graph) MatchIdentity(typ string, identity []model.KeyValue) (model.EntityID, bool) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
 	hash := model.Entity{Type: typ, Identity: identity}.IdentityHash()
 	if id, ok := g.byHash[hash]; ok && !g.deleted[id] {
-		return id, true, true
+		return id, true
 	}
-	if maxDiff <= 0 {
-		return "", false, false
-	}
-	for id := range g.byType[typ] {
-		if g.deleted[id] {
-			continue
-		}
-		same, diffs := identityDiff(g.entities[id].Identity, identity)
-		// Require at least one unchanged identifying value as an anchor: a
-		// single-key identity has no anchor, so any different value is a new
-		// entity, not an identity change.
-		if same && diffs >= 1 && diffs <= maxDiff && diffs < len(identity) {
-			return id, false, true
-		}
-	}
-	return "", false, false
-}
-
-// identityDiff reports whether two identity sets share the same keys and, if so,
-// how many values differ.
-func identityDiff(a, b []model.KeyValue) (sameKeys bool, valueDiffs int) {
-	if len(a) != len(b) {
-		return false, 0
-	}
-	am := make(map[string]string, len(a))
-	for _, kv := range a {
-		am[kv.Key] = kv.Value.String()
-	}
-	for _, kv := range b {
-		v, ok := am[kv.Key]
-		if !ok {
-			return false, 0
-		}
-		if v != kv.Value.String() {
-			valueDiffs++
-		}
-	}
-	return true, valueDiffs
+	return "", false
 }

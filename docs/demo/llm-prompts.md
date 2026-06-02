@@ -71,9 +71,9 @@ calls below use names like `<nginx-id>` for those resolved ids.
 
 - **Tool:** `recent_changes(window: "6h")`
 - **Answer shape:** newest-first list of qualified changes in the window —
-  depending on when you seeded, the nginx restart (`entity.identity_changed`),
-  the dockerd crash (`entity.deleted` + `relation.removed`), and the host
-  heartbeat (`entity.unchanged`).
+  depending on when you seeded, the nginx restart (`entity.attribute_updated`, the
+  pid attribute changing), the dockerd crash (`entity.deleted` + `relation.removed`),
+  and the host heartbeat (`entity.unchanged`).
 
 ## 7. Structural alerts only (anomaly)
 
@@ -128,6 +128,7 @@ calls below use names like `<nginx-id>` for those resolved ids.
 
 - **Tools:** `find_entities(type: "process", match: {"process.executable.name": "nginx"})`
   → `entity_history(entity_id: "<nginx-id>")`
-- **Answer shape:** one logical nginx entity with an `entity.identity_changed`
-  event at S+18h where `process.pid` went 1001→1010. The stable logical id proves
-  it is the same service across the restart (ADR 0017), not a delete-and-recreate.
+- **Answer shape:** one logical nginx entity (identified by its executable name)
+  with an `entity.attribute_updated` event at S+18h where the `process.pid`
+  attribute went 1001→1010. The pid is descriptive, not identifying, so the restart
+  is the *same* entity updating an attribute — not a delete-and-recreate (ADR 0018).

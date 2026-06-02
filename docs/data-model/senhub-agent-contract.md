@@ -64,14 +64,13 @@ can speak it and it maps **1:1 onto the future OTel standard**, making migration
 trivial for everyone. `otel.entity.relationship.*` is deliberately avoided (it
 would squat the reserved OTel namespace before the spec exists).
 
-Each edge is a `relation_state` / `relation_delete` LogRecord carrying
+**Strict purity:** a relation record carries **no `otel.entity.*` attribute** —
+its lifecycle is `entity.relation.event.type` ∈ {`state`, `delete`}, plus
 `entity.relation.type`, `entity.relation.from.{type,id}`,
-`entity.relation.to.{type,id}`, and optional `entity.relation.attributes`. The
-upsert/delete discriminator currently rides `otel.entity.event.type`
-(`relation_state`/`relation_delete`) for a single routing key; a neutral
-`entity.relation.event.type=state|delete` is an open, trivial switch if the agent
-prefers strict purity. Both sides commit to migrating to the OTel standard once it
-lands.
+`entity.relation.to.{type,id}`, and optional `entity.relation.attributes`. A
+relation thus never looks like a malformed entity event to a standard OTel
+consumer (which keys off `otel.entity.*`); it is cleanly ignored there. Both sides
+commit to migrating to the OTel standard once it lands.
 
 Endpoints resolve by **exact identity** against live entities; reference each by
 its current identity. Emit endpoints **before** their edge. Out-of-order edges are
@@ -133,7 +132,7 @@ from this round:
 | Vendor-neutral `entity.relation.*` keys | **done** (PR #17) |
 | Producer vocabulary in the registry | **done** (PR #16) |
 | Conformance fixture / contract test | **done** (PR #17) |
-| Exact-Id matching (retire fuzzy `identity_changed`) | accepted — ADR 0017 revision + engine change pending |
+| Exact-Id matching (retire fuzzy `identity_changed`) | **done** (ADR 0018) |
 | Interval TTL sweeper (entity + edge expiry) | accepted — pending |
 | Out-of-order edge reconciliation buffer | accepted — pending |
 | Explicit `Warn` on dropped nested value | accepted — pending |
@@ -144,8 +143,8 @@ from this round:
   standard OTel nodes (unblocked today) and `entity.relation.*` edges. Emit to
   reproduce the shared conformance fixture
   (`internal/ingest/testdata/conformance/entity-events.json`).
-- **Toise (this repo)** ships the remaining accepted items from the *Planning &
-  status* table — exact-Id matching (ADR 0017 revision), the interval TTL sweeper,
-  the edge reconciliation buffer, and the explicit drop warning — as the phase-2
-  first-real-producer hardening. The wire shape and vocabulary are already in
-  place to build against.
+- **Toise (this repo)** has landed exact-Id matching (ADR 0018) and ships the
+  remaining accepted items from the *Planning & status* table — the interval TTL
+  sweeper, the edge reconciliation buffer, and the explicit drop warning — as the
+  phase-2 first-real-producer hardening. The wire shape and vocabulary are already
+  in place to build against.

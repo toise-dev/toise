@@ -3,7 +3,8 @@
 This is the phase-1 demonstration fixture. It simulates **24 hours** of one
 host's infrastructure evolving, applied through the change engine exactly as
 live OTLP ingestion would be, so it exercises the whole pipeline and **every
-change type** in the taxonomy (ADR 0006).
+change type the engine emits** (eight of the nine taxonomy types, ADR 0006;
+`entity.identity_changed` is retired under ADR 0018).
 
 Seed it and explore:
 
@@ -32,7 +33,7 @@ All times are offsets from the scenario start `S`.
 | **S+6h30** | **`eth0` comes back on a new subnet.** | `eth0` up again; `10.0.1.5` unbound and deleted; new address `10.0.2.7` `bound_to eth0`. | `entity.state_changed`, `relation.removed`, `entity.deleted`, `entity.created`, `relation.added` |
 | **S+9h** | **postgres starts** and listens on `:5432`. | process `postgres` (pid 3003) `runs_on` host; listener `:5432` `listens_on eth0`. | `entity.created`, `relation.added` |
 | **S+12h** | **Default gateway changes.** | new gateway `10.0.2.1`; route's `next_hop` attribute 10.0.1.1→10.0.2.1; `next_hop_via` edge moves to the new gateway; old gateway `10.0.1.1` deleted; `10.0.2.7`'s `bound_to` marked no-longer-`preferred`. | `entity.created`, `entity.attribute_updated`, `relation.removed`, `relation.added`, `entity.deleted`, `relation.attribute_changed` |
-| **S+18h** | **nginx restarts.** Same logical process, new pid — tolerant identity matching keeps the logical id stable (ADR 0017). | `nginx` pid 1001→1010. | `entity.identity_changed` |
+| **S+18h** | **nginx restarts.** Same logical process (exact identity match on the executable name); the pid is a descriptive attribute, so the restart is an attribute update (ADR 0018). | `nginx` pid 1001→1010. | `entity.attribute_updated` |
 | **S+22h** | **The container crashes.** `dockerd` disappears; a host heartbeat confirms nothing else changed. | `dockerd` stops `runs_on` host and is deleted; host re-observed unchanged. | `relation.removed`, `entity.deleted`, `entity.unchanged` |
 
 ## Final state
