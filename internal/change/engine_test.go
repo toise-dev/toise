@@ -243,6 +243,28 @@ func TestLivenessSweepExpiresStaleEntities(t *testing.T) {
 	}
 }
 
+func TestDeleteCascadesIncidentRelations(t *testing.T) {
+	e, g, _ := newEngine(t)
+	procRef := EndpointRef{Type: model.TypeProcess, Identity: []model.KeyValue{kv("process.executable.name", "nginx")}}
+	hostRef := EndpointRef{Type: model.TypeHost, Identity: []model.KeyValue{kv("host.id", "h1")}}
+	mustObserve(t, e, model.TypeProcess, procRef.Identity)
+	mustObserve(t, e, model.TypeHost, hostRef.Identity)
+	if _, em, err := e.ObserveRelation(RelationObservation{Type: model.RelRunsOn, From: procRef, To: hostRef, EventTime: t0}); err != nil || !em {
+		t.Fatalf("relation add: emitted=%v err=%v", em, err)
+	}
+	if g.RelationCount() != 1 {
+		t.Fatalf("relation should exist; count=%d", g.RelationCount())
+	}
+
+	// deleting an endpoint removes its incident edge — no explicit unrelate needed.
+	if _, _, err := e.DeleteEntity(EntityObservation{Type: model.TypeHost, Identity: hostRef.Identity, EventTime: t0}); err != nil {
+		t.Fatal(err)
+	}
+	if g.RelationCount() != 0 {
+		t.Errorf("incident edge should be removed with its endpoint; count=%d", g.RelationCount())
+	}
+}
+
 func TestLivenessSweepExpiresStaleRelations(t *testing.T) {
 	g := projection.New()
 	now := t0

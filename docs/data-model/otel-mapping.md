@@ -145,10 +145,46 @@ Liveness uses **two mechanisms, not one**:
 Producers emit **both**: the explicit delete *and* the interval. Only entities that
 carry an interval are ever expired, so the sweeper is safe to leave on.
 
-The **same backstop applies to edges**: a relation observed with an
-`entity.relation.interval` (ms) is armed with its own deadline, and the sweeper
-expires it with `relation.removed` if it is not re-asserted in time. `relation_delete`
-remains the primary signal; only edges that carry an interval are ever expired.
+#### Edge liveness — derived from endpoints (primary), per-edge TTL (optional)
+
+An edge to a deleted node is meaningless, so edge liveness is **primarily derived
+from its endpoints**: when an entity is deleted — explicitly or by expiry — Toise
+**cascades `relation.removed`** for every incident edge. A producer therefore does
+**not** need to track or expire edges separately: keep the endpoints alive
+(heartbeat + interval) and the edges live with them; let a node die and its edges
+die with it.
+
+`relation_delete` remains available for retiring an edge while both endpoints
+live (e.g. an agent stops monitoring a still-running db). As an **optional**
+backstop for a *missed* such delete, a relation may carry its own
+`entity.relation.interval` (ms) — Toise then expires that edge with
+`relation.removed` if it is not re-asserted in time. Most producers can ignore it
+and rely on endpoint-derived liveness plus explicit `relation_delete`.
+
+#### Multi-producer delete — a known phase-1 limitation
+
+`entity_delete` is keyed by **identity, not by producer**. Because identity is
+exact and observer-independent, multiple agents observing the same entity
+converge — but an explicit `entity_delete` from **one** agent removes the entity
+**globally**, even if another agent still sees it; that agent re-creates it on its
+next heartbeat (a flap of ~one heartbeat cadence). The interval backstop already
+handles the *crash* case correctly (the entity survives while any agent
+heartbeats); only an explicit delete by one of several producers flaps.
+
+The intended fix is **per-producer reference counting**: Toise deletes only when
+**all** producers have released (each by an explicit delete or its own interval
+lapsing), keyed by the producing agent's **`service.instance.id` carried on the
+OTLP Resource** (which producers already set). That keeps it a future *Toise-only*
+change with no wire impact. Until then, the limitation stands: deployments where a
+given entity has a single owning producer are unaffected; shared entities may flap
+on an explicit delete.
+
+**Corollary — shared entities carry only observer-independent attributes.** Because
+`entity_state` is full-state and identity is shared across producers, a shared
+entity must only carry attributes that are **independent of the observer** (system
+name, version, …). Anything *per-observer* ("**this** agent monitors this db") is a
+distinct **`monitors` relation** per agent — never an entity attribute, which would
+flap under last-writer-wins as different agents assert different values.
 
 ### Identity matching — exact (immutable Id)
 
@@ -218,9 +254,11 @@ planned:
 | Concern | Decision | Status |
 | ------- | -------- | ------ |
 | Entity collisions | exact-Id matching (no fuzzy merge) | **done** (ADR 0018) |
-| Missed deletes | explicit `entity_delete`/`relation_delete` + `interval` TTL backstop | **done** (entity + edge expiry) |
+| Missed entity deletes | explicit `entity_delete` + `otel.entity.interval` TTL backstop | **done** |
+| Edge liveness | derived from endpoints (cascade `relation.removed`); optional per-edge `entity.relation.interval` | **done** |
 | Out-of-order edges | reconciliation buffer (park & flush, opt-in) | **done** |
 | Nested values | explicit `Warn` on drop (never silent) | **done** |
+| Multi-producer delete | per-producer reference counting (keyed by Resource `service.instance.id`) | **planned** — flap documented as a phase-1 limit |
 | Scope flag `otel.entity.entity_event=true` | accepted and ignored (never rejected) — interop fast-path for other OTel producers | done |
 
 ### Timestamps

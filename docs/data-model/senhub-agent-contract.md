@@ -101,10 +101,31 @@ leased IP) in the identity — those are descriptive attributes. Agreed identiti
 ### Time & liveness — explicit delete + interval backstop
 
 `event_time` = LogRecord `Timestamp`; `recorded_at` stamped by Toise. Liveness uses
-**both**: an explicit **`entity_delete`** as the primary signal **and** the OTel
-`interval` as a TTL backstop (for missed deletes — `kill -9`, crash, host off, net
-partition). The agent emits both; Toise expires entities not re-asserted within
-`last_seen + interval + margin`. Same for edges (`relation_delete` + TTL).
+**both**: an explicit **`entity_delete`** as the primary signal **and**
+`otel.entity.interval` (ms, sized with slack — the agent emits 3× its heartbeat
+cadence) as a TTL backstop for missed deletes (`kill -9`, crash, host off, net
+partition). Toise expires entities not re-asserted within their interval.
+
+**Edge liveness is derived from endpoints (decided Q2 = Option A):** deleting an
+entity (explicitly or by expiry) **cascades `relation.removed`** for its incident
+edges, so the agent does **not** emit a relation interval — keep the endpoints
+alive and the edges live with them. `relation_delete` retires an edge while both
+endpoints live; an *optional* `entity.relation.interval` exists as a backstop for a
+missed such delete, but the agent can ignore it.
+
+**Multi-producer delete — known phase-1 limitation (decided Q1):** `entity_delete`
+is per-**identity**, not per-producer. Several agents on the same entity converge,
+but an explicit delete by one removes it globally (the others re-create it next
+heartbeat — a ~1-cadence flap). The crash case is handled by the interval. The
+intended fix is **per-producer reference counting keyed by the Resource
+`service.instance.id`** (which the agent already sets) — a future *Toise-only*
+change, no wire impact. For now: single-owner entities are unaffected; the limit is
+documented and accepted.
+
+**Shared-entity attribute rule (design note, agreed):** a shared entity carries only
+**observer-independent** attributes (system name, version…). Anything per-observer
+("this agent monitors this db") is a distinct **`monitors` relation** per agent,
+never an entity attribute (which would flap last-writer-wins).
 
 ### Vocabulary & rollout lots
 
@@ -133,9 +154,11 @@ from this round:
 | Producer vocabulary in the registry | **done** (PR #16) |
 | Conformance fixture / contract test | **done** (PR #17) |
 | Exact-Id matching (retire fuzzy `identity_changed`) | **done** (ADR 0018) |
-| Interval TTL sweeper (entity + edge expiry) | **done** (`--liveness-sweep-interval`) |
+| Entity interval TTL sweeper | **done** (`--liveness-sweep-interval`) |
+| Edge liveness derived from endpoints (cascade) + optional per-edge TTL | **done** |
 | Out-of-order edge reconciliation buffer | **done** (opt-in, `--relation-buffer-ttl`) |
 | Explicit `Warn` on dropped nested value | **done** |
+| Multi-producer delete (per-producer ref-counting) | **planned** — flap documented as a phase-1 limit |
 
 ## Follow-up
 

@@ -251,7 +251,31 @@ func (e *Engine) DeleteEntity(obs EntityObservation) (ev model.Event, emitted bo
 		return model.Event{}, false, err
 	}
 	delete(e.deadlines, id) // explicit delete clears any liveness backstop
+	e.removeIncidentRelations(id, obs.EventTime)
 	return ev, true, nil
+}
+
+// removeIncidentRelations emits relation.removed for every edge touching id: an
+// edge to a deleted entity is meaningless, so edge liveness is derived from its
+// endpoints (a deleted node takes its edges with it). The caller must hold obsMu.
+func (e *Engine) removeIncidentRelations(id model.EntityID, when time.Time) int {
+	edges := append(e.graph.ListRelations("", id, ""), e.graph.ListRelations("", "", id)...)
+	seen := make(map[model.RelationID]struct{}, len(edges))
+	n := 0
+	for _, rel := range edges {
+		if _, dup := seen[rel.ID]; dup {
+			continue
+		}
+		seen[rel.ID] = struct{}{}
+		ev := e.relationEvent(model.RelationRemoved, rel, when)
+		if err := e.commit(ev, rel.Structural); err != nil {
+			e.logger.Error("failed to remove edge of deleted entity", "relation_id", rel.ID, "err", err)
+			continue
+		}
+		delete(e.relDeadlines, rel.ID)
+		n++
+	}
+	return n
 }
 
 // Sweep expires entities whose liveness backstop has lapsed: an entity observed
@@ -294,6 +318,7 @@ func (e *Engine) Sweep() int {
 		e.logger.Warn("expired stale entity: no heartbeat within its interval",
 			"entity_type", ent.Type, "entity_id", id)
 		n++
+		n += e.removeIncidentRelations(id, now) // edges die with their node
 	}
 
 	var expiredRelations []model.RelationID
