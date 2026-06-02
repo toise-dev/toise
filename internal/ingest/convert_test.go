@@ -132,6 +132,21 @@ func TestRouteSurfacesDroppedNonScalar(t *testing.T) {
 	}
 }
 
+func TestRouteParsesInterval(t *testing.T) {
+	lr := newRecord(evEntityState)
+	a := lr.Attributes()
+	a.PutStr(attrEntityType, model.TypeHost)
+	a.PutEmptyMap(attrEntityID).PutStr("host.id", "h1")
+	a.PutInt(attrEntityInterval, 60_000) // 60s in milliseconds
+	f := &fakeEngine{}
+	if _, _, err := routeRecord(f, lr); err != nil {
+		t.Fatal(err)
+	}
+	if f.lastEntity.Interval != time.Minute {
+		t.Errorf("interval = %v, want 1m", f.lastEntity.Interval)
+	}
+}
+
 func TestRouteEntityMissingID(t *testing.T) {
 	lr := newRecord(evEntityState)
 	lr.Attributes().PutStr(attrEntityType, model.TypeHost)

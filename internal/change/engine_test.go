@@ -193,6 +193,56 @@ func TestRelationBufferReconcilesAndExpires(t *testing.T) {
 	}
 }
 
+func TestLivenessSweepExpiresStaleEntities(t *testing.T) {
+	g := projection.New()
+	now := t0
+	e := New(g, &fakeAppender{},
+		WithClock(func() time.Time { return now }),
+		WithLogger(slog.New(slog.DiscardHandler)))
+
+	host1 := []model.KeyValue{kv("host.id", "h1")} // 60s liveness interval
+	host2 := []model.KeyValue{kv("host.id", "h2")} // no interval -> never expires
+	if _, err := e.ObserveEntity(EntityObservation{Type: model.TypeHost, Identity: host1, Interval: time.Minute, EventTime: t0}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.ObserveEntity(EntityObservation{Type: model.TypeHost, Identity: host2, EventTime: t0}); err != nil {
+		t.Fatal(err)
+	}
+
+	// before the deadline nothing expires
+	now = now.Add(30 * time.Second)
+	if n := e.Sweep(); n != 0 {
+		t.Fatalf("premature expiry: swept %d", n)
+	}
+
+	// a fresh heartbeat resets the deadline
+	if _, err := e.ObserveEntity(EntityObservation{Type: model.TypeHost, Identity: host1, Interval: time.Minute, EventTime: now}); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(45 * time.Second) // 75s since first sight, but only 45s since the heartbeat
+	if n := e.Sweep(); n != 0 {
+		t.Fatalf("heartbeat should have reset the deadline; swept %d", n)
+	}
+
+	// let it lapse: the stale entity expires, the interval-less one survives
+	now = now.Add(time.Minute)
+	if n := e.Sweep(); n != 1 {
+		t.Fatalf("stale entity should expire; swept %d, want 1", n)
+	}
+	if _, found := g.MatchIdentity(model.TypeHost, host1); found {
+		t.Error("expired entity should be soft-deleted")
+	}
+	if _, found := g.MatchIdentity(model.TypeHost, host2); !found {
+		t.Error("interval-less entity must not be expired")
+	}
+	if g.EntityCount() != 1 {
+		t.Errorf("EntityCount = %d, want 1", g.EntityCount())
+	}
+	if n := e.Sweep(); n != 0 {
+		t.Errorf("re-sweep should be a no-op; swept %d", n)
+	}
+}
+
 func mustObserve(t *testing.T, e *Engine, typ string, ident []model.KeyValue) {
 	t.Helper()
 	if _, err := e.ObserveEntity(EntityObservation{Type: typ, Identity: ident, EventTime: t0}); err != nil {

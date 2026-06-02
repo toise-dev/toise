@@ -133,7 +133,7 @@ from this round:
 | Producer vocabulary in the registry | **done** (PR #16) |
 | Conformance fixture / contract test | **done** (PR #17) |
 | Exact-Id matching (retire fuzzy `identity_changed`) | **done** (ADR 0018) |
-| Interval TTL sweeper (entity + edge expiry) | accepted — pending |
+| Interval TTL sweeper (entity expiry; edge TTL is a follow-up) | **done** (`--liveness-sweep-interval`) |
 | Out-of-order edge reconciliation buffer | **done** (opt-in, `--relation-buffer-ttl`) |
 | Explicit `Warn` on dropped nested value | **done** |
 

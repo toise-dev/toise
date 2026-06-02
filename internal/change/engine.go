@@ -45,6 +45,10 @@ type Engine struct {
 	bufferTTL time.Duration
 	pending   []pendingRelation
 
+	// liveness backstop: per-entity expiry deadline for entities observed with an
+	// interval. Sweep expires those past their deadline. Guarded by obsMu.
+	deadlines map[model.EntityID]time.Time
+
 	subMu sync.RWMutex
 	subs  map[int]Subscriber
 	subID int
@@ -88,11 +92,12 @@ func WithRelationBuffer(ttl time.Duration) Option {
 // New returns an engine writing to appender and projecting into graph.
 func New(graph *projection.Graph, appender Appender, opts ...Option) *Engine {
 	e := &Engine{
-		graph:    graph,
-		appender: appender,
-		now:      time.Now,
-		logger:   slog.Default(),
-		subs:     make(map[int]Subscriber),
+		graph:     graph,
+		appender:  appender,
+		now:       time.Now,
+		logger:    slog.Default(),
+		subs:      make(map[int]Subscriber),
+		deadlines: make(map[model.EntityID]time.Time),
 	}
 	for _, o := range opts {
 		o(e)
@@ -129,6 +134,11 @@ type EntityObservation struct {
 	Attributes []model.KeyValue
 	SchemaURL  string
 	EventTime  time.Time
+	// Interval is the producer's heartbeat cadence. When > 0 it arms a liveness
+	// backstop: if the entity is not re-asserted within Interval, Sweep expires it
+	// (a missed-delete safety net, not the primary delete signal). The producer
+	// should size Interval to include slack for jitter/a missed heartbeat.
+	Interval time.Duration
 }
 
 // EndpointRef references a relation endpoint by its entity identity.
@@ -196,6 +206,12 @@ func (e *Engine) ObserveEntity(obs EntityObservation) (model.Event, error) {
 	if err := e.commit(ev, false); err != nil {
 		return model.Event{}, err
 	}
+	// Arm (or clear) the liveness backstop for this entity.
+	if obs.Interval > 0 {
+		e.deadlines[entityID] = e.now().Add(obs.Interval)
+	} else {
+		delete(e.deadlines, entityID)
+	}
 	// A new/updated entity may be the missing endpoint of a parked edge.
 	e.flushPending()
 	return ev, nil
@@ -228,7 +244,51 @@ func (e *Engine) DeleteEntity(obs EntityObservation) (ev model.Event, emitted bo
 	if err := e.commit(ev, false); err != nil {
 		return model.Event{}, false, err
 	}
+	delete(e.deadlines, id) // explicit delete clears any liveness backstop
 	return ev, true, nil
+}
+
+// Sweep expires entities whose liveness backstop has lapsed: an entity observed
+// with an interval that has not been re-asserted within it is soft-deleted
+// (entity.deleted), as a safety net for missed explicit deletes (crash, host off,
+// network partition). It returns the number of entities expired. Drive it from a
+// periodic ticker.
+func (e *Engine) Sweep() int {
+	e.obsMu.Lock()
+	defer e.obsMu.Unlock()
+
+	now := e.now()
+	var expired []model.EntityID
+	for id, deadline := range e.deadlines {
+		if now.After(deadline) {
+			expired = append(expired, id)
+		}
+	}
+	n := 0
+	for _, id := range expired {
+		ent, ok, deleted := e.graph.GetEntity(id)
+		if !ok || deleted {
+			delete(e.deadlines, id)
+			continue
+		}
+		ev := model.Event{Entity: &model.EntityEvent{
+			EventID:       model.NewEventID(),
+			ChangeType:    model.EntityDeleted,
+			Entity:        ent, // last-known state
+			EventTime:     now,
+			RecordedAt:    now,
+			SchemaVersion: model.SchemaVersion,
+		}}
+		if err := e.commit(ev, false); err != nil {
+			e.logger.Error("failed to expire stale entity", "id", id, "err", err)
+			continue // keep the deadline and retry next sweep
+		}
+		delete(e.deadlines, id)
+		e.logger.Warn("expired stale entity: no heartbeat within its interval",
+			"entity_type", ent.Type, "entity_id", id)
+		n++
+	}
+	return n
 }
 
 // ObserveRelation classifies an observed relation. It emits relation.added for a
