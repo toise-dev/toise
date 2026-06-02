@@ -87,6 +87,11 @@ Two clear signals:
   the projection, a host detail page (identity + attributes + neighbours +
   history) renders in **< 1 ms** — reads are O(1)/O(n) over the in-memory snapshot
   regardless of graph size. GraphQL, MCP, and the debug UI all sit on this.
+  Microbenchmark (regression guard, `internal/change`, real Sync'ing store):
+  `BenchmarkIngestBatch100` ingests 100 entities in **~4.5 ms** (one Sync'd batch
+  append) versus `BenchmarkIngestPerEvent100` at **~374 ms** (100 Sync'd appends) —
+  ~**84×** on the durable-append path alone.
+
 - **Batched append lifts the ingestion ceiling.** The OTLP boundary used to commit
   **one durable (Sync'd) Pebble append per record**, so a large export (≈ 1.3k
   records) was fsync-limited to ~250–330 records/s. The engine's `Batch` now
