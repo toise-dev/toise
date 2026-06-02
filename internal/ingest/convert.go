@@ -22,21 +22,26 @@ const (
 	// The relation extension uses a vendor-neutral namespace (neither a producer
 	// nor a consumer prefix) so any producer/consumer can speak it and it maps
 	// 1:1 onto the future OTel relationships standard (OTEP 0256 Future Work).
-	// It is explicitly transitional. See docs/data-model/otel-mapping.md.
-	attrRelType     = "entity.relation.type"
-	attrRelFromType = "entity.relation.from.type"
-	attrRelFromID   = "entity.relation.from.id"
-	attrRelToType   = "entity.relation.to.type"
-	attrRelToID     = "entity.relation.to.id"
-	attrRelAttrs    = "entity.relation.attributes"
+	// Strict purity: a relation record carries NO otel.entity.* attribute (its own
+	// lifecycle key is entity.relation.event.type), so a standard OTel
+	// entity-events consumer sees no malformed entity event and cleanly ignores it.
+	// See docs/data-model/otel-mapping.md.
+	attrRelEventType = "entity.relation.event.type"
+	attrRelType      = "entity.relation.type"
+	attrRelFromType  = "entity.relation.from.type"
+	attrRelFromID    = "entity.relation.from.id"
+	attrRelToType    = "entity.relation.to.type"
+	attrRelToID      = "entity.relation.to.id"
+	attrRelAttrs     = "entity.relation.attributes"
 )
 
-// Event type values for the otel.entity.event.type attribute.
+// Lifecycle values: entity events on otel.entity.event.type, relation events on
+// entity.relation.event.type.
 const (
-	evEntityState    = "entity_state"
-	evEntityDelete   = "entity_delete"
-	evRelationState  = "relation_state"
-	evRelationDelete = "relation_delete"
+	evEntityState  = "entity_state"
+	evEntityDelete = "entity_delete"
+	evRelState     = "state"
+	evRelDelete    = "delete"
 )
 
 // engine is the subset of *change.Engine the receiver routes to.
@@ -51,44 +56,51 @@ type engine interface {
 // handled is false for LogRecords that are not Toise entity events (ignored).
 func routeRecord(e engine, lr plog.LogRecord) (handled bool, err error) {
 	attrs := lr.Attributes()
-	et, ok := strAttr(attrs, attrEventType)
-	if !ok {
-		return false, nil // not an entity event
-	}
 	when := eventTimeOf(lr)
 
-	switch et {
-	case evEntityState:
-		obs, err := entityObs(attrs, when)
-		if err != nil {
-			return true, err
+	if et, ok := strAttr(attrs, attrEventType); ok { // entity event (standard OTel)
+		switch et {
+		case evEntityState:
+			obs, oerr := entityObs(attrs, when)
+			if oerr != nil {
+				return true, oerr
+			}
+			_, oerr = e.ObserveEntity(obs)
+			return true, oerr
+		case evEntityDelete:
+			obs, oerr := entityObs(attrs, when)
+			if oerr != nil {
+				return true, oerr
+			}
+			_, _, oerr = e.DeleteEntity(obs)
+			return true, oerr
+		default:
+			return false, nil
 		}
-		_, err = e.ObserveEntity(obs)
-		return true, err
-	case evEntityDelete:
-		obs, err := entityObs(attrs, when)
-		if err != nil {
-			return true, err
-		}
-		_, _, err = e.DeleteEntity(obs)
-		return true, err
-	case evRelationState:
-		obs, err := relationObs(attrs, when)
-		if err != nil {
-			return true, err
-		}
-		_, _, err = e.ObserveRelation(obs)
-		return true, err
-	case evRelationDelete:
-		obs, err := relationObs(attrs, when)
-		if err != nil {
-			return true, err
-		}
-		_, _, err = e.RemoveRelation(obs)
-		return true, err
-	default:
-		return false, nil
 	}
+
+	if rt, ok := strAttr(attrs, attrRelEventType); ok { // relation event (extension)
+		switch rt {
+		case evRelState:
+			obs, oerr := relationObs(attrs, when)
+			if oerr != nil {
+				return true, oerr
+			}
+			_, _, oerr = e.ObserveRelation(obs)
+			return true, oerr
+		case evRelDelete:
+			obs, oerr := relationObs(attrs, when)
+			if oerr != nil {
+				return true, oerr
+			}
+			_, _, oerr = e.RemoveRelation(obs)
+			return true, oerr
+		default:
+			return false, nil
+		}
+	}
+
+	return false, nil // neither an entity nor a relation event
 }
 
 func entityObs(attrs pcommon.Map, when time.Time) (change.EntityObservation, error) {

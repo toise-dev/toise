@@ -50,6 +50,15 @@ func newRecord(eventType string) plog.LogRecord {
 	return lr
 }
 
+// newRelRecord builds a relation record carrying only the neutral relation
+// lifecycle key (no otel.entity.* — strict purity).
+func newRelRecord(relEvent string) plog.LogRecord {
+	lr := plog.NewLogRecord()
+	lr.SetTimestamp(pcommon.NewTimestampFromTime(time.Unix(1_700_000_000, 0)))
+	lr.Attributes().PutStr(attrRelEventType, relEvent)
+	return lr
+}
+
 func TestRouteEntityState(t *testing.T) {
 	lr := newRecord(evEntityState)
 	a := lr.Attributes()
@@ -120,7 +129,7 @@ func TestRouteEntityDelete(t *testing.T) {
 }
 
 func TestRouteRelation(t *testing.T) {
-	lr := newRecord(evRelationState)
+	lr := newRelRecord(evRelState)
 	a := lr.Attributes()
 	a.PutStr(attrRelType, model.RelRunsOn)
 	a.PutStr(attrRelFromType, model.TypeProcess)
@@ -135,8 +144,8 @@ func TestRouteRelation(t *testing.T) {
 		t.Errorf("relation obs = %+v", f.lastRelation)
 	}
 
-	// relation_delete
-	lr2 := newRecord(evRelationDelete)
+	// relation delete
+	lr2 := newRelRecord(evRelDelete)
 	a2 := lr2.Attributes()
 	a2.PutStr(attrRelType, model.RelRunsOn)
 	a2.PutStr(attrRelFromType, model.TypeProcess)
@@ -149,7 +158,7 @@ func TestRouteRelation(t *testing.T) {
 }
 
 func TestRouteRelationMissingEndpoint(t *testing.T) {
-	lr := newRecord(evRelationState)
+	lr := newRelRecord(evRelState)
 	lr.Attributes().PutStr(attrRelType, model.RelRunsOn)
 	// no endpoints
 	f := &fakeEngine{}

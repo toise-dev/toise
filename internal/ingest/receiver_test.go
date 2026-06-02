@@ -80,7 +80,7 @@ func relationRecord(sl plog.ScopeLogs, eventType, relType, fromType string, from
 	lr := sl.LogRecords().AppendEmpty()
 	lr.SetTimestamp(pcommon.NewTimestampFromTime(t0))
 	a := lr.Attributes()
-	a.PutStr(attrEventType, eventType)
+	a.PutStr(attrRelEventType, eventType)
 	a.PutStr(attrRelType, relType)
 	a.PutStr(attrRelFromType, fromType)
 	fm := a.PutEmptyMap(attrRelFromID)
@@ -101,7 +101,7 @@ func TestReceiverEntityAndRelation(t *testing.T) {
 	sl := ld.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty()
 	entityRecord(sl, evEntityState, model.TypeHost, map[string]string{"host.id": "h1"}, map[string]string{"status": "up"})
 	entityRecord(sl, evEntityState, model.TypeProcess, map[string]string{"pid": "100"}, nil)
-	relationRecord(sl, evRelationState, model.RelRunsOn, model.TypeProcess, map[string]string{"pid": "100"}, model.TypeHost, map[string]string{"host.id": "h1"})
+	relationRecord(sl, evRelState, model.RelRunsOn, model.TypeProcess, map[string]string{"pid": "100"}, model.TypeHost, map[string]string{"host.id": "h1"})
 	// a non-entity log record must be ignored
 	sl.LogRecords().AppendEmpty().Body().SetStr("unrelated log line")
 
