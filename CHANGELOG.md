@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
+## [0.1.1] - 2026-06-02
+
+First real-world validation against the **real senhub-agent** producer, which
+surfaced and fixed a silent OTLP ingestion bug.
+
+### Fixed
+
+- **OTLP ingestion now accepts gzip-compressed exports.** The OTLP/gRPC receiver
+  did not register the gzip decompressor, so gzip-compressed exports — the OTel
+  SDK default, and what the senhub-agent reference producer ships — failed at the
+  gRPC transport (`"Decompressor is not installed"`) *before reaching the handler*
+  and were silently dropped (the OTel SDK swallows the export error), surfacing
+  only as an empty graph. Found connecting the real senhub-agent to a running
+  `toise-server`. (#32)
+
+### Changed
+
+- **Tooling:** the lint CI builds golangci-lint from source with the repository's
+  Go toolchain (so it tracks the latest Go) and migrates to golangci-lint v2.
+  (#34, #37)
+
 ## [0.1.0] - 2026-06-02
 
 First tagged release: the phase-1 backend (M0–M8) plus the producer↔consumer
