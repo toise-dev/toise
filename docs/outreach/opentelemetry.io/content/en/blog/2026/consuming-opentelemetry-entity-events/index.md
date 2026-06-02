@@ -3,7 +3,7 @@ title: What can you do with OpenTelemetry entity events?
 linkTitle: Consuming entity events
 date: 2026-06-15
 author: >-
-  [Matthieu Noirbusson](https://github.com/<your-github-handle>) (Sensor
+  [Matthieu Noirbusson](https://github.com/MatthieuNoirbusson) (Sensor
   Factory)
 issue: 0000 # replace with the pre-submission issue number
 sig: "Specification: Entities" # verified against open-telemetry/community SIG list

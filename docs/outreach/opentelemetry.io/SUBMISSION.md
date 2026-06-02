@@ -37,8 +37,7 @@ Put the resulting issue number into the post's `issue:` front-matter field.
 
 ## Placeholders to fill in `index.md`
 
-- `author:` — replace `<your-github-handle>` with your GitHub username (org is
-  already "Sensor Factory").
+- `author:` — set to `MatthieuNoirbusson` / Sensor Factory (done).
 - `issue:` — the pre-submission issue number (currently `0000`).
 - `sig:` — set to `"Specification: Entities"` (verified against the
   `open-telemetry/community` SIG list). Reviewers will adjust if their convention
@@ -50,7 +49,7 @@ Put the resulting issue number into the post's `issue:` front-matter field.
 
 ```bash
 # 1. Fork open-telemetry/opentelemetry.io on GitHub, then:
-git clone https://github.com/<your-github-handle>/opentelemetry.io
+git clone https://github.com/MatthieuNoirbusson/opentelemetry.io
 cd opentelemetry.io
 git checkout -b blog-entity-events
 npm install
