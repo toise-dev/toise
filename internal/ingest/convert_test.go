@@ -71,7 +71,7 @@ func TestRouteEntityState(t *testing.T) {
 	attrs.PutDouble("load", 0.5)
 
 	f := &fakeEngine{}
-	handled, err := routeRecord(f, lr)
+	handled, _, err := routeRecord(f, lr)
 	if !handled || err != nil {
 		t.Fatalf("routeRecord handled=%v err=%v", handled, err)
 	}
@@ -95,14 +95,40 @@ func TestRouteIgnoresNonEntity(t *testing.T) {
 	lr := newRecord("") // no otel.entity.event.type
 	lr.Body().SetStr("plain log")
 	f := &fakeEngine{}
-	handled, err := routeRecord(f, lr)
+	handled, _, err := routeRecord(f, lr)
 	if handled || err != nil {
 		t.Errorf("non-entity record: handled=%v err=%v, want false,nil", handled, err)
 	}
 
 	// unknown event type is also ignored
-	if handled, err := routeRecord(f, newRecord("something_else")); handled || err != nil {
+	if handled, _, err := routeRecord(f, newRecord("something_else")); handled || err != nil {
 		t.Errorf("unknown event type: handled=%v err=%v", handled, err)
+	}
+}
+
+func TestRouteSurfacesDroppedNonScalar(t *testing.T) {
+	lr := newRecord(evEntityState)
+	a := lr.Attributes()
+	a.PutStr(attrEntityType, model.TypeHost)
+	a.PutEmptyMap(attrEntityID).PutStr("host.id", "h1")
+	attrs := a.PutEmptyMap(attrEntityAttrs)
+	attrs.PutStr("os.type", "linux") // scalar: kept
+	attrs.PutEmptyMap("nested")      // non-scalar: dropped and reported
+	attrs.PutEmptySlice("tags")      // non-scalar: dropped and reported
+	f := &fakeEngine{}
+	handled, dropped, err := routeRecord(f, lr)
+	if !handled || err != nil {
+		t.Fatalf("handled=%v err=%v", handled, err)
+	}
+	got := map[string]bool{}
+	for _, k := range dropped {
+		got[k] = true
+	}
+	if !got["otel.entity.attributes.nested"] || !got["otel.entity.attributes.tags"] {
+		t.Errorf("dropped = %v, want the nested map and slice keys surfaced", dropped)
+	}
+	if len(f.lastEntity.Attributes) != 1 || f.lastEntity.Attributes[0].Key != "os.type" {
+		t.Errorf("kept attributes = %+v, want just the scalar os.type", f.lastEntity.Attributes)
 	}
 }
 
@@ -111,7 +137,7 @@ func TestRouteEntityMissingID(t *testing.T) {
 	lr.Attributes().PutStr(attrEntityType, model.TypeHost)
 	// no otel.entity.id
 	f := &fakeEngine{}
-	handled, err := routeRecord(f, lr)
+	handled, _, err := routeRecord(f, lr)
 	if !handled || err == nil {
 		t.Errorf("missing id: handled=%v err=%v, want true,err", handled, err)
 	}
@@ -123,7 +149,7 @@ func TestRouteEntityDelete(t *testing.T) {
 	a.PutStr(attrEntityType, model.TypeHost)
 	a.PutEmptyMap(attrEntityID).PutStr("host.id", "h1")
 	f := &fakeEngine{}
-	if handled, err := routeRecord(f, lr); !handled || err != nil || f.deletes != 1 {
+	if handled, _, err := routeRecord(f, lr); !handled || err != nil || f.deletes != 1 {
 		t.Errorf("delete: handled=%v err=%v deletes=%d", handled, err, f.deletes)
 	}
 }
@@ -137,7 +163,7 @@ func TestRouteRelation(t *testing.T) {
 	a.PutStr(attrRelToType, model.TypeHost)
 	a.PutEmptyMap(attrRelToID).PutStr("host.id", "h1")
 	f := &fakeEngine{}
-	if handled, err := routeRecord(f, lr); !handled || err != nil || f.relAdds != 1 {
+	if handled, _, err := routeRecord(f, lr); !handled || err != nil || f.relAdds != 1 {
 		t.Errorf("relation: handled=%v err=%v relAdds=%d", handled, err, f.relAdds)
 	}
 	if f.lastRelation.From.Type != model.TypeProcess || f.lastRelation.To.Type != model.TypeHost {
@@ -152,7 +178,7 @@ func TestRouteRelation(t *testing.T) {
 	a2.PutEmptyMap(attrRelFromID).PutStr("pid", "100")
 	a2.PutStr(attrRelToType, model.TypeHost)
 	a2.PutEmptyMap(attrRelToID).PutStr("host.id", "h1")
-	if handled, err := routeRecord(f, lr2); !handled || err != nil || f.relRemoves != 1 {
+	if handled, _, err := routeRecord(f, lr2); !handled || err != nil || f.relRemoves != 1 {
 		t.Errorf("relation delete: handled=%v err=%v relRemoves=%d", handled, err, f.relRemoves)
 	}
 }
@@ -162,7 +188,7 @@ func TestRouteRelationMissingEndpoint(t *testing.T) {
 	lr.Attributes().PutStr(attrRelType, model.RelRunsOn)
 	// no endpoints
 	f := &fakeEngine{}
-	if handled, err := routeRecord(f, lr); !handled || err == nil {
+	if handled, _, err := routeRecord(f, lr); !handled || err == nil {
 		t.Errorf("missing endpoints: handled=%v err=%v", handled, err)
 	}
 }

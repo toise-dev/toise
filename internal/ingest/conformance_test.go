@@ -143,7 +143,7 @@ func TestConformanceFixture(t *testing.T) {
 		for j := 0; j < sls.Len(); j++ {
 			recs := sls.At(j).LogRecords()
 			for k := 0; k < recs.Len(); k++ {
-				handled, rerr := routeRecord(eng, recs.At(k))
+				handled, _, rerr := routeRecord(eng, recs.At(k))
 				if rerr != nil {
 					t.Fatalf("record %d: ingest error: %v", k, rerr)
 				}

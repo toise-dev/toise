@@ -54,93 +54,104 @@ type engine interface {
 
 // routeRecord converts an entity-event LogRecord and routes it to the engine.
 // handled is false for LogRecords that are not Toise entity events (ignored).
-func routeRecord(e engine, lr plog.LogRecord) (handled bool, err error) {
+// routeRecord returns the keys of any non-scalar attribute values it dropped, so
+// the caller can surface the loss rather than discard data silently (the
+// producer's contract is flat scalar maps; a nested value is a producer bug worth
+// seeing).
+func routeRecord(e engine, lr plog.LogRecord) (handled bool, dropped []string, err error) {
 	attrs := lr.Attributes()
 	when := eventTimeOf(lr)
 
 	if et, ok := strAttr(attrs, attrEventType); ok { // entity event (standard OTel)
 		switch et {
 		case evEntityState:
-			obs, oerr := entityObs(attrs, when)
+			obs, drop, oerr := entityObs(attrs, when)
 			if oerr != nil {
-				return true, oerr
+				return true, drop, oerr
 			}
 			_, oerr = e.ObserveEntity(obs)
-			return true, oerr
+			return true, drop, oerr
 		case evEntityDelete:
-			obs, oerr := entityObs(attrs, when)
+			obs, drop, oerr := entityObs(attrs, when)
 			if oerr != nil {
-				return true, oerr
+				return true, drop, oerr
 			}
 			_, _, oerr = e.DeleteEntity(obs)
-			return true, oerr
+			return true, drop, oerr
 		default:
-			return false, nil
+			return false, nil, nil
 		}
 	}
 
 	if rt, ok := strAttr(attrs, attrRelEventType); ok { // relation event (extension)
 		switch rt {
 		case evRelState:
-			obs, oerr := relationObs(attrs, when)
+			obs, drop, oerr := relationObs(attrs, when)
 			if oerr != nil {
-				return true, oerr
+				return true, drop, oerr
 			}
 			_, _, oerr = e.ObserveRelation(obs)
-			return true, oerr
+			return true, drop, oerr
 		case evRelDelete:
-			obs, oerr := relationObs(attrs, when)
+			obs, drop, oerr := relationObs(attrs, when)
 			if oerr != nil {
-				return true, oerr
+				return true, drop, oerr
 			}
 			_, _, oerr = e.RemoveRelation(obs)
-			return true, oerr
+			return true, drop, oerr
 		default:
-			return false, nil
+			return false, nil, nil
 		}
 	}
 
-	return false, nil // neither an entity nor a relation event
+	return false, nil, nil // neither an entity nor a relation event
 }
 
-func entityObs(attrs pcommon.Map, when time.Time) (change.EntityObservation, error) {
+func entityObs(attrs pcommon.Map, when time.Time) (change.EntityObservation, []string, error) {
 	typ, ok := strAttr(attrs, attrEntityType)
 	if !ok {
-		return change.EntityObservation{}, fmt.Errorf("missing %s", attrEntityType)
+		return change.EntityObservation{}, nil, fmt.Errorf("missing %s", attrEntityType)
 	}
-	ident, ok := mapAttr(attrs, attrEntityID)
+	ident, identDropped, ok := mapAttr(attrs, attrEntityID)
 	if !ok || len(ident) == 0 {
-		return change.EntityObservation{}, fmt.Errorf("missing or empty %s", attrEntityID)
+		return change.EntityObservation{}, identDropped, fmt.Errorf("missing or empty %s", attrEntityID)
 	}
-	descriptive, _ := mapAttr(attrs, attrEntityAttrs)
+	descriptive, descDropped, _ := mapAttr(attrs, attrEntityAttrs)
+	var dropped []string
+	dropped = append(dropped, identDropped...)
+	dropped = append(dropped, descDropped...)
 	return change.EntityObservation{
 		Type:       typ,
 		Identity:   ident,
 		Attributes: descriptive,
 		EventTime:  when,
-	}, nil
+	}, dropped, nil
 }
 
-func relationObs(attrs pcommon.Map, when time.Time) (change.RelationObservation, error) {
+func relationObs(attrs pcommon.Map, when time.Time) (change.RelationObservation, []string, error) {
 	relType, ok := strAttr(attrs, attrRelType)
 	if !ok {
-		return change.RelationObservation{}, fmt.Errorf("missing %s", attrRelType)
+		return change.RelationObservation{}, nil, fmt.Errorf("missing %s", attrRelType)
 	}
 	fromType, okFT := strAttr(attrs, attrRelFromType)
-	fromID, okFI := mapAttr(attrs, attrRelFromID)
+	fromID, fromDropped, okFI := mapAttr(attrs, attrRelFromID)
 	toType, okTT := strAttr(attrs, attrRelToType)
-	toID, okTI := mapAttr(attrs, attrRelToID)
+	toID, toDropped, okTI := mapAttr(attrs, attrRelToID)
+	var dropped []string
+	dropped = append(dropped, fromDropped...)
+	dropped = append(dropped, toDropped...)
 	if !okFT || !okFI || !okTT || !okTI {
-		return change.RelationObservation{}, fmt.Errorf("relation %q missing endpoint attributes", relType)
+		return change.RelationObservation{}, dropped, fmt.Errorf("relation %q missing endpoint attributes", relType)
 	}
-	relAttrs, _ := mapAttr(attrs, attrRelAttrs)
+	relAttrs, attrDropped, _ := mapAttr(attrs, attrRelAttrs)
+	dropped = append(dropped, attrDropped...)
 	return change.RelationObservation{
 		Type:       relType,
 		From:       change.EndpointRef{Type: fromType, Identity: fromID},
 		To:         change.EndpointRef{Type: toType, Identity: toID},
 		Attributes: relAttrs,
 		EventTime:  when,
-	}, nil
+	}, dropped, nil
 }
 
 func eventTimeOf(lr plog.LogRecord) time.Time {
@@ -161,25 +172,29 @@ func strAttr(attrs pcommon.Map, key string) (string, bool) {
 	return v.Str(), true
 }
 
-func mapAttr(attrs pcommon.Map, key string) ([]model.KeyValue, bool) {
+func mapAttr(attrs pcommon.Map, key string) ([]model.KeyValue, []string, bool) {
 	v, ok := attrs.Get(key)
 	if !ok || v.Type() != pcommon.ValueTypeMap {
-		return nil, false
+		return nil, nil, false
 	}
-	return kvsFromMap(v.Map()), true
+	kvs, dropped := kvsFromMap(v.Map(), key)
+	return kvs, dropped, true
 }
 
-// kvsFromMap converts a pcommon.Map of scalar values to Toise KeyValues,
-// skipping non-scalar entries.
-func kvsFromMap(m pcommon.Map) []model.KeyValue {
-	out := make([]model.KeyValue, 0, m.Len())
+// kvsFromMap converts a pcommon.Map of scalar values to Toise KeyValues. It
+// returns the dotted keys (prefixed with the map's attribute name) of any
+// non-scalar entries it dropped, so the caller can surface the loss.
+func kvsFromMap(m pcommon.Map, prefix string) (kvs []model.KeyValue, dropped []string) {
+	kvs = make([]model.KeyValue, 0, m.Len())
 	m.Range(func(k string, v pcommon.Value) bool {
 		if mv, ok := valueFrom(v); ok {
-			out = append(out, model.KeyValue{Key: k, Value: mv})
+			kvs = append(kvs, model.KeyValue{Key: k, Value: mv})
+		} else {
+			dropped = append(dropped, prefix+"."+k)
 		}
 		return true
 	})
-	return out
+	return kvs, dropped
 }
 
 func valueFrom(v pcommon.Value) (model.Value, bool) {

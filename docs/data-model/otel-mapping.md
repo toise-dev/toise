@@ -116,11 +116,10 @@ emitting — send `{"server.address": "10.0.0.1", "server.port": 5432}`, never
 `{"server": {"address": "10.0.0.1", "port": 5432}}` (the nested `server` value
 would be discarded).
 
-**No silent loss (planned):** dropping a nested value must be **surfaced**, not
-silent — the boundary will log a `Warn` naming the dropped key so the data loss
-is observable. Pre-flattening remains the producer's contract; the requirement is
-only that the consumer never drops data quietly. *(Status: agreed; the explicit
-warning is a small ingest follow-up — today the drop is silent.)*
+**No silent loss:** dropping a nested value is **surfaced**, not silent — the
+boundary logs a `Warn` naming the dropped key(s) (e.g.
+`otel.entity.attributes.foo`) so the loss is observable. Pre-flattening remains
+the producer's contract; the consumer never drops data quietly.
 
 ### Entity liveness — explicit delete primary, interval backstop
 
@@ -207,7 +206,7 @@ planned:
 | Entity collisions | exact-Id matching (no fuzzy merge) | **done** (ADR 0018) |
 | Missed deletes | explicit `entity_delete` + `interval` TTL backstop | accepted; sweeper pending |
 | Out-of-order edges | reconciliation buffer (park & flush) | accepted; today a retriable error |
-| Nested values | explicit `Warn` on drop (never silent) | accepted; warning pending |
+| Nested values | explicit `Warn` on drop (never silent) | **done** |
 | Scope flag `otel.entity.entity_event=true` | accepted and ignored (never rejected) — interop fast-path for other OTel producers | done |
 
 ### Timestamps
