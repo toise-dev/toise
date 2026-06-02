@@ -55,31 +55,46 @@ type logsServer struct {
 func (s *logsServer) Export(_ context.Context, req plogotlp.ExportRequest) (plogotlp.ExportResponse, error) {
 	ld := req.Logs()
 	var handled, skipped int
+	var dropped []string
 
+	// Each ResourceLogs (one producer) is ingested as a single batch so its events
+	// commit with one durable append (one fsync) instead of one per record.
 	rls := ld.ResourceLogs()
 	for i := 0; i < rls.Len(); i++ {
 		producer, _ := strAttr(rls.At(i).Resource().Attributes(), resAttrProducer)
 		sls := rls.At(i).ScopeLogs()
-		for j := 0; j < sls.Len(); j++ {
-			recs := sls.At(j).LogRecords()
-			for k := 0; k < recs.Len(); k++ {
-				ok, dropped, err := routeRecord(s.engine, recs.At(k), producer)
-				if len(dropped) > 0 {
-					// Non-scalar attribute values are dropped (producers must send
-					// flat scalar maps) — surface it, never lose data silently.
-					s.logger.Warn("dropped non-scalar attribute values at ingest boundary", "keys", dropped)
-				}
-				if err != nil {
-					// A routing failure (e.g. store append) is retriable: surface it.
-					return plogotlp.NewExportResponse(), fmt.Errorf("routing log record: %w", err)
-				}
-				if ok {
-					handled++
-				} else {
-					skipped++
+		var routeErr error
+		batchErr := s.engine.Batch(func(b *change.Batch) {
+			for j := 0; j < sls.Len() && routeErr == nil; j++ {
+				recs := sls.At(j).LogRecords()
+				for k := 0; k < recs.Len(); k++ {
+					ok, drop, err := routeRecord(b, recs.At(k), producer)
+					dropped = append(dropped, drop...)
+					if err != nil {
+						routeErr = err
+						break
+					}
+					if ok {
+						handled++
+					} else {
+						skipped++
+					}
 				}
 			}
+		})
+		// A routing or append failure is retriable (at-least-once + idempotent
+		// classification make a retry safe): surface it.
+		if routeErr != nil {
+			return plogotlp.NewExportResponse(), fmt.Errorf("routing log record: %w", routeErr)
 		}
+		if batchErr != nil {
+			return plogotlp.NewExportResponse(), fmt.Errorf("ingest batch: %w", batchErr)
+		}
+	}
+	if len(dropped) > 0 {
+		// Non-scalar attribute values are dropped (producers must send flat scalar
+		// maps) — surface it, never lose data silently.
+		s.logger.Warn("dropped non-scalar attribute values at ingest boundary", "keys", dropped)
 	}
 	if skipped > 0 {
 		s.logger.Debug("otlp export processed", "entity_events", handled, "ignored", skipped)
