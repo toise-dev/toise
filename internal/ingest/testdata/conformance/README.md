@@ -12,10 +12,12 @@ It is the **shared, executable interface** between the two sides:
   it can reproduce the same shape, so a producer-side drift is caught in its CI.
 
 It exercises the full contract: the standard `otel.entity.*` node shape, the
-`entity.relation.*` edge extension, flat scalar maps, exact-identity endpoints
-emitted before their edges, an attribute update, an explicit `entity_delete`, a
-`relation_delete`, and the producer vocabulary (`host`, `service.instance`, `db`
-with a single composite identity key, `network.device`; relations `monitors`,
+`entity.relation.*` edge extension (strict purity — relation records carry no
+`otel.entity.*`, discriminated by `entity.relation.event.type`), flat scalar maps,
+exact-identity endpoints emitted before their edges, an attribute update, an
+explicit `entity_delete`, a `relation_delete`, and the producer vocabulary
+(`host`, `service.instance`, `db` with a single composite identity key,
+`network.device`; relations `runs_on` (agent→host), `monitors` (agent→db),
 `adjacent_to`).
 
 The file is **generated** from `buildConformanceLogs` — do not hand-edit it.

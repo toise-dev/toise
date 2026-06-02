@@ -148,12 +148,6 @@
                     "kvlistValue": {
                       "values": [
                         {
-                          "key": "server.port",
-                          "value": {
-                            "intValue": "5432"
-                          }
-                        },
-                        {
                           "key": "db.system.name",
                           "value": {
                             "stringValue": "postgresql"
@@ -163,6 +157,12 @@
                           "key": "server.address",
                           "value": {
                             "stringValue": "10.0.1.5"
+                          }
+                        },
+                        {
+                          "key": "server.port",
+                          "value": {
+                            "intValue": "5432"
                           }
                         }
                       ]
@@ -176,15 +176,15 @@
             {
               "attributes": [
                 {
-                  "key": "otel.entity.event.type",
+                  "key": "entity.relation.event.type",
                   "value": {
-                    "stringValue": "relation_state"
+                    "stringValue": "state"
                   }
                 },
                 {
                   "key": "entity.relation.type",
                   "value": {
-                    "stringValue": "monitors"
+                    "stringValue": "runs_on"
                   }
                 },
                 {
@@ -236,9 +236,9 @@
             {
               "attributes": [
                 {
-                  "key": "otel.entity.event.type",
+                  "key": "entity.relation.event.type",
                   "value": {
-                    "stringValue": "relation_state"
+                    "stringValue": "state"
                   }
                 },
                 {
@@ -328,6 +328,12 @@
                     "kvlistValue": {
                       "values": [
                         {
+                          "key": "db.connection.count",
+                          "value": {
+                            "intValue": "12"
+                          }
+                        },
+                        {
                           "key": "db.system.name",
                           "value": {
                             "stringValue": "postgresql"
@@ -344,12 +350,6 @@
                           "value": {
                             "intValue": "5432"
                           }
-                        },
-                        {
-                          "key": "db.connection.count",
-                          "value": {
-                            "intValue": "12"
-                          }
                         }
                       ]
                     }
@@ -362,9 +362,9 @@
             {
               "attributes": [
                 {
-                  "key": "otel.entity.event.type",
+                  "key": "entity.relation.event.type",
                   "value": {
-                    "stringValue": "relation_delete"
+                    "stringValue": "delete"
                   }
                 },
                 {
@@ -551,9 +551,9 @@
             {
               "attributes": [
                 {
-                  "key": "otel.entity.event.type",
+                  "key": "entity.relation.event.type",
                   "value": {
-                    "stringValue": "relation_state"
+                    "stringValue": "state"
                   }
                 },
                 {
