@@ -104,6 +104,25 @@ demo. Checkpoint H is the phase-1 completion gate: on validation, cut **v0.1.0**
 (CHANGELOG + README phase-1 summary updated; tag **not** pushed without explicit
 approval).
 
+## Post-0.1.0 real-world hardening
+
+Validation against the **real senhub-agent** (not just the synthetic
+`toise-probe`): the agent's OTLP entities signal was pointed at a live
+`toise-server`, and its Lot 1 (host + service.instance + `runs_on`) flowed into
+the projection over the wire — confirming the converged producer contract with
+the actual producer.
+
+- **gzip OTLP ingestion (PR #32):** the agent (and the OTel SDK) compress exports
+  with **gzip by default**, but the gRPC receiver didn't register the gzip
+  decompressor — gRPC-Go doesn't install it unless the encoding package is
+  blank-imported. gzip'd exports failed at the transport (`"Decompressor is not
+  installed"`) *before* reaching the handler, and the OTel SDK swallows the export
+  error: a silent drop on the wire, surfacing only as an empty graph. Fixed by the
+  blank import in `internal/ingest/receiver.go`, with a regression test
+  (`TestReceiverAcceptsGzip`) that references the codec by name only so the
+  production import is the sole registrant. See `docs/data-model/otel-mapping.md`
+  (*Transport*).
+
 ## Key cross-cutting rules (brief v2)
 
 - **Bi-temporality (patch 2):** default queries operate in `event_time` space (reality view). `asKnownAt` opt-in constrains to `recorded_at <= t` (audit view). Every event exposes both `eventTime` and `recordedAt`. Schema descriptions must teach the LLM which mode to pick.
