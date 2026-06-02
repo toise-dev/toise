@@ -1,11 +1,13 @@
 # Toise — Makefile
 # Run `make help` (the default target) to list available targets.
 
-BINARY      := toise-server
-DEMO_BINARY := toise-demo
-BIN_DIR     := bin
-CMD_PKG     := ./cmd/toise-server
-DEMO_PKG    := ./cmd/toise-demo
+BINARY       := toise-server
+DEMO_BINARY  := toise-demo
+PROBE_BINARY := toise-probe
+BIN_DIR      := bin
+CMD_PKG      := ./cmd/toise-server
+DEMO_PKG     := ./cmd/toise-demo
+PROBE_PKG    := ./cmd/toise-probe
 COVERAGE    := coverage.out
 COVERAGE_HTML := coverage.html
 
@@ -27,10 +29,11 @@ help: ## Show this help
 		| sort \
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 
-build: ## Build the toise-server and toise-demo binaries into bin/
+build: ## Build the toise-server, toise-demo and toise-probe binaries into bin/
 	@mkdir -p $(BIN_DIR)
 	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(BINARY) $(CMD_PKG)
 	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(DEMO_BINARY) $(DEMO_PKG)
+	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(PROBE_BINARY) $(PROBE_PKG)
 
 test: ## Run all tests
 	go test ./...

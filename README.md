@@ -54,9 +54,20 @@ breaking changes.
 ## Quickstart
 
 ```bash
-make build                                  # builds bin/toise-server and bin/toise-demo
+make build                                  # builds bin/toise-server, toise-demo, toise-probe
 ./bin/toise-demo --data-dir ./demo-data     # seed the "day in the life of web-server-1" demo
 ./bin/toise-server --data-dir ./demo-data   # then open http://127.0.0.1:8080/
+```
+
+For a **live** demo over the real OTLP path, run a fresh server and point one or
+more `toise-probe` agents at it — a real OTLP/gRPC producer that heartbeats an
+evolving infrastructure topology (process restarts, an interface flap, a
+container crash, multi-agent reference counting):
+
+```bash
+./bin/toise-server --data-dir ./live-data &
+./bin/toise-probe --producer agent-a            # in another terminal
+./bin/toise-probe --producer agent-b            # a second agent sharing the host/db
 ```
 
 The demo scenario and a set of example LLM prompts (with the MCP tool calls they
