@@ -45,10 +45,13 @@ type Engine struct {
 	bufferTTL time.Duration
 	pending   []pendingRelation
 
-	// liveness backstop: per-entity and per-relation expiry deadlines, for entities
-	// and edges observed with an interval. Sweep expires those past their deadline.
-	// Guarded by obsMu.
-	deadlines    map[model.EntityID]time.Time
+	// liveness: per-entity reference counts keyed by producer (the agent's
+	// service.instance.id; "" for an anonymous/single producer), each with an
+	// expiry deadline (zero = no interval, explicit-only). An entity is live while
+	// any producer references it; it is deleted only when the last reference is
+	// released (explicit delete or interval expiry). See ADR 0019. Per-relation
+	// edge deadlines for the optional per-edge TTL. Guarded by obsMu.
+	refs         map[model.EntityID]map[string]time.Time
 	relDeadlines map[model.RelationID]time.Time
 
 	subMu sync.RWMutex
@@ -99,7 +102,7 @@ func New(graph *projection.Graph, appender Appender, opts ...Option) *Engine {
 		now:          time.Now,
 		logger:       slog.Default(),
 		subs:         make(map[int]Subscriber),
-		deadlines:    make(map[model.EntityID]time.Time),
+		refs:         make(map[model.EntityID]map[string]time.Time),
 		relDeadlines: make(map[model.RelationID]time.Time),
 	}
 	for _, o := range opts {
@@ -142,6 +145,10 @@ type EntityObservation struct {
 	// (a missed-delete safety net, not the primary delete signal). The producer
 	// should size Interval to include slack for jitter/a missed heartbeat.
 	Interval time.Duration
+	// Producer identifies the observing agent (its service.instance.id). Liveness
+	// is reference-counted per producer: an entity stays live while any producer
+	// references it (ADR 0019). Empty means a single anonymous producer.
+	Producer string
 }
 
 // EndpointRef references a relation endpoint by its entity identity.
@@ -212,19 +219,28 @@ func (e *Engine) ObserveEntity(obs EntityObservation) (model.Event, error) {
 	if err := e.commit(ev, false); err != nil {
 		return model.Event{}, err
 	}
-	// Arm (or clear) the liveness backstop for this entity.
+	// Record this producer's reference, with its expiry deadline (zero = no
+	// interval, released only by an explicit delete). See ADR 0019.
+	producers := e.refs[entityID]
+	if producers == nil {
+		producers = make(map[string]time.Time)
+		e.refs[entityID] = producers
+	}
 	if obs.Interval > 0 {
-		e.deadlines[entityID] = e.now().Add(obs.Interval)
+		producers[obs.Producer] = e.now().Add(obs.Interval)
 	} else {
-		delete(e.deadlines, entityID)
+		producers[obs.Producer] = time.Time{}
 	}
 	// A new/updated entity may be the missing endpoint of a parked edge.
 	e.flushPending()
 	return ev, nil
 }
 
-// DeleteEntity emits entity.deleted for an entity matched by identity. If no
-// matching entity exists, no event is emitted (emitted=false).
+// DeleteEntity releases this producer's reference to an entity matched by
+// identity. The entity is actually deleted (entity.deleted + cascade) only when
+// the last producer has released it; while another producer still references it,
+// the delete is a silent release with no event (ADR 0019). No matching entity
+// means no event.
 func (e *Engine) DeleteEntity(obs EntityObservation) (ev model.Event, emitted bool, err error) {
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()
@@ -232,6 +248,15 @@ func (e *Engine) DeleteEntity(obs EntityObservation) (ev model.Event, emitted bo
 	id, found := e.graph.MatchIdentity(obs.Type, obs.Identity)
 	if !found {
 		return model.Event{}, false, nil
+	}
+	// Release this producer; if other producers still reference the entity, it
+	// stays live.
+	if producers, ok := e.refs[id]; ok {
+		delete(producers, obs.Producer)
+		if len(producers) > 0 {
+			return model.Event{}, false, nil
+		}
+		delete(e.refs, id)
 	}
 	ev = model.Event{Entity: &model.EntityEvent{
 		EventID:    model.NewEventID(),
@@ -250,7 +275,6 @@ func (e *Engine) DeleteEntity(obs EntityObservation) (ev model.Event, emitted bo
 	if err := e.commit(ev, false); err != nil {
 		return model.Event{}, false, err
 	}
-	delete(e.deadlines, id) // explicit delete clears any liveness backstop
 	e.removeIncidentRelations(id, obs.EventTime)
 	return ev, true, nil
 }
@@ -290,16 +314,23 @@ func (e *Engine) Sweep() int {
 	now := e.now()
 	n := 0
 
-	var expiredEntities []model.EntityID
-	for id, deadline := range e.deadlines {
-		if now.After(deadline) {
-			expiredEntities = append(expiredEntities, id)
+	// Drop each producer reference whose interval has lapsed; an entity with no
+	// surviving reference is expired (ADR 0019).
+	var orphaned []model.EntityID
+	for id, producers := range e.refs {
+		for p, deadline := range producers {
+			if !deadline.IsZero() && now.After(deadline) {
+				delete(producers, p)
+			}
+		}
+		if len(producers) == 0 {
+			orphaned = append(orphaned, id)
 		}
 	}
-	for _, id := range expiredEntities {
+	for _, id := range orphaned {
 		ent, ok, deleted := e.graph.GetEntity(id)
 		if !ok || deleted {
-			delete(e.deadlines, id)
+			delete(e.refs, id)
 			continue
 		}
 		ev := model.Event{Entity: &model.EntityEvent{
@@ -312,10 +343,10 @@ func (e *Engine) Sweep() int {
 		}}
 		if err := e.commit(ev, false); err != nil {
 			e.logger.Error("failed to expire stale entity", "id", id, "err", err)
-			continue // keep the deadline and retry next sweep
+			continue // leave the (empty) ref set to retry next sweep
 		}
-		delete(e.deadlines, id)
-		e.logger.Warn("expired stale entity: no heartbeat within its interval",
+		delete(e.refs, id)
+		e.logger.Warn("expired stale entity: no producer heartbeat within its interval",
 			"entity_type", ent.Type, "entity_id", id)
 		n++
 		n += e.removeIncidentRelations(id, now) // edges die with their node

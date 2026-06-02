@@ -22,6 +22,10 @@ const (
 	// liveness backstop (a stale entity is expired), not a primary delete signal.
 	attrEntityInterval = "otel.entity.interval"
 
+	// resAttrProducer is the OTLP Resource attribute identifying the producing
+	// agent; liveness is reference-counted per producer (ADR 0019).
+	resAttrProducer = "service.instance.id"
+
 	// The relation extension uses a vendor-neutral namespace (neither a producer
 	// nor a consumer prefix) so any producer/consumer can speak it and it maps
 	// 1:1 onto the future OTel relationships standard (OTEP 0256 Future Work).
@@ -62,7 +66,7 @@ type engine interface {
 // the caller can surface the loss rather than discard data silently (the
 // producer's contract is flat scalar maps; a nested value is a producer bug worth
 // seeing).
-func routeRecord(e engine, lr plog.LogRecord) (handled bool, dropped []string, err error) {
+func routeRecord(e engine, lr plog.LogRecord, producer string) (handled bool, dropped []string, err error) {
 	attrs := lr.Attributes()
 	when := eventTimeOf(lr)
 
@@ -73,6 +77,7 @@ func routeRecord(e engine, lr plog.LogRecord) (handled bool, dropped []string, e
 			if oerr != nil {
 				return true, drop, oerr
 			}
+			obs.Producer = producer
 			_, oerr = e.ObserveEntity(obs)
 			return true, drop, oerr
 		case evEntityDelete:
@@ -80,6 +85,7 @@ func routeRecord(e engine, lr plog.LogRecord) (handled bool, dropped []string, e
 			if oerr != nil {
 				return true, drop, oerr
 			}
+			obs.Producer = producer
 			_, _, oerr = e.DeleteEntity(obs)
 			return true, drop, oerr
 		default:

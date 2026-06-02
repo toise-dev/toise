@@ -38,6 +38,9 @@ Notes:
 
 - `otel.entity.id` and `otel.entity.attributes` are genuine OTLP **maps**
   (`AnyValue` kvlist), parsed structurally — see *AnyValue restriction* below.
+- The OTLP **Resource** `service.instance.id` identifies the producing agent and
+  keys per-producer liveness reference counting (ADR 0019; see *Entity liveness*).
+  Producers should set it on every export.
 - A `schema_url` is part of the model but is **not currently read** at the OTLP
   boundary; entities ingested via OTLP carry an empty schema URL for now.
 
@@ -161,23 +164,22 @@ backstop for a *missed* such delete, a relation may carry its own
 `relation.removed` if it is not re-asserted in time. Most producers can ignore it
 and rely on endpoint-derived liveness plus explicit `relation_delete`.
 
-#### Multi-producer delete — a known phase-1 limitation
+#### Multi-producer liveness — per-producer reference counting
 
-`entity_delete` is keyed by **identity, not by producer**. Because identity is
-exact and observer-independent, multiple agents observing the same entity
-converge — but an explicit `entity_delete` from **one** agent removes the entity
-**globally**, even if another agent still sees it; that agent re-creates it on its
-next heartbeat (a flap of ~one heartbeat cadence). The interval backstop already
-handles the *crash* case correctly (the entity survives while any agent
-heartbeats); only an explicit delete by one of several producers flaps.
+Liveness is **reference-counted per producer** (ADR 0019). Toise records, per
+entity, the set of producers asserting it (keyed by the OTLP **Resource
+`service.instance.id`**, which producers already set), each with its own interval
+deadline. An entity is **live while any producer references it**; it is deleted
+only when the **last** reference is released — by that producer's explicit
+`entity_delete` or by its interval lapsing. So an explicit delete (or a crash) by
+one of several agents observing the same entity no longer flaps it: a `delete`
+from one producer is a silent release while others still observe.
 
-The intended fix is **per-producer reference counting**: Toise deletes only when
-**all** producers have released (each by an explicit delete or its own interval
-lapsing), keyed by the producing agent's **`service.instance.id` carried on the
-OTLP Resource** (which producers already set). That keeps it a future *Toise-only*
-change with no wire impact. Until then, the limitation stands: deployments where a
-given entity has a single owning producer are unaffected; shared entities may flap
-on an explicit delete.
+This needs no producer change beyond keeping `service.instance.id` on the
+Resource. An observation with no producer is treated as a single anonymous
+producer, so single-producer deployments behave exactly as before. (Two distinct
+producers both omitting `service.instance.id` would collapse into one anonymous
+reference — a misconfiguration.)
 
 **Corollary — shared entities carry only observer-independent attributes.** Because
 `entity_state` is full-state and identity is shared across producers, a shared
@@ -258,7 +260,7 @@ planned:
 | Edge liveness | derived from endpoints (cascade `relation.removed`); optional per-edge `entity.relation.interval` | **done** |
 | Out-of-order edges | reconciliation buffer (park & flush, opt-in) | **done** |
 | Nested values | explicit `Warn` on drop (never silent) | **done** |
-| Multi-producer delete | per-producer reference counting (keyed by Resource `service.instance.id`) | **planned** — flap documented as a phase-1 limit |
+| Multi-producer liveness | per-producer reference counting (keyed by Resource `service.instance.id`) | **done** (ADR 0019) |
 | Scope flag `otel.entity.entity_event=true` | accepted and ignored (never rejected) — interop fast-path for other OTel producers | done |
 
 ### Timestamps

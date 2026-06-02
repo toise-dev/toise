@@ -58,11 +58,12 @@ func (s *logsServer) Export(_ context.Context, req plogotlp.ExportRequest) (plog
 
 	rls := ld.ResourceLogs()
 	for i := 0; i < rls.Len(); i++ {
+		producer, _ := strAttr(rls.At(i).Resource().Attributes(), resAttrProducer)
 		sls := rls.At(i).ScopeLogs()
 		for j := 0; j < sls.Len(); j++ {
 			recs := sls.At(j).LogRecords()
 			for k := 0; k < recs.Len(); k++ {
-				ok, dropped, err := routeRecord(s.engine, recs.At(k))
+				ok, dropped, err := routeRecord(s.engine, recs.At(k), producer)
 				if len(dropped) > 0 {
 					// Non-scalar attribute values are dropped (producers must send
 					// flat scalar maps) — surface it, never lose data silently.
