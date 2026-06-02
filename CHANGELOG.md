@@ -7,8 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-These are the changes staged for the first tagged release (**0.1.0**, phase 1).
-On release this section is renamed to `## [0.1.0] - <date>`.
+<!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
+
+## [0.1.0] - 2026-06-02
+
+First tagged release: the phase-1 backend (M0–M8) plus the producer↔consumer
+contract converged with the senhub-agent reference producer.
 
 ### Added
 
@@ -20,12 +24,11 @@ On release this section is renamed to `## [0.1.0] - <date>`.
   indexes (by entity, change type, event time), durable `Append`, crash
   recovery, and heartbeat-coalescing retention. (M2; ADR 0007, 0013)
 - **Projection & change detection** — in-memory graph rebuilt from the log, with
-  the nine-type change taxonomy, tolerant identity matching that keeps the
-  logical id stable across identity changes, and structural relation changes
-  flagged high-priority. (M3; ADR 0008)
+  the nine-type change taxonomy, **exact identity matching** (immutable ids), and
+  structural relation changes flagged high-priority. (M3; ADR 0008, 0018)
 - **OTLP ingestion** — an OTLP/gRPC logs receiver that converts entity-event
-  LogRecords into change-engine observations (entity state/delete and the Toise
-  relation extensions). (M4; ADR 0009)
+  LogRecords into change-engine observations: standard `otel.entity.*` nodes and
+  the vendor-neutral `entity.relation.*` edge extension. (M4; ADR 0009)
 - **GraphQL API** — schema-first gqlgen API with rich descriptions, Relay cursor
   pagination, subscriptions, a complexity limit and per-request timeout, served
   at `/graphql` with a playground at `/playground`. (M5; ADR 0010)
@@ -39,10 +42,42 @@ On release this section is renamed to `## [0.1.0] - <date>`.
   24-hour scenario; `docs/demo/` documents the timeline and twelve LLM example
   prompts. (M8)
 - **`toise-server`** — single binary wiring the store, projection, OTLP receiver,
-  GraphQL, MCP, and debug UI together; loopback by default.
+  GraphQL, MCP, and debug UI together; loopback by default. Liveness/robustness
+  flags: `--liveness-sweep-interval`, `--relation-buffer-ttl`.
+
+### Added — producer↔consumer contract (senhub-agent #185)
+
+- **Producer vocabulary** in the type registry: entities `service.instance`, `db`,
+  `network.device`; relations `monitors`, `runs_on` (also `service.instance→host`),
+  `routes_via`, `forwards_to`, `adjacent_to`.
+- **Vendor-neutral relation extension `entity.relation.*`** with **strict purity**
+  (relation records carry no `otel.entity.*`, discriminated by
+  `entity.relation.event.type`), designed to map 1:1 onto the future OTel
+  relationships standard.
+- **Liveness backstops:** explicit `entity_delete`/`relation_delete` primary, plus
+  an `otel.entity.interval` / `entity.relation.interval` TTL sweeper; edge liveness
+  derived from endpoints (cascade); an out-of-order edge reconciliation buffer.
+- **Per-producer reference counting** for entity liveness, keyed by the OTLP
+  Resource `service.instance.id`, so multiple agents observing one entity no longer
+  flap on a single producer's delete. (ADR 0019)
+- **No silent loss at the boundary:** non-scalar attribute values are logged
+  (`Warn`) rather than dropped silently; flat scalar maps are the producer contract.
+- **Shared conformance fixture** (`internal/ingest/testdata/conformance/`): an
+  OTLP/JSON batch ingested by a contract test, the executable interface between
+  Toise and producers.
+
+### Changed
+
+- **Exact identity matching supersedes tolerant matching** (ADR 0018, superseding
+  ADR 0017): identities are immutable, so a differing identity is a different
+  entity. `entity.identity_changed` is retained in the taxonomy but no longer
+  emitted by the engine.
 
 ### Security
 
 - **No authentication in phase 1** (ADR 0014). All surfaces bind to loopback by
   default and are intended for trusted networks only; the WebSocket subscription
   endpoint enforces an origin check.
+
+[Unreleased]: https://github.com/toise-dev/toise/compare/0.1.0...HEAD
+[0.1.0]: https://github.com/toise-dev/toise/releases/tag/0.1.0
