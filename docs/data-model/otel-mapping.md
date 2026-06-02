@@ -80,12 +80,14 @@ consumer. The boundary routes by which lifecycle key is present:
 
 **Endpoint resolution is by exact identity**, against a **live** entity by
 `(type, identity)`. Endpoint identities must be the entity's current identity.
-Ordering: emit the endpoint `entity_state` events **before** the edge. Today an
-edge whose endpoint is not yet present is a **retriable ingest error** (loud, not
-silent — the batch is retried), but OTLP guarantees no inter-batch order, so a
-**reconciliation buffer** (park an unresolved edge briefly and flush it when its
-endpoints arrive) is a planned hardening so out-of-order edges are not lost; see
-*Robustness backstops* below.
+Producers should still emit the endpoint `entity_state` events **before** the
+edge, but ordering is **not required**: with the **reconciliation buffer** enabled
+(`--relation-buffer-ttl`, on by default in `toise-server`), an edge whose endpoint
+is not yet present is **parked** and retried as later entities arrive, and dropped
+with a `Warn` only if its endpoints have not appeared within the TTL — so
+out-of-order delivery (OTLP guarantees no inter-batch order) never silently loses
+edges. With the buffer disabled, a missing endpoint is a retriable ingest error
+instead. See *Robustness backstops* below.
 
 ## Mapping table
 
@@ -205,7 +207,7 @@ planned:
 | ------- | -------- | ------ |
 | Entity collisions | exact-Id matching (no fuzzy merge) | **done** (ADR 0018) |
 | Missed deletes | explicit `entity_delete` + `interval` TTL backstop | accepted; sweeper pending |
-| Out-of-order edges | reconciliation buffer (park & flush) | accepted; today a retriable error |
+| Out-of-order edges | reconciliation buffer (park & flush, opt-in) | **done** |
 | Nested values | explicit `Warn` on drop (never silent) | **done** |
 | Scope flag `otel.entity.entity_event=true` | accepted and ignored (never rejected) — interop fast-path for other OTel producers | done |
 

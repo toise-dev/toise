@@ -134,7 +134,7 @@ from this round:
 | Conformance fixture / contract test | **done** (PR #17) |
 | Exact-Id matching (retire fuzzy `identity_changed`) | **done** (ADR 0018) |
 | Interval TTL sweeper (entity + edge expiry) | accepted — pending |
-| Out-of-order edge reconciliation buffer | accepted — pending |
+| Out-of-order edge reconciliation buffer | **done** (opt-in, `--relation-buffer-ttl`) |
 | Explicit `Warn` on dropped nested value | **done** |
 
 ## Follow-up
