@@ -13,6 +13,11 @@ semantic conventions. Toise ingests them at the **OTLP boundary** in
 **Milestone 4** (`internal/ingest`): the boundary is the single place where the
 OTel wire shape is translated into the internal Toise event model.
 
+**Transport.** OTLP/gRPC over the logs service (`127.0.0.1:4317` by default).
+Toise accepts uncompressed **and gzip-compressed** exports — gzip is the OTel SDK
+default and what senhub-agent ships, so it works out of the box with no
+`compression:` override required on the producer.
+
 ## Wire shape: the exact LogRecord attributes Toise reads
 
 The ingest boundary classifies each `LogRecord` by **which lifecycle key is

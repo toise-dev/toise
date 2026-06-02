@@ -22,7 +22,9 @@ var t0 = time.Unix(1_700_000_000, 0).UTC()
 
 // startReceiver wires a real store + projection + engine behind an OTLP gRPC
 // receiver on a loopback port and returns an OTLP logs client plus the graph.
-func startReceiver(t *testing.T) (plogotlp.GRPCClient, *projection.Graph) {
+// Extra dial options (e.g. a default call compressor) let a test exercise the
+// wire path real producers use.
+func startReceiver(t *testing.T, dialOpts ...grpc.DialOption) (plogotlp.GRPCClient, *projection.Graph) {
 	t.Helper()
 	st, err := store.Open(t.TempDir(), store.DefaultConfig())
 	if err != nil {
@@ -41,7 +43,8 @@ func startReceiver(t *testing.T) (plogotlp.GRPCClient, *projection.Graph) {
 	go func() { _ = rec.Serve(lis) }()
 	t.Cleanup(rec.Stop)
 
-	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	opts := append([]grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}, dialOpts...)
+	conn, err := grpc.NewClient(lis.Addr().String(), opts...)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -121,6 +124,31 @@ func TestReceiverEntityAndRelation(t *testing.T) {
 	host, ok, _ := g.GetEntity(id)
 	if !ok || len(host.Attributes) != 1 || host.Attributes[0].Key != "status" {
 		t.Errorf("host attributes = %+v, want [status]", host.Attributes)
+	}
+}
+
+// TestReceiverAcceptsGzip guards the gzip decompressor registration: real
+// producers (the OTel SDK, senhub-agent) compress exports with gzip by
+// default, and gRPC-Go does not install the codec unless the encoding package
+// is imported. Without it, a gzip'd export fails at the transport with
+// "Decompressor is not installed" before reaching the handler.
+//
+// The codec lives in a process-wide registry, so this test deliberately
+// references it by name only ("gzip") and does NOT import the encoding
+// package: the sole thing registering gzip in the test binary is the
+// production blank import in receiver.go. Drop that import and this test
+// fails to even compress the request — exactly the regression we guard.
+func TestReceiverAcceptsGzip(t *testing.T) {
+	client, g := startReceiver(t, grpc.WithDefaultCallOptions(grpc.UseCompressor("gzip")))
+
+	ld := plog.NewLogs()
+	sl := ld.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty()
+	entityRecord(sl, evEntityState, model.TypeHost, map[string]string{"host.id": "h1"}, nil)
+
+	export(t, client, ld)
+
+	if g.EntityCount() != 1 {
+		t.Errorf("entities = %d, want 1 (gzip'd export must reach the handler)", g.EntityCount())
 	}
 }
 
