@@ -127,7 +127,7 @@ func entityObs(attrs pcommon.Map, when time.Time) (change.EntityObservation, []s
 		return change.EntityObservation{}, identDropped, fmt.Errorf("missing or empty %s", attrEntityID)
 	}
 	descriptive, descDropped, _ := mapAttr(attrs, attrEntityAttrs)
-	var dropped []string
+	dropped := make([]string, 0, len(identDropped)+len(descDropped))
 	dropped = append(dropped, identDropped...)
 	dropped = append(dropped, descDropped...)
 	var interval time.Duration

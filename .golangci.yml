@@ -1,54 +1,65 @@
-# golangci-lint configuration
+# golangci-lint configuration (schema v2).
 # Docs: https://golangci-lint.run/usage/configuration/
+version: "2"
 
 run:
-  timeout: 5m
   tests: true
 
 linters:
-  disable-all: true
+  default: none
   enable:
-    - govet
     - errcheck
-    - staticcheck
-    - unused
-    - gosimple
-    - ineffassign
-    - gofmt
-    - goimports
-    - misspell
-    - unconvert
-    - prealloc
     - gocritic
-
-linters-settings:
-  goimports:
-    local-prefixes: github.com/toise-dev/toise
-  govet:
-    enable:
-      - shadow
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - performance
-      - style
-    disabled-checks:
-      # Allow the occasional explanatory comment block without nagging.
-      - commentFormatting
-      # Domain types (Entity, Event, ...) use value receivers deliberately for
-      # value semantics and to avoid mixing pointer/value receivers. They are
-      # not on a proven hot path that warrants pointer receivers in phase 1.
-      - hugeParam
-  misspell:
-    locale: US
+    - govet
+    - ineffassign
+    - misspell
+    - prealloc
+    - staticcheck # in v2 staticcheck also covers the former gosimple checks
+    - unconvert
+    - unused
+  settings:
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+        - style
+      disabled-checks:
+        # Allow the occasional explanatory comment block without nagging.
+        - commentFormatting
+        # Domain types (Entity, Event, ...) use value receivers deliberately for
+        # value semantics and to avoid mixing pointer/value receivers. They are
+        # not on a proven hot path that warrants pointer receivers in phase 1.
+        - hugeParam
+    govet:
+      enable:
+        - shadow
+    misspell:
+      locale: US
+  exclusions:
+    generated: lax
+    # Presets replicate v1's default exclusions (v2 ships them off by default).
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      # Test files may favor readability over some lint rules.
+      - path: _test\.go
+        linters:
+          - gocritic
+          - prealloc
 
 issues:
   # Keep the bootstrap friendly: surface everything rather than capping counts.
   max-issues-per-linter: 0
   max-same-issues: 0
-  exclude-rules:
-    # Test files may favor readability over some lint rules.
-    - path: _test\.go
-      linters:
-        - prealloc
-        - gocritic
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/toise-dev/toise
