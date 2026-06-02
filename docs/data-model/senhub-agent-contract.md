@@ -64,14 +64,13 @@ can speak it and it maps **1:1 onto the future OTel standard**, making migration
 trivial for everyone. `otel.entity.relationship.*` is deliberately avoided (it
 would squat the reserved OTel namespace before the spec exists).
 
-Each edge is a `relation_state` / `relation_delete` LogRecord carrying
+**Strict purity:** a relation record carries **no `otel.entity.*` attribute** —
+its lifecycle is `entity.relation.event.type` ∈ {`state`, `delete`}, plus
 `entity.relation.type`, `entity.relation.from.{type,id}`,
-`entity.relation.to.{type,id}`, and optional `entity.relation.attributes`. The
-upsert/delete discriminator currently rides `otel.entity.event.type`
-(`relation_state`/`relation_delete`) for a single routing key; a neutral
-`entity.relation.event.type=state|delete` is an open, trivial switch if the agent
-prefers strict purity. Both sides commit to migrating to the OTel standard once it
-lands.
+`entity.relation.to.{type,id}`, and optional `entity.relation.attributes`. A
+relation thus never looks like a malformed entity event to a standard OTel
+consumer (which keys off `otel.entity.*`); it is cleanly ignored there. Both sides
+commit to migrating to the OTel standard once it lands.
 
 Endpoints resolve by **exact identity** against live entities; reference each by
 its current identity. Emit endpoints **before** their edge. Out-of-order edges are

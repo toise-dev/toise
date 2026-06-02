@@ -15,12 +15,13 @@ OTel wire shape is translated into the internal Toise event model.
 
 ## Wire shape: the exact LogRecord attributes Toise reads
 
-The ingest boundary classifies each `LogRecord` **solely by the presence of the
-`otel.entity.event.type` attribute**. A record without it is ignored (it is
-treated as an ordinary log). The scope is **not** inspected — Toise does not
-require the experimental `otel.entity.entity_event=true` instrumentation-scope
-flag; a producer may set it for spec fidelity, but Toise neither reads nor
-requires it.
+The ingest boundary classifies each `LogRecord` by **which lifecycle key is
+present**: `otel.entity.event.type` marks an **entity event** (standard OTel),
+`entity.relation.event.type` marks a **relation event** (the extension). A record
+with neither is ignored (treated as an ordinary log). The scope is **not**
+inspected — Toise does not require the experimental `otel.entity.entity_event=true`
+instrumentation-scope flag; a producer may set it for spec fidelity, but Toise
+neither reads nor requires it.
 
 ### Entity events (standard OTel convention)
 
@@ -51,7 +52,7 @@ standard OTel. It rides the same LogRecord convention:
 
 | LogRecord attribute            | Type    | Required | Meaning                                              |
 | ------------------------------ | ------- | -------- | ---------------------------------------------------- |
-| `otel.entity.event.type`       | string  | yes      | `relation_state` (upsert) or `relation_delete`       |
+| `entity.relation.event.type`   | string  | yes      | `state` (upsert) or `delete`                         |
 | `entity.relation.type`         | string  | yes      | the relation type — **must be in Toise's registry**  |
 | `entity.relation.from.type`    | string  | yes      | source endpoint entity type                          |
 | `entity.relation.from.id`      | **map** | yes      | source endpoint identity                             |
@@ -66,10 +67,16 @@ shaped to map **1:1 onto the eventual OTel relationships standard**, so migratio
 is trivial for everyone. We deliberately avoid `otel.entity.relationship.*` too —
 that would squat the reserved OTel namespace before the spec exists. The extension
 is explicitly **transitional** and both sides commit to migrating to the standard
-once it lands. *(The upsert/delete discriminator currently rides the existing
-`otel.entity.event.type` key for a single routing key at the boundary; making it
-a neutral `entity.relation.event.type` is an open, trivial follow-up if producers
-prefer strict purity.)*
+once it lands.
+
+**Strict purity:** a relation record carries **no `otel.entity.*` attribute at
+all** — its lifecycle is the neutral `entity.relation.event.type` (`state` /
+`delete`), never `otel.entity.event.type`. This matters for interop: a record with
+`otel.entity.event.type=relation_state` but no `otel.entity.type`/`id` would look
+like a *malformed* entity event to a standard OTel entity-events consumer; carrying
+no `otel.entity.*`, the relation record is instead cleanly ignored by such a
+consumer. The boundary routes by which lifecycle key is present:
+`otel.entity.event.type` → entity event, `entity.relation.event.type` → relation.
 
 **Endpoint resolution is by exact identity**, against a **live** entity by
 `(type, identity)`. Endpoint identities must be the entity's current identity.
