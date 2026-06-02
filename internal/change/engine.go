@@ -45,9 +45,11 @@ type Engine struct {
 	bufferTTL time.Duration
 	pending   []pendingRelation
 
-	// liveness backstop: per-entity expiry deadline for entities observed with an
-	// interval. Sweep expires those past their deadline. Guarded by obsMu.
-	deadlines map[model.EntityID]time.Time
+	// liveness backstop: per-entity and per-relation expiry deadlines, for entities
+	// and edges observed with an interval. Sweep expires those past their deadline.
+	// Guarded by obsMu.
+	deadlines    map[model.EntityID]time.Time
+	relDeadlines map[model.RelationID]time.Time
 
 	subMu sync.RWMutex
 	subs  map[int]Subscriber
@@ -92,12 +94,13 @@ func WithRelationBuffer(ttl time.Duration) Option {
 // New returns an engine writing to appender and projecting into graph.
 func New(graph *projection.Graph, appender Appender, opts ...Option) *Engine {
 	e := &Engine{
-		graph:     graph,
-		appender:  appender,
-		now:       time.Now,
-		logger:    slog.Default(),
-		subs:      make(map[int]Subscriber),
-		deadlines: make(map[model.EntityID]time.Time),
+		graph:        graph,
+		appender:     appender,
+		now:          time.Now,
+		logger:       slog.Default(),
+		subs:         make(map[int]Subscriber),
+		deadlines:    make(map[model.EntityID]time.Time),
+		relDeadlines: make(map[model.RelationID]time.Time),
 	}
 	for _, o := range opts {
 		o(e)
@@ -154,6 +157,9 @@ type RelationObservation struct {
 	To         EndpointRef
 	Attributes []model.KeyValue
 	EventTime  time.Time
+	// Interval, when > 0, arms the same liveness backstop as for entities: an edge
+	// not re-asserted within Interval is expired (relation.removed) by Sweep.
+	Interval time.Duration
 }
 
 // ObserveEntity classifies an entity observation, persists the qualified event,
@@ -245,27 +251,52 @@ func (e *Engine) DeleteEntity(obs EntityObservation) (ev model.Event, emitted bo
 		return model.Event{}, false, err
 	}
 	delete(e.deadlines, id) // explicit delete clears any liveness backstop
+	e.removeIncidentRelations(id, obs.EventTime)
 	return ev, true, nil
 }
 
+// removeIncidentRelations emits relation.removed for every edge touching id: an
+// edge to a deleted entity is meaningless, so edge liveness is derived from its
+// endpoints (a deleted node takes its edges with it). The caller must hold obsMu.
+func (e *Engine) removeIncidentRelations(id model.EntityID, when time.Time) int {
+	edges := append(e.graph.ListRelations("", id, ""), e.graph.ListRelations("", "", id)...)
+	seen := make(map[model.RelationID]struct{}, len(edges))
+	n := 0
+	for _, rel := range edges {
+		if _, dup := seen[rel.ID]; dup {
+			continue
+		}
+		seen[rel.ID] = struct{}{}
+		ev := e.relationEvent(model.RelationRemoved, rel, when)
+		if err := e.commit(ev, rel.Structural); err != nil {
+			e.logger.Error("failed to remove edge of deleted entity", "relation_id", rel.ID, "err", err)
+			continue
+		}
+		delete(e.relDeadlines, rel.ID)
+		n++
+	}
+	return n
+}
+
 // Sweep expires entities whose liveness backstop has lapsed: an entity observed
-// with an interval that has not been re-asserted within it is soft-deleted
-// (entity.deleted), as a safety net for missed explicit deletes (crash, host off,
-// network partition). It returns the number of entities expired. Drive it from a
-// periodic ticker.
+// or edge with an interval that has not been re-asserted within it is soft-deleted
+// (entity.deleted / relation.removed), as a safety net for missed explicit deletes
+// (crash, host off, network partition). It returns the number of entities and
+// edges expired. Drive it from a periodic ticker.
 func (e *Engine) Sweep() int {
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()
 
 	now := e.now()
-	var expired []model.EntityID
+	n := 0
+
+	var expiredEntities []model.EntityID
 	for id, deadline := range e.deadlines {
 		if now.After(deadline) {
-			expired = append(expired, id)
+			expiredEntities = append(expiredEntities, id)
 		}
 	}
-	n := 0
-	for _, id := range expired {
+	for _, id := range expiredEntities {
 		ent, ok, deleted := e.graph.GetEntity(id)
 		if !ok || deleted {
 			delete(e.deadlines, id)
@@ -286,6 +317,30 @@ func (e *Engine) Sweep() int {
 		delete(e.deadlines, id)
 		e.logger.Warn("expired stale entity: no heartbeat within its interval",
 			"entity_type", ent.Type, "entity_id", id)
+		n++
+		n += e.removeIncidentRelations(id, now) // edges die with their node
+	}
+
+	var expiredRelations []model.RelationID
+	for id, deadline := range e.relDeadlines {
+		if now.After(deadline) {
+			expiredRelations = append(expiredRelations, id)
+		}
+	}
+	for _, id := range expiredRelations {
+		rel, ok := e.graph.GetRelation(id)
+		if !ok {
+			delete(e.relDeadlines, id)
+			continue
+		}
+		ev := e.relationEvent(model.RelationRemoved, rel, now)
+		if err := e.commit(ev, rel.Structural); err != nil {
+			e.logger.Error("failed to expire stale relation", "id", id, "err", err)
+			continue
+		}
+		delete(e.relDeadlines, id)
+		e.logger.Warn("expired stale relation: not re-asserted within its interval",
+			"relation_type", rel.Type, "relation_id", id)
 		n++
 	}
 	return n
@@ -317,6 +372,14 @@ func (e *Engine) observeRelationLocked(obs RelationObservation) (model.Event, bo
 		return model.Event{}, false, err
 	}
 	rel := model.NewRelation(obs.Type, from, to, obs.Attributes...)
+
+	// Arm (or clear) the edge liveness backstop, even when the observation is
+	// otherwise unchanged — re-asserting an edge resets its deadline.
+	if obs.Interval > 0 {
+		e.relDeadlines[rel.ID] = e.now().Add(obs.Interval)
+	} else {
+		delete(e.relDeadlines, rel.ID)
+	}
 
 	var ct model.ChangeType
 	if existing, ok := e.graph.GetRelation(rel.ID); ok {
@@ -373,6 +436,7 @@ func (e *Engine) RemoveRelation(obs RelationObservation) (ev model.Event, emitte
 		return model.Event{}, false, err
 	}
 	id := model.ComputeRelationID(obs.Type, from, to)
+	delete(e.relDeadlines, id) // explicit remove clears any liveness backstop
 	existing, ok := e.graph.GetRelation(id)
 	if !ok {
 		return model.Event{}, false, nil

@@ -147,6 +147,24 @@ func TestRouteParsesInterval(t *testing.T) {
 	}
 }
 
+func TestRouteParsesRelationInterval(t *testing.T) {
+	lr := newRelRecord(evRelState)
+	a := lr.Attributes()
+	a.PutStr(attrRelType, model.RelRunsOn)
+	a.PutStr(attrRelFromType, model.TypeProcess)
+	a.PutEmptyMap(attrRelFromID).PutStr("process.executable.name", "nginx")
+	a.PutStr(attrRelToType, model.TypeHost)
+	a.PutEmptyMap(attrRelToID).PutStr("host.id", "h1")
+	a.PutInt(attrRelInterval, 60_000) // 60s in milliseconds
+	f := &fakeEngine{}
+	if _, _, err := routeRecord(f, lr); err != nil {
+		t.Fatal(err)
+	}
+	if f.lastRelation.Interval != time.Minute {
+		t.Errorf("relation interval = %v, want 1m", f.lastRelation.Interval)
+	}
+}
+
 func TestRouteEntityMissingID(t *testing.T) {
 	lr := newRecord(evEntityState)
 	lr.Attributes().PutStr(attrEntityType, model.TypeHost)

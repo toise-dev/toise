@@ -30,6 +30,7 @@ const (
 	// entity-events consumer sees no malformed entity event and cleanly ignores it.
 	// See docs/data-model/otel-mapping.md.
 	attrRelEventType = "entity.relation.event.type"
+	attrRelInterval  = "entity.relation.interval" // heartbeat cadence in ms; edge liveness backstop
 	attrRelType      = "entity.relation.type"
 	attrRelFromType  = "entity.relation.from.type"
 	attrRelFromID    = "entity.relation.from.id"
@@ -153,11 +154,16 @@ func relationObs(attrs pcommon.Map, when time.Time) (change.RelationObservation,
 	}
 	relAttrs, attrDropped, _ := mapAttr(attrs, attrRelAttrs)
 	dropped = append(dropped, attrDropped...)
+	var interval time.Duration
+	if ms, ok := intAttr(attrs, attrRelInterval); ok && ms > 0 {
+		interval = time.Duration(ms) * time.Millisecond
+	}
 	return change.RelationObservation{
 		Type:       relType,
 		From:       change.EndpointRef{Type: fromType, Identity: fromID},
 		To:         change.EndpointRef{Type: toType, Identity: toID},
 		Attributes: relAttrs,
+		Interval:   interval,
 		EventTime:  when,
 	}, dropped, nil
 }
