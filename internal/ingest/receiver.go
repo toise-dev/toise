@@ -62,7 +62,12 @@ func (s *logsServer) Export(_ context.Context, req plogotlp.ExportRequest) (plog
 		for j := 0; j < sls.Len(); j++ {
 			recs := sls.At(j).LogRecords()
 			for k := 0; k < recs.Len(); k++ {
-				ok, err := routeRecord(s.engine, recs.At(k))
+				ok, dropped, err := routeRecord(s.engine, recs.At(k))
+				if len(dropped) > 0 {
+					// Non-scalar attribute values are dropped (producers must send
+					// flat scalar maps) — surface it, never lose data silently.
+					s.logger.Warn("dropped non-scalar attribute values at ingest boundary", "keys", dropped)
+				}
 				if err != nil {
 					// A routing failure (e.g. store append) is retriable: surface it.
 					return plogotlp.NewExportResponse(), fmt.Errorf("routing log record: %w", err)

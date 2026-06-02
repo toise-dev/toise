@@ -1,7 +1,9 @@
 package change
 
 import (
+	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -33,13 +35,29 @@ type Engine struct {
 	graph    *projection.Graph
 	appender Appender
 	now      func() time.Time
+	logger   *slog.Logger
 
 	obsMu sync.Mutex // serializes observation processing
+
+	// relation reconciliation buffer (opt-in via WithRelationBuffer): edges whose
+	// endpoints are not yet present are parked here and retried when later entities
+	// arrive, so out-of-order delivery does not drop edges. Guarded by obsMu.
+	bufferTTL time.Duration
+	pending   []pendingRelation
 
 	subMu sync.RWMutex
 	subs  map[int]Subscriber
 	subID int
 }
+
+type pendingRelation struct {
+	obs      RelationObservation
+	deadline time.Time
+}
+
+// errEndpointMissing marks a relation whose endpoint entity is not (yet) present,
+// distinguishing a reconcilable out-of-order edge from a real failure.
+var errEndpointMissing = errors.New("relation endpoint not found")
 
 // Option configures an Engine.
 type Option func(*Engine)
@@ -49,12 +67,31 @@ func WithClock(now func() time.Time) Option {
 	return func(e *Engine) { e.now = now }
 }
 
+// WithLogger sets the logger used for reconciliation warnings.
+func WithLogger(l *slog.Logger) Option {
+	return func(e *Engine) {
+		if l != nil {
+			e.logger = l
+		}
+	}
+}
+
+// WithRelationBuffer enables the out-of-order edge reconciliation buffer with the
+// given TTL: a relation whose endpoints are not yet present is parked and retried
+// as later entities arrive, and dropped (with a warning) if its endpoints have not
+// appeared within ttl. A non-positive ttl leaves the buffer disabled (a missing
+// endpoint is then a retriable error, the default).
+func WithRelationBuffer(ttl time.Duration) Option {
+	return func(e *Engine) { e.bufferTTL = ttl }
+}
+
 // New returns an engine writing to appender and projecting into graph.
 func New(graph *projection.Graph, appender Appender, opts ...Option) *Engine {
 	e := &Engine{
 		graph:    graph,
 		appender: appender,
 		now:      time.Now,
+		logger:   slog.Default(),
 		subs:     make(map[int]Subscriber),
 	}
 	for _, o := range opts {
@@ -159,6 +196,8 @@ func (e *Engine) ObserveEntity(obs EntityObservation) (model.Event, error) {
 	if err := e.commit(ev, false); err != nil {
 		return model.Event{}, err
 	}
+	// A new/updated entity may be the missing endpoint of a parked edge.
+	e.flushPending()
 	return ev, nil
 }
 
@@ -200,6 +239,19 @@ func (e *Engine) ObserveRelation(obs RelationObservation) (ev model.Event, emitt
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()
 
+	ev, emitted, err = e.observeRelationLocked(obs)
+	if err != nil && e.bufferTTL > 0 && errors.Is(err, errEndpointMissing) {
+		// Out-of-order edge: park it and retry as later entities arrive, instead
+		// of failing. Not an error to the caller.
+		e.pending = append(e.pending, pendingRelation{obs: obs, deadline: e.now().Add(e.bufferTTL)})
+		return model.Event{}, false, nil
+	}
+	return ev, emitted, err
+}
+
+// observeRelationLocked resolves, classifies, and commits a relation. The caller
+// must hold obsMu. It does not buffer — that is ObserveRelation's concern.
+func (e *Engine) observeRelationLocked(obs RelationObservation) (model.Event, bool, error) {
 	from, to, err := e.resolveEndpoints(obs.From, obs.To)
 	if err != nil {
 		return model.Event{}, false, err
@@ -217,12 +269,37 @@ func (e *Engine) ObserveRelation(obs RelationObservation) (ev model.Event, emitt
 		ct = model.RelationAdded
 	}
 
-	ev = e.relationEvent(ct, rel, obs.EventTime)
+	ev := e.relationEvent(ct, rel, obs.EventTime)
 	highPriority := rel.Structural && ct == model.RelationAdded
 	if err := e.commit(ev, highPriority); err != nil {
 		return model.Event{}, false, err
 	}
 	return ev, true, nil
+}
+
+// flushPending retries parked relations: those whose endpoints now resolve are
+// committed and removed; those past their TTL are dropped with a warning (never
+// silently); the rest stay parked. The caller must hold obsMu.
+func (e *Engine) flushPending() {
+	if len(e.pending) == 0 {
+		return
+	}
+	now := e.now()
+	var kept []pendingRelation
+	for i := range e.pending {
+		obs := e.pending[i].obs
+		_, _, err := e.observeRelationLocked(obs)
+		switch {
+		case err == nil:
+			// resolved and committed; drop from the buffer
+		case errors.Is(err, errEndpointMissing) && now.After(e.pending[i].deadline):
+			e.logger.Warn("dropping relation: endpoints did not arrive within the reconciliation TTL",
+				"relation_type", obs.Type, "from_type", obs.From.Type, "to_type", obs.To.Type)
+		default:
+			kept = append(kept, e.pending[i]) // still waiting, or a transient commit error to retry
+		}
+	}
+	e.pending = kept
 }
 
 // RemoveRelation emits relation.removed for an existing relation between the
@@ -263,11 +340,11 @@ func (e *Engine) resolveEndpoints(from, to EndpointRef) (fromID, toID model.Enti
 	var ok bool
 	fromID, ok = e.graph.MatchIdentity(from.Type, from.Identity)
 	if !ok {
-		return "", "", fmt.Errorf("relation from-endpoint not found: type %q", from.Type)
+		return "", "", fmt.Errorf("relation from-endpoint not found: type %q: %w", from.Type, errEndpointMissing)
 	}
 	toID, ok = e.graph.MatchIdentity(to.Type, to.Identity)
 	if !ok {
-		return "", "", fmt.Errorf("relation to-endpoint not found: type %q", to.Type)
+		return "", "", fmt.Errorf("relation to-endpoint not found: type %q: %w", to.Type, errEndpointMissing)
 	}
 	return fromID, toID, nil
 }

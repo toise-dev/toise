@@ -66,7 +66,7 @@ func buildConformanceLogs() plog.Logs {
 
 	hostID := map[string]any{"host.id": "h-001"}
 	agentID := map[string]any{"service.instance.id": "agent-7f3a"}
-	dbID := map[string]any{"db.instance.id": "pg@web-server-1:5432"} // single composite key (not {system,address,port})
+	dbID := map[string]any{"db.instance.id": "postgresql:7311168095704935424"} // stable source id (PG system_identifier), NOT network-derived
 	sw1 := map[string]any{"network.device.id": "sw-01"}
 	sw2 := map[string]any{"network.device.id": "sw-02"}
 
@@ -143,7 +143,7 @@ func TestConformanceFixture(t *testing.T) {
 		for j := 0; j < sls.Len(); j++ {
 			recs := sls.At(j).LogRecords()
 			for k := 0; k < recs.Len(); k++ {
-				handled, rerr := routeRecord(eng, recs.At(k))
+				handled, _, rerr := routeRecord(eng, recs.At(k))
 				if rerr != nil {
 					t.Fatalf("record %d: ingest error: %v", k, rerr)
 				}

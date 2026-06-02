@@ -80,12 +80,14 @@ consumer. The boundary routes by which lifecycle key is present:
 
 **Endpoint resolution is by exact identity**, against a **live** entity by
 `(type, identity)`. Endpoint identities must be the entity's current identity.
-Ordering: emit the endpoint `entity_state` events **before** the edge. Today an
-edge whose endpoint is not yet present is a **retriable ingest error** (loud, not
-silent — the batch is retried), but OTLP guarantees no inter-batch order, so a
-**reconciliation buffer** (park an unresolved edge briefly and flush it when its
-endpoints arrive) is a planned hardening so out-of-order edges are not lost; see
-*Robustness backstops* below.
+Producers should still emit the endpoint `entity_state` events **before** the
+edge, but ordering is **not required**: with the **reconciliation buffer** enabled
+(`--relation-buffer-ttl`, on by default in `toise-server`), an edge whose endpoint
+is not yet present is **parked** and retried as later entities arrive, and dropped
+with a `Warn` only if its endpoints have not appeared within the TTL — so
+out-of-order delivery (OTLP guarantees no inter-batch order) never silently loses
+edges. With the buffer disabled, a missing endpoint is a retriable ingest error
+instead. See *Robustness backstops* below.
 
 ## Mapping table
 
@@ -116,11 +118,10 @@ emitting — send `{"server.address": "10.0.0.1", "server.port": 5432}`, never
 `{"server": {"address": "10.0.0.1", "port": 5432}}` (the nested `server` value
 would be discarded).
 
-**No silent loss (planned):** dropping a nested value must be **surfaced**, not
-silent — the boundary will log a `Warn` naming the dropped key so the data loss
-is observable. Pre-flattening remains the producer's contract; the requirement is
-only that the consumer never drops data quietly. *(Status: agreed; the explicit
-warning is a small ingest follow-up — today the drop is silent.)*
+**No silent loss:** dropping a nested value is **surfaced**, not silent — the
+boundary logs a `Warn` naming the dropped key(s) (e.g.
+`otel.entity.attributes.foo`) so the loss is observable. Pre-flattening remains
+the producer's contract; the consumer never drops data quietly.
 
 ### Entity liveness — explicit delete primary, interval backstop
 
@@ -164,11 +165,16 @@ Under exact matching:
   view). Fuzzy "identity changed" detection is dropped; if continuity across an Id
   change is ever needed, the producer signals it explicitly.
 - A single-key identity (`host.id`, the agent key) is **valid again** — no need for
-  the "≥2 values / composite key" rule. A composite `db.instance.id` remains a good
-  convention by *choice* (one clean immutable key), not to dodge a fuzzy merge.
+  the "≥2 values / composite key" rule.
 
 The corollary for producers: **Ids must be immutable** — never put a mutable value
-(a pid, a leased IP) in the identity; those are descriptive attributes.
+(a pid, a leased IP, a **network address**) in the identity; those are descriptive
+attributes. In particular a `db` identity must be a **stable source identifier**
+(PostgreSQL `system_identifier`, MySQL `server_uuid`, or an operator-configured
+logical instance name), **not** a network-derived composite like
+`host:port` — the address moves under DHCP/failover/VIP, which would make the
+instance look like a brand-new entity and orphan its edges. `server.address` /
+`server.port` / `db.system.name` stay descriptive attributes.
 
 *(Implemented: ADR 0017 is superseded by ADR 0018; the change engine matches
 exactly and no longer emits `entity.identity_changed`, though the type is retained
@@ -206,8 +212,8 @@ planned:
 | ------- | -------- | ------ |
 | Entity collisions | exact-Id matching (no fuzzy merge) | **done** (ADR 0018) |
 | Missed deletes | explicit `entity_delete` + `interval` TTL backstop | accepted; sweeper pending |
-| Out-of-order edges | reconciliation buffer (park & flush) | accepted; today a retriable error |
-| Nested values | explicit `Warn` on drop (never silent) | accepted; warning pending |
+| Out-of-order edges | reconciliation buffer (park & flush, opt-in) | **done** |
+| Nested values | explicit `Warn` on drop (never silent) | **done** |
 | Scope flag `otel.entity.entity_event=true` | accepted and ignored (never rejected) — interop fast-path for other OTel producers | done |
 
 ### Timestamps

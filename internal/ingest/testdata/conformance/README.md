@@ -16,7 +16,7 @@ It exercises the full contract: the standard `otel.entity.*` node shape, the
 `otel.entity.*`, discriminated by `entity.relation.event.type`), flat scalar maps,
 exact-identity endpoints emitted before their edges, an attribute update, an
 explicit `entity_delete`, a `relation_delete`, and the producer vocabulary
-(`host`, `service.instance`, `db` with a single composite identity key,
+(`host`, `service.instance`, `db` with a stable source identity key,
 `network.device`; relations `runs_on` (agent→host), `monitors` (agent→db),
 `adjacent_to`).
 

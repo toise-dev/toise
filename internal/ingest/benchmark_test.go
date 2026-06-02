@@ -21,7 +21,7 @@ func BenchmarkRouteEntityState(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := routeRecord(f, lr); err != nil {
+		if _, _, err := routeRecord(f, lr); err != nil {
 			b.Fatal(err)
 		}
 	}

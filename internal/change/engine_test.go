@@ -1,6 +1,7 @@
 package change
 
 import (
+	"log/slog"
 	"testing"
 	"time"
 
@@ -145,6 +146,57 @@ func TestObserveRelationUnknownEndpoint(t *testing.T) {
 	}
 	if _, _, err := e.ObserveRelation(rel); err == nil {
 		t.Error("expected error for unknown endpoint")
+	}
+}
+
+func TestRelationBufferReconcilesAndExpires(t *testing.T) {
+	g := projection.New()
+	now := t0
+	e := New(g, &fakeAppender{},
+		WithClock(func() time.Time { return now }),
+		WithRelationBuffer(30*time.Second),
+		WithLogger(slog.New(slog.DiscardHandler)))
+
+	procRef := EndpointRef{Type: model.TypeProcess, Identity: []model.KeyValue{kv("process.executable.name", "nginx")}}
+	hostRef := EndpointRef{Type: model.TypeHost, Identity: []model.KeyValue{kv("host.id", "h1")}}
+	edge := RelationObservation{Type: model.RelRunsOn, From: procRef, To: hostRef, EventTime: t0}
+
+	// the edge arrives before its endpoints: parked, not an error, not yet applied
+	if _, emitted, err := e.ObserveRelation(edge); err != nil || emitted {
+		t.Fatalf("parked edge: emitted=%v err=%v, want false,nil", emitted, err)
+	}
+	if g.RelationCount() != 0 {
+		t.Fatalf("edge should be parked, not applied; count=%d", g.RelationCount())
+	}
+
+	// endpoints arrive -> the next observations flush and reconcile the edge
+	mustObserve(t, e, model.TypeProcess, procRef.Identity)
+	mustObserve(t, e, model.TypeHost, hostRef.Identity)
+	if g.RelationCount() != 1 {
+		t.Fatalf("edge should reconcile once endpoints exist; count=%d", g.RelationCount())
+	}
+
+	// a second edge whose endpoints never come is dropped after the TTL
+	ghost := RelationObservation{Type: model.RelRunsOn,
+		From:      EndpointRef{Type: model.TypeProcess, Identity: []model.KeyValue{kv("process.executable.name", "ghost")}},
+		To:        hostRef,
+		EventTime: t0}
+	if _, _, err := e.ObserveRelation(ghost); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)                                               // past the 30s TTL
+	mustObserve(t, e, model.TypeHost, []model.KeyValue{kv("host.id", "h2")}) // triggers the expiring flush
+	// even if its endpoint shows up afterwards, the dropped edge must not resurface
+	mustObserve(t, e, model.TypeProcess, []model.KeyValue{kv("process.executable.name", "ghost")})
+	if g.RelationCount() != 1 {
+		t.Errorf("expired edge must not reconcile later; count=%d, want 1", g.RelationCount())
+	}
+}
+
+func mustObserve(t *testing.T, e *Engine, typ string, ident []model.KeyValue) {
+	t.Helper()
+	if _, err := e.ObserveEntity(EntityObservation{Type: typ, Identity: ident, EventTime: t0}); err != nil {
+		t.Fatal(err)
 	}
 }
 
