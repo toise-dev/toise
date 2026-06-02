@@ -243,6 +243,47 @@ func TestLivenessSweepExpiresStaleEntities(t *testing.T) {
 	}
 }
 
+type countingAppender struct{ calls, events int }
+
+func (c *countingAppender) Append(evs ...model.Event) error {
+	c.calls++
+	c.events += len(evs)
+	return nil
+}
+
+func TestBatchAppendsOnce(t *testing.T) {
+	g := projection.New()
+	ap := &countingAppender{}
+	e := New(g, ap, WithClock(fixedNow))
+
+	procRef := EndpointRef{Type: model.TypeProcess, Identity: []model.KeyValue{kv("process.executable.name", "nginx")}}
+	hostRef := EndpointRef{Type: model.TypeHost, Identity: []model.KeyValue{kv("host.id", "h1")}}
+	err := e.Batch(func(b *Batch) {
+		if _, err := b.ObserveEntity(EntityObservation{Type: model.TypeHost, Identity: hostRef.Identity, EventTime: t0}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := b.ObserveEntity(EntityObservation{Type: model.TypeProcess, Identity: procRef.Identity, EventTime: t0}); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := b.ObserveRelation(RelationObservation{Type: model.RelRunsOn, From: procRef, To: hostRef, EventTime: t0}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if err != nil {
+		t.Fatalf("batch: %v", err)
+	}
+	// three qualified events, but exactly ONE durable append (the batch flush)
+	if ap.calls != 1 {
+		t.Errorf("Append calls = %d, want 1 (batched, one fsync)", ap.calls)
+	}
+	if ap.events != 3 {
+		t.Errorf("events appended = %d, want 3", ap.events)
+	}
+	if g.EntityCount() != 2 || g.RelationCount() != 1 {
+		t.Errorf("graph = %d entities, %d relations, want 2 and 1", g.EntityCount(), g.RelationCount())
+	}
+}
+
 func TestMultiProducerRefCounting(t *testing.T) {
 	e, g, _ := newEngine(t)
 	ident := []model.KeyValue{kv("db.instance.id", "pg:1")}

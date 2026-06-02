@@ -54,6 +54,12 @@ type Engine struct {
 	refs         map[model.EntityID]map[string]time.Time
 	relDeadlines map[model.RelationID]time.Time
 
+	// batch append: while a Batch runs, commit defers the durable store append into
+	// appendBuf and flushes it in one Sync'd batch at the end, instead of one Sync
+	// per event. Guarded by obsMu.
+	buffering bool
+	appendBuf []model.Event
+
 	subMu sync.RWMutex
 	subs  map[int]Subscriber
 	subID int
@@ -175,7 +181,10 @@ type RelationObservation struct {
 func (e *Engine) ObserveEntity(obs EntityObservation) (model.Event, error) {
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()
+	return e.observeEntityLocked(obs)
+}
 
+func (e *Engine) observeEntityLocked(obs EntityObservation) (model.Event, error) {
 	id, found := e.graph.MatchIdentity(obs.Type, obs.Identity)
 
 	var (
@@ -244,7 +253,10 @@ func (e *Engine) ObserveEntity(obs EntityObservation) (model.Event, error) {
 func (e *Engine) DeleteEntity(obs EntityObservation) (ev model.Event, emitted bool, err error) {
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()
+	return e.deleteEntityLocked(obs)
+}
 
+func (e *Engine) deleteEntityLocked(obs EntityObservation) (ev model.Event, emitted bool, err error) {
 	id, found := e.graph.MatchIdentity(obs.Type, obs.Identity)
 	if !found {
 		return model.Event{}, false, nil
@@ -384,8 +396,13 @@ func (e *Engine) Sweep() int {
 func (e *Engine) ObserveRelation(obs RelationObservation) (ev model.Event, emitted bool, err error) {
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()
+	return e.observeRelationBuffered(obs)
+}
 
-	ev, emitted, err = e.observeRelationLocked(obs)
+// observeRelationBuffered runs observeRelationLocked and parks an out-of-order
+// edge when the reconciliation buffer is enabled. The caller must hold obsMu.
+func (e *Engine) observeRelationBuffered(obs RelationObservation) (model.Event, bool, error) {
+	ev, emitted, err := e.observeRelationLocked(obs)
 	if err != nil && e.bufferTTL > 0 && errors.Is(err, errEndpointMissing) {
 		// Out-of-order edge: park it and retry as later entities arrive, instead
 		// of failing. Not an error to the caller.
@@ -461,7 +478,10 @@ func (e *Engine) flushPending() {
 func (e *Engine) RemoveRelation(obs RelationObservation) (ev model.Event, emitted bool, err error) {
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()
+	return e.removeRelationLocked(obs)
+}
 
+func (e *Engine) removeRelationLocked(obs RelationObservation) (ev model.Event, emitted bool, err error) {
 	from, to, err := e.resolveEndpoints(obs.From, obs.To)
 	if err != nil {
 		return model.Event{}, false, err
@@ -505,12 +525,68 @@ func (e *Engine) resolveEndpoints(from, to EndpointRef) (fromID, toID model.Enti
 }
 
 func (e *Engine) commit(ev model.Event, highPriority bool) error {
+	if e.buffering {
+		// Defer the durable append to the batch flush; apply to the projection and
+		// notify now so in-batch classification stays consistent.
+		e.appendBuf = append(e.appendBuf, ev)
+		e.graph.Apply(ev)
+		e.notify(ev, highPriority)
+		return nil
+	}
 	if err := e.appender.Append(ev); err != nil {
 		return fmt.Errorf("appending qualified event: %w", err)
 	}
 	e.graph.Apply(ev)
 	e.notify(ev, highPriority)
 	return nil
+}
+
+// Batch processes a sequence of observations under a single lock and commits all
+// resulting events to the store in one durable batch append (one fsync) instead
+// of one per event. The OTLP receiver uses it per export to lift the
+// fsync-bound ingestion ceiling. fn receives a Batch whose Observe/Delete methods
+// mirror the engine's but run lock-free; do not retain it past the call.
+func (e *Engine) Batch(fn func(*Batch)) error {
+	e.obsMu.Lock()
+	defer e.obsMu.Unlock()
+
+	e.buffering = true
+	e.appendBuf = e.appendBuf[:0]
+	fn(&Batch{e})
+	e.buffering = false
+
+	if len(e.appendBuf) == 0 {
+		return nil
+	}
+	err := e.appender.Append(e.appendBuf...)
+	e.appendBuf = e.appendBuf[:0]
+	if err != nil {
+		return fmt.Errorf("flushing batch append: %w", err)
+	}
+	return nil
+}
+
+// Batch routes observations to the engine with the obsMu already held by Batch.
+type Batch struct{ e *Engine }
+
+// ObserveEntity mirrors Engine.ObserveEntity within a batch.
+func (b *Batch) ObserveEntity(obs EntityObservation) (model.Event, error) {
+	return b.e.observeEntityLocked(obs)
+}
+
+// DeleteEntity mirrors Engine.DeleteEntity within a batch.
+func (b *Batch) DeleteEntity(obs EntityObservation) (model.Event, bool, error) {
+	return b.e.deleteEntityLocked(obs)
+}
+
+// ObserveRelation mirrors Engine.ObserveRelation within a batch.
+func (b *Batch) ObserveRelation(obs RelationObservation) (model.Event, bool, error) {
+	return b.e.observeRelationBuffered(obs)
+}
+
+// RemoveRelation mirrors Engine.RemoveRelation within a batch.
+func (b *Batch) RemoveRelation(obs RelationObservation) (model.Event, bool, error) {
+	return b.e.removeRelationLocked(obs)
 }
 
 // diffAttributes returns the keys whose value differs between old and new (in

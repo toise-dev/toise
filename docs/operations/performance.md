@@ -76,10 +76,10 @@ Measured end-to-end over OTLP/gRPC with `toise-probe --hosts N` (a generated
 fabric: hosts + interfaces/addresses/routes/listeners, ~1 db per 8 hosts, a ring
 of network switches, all monitored by one agent), on Apple Silicon dev hardware:
 
-| Fabric | Entities | Relations | Initial ingest |
-|--------|----------|-----------|----------------|
-| 120 hosts | 633 | 639 | ~5.4 s (≈ 235 records/s) |
-| 250 hosts | 1319 | 1333 | ~8 s (≈ 330 records/s) |
+| Fabric | Entities | Relations | Initial ingest (1 fsync/record) | After **batched append** (1 fsync/export) |
+|--------|----------|-----------|---------------------------------|-------------------------------------------|
+| 120 hosts | 633 | 639 | ~5.4 s (≈ 235 records/s) | **~0.40 s** (~13× faster) |
+| 250 hosts | 1319 | 1333 | ~8 s (≈ 330 records/s) | **~0.03 s** (re-assert) |
 
 Two clear signals:
 
@@ -87,15 +87,16 @@ Two clear signals:
   the projection, a host detail page (identity + attributes + neighbours +
   history) renders in **< 1 ms** — reads are O(1)/O(n) over the in-memory snapshot
   regardless of graph size. GraphQL, MCP, and the debug UI all sit on this.
-- **Ingestion is fsync-bound on bursts.** The OTLP boundary routes record by
-  record and the engine commits **one durable (Sync'd) Pebble append per record**,
-  so a large single export (≈ 1.3k records) is **fsync-limited to ~250–330
-  records/s** — a burst takes seconds, and a client must allow a generous deadline
-  (`toise-probe` uses 2 min). This is fine for steady heartbeating at a sane
-  cadence, but is the throughput ceiling. **Optimization opportunity:** batch the
-  commits within a single `Export` into one Sync'd `store.AppendBatch` (the store
-  already supports batched durable appends — see M2) rather than one Sync per
-  event. Tracked as a post-0.1.0 ingestion-throughput improvement.
+- **Batched append lifts the ingestion ceiling.** The OTLP boundary used to commit
+  **one durable (Sync'd) Pebble append per record**, so a large export (≈ 1.3k
+  records) was fsync-limited to ~250–330 records/s. The engine's `Batch` now
+  ingests a whole export's records under one lock and flushes their qualified
+  events in **one Sync'd batch append** (`Engine.Batch` → `store.Append(...)`),
+  cutting a 633-record export from ~5.4 s to **~0.40 s**. Durability is preserved:
+  events are applied to the projection as they are classified and made durable in
+  one batch at the end of the export; a crash before the flush is covered by OTLP
+  at-least-once retry and idempotent classification (verified: a data dir written
+  this way reopens and rebuilds the projection intact).
 
 When a target is missed, an issue is opened and the architectural cause is
 investigated before proceeding (brief, patch 6).
