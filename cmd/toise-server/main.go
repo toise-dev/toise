@@ -43,6 +43,7 @@ func main() {
 	dataDir := "toise-data"
 	var mcpStdio bool
 	relationBufferTTL := 30 * time.Second
+	livenessSweepInterval := 30 * time.Second
 	cfg := store.DefaultConfig()
 
 	fs := flag.NewFlagSet("toise-server", flag.ExitOnError)
@@ -52,6 +53,8 @@ func main() {
 	fs.BoolVar(&mcpStdio, "mcp-stdio", mcpStdio, "serve only the MCP server over stdio (for Claude Desktop); no HTTP or OTLP servers")
 	fs.DurationVar(&relationBufferTTL, "relation-buffer-ttl", relationBufferTTL,
 		"how long to hold an out-of-order edge waiting for its endpoints before dropping it (0 = disabled)")
+	fs.DurationVar(&livenessSweepInterval, "liveness-sweep-interval", livenessSweepInterval,
+		"how often to expire entities past their heartbeat interval (0 = disabled)")
 	fs.DurationVar(&cfg.RetentionMaxAge, "retention-max-age", cfg.RetentionMaxAge,
 		"maximum age of retained events (0 = unlimited)")
 	fs.DurationVar(&cfg.CompactionInterval, "retention-compaction-interval", cfg.CompactionInterval,
@@ -62,13 +65,13 @@ func main() {
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	if err := run(listen, otlpListen, dataDir, mcpStdio, relationBufferTTL, cfg, logger); err != nil {
+	if err := run(listen, otlpListen, dataDir, mcpStdio, relationBufferTTL, livenessSweepInterval, cfg, logger); err != nil {
 		logger.Error("server failed", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(listen, otlpListen, dataDir string, mcpStdio bool, relationBufferTTL time.Duration, cfg store.Config, logger *slog.Logger) error {
+func run(listen, otlpListen, dataDir string, mcpStdio bool, relationBufferTTL, livenessSweepInterval time.Duration, cfg store.Config, logger *slog.Logger) error {
 	st, err := store.Open(dataDir, cfg)
 	if err != nil {
 		return fmt.Errorf("opening event log: %w", err)
@@ -122,6 +125,23 @@ func run(listen, otlpListen, dataDir string, mcpStdio bool, relationBufferTTL ti
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	if livenessSweepInterval > 0 {
+		go func() {
+			ticker := time.NewTicker(livenessSweepInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if n := engine.Sweep(); n > 0 {
+						logger.Info("liveness sweep expired stale entities", "count", n)
+					}
+				}
+			}
+		}()
+	}
 
 	fmt.Printf("Toise %s — the living map of your infrastructure\n", version.String())
 	logger.Info("toise-server ready",

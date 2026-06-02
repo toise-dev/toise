@@ -31,13 +31,13 @@ neither reads nor requires it.
 | `otel.entity.type`         | string  | yes      | the entity type — **must be in Toise's type registry** |
 | `otel.entity.id`           | **map** | yes      | identifying attributes (the entity's identity)         |
 | `otel.entity.attributes`   | **map** | no       | descriptive, non-identifying attributes                |
+| `otel.entity.interval`     | int     | no       | heartbeat cadence in **milliseconds**; arms the liveness backstop (see *Entity liveness*) |
 | `LogRecord.Timestamp`      | —       | yes      | becomes `event_time` (falls back to `ObservedTimestamp`, then ingest time) |
 
 Notes:
 
 - `otel.entity.id` and `otel.entity.attributes` are genuine OTLP **maps**
   (`AnyValue` kvlist), parsed structurally — see *AnyValue restriction* below.
-- `otel.entity.interval` is **not consumed** in phase 1 (see *Entity liveness*).
 - A `schema_url` is part of the model but is **not currently read** at the OTLP
   boundary; entities ingested via OTLP carry an empty schema URL for now.
 
@@ -131,17 +131,20 @@ Liveness uses **two mechanisms, not one**:
    entity is gone, it emits `entity_delete` and Toise soft-deletes it. A heartbeat
    is a re-emitted `entity_state` (unchanged → `entity.unchanged`, coalesced under
    retention, ADR 0013).
-2. **`otel.entity.interval` is a backstop (planned).** A producer often *misses*
-   the clean delete — `kill -9`, crash, host powered off, network partition — so
-   relying on the explicit delete alone accumulates zombie entities. OTel's
-   `Interval` exists exactly for this ("resilient to event losses"): an entity not
-   re-asserted within `last_seen + interval + margin` is expired by a background
-   sweeper. The same applies to edges (`relation_delete` + a TTL backstop).
+2. **`otel.entity.interval` is a backstop.** A producer often *misses* the clean
+   delete — `kill -9`, crash, host powered off, network partition — so relying on
+   the explicit delete alone accumulates zombie entities. OTel's `Interval` exists
+   exactly for this ("resilient to event losses"). An entity observed with an
+   `otel.entity.interval` (heartbeat cadence, in ms) is armed with a deadline; a
+   periodic sweeper (`toise-server --liveness-sweep-interval`, default 30s) expires
+   it with `entity.deleted` if it is not re-asserted within the interval. The
+   producer should **size the interval to include slack** (e.g. a few heartbeats)
+   so a single late heartbeat does not expire a live entity.
 
-Producers should emit **both**: the explicit delete *and* the interval. *(Status:
-agreed. Today Toise consumes neither the interval nor runs a sweeper — explicit
-delete only; parsing/storing the interval and the TTL sweeper are the next
-ingest-hardening item; see* Robustness backstops *below.)*
+Producers emit **both**: the explicit delete *and* the interval. Only entities that
+carry an interval are ever expired, so the sweeper is safe to leave on. *(Edge
+TTL expiry — `relation_delete` plus a per-edge backstop — remains a smaller
+follow-up.)*
 
 ### Identity matching — exact (immutable Id)
 
@@ -211,7 +214,7 @@ planned:
 | Concern | Decision | Status |
 | ------- | -------- | ------ |
 | Entity collisions | exact-Id matching (no fuzzy merge) | **done** (ADR 0018) |
-| Missed deletes | explicit `entity_delete` + `interval` TTL backstop | accepted; sweeper pending |
+| Missed deletes | explicit `entity_delete` + `interval` TTL backstop | **done** (entity expiry; edge TTL is a follow-up) |
 | Out-of-order edges | reconciliation buffer (park & flush, opt-in) | **done** |
 | Nested values | explicit `Warn` on drop (never silent) | **done** |
 | Scope flag `otel.entity.entity_event=true` | accepted and ignored (never rejected) — interop fast-path for other OTel producers | done |

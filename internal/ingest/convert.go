@@ -18,6 +18,9 @@ const (
 	attrEntityType  = "otel.entity.type"
 	attrEntityID    = "otel.entity.id"
 	attrEntityAttrs = "otel.entity.attributes"
+	// interval is the producer's heartbeat cadence in milliseconds; it is a
+	// liveness backstop (a stale entity is expired), not a primary delete signal.
+	attrEntityInterval = "otel.entity.interval"
 
 	// The relation extension uses a vendor-neutral namespace (neither a producer
 	// nor a consumer prefix) so any producer/consumer can speak it and it maps
@@ -120,10 +123,15 @@ func entityObs(attrs pcommon.Map, when time.Time) (change.EntityObservation, []s
 	var dropped []string
 	dropped = append(dropped, identDropped...)
 	dropped = append(dropped, descDropped...)
+	var interval time.Duration
+	if ms, ok := intAttr(attrs, attrEntityInterval); ok && ms > 0 {
+		interval = time.Duration(ms) * time.Millisecond
+	}
 	return change.EntityObservation{
 		Type:       typ,
 		Identity:   ident,
 		Attributes: descriptive,
+		Interval:   interval,
 		EventTime:  when,
 	}, dropped, nil
 }
@@ -162,6 +170,14 @@ func eventTimeOf(lr plog.LogRecord) time.Time {
 		return ts.AsTime()
 	}
 	return time.Now()
+}
+
+func intAttr(attrs pcommon.Map, key string) (int64, bool) {
+	v, ok := attrs.Get(key)
+	if !ok || v.Type() != pcommon.ValueTypeInt {
+		return 0, false
+	}
+	return v.Int(), true
 }
 
 func strAttr(attrs pcommon.Map, key string) (string, bool) {
