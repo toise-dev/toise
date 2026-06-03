@@ -89,14 +89,17 @@ OpenTelemetry treats an entity's **Id as immutable**, and that turns out to be t
 right discipline for a graph that wants to be a source of truth. Match identity
 **exactly**: an observation is either a known entity (same Id) or a different one.
 
-The trap is putting volatile facts in the Id. If a process's identity includes its
-pid, every restart looks like a brand-new process and the timeline shatters; if a
-host's identity includes a leased IP, a DHCP renewal forks it. The fix is to pick
-**stable identifying attributes** and push everything that legitimately changes —
-pid, current address, last-seen state — into *descriptive* attributes. Then a
-restart or re-address is an attribute update on the *same* entity, and a genuine
-identity change is correctly a *new* entity rather than a silent merge of two
-different things.
+The trap is putting a volatile value in the Id with nothing to anchor it: fold a
+leased IP into a host's identity and a DHCP renewal forks it in two. Identify by
+something **immutable** and push everything that legitimately changes — current
+address, last-seen state, resource usage — into *descriptive* attributes, so a
+re-address is an attribute update on the *same* entity, not a silent fork. A reused
+value can still anchor an identity when it is paired with a discriminator stable for
+the resource's lifetime: the OpenTelemetry `process` entity is keyed by
+`process.pid` **+** `process.creation.time`, so a real restart — a new pid *and* a
+new creation time — is correctly a *new* process, while a config reload at the same
+identity is an attribute update. A genuine identity change is a *new* entity, never
+a silent merge of two different things.
 
 Toise learned this the hard way. It first tried *tolerant* matching — treat an
 observation differing by a single identifying value as the same entity that
