@@ -134,6 +134,27 @@ the actual producer.
   (`/toise-data/`, `/toise-demo-data/`, `/live-data/`), so local builds and
   demo/test runs leave no untracked clutter.
 
+## Post-0.1.1 — Lot 5 (SNMP topology) contract freeze
+
+Successor scope to the senhub-agent contract (#185, closed): the producer's
+network-topology lot. `network.device` and `adjacent_to` / `routes_via` /
+`forwards_to` were already in the registry; this freezes their identity and shapes
+in `docs/data-model/{otel-mapping,senhub-agent-contract}.md` and the conformance
+fixture (the executable contract).
+
+- **`network.device.id` is a single subtype-prefixed key with a precedence ladder
+  (PR #52, #53, #55):** `serial:<PEN>:<n>` (ENTITY-MIB serial namespaced by the IANA
+  PEN from `sysObjectID`, only with a single chassis + PEN) **>** `engine:<id>`
+  (`snmpEngineID`, globally unique by RFC 3411 — the robust fallback that also keys
+  **stacks**, detected as >1 `entPhysicalClass=3`) **>** `mac:` (LLDP) **>** `name:`
+  **>** `mgmt:` (mutable, last resort). **Anchored on SNMP, not LLDP** (often
+  disabled); cross-vendor collisions and stacks both fall back to `engine:`. Values
+  are opaque, byte-exact tokens (no serial-format standard); the producer owns
+  canonicalization and resolves endpoints to the canonical id before emitting edges.
+- **No fuzzy merge** (ADR 0018): cross-source convergence is by shared exact id. A
+  weighted multi-source identity model (evidence + `same_as` + canonical view) is the
+  additive **Phase-2 path — ADR 0020 (draft)**; Lot 5 ships exact / producer-resolved.
+
 ## Key cross-cutting rules (brief v2)
 
 - **Bi-temporality (patch 2):** default queries operate in `event_time` space (reality view). `asKnownAt` opt-in constrains to `recorded_at <= t` (audit view). Every event exposes both `eventTime` and `recordedAt`. Schema descriptions must teach the LLM which mode to pick.
