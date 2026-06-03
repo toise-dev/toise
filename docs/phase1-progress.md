@@ -129,6 +129,10 @@ the actual producer.
 - **Released 0.1.1** (2026-06-02): CHANGELOG `[0.1.1]` (PR #40), annotated tag
   `0.1.1` (no `v` prefix), GitHub Release "0.1.1 — gzip OTLP fix" published. The
   producer↔consumer contract issue (senhub-agent #185) is **closed as converged**.
+- **Repo hygiene (PR #42):** `.gitignore` now covers the root-built binaries
+  (`/toise-demo`, `/toise-probe`) and the local Pebble data directories
+  (`/toise-data/`, `/toise-demo-data/`, `/live-data/`), so local builds and
+  demo/test runs leave no untracked clutter.
 
 ## Key cross-cutting rules (brief v2)
 
