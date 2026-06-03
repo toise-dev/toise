@@ -474,7 +474,7 @@
                         {
                           "key": "network.device.id",
                           "value": {
-                            "stringValue": "serial:FOC2150X0AB"
+                            "stringValue": "serial:9:FOC2150X0AB"
                           }
                         }
                       ]
@@ -600,7 +600,7 @@
                         {
                           "key": "network.device.id",
                           "value": {
-                            "stringValue": "serial:FOC2150X0AB"
+                            "stringValue": "serial:9:FOC2150X0AB"
                           }
                         }
                       ]
