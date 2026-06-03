@@ -139,6 +139,13 @@ and later `netscaler`, `veeam`, `redfish`, `citrix`, `ibmi`, `network.device`
 
 - **Lot 1:** entities `host` + `service.instance`; relation `runs_on`.
 - **Lot 2:** monitored systems (`db` first); relation `monitors`.
+- **Lot 4 (host routing/ARP):** **host-sourced** topology edges from the host's own
+  tables — `host --routes_via--> <gateway network.device>` and
+  `host --adjacent_to--> <neighbor>`. Reuses the frozen relation types with a `host`
+  source (endpoints advisory, not enforced); **no new relation type, no host↔device
+  identity merge** (§6b deferred). Device endpoints resolve to the canonical id where
+  known, else provisional `mac:`/`mgmt:`. ARP is high-cardinality — filter to
+  infrastructure/known devices, do not emit `adjacent_to` for every ARP peer.
 - **Lot 5 (SNMP):** `network.device` and `routes_via`/`forwards_to`/`adjacent_to`.
   `network.device.id` and the relation shapes are **frozen** (precedence ladder +
   canonicalization above); rollout 5a LLDP → 5b routing → 5c FDB → 5d ARP, with
