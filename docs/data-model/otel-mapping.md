@@ -230,6 +230,59 @@ instance look like a brand-new entity and orphan its edges. `server.address` /
 exactly and no longer emits `entity.identity_changed`, though the type is retained
 in the taxonomy for replay/wire compatibility.)*
 
+#### `network.device` identity — SNMP topology (Lot 5, frozen)
+
+A discovered network asset is keyed by the single identity key
+**`network.device.id`**, whose value is **subtype-prefixed** and chosen by the
+producer from a fixed **precedence ladder** — highest available tier wins:
+
+| Tier | Value | Source | Why |
+|------|-------|--------|-----|
+| 1 | `serial:<n>` | ENTITY-MIB `entPhysicalSerialNum` (chassis row, `entPhysicalClass=3`) | immutable hardware id; no LLDP needed |
+| 2 | `engine:<hex>` | `snmpEngineID` | stable fallback when no serial |
+| 3 | `mac:<addr>` | LLDP chassis-id (subtype 4) | strong, but **LLDP is often disabled** |
+| 4 | `name:<n>` | `sysName` | may be unset / non-unique |
+| 5 | `mgmt:<ip>` | the polled management address | last resort — **mutable**, so weakest |
+
+Identity is **anchored on SNMP-immutable facts (serial/engine), not on LLDP**:
+LLDP is frequently off, and `mgmt:<ip>` is network-derived (the `db` anti-pattern).
+The raw parts (`sysName`, management IP, vendor, model) ride as **descriptive
+attributes**, never as identity.
+
+**Canonicalization is the producer's responsibility** — Toise matches the id string
+byte-for-byte and never normalizes, so two agents must render identically:
+
+| Prefix | Canonical form |
+|--------|----------------|
+| `mac:` | lowercase hex, colon-separated per octet (`00:1a:2b:3c:4d:5e`) |
+| `engine:` | lowercase hex, no separator |
+| `serial:` / `name:` | `TrimSpace`, case preserved (they are identifiers) |
+| `mgmt:` | `net.IP.String()` form (IPv4 no leading zeros; IPv6 RFC 5952 lowercased) |
+
+**Resolve to the canonical id before emitting edges.** Because the agent reads each
+polled device's interface MAC table (`ifPhysAddress`), an FDB/ARP/route endpoint
+that belongs to a known device is emitted pointing at that device's *canonical* id
+(`serial:…`), not at a raw `mac:…`/`mgmt:…`. Provisional `mac:<addr>` / `mgmt:<ip>`
+ids are the **unresolved exception**. This keeps Lot 5 fully exact and minimizes
+identity-promotion churn (a provisional→canonical promotion is a delete+create, with
+edges re-pointed and the stale node expiring by cascade + interval).
+
+`adjacent_to` is emitted as **one directed edge, polled→neighbor** (Toise neighbor
+traversal is direction-agnostic, so no reciprocal duplicate), carrying `local_port`
+/ `remote_port` as descriptive edge attributes.
+
+**Cadence:** poll topology **slower than metrics** (≈5–15 min); set
+`otel.entity.interval` to ≈**3× the topology cadence** (not the metric cadence) or
+the liveness sweeper reaps devices between polls. Emit a **full snapshot per cycle
+as one OTLP export** (one batched durable append); **no sampling** — a partial
+snapshot would read as deletes. The committed conformance fixture carries the frozen
+`serial:`/`mac:` example with an `adjacent_to` edge.
+
+*(A weighted multi-source identity model — evidence + `same_as` edges with
+`confidence` + a derived canonical view — is the additive Phase-2 path for sources
+that cannot converge on one exact id; see ADR 0020 (draft). Lot 5 ships exact /
+producer-resolved and needs none of it.)*
+
 ### Type registry — types must be known
 
 `otel.entity.type` and `entity.relation.type` are validated against Toise's
