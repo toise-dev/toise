@@ -44,9 +44,9 @@ calls below use names like `<nginx-id>` for those resolved ids.
 
 - **Tools:** `find_entities(type: "process", match: {"process.executable.name": "nginx"})`
   → `get_entity(id: "<nginx-id>")`
-- **Answer shape:** nginx's identity (`process.executable.name=nginx`,
-  `process.pid=1010`) and attributes (`status=running`), with its stable logical
-  id.
+- **Answer shape:** nginx's identity (`process.pid=1010` +
+  `process.creation.time`) and descriptive attributes
+  (`process.executable.name=nginx`, `status=running`), with its stable logical id.
 
 ## 4. Topology — direct neighbors (traversal)
 
@@ -71,9 +71,10 @@ calls below use names like `<nginx-id>` for those resolved ids.
 
 - **Tool:** `recent_changes(window: "6h")`
 - **Answer shape:** newest-first list of qualified changes in the window —
-  depending on when you seeded, the nginx restart (`entity.attribute_updated`, the
-  pid attribute changing), the dockerd crash (`entity.deleted` + `relation.removed`),
-  and the host heartbeat (`entity.unchanged`).
+  depending on when you seeded, the nginx reload (`entity.attribute_updated`, the
+  `status` attribute flipping) and restart (`entity.deleted` + `entity.created`, a
+  new process per the semconv identity), the dockerd crash (`entity.deleted` +
+  `relation.removed`), and the host heartbeat (`entity.unchanged`).
 
 ## 7. Structural alerts only (anomaly)
 
@@ -107,9 +108,11 @@ calls below use names like `<nginx-id>` for those resolved ids.
 > *"Did any process crash or disappear in the last day?"*
 
 - **Tool:** `recent_changes(window: "24h", kind: "entity")`
-- **Answer shape:** `dockerd` was deleted (`entity.deleted`) at S+22h — the
-  container crash. nginx did **not** disappear; it changed identity (restart),
-  which is a different signal.
+- **Answer shape:** `dockerd` was deleted (`entity.deleted`) at S+22h and **not
+  replaced** — the container crash. nginx also shows an `entity.deleted` at S+18h,
+  but immediately followed by an `entity.created` (a new process, new
+  pid + `process.creation.time`) — a restart, not a crash. The delete-with-no-create
+  vs delete-then-create pairing is the signal.
 
 ## 11. Audit — what did we know then? (asKnownAt)
 
@@ -126,9 +129,13 @@ calls below use names like `<nginx-id>` for those resolved ids.
 
 > *"Did nginx restart? I want to confirm it's the same service, not a new one."*
 
-- **Tools:** `find_entities(type: "process", match: {"process.executable.name": "nginx"})`
-  → `entity_history(entity_id: "<nginx-id>")`
-- **Answer shape:** one logical nginx entity (identified by its executable name)
-  with an `entity.attribute_updated` event at S+18h where the `process.pid`
-  attribute went 1001→1010. The pid is descriptive, not identifying, so the restart
-  is the *same* entity updating an attribute — not a delete-and-recreate (ADR 0018).
+- **Tools:** `recent_changes(window: "24h", kind: "entity")` →
+  `find_entities(type: "process", match: {"process.executable.name": "nginx"})`
+- **Answer shape:** the changes show an `entity.deleted` (pid 1001) immediately
+  followed by an `entity.created` (pid 1010) at S+18h — a **new process entity**,
+  because the OTel-semconv process identity is `process.pid` + `process.creation.time`
+  and a restart changes both. So it is the *same service* (same
+  `process.executable.name=nginx`, same host, same `:80` listener) but a genuinely
+  *new process* — Toise models the restart honestly rather than papering over it
+  (ADR 0018). The earlier config *reload* at S+15h, by contrast, kept the same
+  identity and is an `entity.attribute_updated`.
