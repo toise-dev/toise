@@ -66,8 +66,14 @@ func New(graph Graph, store EventReader) *Server {
 
 // HTTPHandler returns an http.Handler serving the MCP server over the Streamable
 // HTTP transport, suitable for mounting at a path such as /mcp.
+//
+// The transport runs stateless: every tool is a pure read with no server->client
+// request, so there is nothing to retain between calls. Stateless mode stops the
+// SDK from minting an Mcp-Session-Id and expiring it on idle, which otherwise
+// surfaces to clients as spurious "session expired" errors mid-conversation.
 func (s *Server) HTTPHandler() http.Handler {
-	return mcpsdk.NewStreamableHTTPHandler(func(*http.Request) *mcpsdk.Server { return s.srv }, nil)
+	opts := &mcpsdk.StreamableHTTPOptions{Stateless: true}
+	return mcpsdk.NewStreamableHTTPHandler(func(*http.Request) *mcpsdk.Server { return s.srv }, opts)
 }
 
 // ServeStdio runs the MCP server over stdio until the context is canceled or

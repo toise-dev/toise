@@ -1,8 +1,12 @@
 package mcp
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -387,4 +391,78 @@ func TestMCPRoundTrip(t *testing.T) {
 	if !bad.IsError {
 		t.Fatal("want IsError for depth exceeding the cap")
 	}
+}
+
+// TestHTTPStatelessIgnoresStaleSession guards the Streamable HTTP transport
+// against the "session expired" regression: a client that replays a session id
+// the server has long forgotten (idle eviction, restart) must still be served.
+//
+// In stateful mode the SDK answers an unknown Mcp-Session-Id with 404 "session
+// not found"; statelessness (server.go) makes the same request succeed, because
+// the tools are pure reads with nothing to retain between calls.
+func TestHTTPStatelessIgnoresStaleSession(t *testing.T) {
+	srv := httptest.NewServer(newTestServer().HTTPHandler())
+	defer srv.Close()
+
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call",` +
+		`"params":{"name":"find_entities","arguments":{"type":"host"}}}`
+	req, err := http.NewRequest(http.MethodPost, srv.URL, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("MCP-Protocol-Version", "2025-06-18")
+	// A session id the server never issued — as if it had expired server-side.
+	req.Header.Set("Mcp-Session-Id", "stale-session-evicted-long-ago")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("want 200 for a call carrying a stale session id, got %d", resp.StatusCode)
+	}
+
+	rpc := readSSEResult(t, resp)
+	if _, isErr := rpc["error"]; isErr {
+		t.Fatalf("JSON-RPC error on a stale-session call: %v", rpc["error"])
+	}
+	result, ok := rpc["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("no result object in response: %v", rpc)
+	}
+	sc, ok := result["structuredContent"].(map[string]any)
+	if !ok {
+		t.Fatalf("no structuredContent in tool result: %v", result)
+	}
+	if total, _ := sc["total"].(float64); total != 2 {
+		t.Fatalf("want 2 hosts over the wire, got %v", sc["total"])
+	}
+}
+
+// readSSEResult decodes the single JSON-RPC message the Streamable HTTP
+// transport returns as a text/event-stream "data:" line.
+func readSSEResult(t *testing.T, resp *http.Response) map[string]any {
+	t.Helper()
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		data, ok := strings.CutPrefix(line, "data: ")
+		if !ok {
+			continue
+		}
+		var msg map[string]any
+		if err := json.Unmarshal([]byte(data), &msg); err != nil {
+			t.Fatalf("decode SSE data line: %v", err)
+		}
+		return msg
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan SSE body: %v", err)
+	}
+	t.Fatal("no data line in SSE response")
+	return nil
 }
