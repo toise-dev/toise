@@ -474,7 +474,7 @@
                         {
                           "key": "network.device.id",
                           "value": {
-                            "stringValue": "sw-01"
+                            "stringValue": "serial:FOC2150X0AB"
                           }
                         }
                       ]
@@ -490,6 +490,18 @@
                           "key": "device.role",
                           "value": {
                             "stringValue": "switch"
+                          }
+                        },
+                        {
+                          "key": "mgmt.ip",
+                          "value": {
+                            "stringValue": "10.0.0.1"
+                          }
+                        },
+                        {
+                          "key": "sys.name",
+                          "value": {
+                            "stringValue": "core-sw-01"
                           }
                         }
                       ]
@@ -522,7 +534,7 @@
                         {
                           "key": "network.device.id",
                           "value": {
-                            "stringValue": "sw-02"
+                            "stringValue": "mac:00:1a:2b:3c:4d:5e"
                           }
                         }
                       ]
@@ -538,6 +550,18 @@
                           "key": "device.role",
                           "value": {
                             "stringValue": "switch"
+                          }
+                        },
+                        {
+                          "key": "mgmt.ip",
+                          "value": {
+                            "stringValue": "10.0.0.2"
+                          }
+                        },
+                        {
+                          "key": "sys.name",
+                          "value": {
+                            "stringValue": "core-sw-02"
                           }
                         }
                       ]
@@ -576,7 +600,7 @@
                         {
                           "key": "network.device.id",
                           "value": {
-                            "stringValue": "sw-01"
+                            "stringValue": "serial:FOC2150X0AB"
                           }
                         }
                       ]
@@ -597,7 +621,28 @@
                         {
                           "key": "network.device.id",
                           "value": {
-                            "stringValue": "sw-02"
+                            "stringValue": "mac:00:1a:2b:3c:4d:5e"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "entity.relation.attributes",
+                  "value": {
+                    "kvlistValue": {
+                      "values": [
+                        {
+                          "key": "local_port",
+                          "value": {
+                            "stringValue": "Gi1/0/1"
+                          }
+                        },
+                        {
+                          "key": "remote_port",
+                          "value": {
+                            "stringValue": "Gi1/0/24"
                           }
                         }
                       ]

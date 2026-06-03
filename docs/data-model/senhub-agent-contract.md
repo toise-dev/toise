@@ -96,7 +96,7 @@ leased IP) in the identity — those are descriptive attributes. Agreed identiti
 | `host` | `{host.id}` (machine-id) | `host.name` descriptive |
 | `service.instance` | `{service.instance.id}` (agent key) | the agent |
 | `db` | `{db.instance.id}` — a **stable source identifier**: PostgreSQL `system_identifier`, MySQL `server_uuid`, else an operator-configured logical instance name | **never network-derived** — `server.address`/`server.port` are mutable (DHCP/failover/VIP) so they stay descriptive attributes |
-| `network.device` | `{net.device.id}` = LLDP chassis-id (`lldpLoc/RemChassisId`), fallback management IP | frozen at the SNMP collection lot; not emitted before then |
+| `network.device` | `{network.device.id}` — a single subtype-prefixed value by **precedence**: `serial:` (ENTITY-MIB `entPhysicalSerialNum`) > `engine:` (`snmpEngineID`) > `mac:` (LLDP chassis-id) > `name:` (`sysName`) > `mgmt:` (mgmt IP) | **anchored on SNMP-immutable facts, not LLDP** (often disabled); `mgmt:` is mutable last-resort. Producer canonicalizes (Toise is byte-exact); raw parts descriptive. Endpoints resolved to the canonical id via `ifPhysAddress` before emitting edges. Frozen for Lot 5 — see [`otel-mapping.md`](./otel-mapping.md#networkdevice-identity--snmp-topology-lot-5-frozen). |
 
 ### Time & liveness — explicit delete + interval backstop
 
@@ -140,6 +140,9 @@ and later `netscaler`, `veeam`, `redfish`, `citrix`, `ibmi`, `network.device`
 - **Lot 1:** entities `host` + `service.instance`; relation `runs_on`.
 - **Lot 2:** monitored systems (`db` first); relation `monitors`.
 - **Lot 5 (SNMP):** `network.device` and `routes_via`/`forwards_to`/`adjacent_to`.
+  `network.device.id` and the relation shapes are **frozen** (precedence ladder +
+  canonicalization above); rollout 5a LLDP → 5b routing → 5c FDB → 5d ARP, with
+  identity anchored on SNMP (serial/engine) so it does not depend on LLDP.
 
 ### Planning & status
 

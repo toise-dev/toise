@@ -54,7 +54,7 @@ func buildConformanceLogs() plog.Logs {
 	}
 	// relation carries only the neutral relation lifecycle key (strict purity):
 	// no otel.entity.* attribute, so a standard OTel entity consumer ignores it.
-	relation := func(event, relType, fromType string, fromID map[string]any, toType string, toID map[string]any) {
+	relation := func(event, relType, fromType string, fromID map[string]any, toType string, toID map[string]any, attrs map[string]any) {
 		a := rec().Attributes()
 		a.PutStr(attrRelEventType, event)
 		a.PutStr(attrRelType, relType)
@@ -62,13 +62,21 @@ func buildConformanceLogs() plog.Logs {
 		putMap(a.PutEmptyMap(attrRelFromID), fromID)
 		a.PutStr(attrRelToType, toType)
 		putMap(a.PutEmptyMap(attrRelToID), toID)
+		if attrs != nil {
+			putMap(a.PutEmptyMap(attrRelAttrs), attrs)
+		}
 	}
 
 	hostID := map[string]any{"host.id": "h-001"}
 	agentID := map[string]any{"service.instance.id": "agent-7f3a"}
 	dbID := map[string]any{"db.instance.id": "postgresql:7311168095704935424"} // stable source id (PG system_identifier), NOT network-derived
-	sw1 := map[string]any{"network.device.id": "sw-01"}
-	sw2 := map[string]any{"network.device.id": "sw-02"}
+	// network.device.id is a single key whose value is subtype-prefixed and chosen
+	// by the producer's precedence: serial > engine > mac (LLDP) > name > mgmt.
+	// sw1 is anchored on its immutable ENTITY-MIB chassis serial; sw2 falls back to
+	// its LLDP chassis-id MAC, canonicalized lowercase colon-hex. Raw parts (sysName,
+	// mgmt IP) ride as descriptive attributes, never as identity.
+	sw1 := map[string]any{"network.device.id": "serial:FOC2150X0AB"}
+	sw2 := map[string]any{"network.device.id": "mac:00:1a:2b:3c:4d:5e"}
 
 	// 1-3: nodes (standard OTel). Endpoints exist before the edges reference them.
 	entity(evEntityState, model.TypeHost, hostID, map[string]any{"host.name": "web-server-1", "os.type": "linux"})
@@ -76,17 +84,20 @@ func buildConformanceLogs() plog.Logs {
 	entity(evEntityState, model.TypeDatabase, dbID, map[string]any{"db.system.name": "postgresql", "server.address": "10.0.1.5", "server.port": int64(5432)})
 	// 4-5: edges. The agent runs_on the host (Lot 1, deployment) and monitors the
 	// db (Lot 2, observation) — distinct relation types.
-	relation(evRelState, model.RelRunsOn, model.TypeServiceInstance, agentID, model.TypeHost, hostID)
-	relation(evRelState, model.RelMonitors, model.TypeServiceInstance, agentID, model.TypeDatabase, dbID)
+	relation(evRelState, model.RelRunsOn, model.TypeServiceInstance, agentID, model.TypeHost, hostID, nil)
+	relation(evRelState, model.RelMonitors, model.TypeServiceInstance, agentID, model.TypeDatabase, dbID, nil)
 	// 6: descriptive attribute added -> entity.attribute_updated.
 	entity(evEntityState, model.TypeDatabase, dbID, map[string]any{"db.system.name": "postgresql", "server.address": "10.0.1.5", "server.port": int64(5432), "db.connection.count": int64(12)})
 	// 7-8: the db goes away — remove its edge first (endpoints must be live), then delete it.
-	relation(evRelDelete, model.RelMonitors, model.TypeServiceInstance, agentID, model.TypeDatabase, dbID)
+	relation(evRelDelete, model.RelMonitors, model.TypeServiceInstance, agentID, model.TypeDatabase, dbID, nil)
 	entity(evEntityDelete, model.TypeDatabase, dbID, nil)
-	// 9-11: discovered network assets and a link-layer adjacency.
-	entity(evEntityState, model.TypeNetworkDevice, sw1, map[string]any{"device.role": "switch"})
-	entity(evEntityState, model.TypeNetworkDevice, sw2, map[string]any{"device.role": "switch"})
-	relation(evRelState, model.RelAdjacentTo, model.TypeNetworkDevice, sw1, model.TypeNetworkDevice, sw2)
+	// 9-11: discovered network assets (SNMP topology, Lot 5) and a link-layer
+	// adjacency. Identity is anchored on observer-independent SNMP facts (serial,
+	// then LLDP chassis-id); the mutable mgmt IP and sysName are descriptive only.
+	// adjacent_to is one directed edge polled->neighbor carrying the port pair.
+	entity(evEntityState, model.TypeNetworkDevice, sw1, map[string]any{"device.role": "switch", "sys.name": "core-sw-01", "mgmt.ip": "10.0.0.1"})
+	entity(evEntityState, model.TypeNetworkDevice, sw2, map[string]any{"device.role": "switch", "sys.name": "core-sw-02", "mgmt.ip": "10.0.0.2"})
+	relation(evRelState, model.RelAdjacentTo, model.TypeNetworkDevice, sw1, model.TypeNetworkDevice, sw2, map[string]any{"local_port": "Gi1/0/1", "remote_port": "Gi1/0/24"})
 
 	return logs
 }
@@ -154,7 +165,8 @@ func TestConformanceFixture(t *testing.T) {
 		}
 	}
 
-	// Final live graph: host, service.instance, sw-01, sw-02 (the db was deleted).
+	// Final live graph: host, service.instance, and the two network.devices
+	// (serial:… and mac:…); the db was deleted.
 	if got := graph.EntityCount(); got != 4 {
 		t.Errorf("EntityCount = %d, want 4", got)
 	}
