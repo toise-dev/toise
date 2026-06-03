@@ -39,10 +39,18 @@ identity hash). There is no tolerance.
   composite key" rule from the contract is no longer required; a composite key
   (e.g. `db.instance.id`) remains a good convention by choice, not to dodge a
   fuzzy merge.
-- The corollary for producers: **Ids must be immutable.** A mutable value (a pid, a
-  leased IP) must be a *descriptive attribute*, never an identifying one. The demo
-  models a process by its executable name with the pid as an attribute, so a
-  restart is an `attribute_updated`.
+- The corollary for producers: **Ids must be immutable.** A *bare* reused value
+  (a raw pid, a leased IP) is not an identity on its own — but it becomes a valid
+  immutable identity when paired with a discriminator that is stable for the
+  resource's lifetime. The OTel semconv `process` entity does exactly this: its
+  identity is **`process.pid` + `process.creation.time`** (the creation time
+  disambiguates PID reuse), so a real restart yields a new creation time — a
+  genuinely new process (delete + create) — while a descriptive change at the same
+  pid + creation time is an `attribute_updated`. Where no such lifetime-stable
+  discriminator exists — e.g. a `db` keyed by `host:port`, which moves under
+  DHCP/failover — the value stays descriptive and a stable source id is used instead.
+  (The demo, accordingly, models a process by `process.pid` + `process.creation.time`,
+  so a restart is a delete + create and a config reload is an `attribute_updated`.)
 - `entity.identity_changed` is **retained in the taxonomy and the proto enum** for
   wire compatibility and so the projection can still **replay** historical (or
   producer-signalled) identity-change events; it is simply never produced by the
