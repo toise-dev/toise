@@ -70,12 +70,13 @@ func buildConformanceLogs() plog.Logs {
 	hostID := map[string]any{"host.id": "h-001"}
 	agentID := map[string]any{"service.instance.id": "agent-7f3a"}
 	dbID := map[string]any{"db.instance.id": "postgresql:7311168095704935424"} // stable source id (PG system_identifier), NOT network-derived
-	// network.device.id is a single key whose value is subtype-prefixed and chosen
-	// by the producer's precedence: serial > engine > mac (LLDP) > name > mgmt.
-	// sw1 is anchored on its immutable ENTITY-MIB chassis serial; sw2 falls back to
-	// its LLDP chassis-id MAC, canonicalized lowercase colon-hex. Raw parts (sysName,
-	// mgmt IP) ride as descriptive attributes, never as identity.
-	sw1 := map[string]any{"network.device.id": "serial:FOC2150X0AB"}
+	// network.device.id is a single key whose value is subtype-prefixed and chosen by
+	// the producer's precedence: serial:<PEN>:<n> > engine: > mac: (LLDP) > name: >
+	// mgmt:. sw1 is anchored on its immutable ENTITY-MIB chassis serial, namespaced by
+	// the vendor PEN (here 9, Cisco) read from sysObjectID; sw2 falls back to its LLDP
+	// chassis-id MAC, lowercase colon-hex. Raw parts (sysName, mgmt IP) ride as
+	// descriptive attributes, never as identity.
+	sw1 := map[string]any{"network.device.id": "serial:9:FOC2150X0AB"}
 	sw2 := map[string]any{"network.device.id": "mac:00:1a:2b:3c:4d:5e"}
 
 	// 1-3: nodes (standard OTel). Endpoints exist before the edges reference them.

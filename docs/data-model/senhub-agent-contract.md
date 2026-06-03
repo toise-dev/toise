@@ -142,9 +142,11 @@ and later `netscaler`, `veeam`, `redfish`, `citrix`, `ibmi`, `network.device`
 - **Lot 5 (SNMP):** `network.device` and `routes_via`/`forwards_to`/`adjacent_to`.
   `network.device.id` and the relation shapes are **frozen** (precedence ladder +
   canonicalization above); rollout 5a LLDP → 5b routing → 5c FDB → 5d ARP, with
-  identity anchored on SNMP (serial/engine) so it does not depend on LLDP. Two
-  `serial:` *scope* semantics remain open pending the producer — cross-vendor
-  namespacing and stacked-device scope (see `otel-mapping.md`).
+  identity anchored on SNMP (serial/engine) so it does not depend on LLDP. The serial
+  tier is vendor-namespaced `serial:<PEN>:<n>` (PEN from `sysObjectID`) and fires only
+  with a single chassis + PEN; cross-vendor collisions and stacks (>1
+  `entPhysicalClass=3`) both fall back to the globally-unique `engine:<engineID>`
+  (see `otel-mapping.md`).
 
 ### Planning & status
 

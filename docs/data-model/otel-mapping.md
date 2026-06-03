@@ -238,8 +238,8 @@ producer from a fixed **precedence ladder** — highest available tier wins:
 
 | Tier | Value | Source | Why |
 |------|-------|--------|-----|
-| 1 | `serial:<n>` | ENTITY-MIB `entPhysicalSerialNum` (chassis row, `entPhysicalClass=3`) | immutable hardware id; no LLDP needed |
-| 2 | `engine:<hex>` | `snmpEngineID` | stable fallback when no serial |
+| 1 | `serial:<PEN>:<n>` | ENTITY-MIB `entPhysicalSerialNum`, namespaced by the IANA PEN from `sysObjectID` | immutable hardware id, vendor-namespaced; **only when a single chassis and a PEN are present** |
+| 2 | `engine:<hex>` | `snmpEngineID` | globally unique by construction (RFC 3411); the robust fallback — covers no-PEN **and stacks** (one engine id stack-wide) |
 | 3 | `mac:<addr>` | LLDP chassis-id (subtype 4) | strong, but **LLDP is often disabled** |
 | 4 | `name:<n>` | `sysName` | may be unset / non-unique |
 | 5 | `mgmt:<ip>` | the polled management address | last resort — **mutable**, so weakest |
@@ -255,16 +255,21 @@ is a *vendor-specific* `SnmpAdminString` (ENTITY-MIB, RFC 6933) and may be empty
 which is exactly why the ladder degrades. What is frozen is the **wrapping** (the
 prefix + the canonicalization below), not the content; observer-independence comes
 from *same OID, same device, same bytes*, not from a value format (the same is true
-of `host.id`, `db.instance.id`, etc.). Two `serial:` **semantics are open, pending
-producer confirmation**, and they are about identity *scope*, not format:
+of `host.id`, `db.instance.id`, etc.). Two `serial:` identity-*scope* hazards are
+handled by the top two tiers — neither is a format question:
 
-- **Cross-vendor uniqueness.** Serials are unique *per vendor*, not globally, so two
-  different-vendor devices could collide on one node under exact matching. A vendor
-  namespace (e.g. `serial:<sysObjectID-enterprise>:<n>`) may be needed; TBD with the
-  producer.
-- **Stacked-device scope.** A stack exposes one chassis serial per member; the rule
-  for which serial identifies the single logical device (a designated master, or one
-  `network.device` per member plus a relation) must be fixed. TBD with the producer.
+- **Cross-vendor uniqueness.** Serials are unique *per vendor*, not globally, so the
+  serial tier is **vendor-namespaced**: `serial:<PEN>:<n>`, where `<PEN>` is the IANA
+  Private Enterprise Number — the segment after `1.3.6.1.4.1.` in `sysObjectID`. The
+  serial tier fires **only when a PEN is readable**; otherwise it drops to `engine:`,
+  which is globally unique by construction (RFC 3411 embeds the PEN + vendor-unique
+  bytes) and so needs no namespace.
+- **Stacked-device scope.** The logical `network.device` is an **SNMP management
+  entity**. A stack — detected as **more than one `entPhysicalClass=3` chassis row**
+  in `entPhysicalTable` — is keyed by its single stack-wide `engine:<engineID>`,
+  **not** a per-member serial (a designated master would flip at failover and break
+  immutability). The physical members surface later as sub-components (entPhysical
+  inventory) and/or a `member` relation, never as the head node.
 
 **Canonicalization is the producer's responsibility** — Toise matches the id string
 byte-for-byte and never normalizes, so two agents must render identically:
