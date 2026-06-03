@@ -322,7 +322,13 @@ registry is:
 `runs_on` is the foundational producer edge — `service.instance --runs_on--> host`
 as well as the existing `process --runs_on--> host`. Endpoint-type pairings are
 **advisory** (not runtime-enforced), so `monitors` may target a host, db, or
-network.device. Further monitored-system types (e.g. those discovered by later
+network.device, and **`routes_via` / `adjacent_to` may be sourced from a `host`**
+(Lot 4: a host's own routing/ARP tables link it to discovered `network.device`s —
+`host --routes_via--> <gateway device>`, `host --adjacent_to--> <neighbor>`).
+Resolve each device endpoint to its canonical id where known (else provisional
+`mac:`/`mgmt:`); the host↔network.device *identity* twin (§6b) stays deferred — a
+host-sourced edge needs no merge, the `host` endpoint is the existing `host.id`
+entity. Further monitored-system types (e.g. those discovered by later
 collection lots) are added to the registry when introduced — the vocabulary is the
 explicit coordination point with a producer (see `senhub-agent-contract.md`).
 

@@ -38,7 +38,9 @@ const (
 // Producer-vocabulary relation types (senhub-agent integration). The From/To
 // entity types are the canonical pairing and are advisory — they are not
 // enforced at runtime, so a relation may legitimately connect other registered
-// types (notably `monitors`, whose target may be a host, db, or network.device).
+// types: `monitors`' target may be a host, db, or network.device, and
+// `routes_via`/`adjacent_to` may be sourced from a `host` (Lot 4: a host's own
+// routing/ARP tables link it to discovered network.devices).
 const (
 	RelMonitors   = "monitors"    // a service.instance monitors a target entity
 	RelRoutesVia  = "routes_via"  // a network.device routes traffic via another
