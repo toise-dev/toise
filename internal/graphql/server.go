@@ -82,5 +82,25 @@ func NewHandler(r *resolvers.Resolver, cfg Config) http.Handler {
 	srv.Use(extension.Introspection{})
 	srv.Use(extension.FixedComplexityLimit(cfg.ComplexityLimit))
 
-	return http.TimeoutHandler(srv, cfg.Timeout, timeoutBody)
+	// The per-request timeout uses http.TimeoutHandler, whose ResponseWriter
+	// does not implement http.Hijacker. A WebSocket subscription needs to hijack
+	// the connection to upgrade it, so routing the upgrade through the timeout
+	// makes every subscription fail ("response does not implement http.Hijacker").
+	// A timeout is meaningless for a long-lived subscription anyway: bound only
+	// the POST/GET request lifecycle, and let the upgrade reach srv untouched.
+	timed := http.TimeoutHandler(srv, cfg.Timeout, timeoutBody)
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if isWebSocketUpgrade(req) {
+			srv.ServeHTTP(w, req)
+			return
+		}
+		timed.ServeHTTP(w, req)
+	})
+}
+
+// isWebSocketUpgrade reports whether req is a WebSocket upgrade handshake. The
+// Connection header is a comma-separated token list (e.g. "keep-alive, Upgrade").
+func isWebSocketUpgrade(req *http.Request) bool {
+	return strings.EqualFold(req.Header.Get("Upgrade"), "websocket") &&
+		strings.Contains(strings.ToLower(req.Header.Get("Connection")), "upgrade")
 }
