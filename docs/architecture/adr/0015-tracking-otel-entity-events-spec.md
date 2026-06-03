@@ -42,6 +42,19 @@ versioning our internal model independently of it.
   spec version and the Toise schema is recorded in
   `docs/data-model/otel-mapping.md` and kept up to date as either side changes.
 
+### Tracked reconciliations
+
+Concrete divergences found against the spec and how they were resolved:
+
+- **Process entity identity (2026-06-03, issue #61).** Toise initially modeled the
+  `process` entity by `process.executable.name` (pid descriptive), and ADR 0018 used
+  "a pid is never identifying" as a blanket example. The semconv `process` identity
+  is **`process.pid` + `process.creation.time`** (the creation time disambiguates
+  PID reuse), so a bare pid is not identifying but the *pair* is. Reconciled: ADR 0018
+  wording softened, and `otel-mapping.md`, the demo, and the producer contract aligned
+  to the semconv identity. Surfaced by the OpenTelemetry community blog review
+  (opentelemetry.io#10124).
+
 ## Consequences
 
 - Some integration friction is accepted when new spec versions drop: a bump is

@@ -217,14 +217,18 @@ Under exact matching:
 - A single-key identity (`host.id`, the agent key) is **valid again** — no need for
   the "≥2 values / composite key" rule.
 
-The corollary for producers: **Ids must be immutable** — never put a mutable value
-(a pid, a leased IP, a **network address**) in the identity; those are descriptive
-attributes. In particular a `db` identity must be a **stable source identifier**
-(PostgreSQL `system_identifier`, MySQL `server_uuid`, or an operator-configured
-logical instance name), **not** a network-derived composite like
-`host:port` — the address moves under DHCP/failover/VIP, which would make the
-instance look like a brand-new entity and orphan its edges. `server.address` /
-`server.port` / `db.system.name` stay descriptive attributes.
+The corollary for producers: **Ids must be immutable.** A *bare* reused value is not
+an identity on its own, but becomes one when paired with a discriminator stable for
+the resource's lifetime — the OTel semconv `process` identity is **`process.pid` +
+`process.creation.time`** (the creation time disambiguates PID reuse), so a restart
+is a new process, not a mutated one, and `process.executable.name` stays descriptive.
+Where no such discriminator exists the value stays descriptive: a leased IP / **network
+address** is never identifying, and in particular a `db` identity must be a **stable
+source identifier** (PostgreSQL `system_identifier`, MySQL `server_uuid`, or an
+operator-configured logical instance name), **not** a network-derived composite like
+`host:port` — the address moves under DHCP/failover/VIP, which would make the instance
+look like a brand-new entity and orphan its edges. `server.address` / `server.port` /
+`db.system.name` stay descriptive attributes.
 
 *(Implemented: ADR 0017 is superseded by ADR 0018; the change engine matches
 exactly and no longer emits `entity.identity_changed`, though the type is retained

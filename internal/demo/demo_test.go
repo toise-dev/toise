@@ -38,25 +38,29 @@ func TestScenarioFinalGraph(t *testing.T) {
 		t.Errorf("EntityCount = %d, want 9", got)
 	}
 
-	// nginx survived a restart as one logical entity: identity is its executable
-	// name, the pid is a descriptive attribute that the restart updated to 1010.
+	// nginx restarted into a NEW process entity (semconv identity = process.pid +
+	// process.creation.time): exactly one nginx is live, and it is the restarted
+	// one (pid 1010); the pre-restart pid 1001 is gone. The executable name is a
+	// descriptive attribute.
 	var nginx []model.Entity
 	for _, e := range graph.ListEntities(model.TypeProcess) {
-		for _, kv := range e.Identity {
-			if kv.Key == "process.executable.name" && kv.Value.Str() == "nginx" {
-				nginx = append(nginx, e)
-			}
+		if attrStr(e, "process.executable.name") == "nginx" {
+			nginx = append(nginx, e)
 		}
 	}
 	if len(nginx) != 1 {
 		t.Fatalf("want exactly one nginx process, got %d", len(nginx))
 	}
-	if pid := attrInt(nginx[0], "process.pid"); pid != 1010 {
-		t.Errorf("nginx pid attribute = %d, want 1010 (updated on restart)", pid)
+	if pid := identInt(nginx[0], "process.pid"); pid != 1010 {
+		t.Errorf("live nginx identity pid = %d, want 1010 (the restarted process)", pid)
 	}
 
 	// dockerd crashed and is gone; the old addresses/gateway are gone.
-	assertAbsent(t, graph, model.TypeProcess, "process.executable.name", "dockerd")
+	for _, e := range graph.ListEntities(model.TypeProcess) {
+		if attrStr(e, "process.executable.name") == "dockerd" {
+			t.Error("dockerd should be gone (deleted) but a process still reports it")
+		}
+	}
 	assertAbsent(t, graph, model.TypeNetworkAddress, "network.address", "10.0.1.5")
 	assertAbsent(t, graph, model.TypeNetworkAddress, "network.address", "10.0.1.1")
 }
@@ -116,8 +120,17 @@ func TestScenarioLateRecordedFact(t *testing.T) {
 	}
 }
 
-func attrInt(e model.Entity, key string) int64 {
+func attrStr(e model.Entity, key string) string {
 	for _, kv := range e.Attributes {
+		if kv.Key == key {
+			return kv.Value.Str()
+		}
+	}
+	return ""
+}
+
+func identInt(e model.Entity, key string) int64 {
+	for _, kv := range e.Identity {
 		if kv.Key == key {
 			return kv.Value.Int()
 		}
