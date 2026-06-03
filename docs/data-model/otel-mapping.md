@@ -249,6 +249,23 @@ LLDP is frequently off, and `mgmt:<ip>` is network-derived (the `db` anti-patter
 The raw parts (`sysName`, management IP, vendor, model) ride as **descriptive
 attributes**, never as identity.
 
+**Values are opaque pass-through tokens** — Toise never parses or validates them.
+There is deliberately **no standard for the serial's content**: `entPhysicalSerialNum`
+is a *vendor-specific* `SnmpAdminString` (ENTITY-MIB, RFC 6933) and may be empty —
+which is exactly why the ladder degrades. What is frozen is the **wrapping** (the
+prefix + the canonicalization below), not the content; observer-independence comes
+from *same OID, same device, same bytes*, not from a value format (the same is true
+of `host.id`, `db.instance.id`, etc.). Two `serial:` **semantics are open, pending
+producer confirmation**, and they are about identity *scope*, not format:
+
+- **Cross-vendor uniqueness.** Serials are unique *per vendor*, not globally, so two
+  different-vendor devices could collide on one node under exact matching. A vendor
+  namespace (e.g. `serial:<sysObjectID-enterprise>:<n>`) may be needed; TBD with the
+  producer.
+- **Stacked-device scope.** A stack exposes one chassis serial per member; the rule
+  for which serial identifies the single logical device (a designated master, or one
+  `network.device` per member plus a relation) must be fixed. TBD with the producer.
+
 **Canonicalization is the producer's responsibility** — Toise matches the id string
 byte-for-byte and never normalizes, so two agents must render identically:
 
