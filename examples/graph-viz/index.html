@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Toise — Graph</title>
+<!--
+  Example consumer of the Toise GraphQL API — NOT part of toise-server.
+  A standalone, dependency-free page (vis-network from a CDN) that loads the
+  entity/relation graph with a query and then streams live changes over the
+  entityChanged / relationChanged subscriptions. See README.md.
+
+  Endpoint: defaults to a same-origin /graphql (serve this file behind the same
+  proxy as toise-server). Override with ?api=https://host:port/graphql.
+-->
+<script src="https://cdn.jsdelivr.net/npm/vis-network@9.1.9/standalone/umd/vis-network.min.js" integrity="sha384-yxKDWWf0wwdUj/gPeuL11czrnKFQROnLgY8ll7En9NYoXibgg3C6NK/UDHNtUgWJ" crossorigin="anonymous"></script>
+<style>
+:root{--bg:#0d1117;--panel:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;--accent:#58a6ff;--warn:#d29922;--ok:#3fb950;}
+*{box-sizing:border-box;}
+html,body{height:100%;margin:0;}
+body{background:var(--bg);color:var(--fg);font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;display:flex;flex-direction:column;}
+header{display:flex;align-items:center;gap:1rem;padding:.5rem 1rem;background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap;}
+header .brand{font-weight:700;}
+header .tag{color:var(--dim);font-size:12px;border:1px solid var(--line);border-radius:4px;padding:0 .35rem;}
+header nav{display:flex;gap:1rem;}
+header a{color:var(--accent);text-decoration:none;}
+header a:hover{text-decoration:underline;}
+.stats{margin-left:auto;display:flex;gap:1rem;align-items:center;color:var(--dim);font-size:12px;flex-wrap:wrap;}
+.stats b{color:var(--fg);}
+#status{display:flex;align-items:center;gap:.35rem;}
+#status i{width:9px;height:9px;border-radius:50%;display:inline-block;background:var(--dim);}
+#status.live i{background:var(--ok);box-shadow:0 0 6px var(--ok);}
+#status.poll i{background:var(--warn);}
+#status.down i{background:#ff7b72;}
+.pulse{animation:p 1.2s ease-out;}
+@keyframes p{from{box-shadow:0 0 0 0 var(--accent);}to{box-shadow:0 0 0 14px rgba(88,166,255,0);}}
+main{flex:1;display:flex;min-height:0;}
+#net{flex:1;min-width:0;}
+aside{width:320px;border-left:1px solid var(--line);background:var(--panel);overflow:auto;padding:.8rem;}
+aside h2{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;margin:.2rem 0 .6rem;}
+aside table{border-collapse:collapse;width:100%;}
+aside td{padding:.25rem .4rem;border-bottom:1px solid var(--line);vertical-align:top;word-break:break-word;}
+aside td.k{color:var(--dim);white-space:nowrap;}
+.legend{display:flex;flex-wrap:wrap;gap:.4rem .8rem;padding:.5rem 1rem;background:var(--panel);border-bottom:1px solid var(--line);font-size:12px;}
+.legend span{display:flex;align-items:center;gap:.3rem;cursor:pointer;opacity:.85;}
+.legend span.off{opacity:.3;text-decoration:line-through;}
+.legend i{width:11px;height:11px;border-radius:50%;display:inline-block;}
+.muted{color:var(--dim);}
+.empty{color:var(--dim);padding:2rem;text-align:center;}
+button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:.2rem .5rem;font:inherit;cursor:pointer;}
+#feed{font-size:11px;color:var(--dim);max-height:30vh;overflow:auto;margin-top:.4rem;}
+#feed div{padding:.15rem 0;border-bottom:1px solid var(--line);}
+#err{color:var(--warn);font-size:12px;}
+</style>
+</head>
+<body>
+<header>
+  <span class="brand">Toise</span><span class="tag">graph</span>
+  <nav>
+    <a href="/">Dashboard</a><a href="/entities">Entities</a><a href="/changes">Changes</a><a href="/playground">GraphQL</a>
+  </nav>
+  <div class="stats">
+    <span id="err"></span>
+    <span id="status"><i></i><span id="statusTxt">connecting…</span></span>
+    <span><b id="nNodes">0</b> entities</span>
+    <span><b id="nEdges">0</b> relations</span>
+    <button id="resync">resync</button>
+    <button id="fit">fit</button>
+  </div>
+</header>
+<div class="legend" id="legend"></div>
+<main>
+  <div id="net"></div>
+  <aside id="panel">
+    <div class="empty">Click a node to inspect its identity &amp; attributes.</div>
+    <h2 style="margin-top:1rem">Live feed</h2>
+    <div id="feed"></div>
+  </aside>
+</main>
+<script>
+// GraphQL endpoint: same-origin /graphql by default; override with ?api=...
+const API=new URLSearchParams(location.search).get('api')||'/graphql';
+function wsURL(){ let u; try{ u=new URL(API,location.href); }catch{ u=new URL('/graphql',location.href); }
+  u.protocol=(u.protocol==='https:'?'wss:':'ws:'); return u.toString(); }
+
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const PALETTE=["#58a6ff","#3fb950","#d29922","#bc8cff","#f778ba","#39c5cf","#ff7b72","#a5d6ff","#7ee787","#ffa657","#d2a8ff","#79c0ff"];
+const typeColor={};
+const colorFor=t=>{ if(!(t in typeColor)) typeColor[t]=PALETTE[Object.keys(typeColor).length%PALETTE.length]; return typeColor[t]; };
+const hidden=new Set();
+const ENT={}, REL={};
+const nodes=new vis.DataSet(), edges=new vis.DataSet();
+let fitted=false;
+
+const net=new vis.Network(document.getElementById('net'),{nodes,edges},{
+  nodes:{shape:'dot',size:14,font:{color:'#c9d1d9',face:'ui-monospace, monospace',size:12,strokeWidth:3,strokeColor:'#0d1117'},borderWidth:2},
+  edges:{color:{color:'#30363d',highlight:'#58a6ff'},font:{color:'#8b949e',size:10,strokeWidth:3,strokeColor:'#0d1117',align:'middle'},
+         arrows:{to:{enabled:true,scaleFactor:.5}},smooth:{type:'dynamic'}},
+  physics:{barnesHut:{gravitationalConstant:-9000,springLength:130,springConstant:.03,damping:.5},stabilization:{iterations:180}},
+  interaction:{hover:true,tooltipDelay:120,multiselect:true}
+});
+
+function labelOf(n){
+  const id=(n.identity||[]);
+  if(id.length){ const named=id.find(a=>/(^|\.)(name|id|endpoint|address)$/i.test(a.key));
+    return (named?named.value:id.map(a=>a.value).join('·')).toString(); }
+  return n.type+' '+n.id.slice(0,6);
+}
+
+let rebuildTimer=null;
+function scheduleRebuild(){ if(rebuildTimer) return; rebuildTimer=setTimeout(()=>{rebuildTimer=null;rebuild();},250); }
+function rebuild(){
+  const allTypes=new Set(), nodeIds=new Set(), nUp=[];
+  Object.values(ENT).forEach(n=>{ allTypes.add(n.type); if(hidden.has(n.type)) return; nodeIds.add(n.id);
+    nUp.push({id:n.id,label:labelOf(n),title:n.type,opacity:n.deleted?0.45:1,
+              color:{background:colorFor(n.type),border:n.deleted?'#d29922':'#0d1117'}}); });
+  nodes.update(nUp);
+  nodes.getIds().forEach(id=>{ if(!nodeIds.has(id)) nodes.remove(id); });
+  const edgeIds=new Set(), eUp=[];
+  Object.values(REL).forEach(r=>{ if(nodeIds.has(r.fromId)&&nodeIds.has(r.toId)){ edgeIds.add(r.id);
+    eUp.push({id:r.id,from:r.fromId,to:r.toId,label:r.type}); } });
+  edges.update(eUp);
+  edges.getIds().forEach(id=>{ if(!edgeIds.has(id)) edges.remove(id); });
+  document.getElementById('nNodes').textContent=nodeIds.size;
+  document.getElementById('nEdges').textContent=edgeIds.size;
+  const leg=document.getElementById('legend'); leg.innerHTML='';
+  [...allTypes].sort().forEach(t=>{ const s=document.createElement('span'); s.className=hidden.has(t)?'off':'';
+    s.innerHTML='<i style="background:'+colorFor(t)+'"></i>'+esc(t);
+    s.onclick=()=>{ hidden.has(t)?hidden.delete(t):hidden.add(t); rebuild(); }; leg.appendChild(s); });
+  if(!fitted && nodeIds.size){ fitted=true; setTimeout(()=>net.fit({animation:false}),300); }
+}
+
+const FULL=`{ entities(first:2000){ edges{ node{ id type deleted identity{key value} attributes{key value} } } }
+             relations(first:4000){ edges{ node{ id type fromId toId } } } }`;
+async function loadFull(){
+  const err=document.getElementById('err'); err.textContent='';
+  try{
+    const r=await fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({query:FULL})});
+    const j=await r.json(); if(j.errors) throw new Error(j.errors[0].message);
+    for(const k in ENT) delete ENT[k]; for(const k in REL) delete REL[k];
+    j.data.entities.edges.forEach(e=>ENT[e.node.id]=e.node);
+    j.data.relations.edges.forEach(e=>REL[e.node.id]=e.node);
+    rebuild();
+  }catch(e){ err.textContent='⚠ '+e.message; }
+}
+
+function feed(txt){ const f=document.getElementById('feed'); if(!f) return; const d=document.createElement('div');
+  d.textContent=new Date().toLocaleTimeString()+'  '+txt; f.prepend(d);
+  while(f.childNodes.length>40) f.removeChild(f.lastChild); }
+function flashStatus(){ const i=document.querySelector('#status i'); i.classList.remove('pulse'); void i.offsetWidth; i.classList.add('pulse'); }
+
+function applyEntity(ce){ const n=ce&&ce.entity; if(!n) return;
+  if(ce.changeType==='ENTITY_DELETED') n.deleted=true;
+  ENT[n.id]=n; scheduleRebuild();
+  if(ce.changeType!=='ENTITY_UNCHANGED'){ feed(ce.changeType+'  '+n.type+' '+labelOf(n)); flashStatus(); } }
+function applyRelation(ce){ const r=ce&&ce.relation; if(!r) return;
+  if(ce.changeType==='RELATION_DELETED') delete REL[r.id]; else REL[r.id]=r;
+  scheduleRebuild();
+  if(ce.changeType!=='RELATION_UNCHANGED'){ feed(ce.changeType+'  '+r.type); flashStatus(); } }
+
+net.on('click',p=>{
+  const panel=document.getElementById('panel');
+  const head='<h2 style="margin-top:1rem">Live feed</h2><div id="feed"></div>';
+  if(!p.nodes.length){ panel.innerHTML='<div class="empty">Click a node to inspect its identity &amp; attributes.</div>'+head; return; }
+  const n=ENT[p.nodes[0]]; if(!n) return;
+  const rows=a=>(a||[]).map(x=>'<tr><td class="k">'+esc(x.key)+'</td><td>'+esc(x.value)+'</td></tr>').join('')||'<tr><td class="muted" colspan=2>—</td></tr>';
+  panel.innerHTML='<h2>'+esc(n.type)+(n.deleted?' <span class="muted">(deleted)</span>':'')+'</h2>'
+    +'<h2>Identity</h2><table>'+rows(n.identity)+'</table>'
+    +'<h2>Attributes</h2><table>'+rows(n.attributes)+'</table>'
+    +'<h2>id</h2><div class="muted" style="word-break:break-all">'+esc(n.id)+'</div>'+head;
+});
+
+// Realtime: graphql-transport-ws subscriptions, with polling fallback.
+const ENT_SUB='subscription{ entityChanged{ changeType entity{ id type deleted identity{key value} attributes{key value} } } }';
+const REL_SUB='subscription{ relationChanged{ changeType relation{ id type fromId toId } } }';
+let ws=null, pollTimer=null, retry=0, acked=false;
+function setStatus(cls,txt){ const s=document.getElementById('status'); s.className=cls; document.getElementById('statusTxt').textContent=txt; }
+function startPolling(){ if(!pollTimer) pollTimer=setInterval(loadFull,6000); }
+function stopPolling(){ if(pollTimer){ clearInterval(pollTimer); pollTimer=null; } }
+
+function connect(){
+  acked=false; setStatus('','connecting…');
+  try{ ws=new WebSocket(wsURL(),'graphql-transport-ws'); }catch(e){ fallback(); return; }
+  ws.onopen=()=>ws.send(JSON.stringify({type:'connection_init'}));
+  ws.onmessage=ev=>{ let m; try{ m=JSON.parse(ev.data); }catch{ return; }
+    if(m.type==='connection_ack'){ acked=true; retry=0; stopPolling(); setStatus('live','live (ws)');
+      ws.send(JSON.stringify({id:'ent',type:'subscribe',payload:{query:ENT_SUB}}));
+      ws.send(JSON.stringify({id:'rel',type:'subscribe',payload:{query:REL_SUB}}));
+      loadFull(); }
+    else if(m.type==='ping'){ ws.send(JSON.stringify({type:'pong'})); }
+    else if(m.type==='next'){ const d=m.payload&&m.payload.data; if(!d) return;
+      if(d.entityChanged) applyEntity(d.entityChanged);
+      if(d.relationChanged) applyRelation(d.relationChanged); }
+    else if(m.type==='error'){ feed('subscription error'); }
+  };
+  ws.onclose=()=>{ if(acked) setStatus('down','reconnecting…'); else fallback(); scheduleReconnect(); };
+  ws.onerror=()=>{ try{ws.close();}catch{} };
+}
+function fallback(){ setStatus('poll','polling (ws off)'); startPolling(); }
+function scheduleReconnect(){ const wait=Math.min(2000*Math.pow(1.6,retry++),15000); if(!acked) startPolling(); setTimeout(connect,wait); }
+
+document.getElementById('resync').onclick=loadFull;
+document.getElementById('fit').onclick=()=>net.fit({animation:true});
+loadFull().then(connect);
+</script>
+</body>
+</html>
