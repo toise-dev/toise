@@ -23,10 +23,17 @@ vendor/
 # Build artifacts
 bin/
 dist/
-# Binary produced by `go build .` at the module root (module name == toise)
+# Binaries produced by `go build ./cmd/...` at the module root
 /toise
+/toise-demo
+/toise-probe
 # Compiled binary of the throwaway Pebble PoC (scratch module)
 /scratch/pebble-poc/pebble-poc
+
+# Local data directories (Pebble event log written by toise-server / demos)
+/toise-data/
+/toise-demo-data/
+/live-data/
 
 # Editors / IDEs
 .idea/
