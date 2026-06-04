@@ -171,3 +171,60 @@ func TestReceiverEntityDelete(t *testing.T) {
 		t.Errorf("after delete: %d live entities, want 0", g.EntityCount())
 	}
 }
+
+// embeddedEntity appends an entity-state record carrying an embedded
+// `entity.relationships` array (the OTel spec form, PR #4836) to sl.
+func embeddedEntity(sl plog.ScopeLogs, when time.Time, typ string, id map[string]string, rels []relDesc) {
+	lr := sl.LogRecords().AppendEmpty()
+	lr.SetTimestamp(pcommon.NewTimestampFromTime(when))
+	a := lr.Attributes()
+	a.PutStr(attrEventType, evEntityState)
+	a.PutStr(attrEntityType, typ)
+	idm := a.PutEmptyMap(attrEntityID)
+	for k, v := range id {
+		idm.PutStr(k, v)
+	}
+	if rels != nil {
+		slv := a.PutEmptySlice(attrEntityRelationships)
+		for _, d := range rels {
+			m := slv.AppendEmpty().SetEmptyMap()
+			m.PutStr(relDescType, d.relType)
+			m.PutStr(relDescEntityType, d.toType)
+			tid := m.PutEmptyMap(relDescEntityID)
+			for k, v := range d.toID {
+				tid.PutStr(k, v)
+			}
+		}
+	}
+}
+
+// TestReceiverEmbeddedRelationships exercises the spec's embedded relationship
+// model end-to-end: a relation embedded on an entity-state event is ingested, and
+// re-emitting the source without it removes the relation.
+func TestReceiverEmbeddedRelationships(t *testing.T) {
+	client, g := startReceiver(t)
+
+	ld := plog.NewLogs()
+	sl := ld.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty()
+	entityRecord(sl, evEntityState, model.TypeHost, map[string]string{"host.id": "h1"}, nil)
+	embeddedEntity(sl, t0, model.TypeServiceInstance, map[string]string{"service.instance.id": "s1"},
+		[]relDesc{{relType: model.RelRunsOn, toType: model.TypeHost, toID: map[string]string{"host.id": "h1"}}})
+	export(t, client, ld)
+
+	if g.RelationCount() != 1 {
+		t.Fatalf("RelationCount = %d, want 1 (embedded runs_on)", g.RelationCount())
+	}
+	if n := len(g.ListRelations(model.RelRunsOn, "", "")); n != 1 {
+		t.Errorf("runs_on relations = %d, want 1", n)
+	}
+
+	// Re-emit s1 with no relationships — the runs_on is removed by absence.
+	ld2 := plog.NewLogs()
+	sl2 := ld2.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty()
+	embeddedEntity(sl2, t0.Add(time.Minute), model.TypeServiceInstance, map[string]string{"service.instance.id": "s1"}, nil)
+	export(t, client, ld2)
+
+	if g.RelationCount() != 0 {
+		t.Errorf("RelationCount = %d after dropping the embedded relationship, want 0", g.RelationCount())
+	}
+}
