@@ -326,16 +326,19 @@ supersedes `adjacent_to` + port attributes. Likewise a route's `metric` rides on
 `network.route` entity, an address's `preferred` flag on the `network.address`
 entity, and **provenance** (how an edge was observed) on the **instrumentation
 scope**, never on the edge. Device-level `adjacent_to` becomes a **derived** read-side
-view (a surcouche), not a stored fact. `connected_to` is **registered now**; the
-producer emission migrates with the contract resync (the `adjacent_to`+ports form
-above remains the transitional shape until then).
+view (a surcouche), not a stored fact. `connected_to` is **registered** and the
+**conformance fixture now demonstrates this target model** (port entities + bare
+`connected_to`). The producer emission migrates with the contract resync; Toise still
+**ingests** the transitional `adjacent_to`+ports form above until the producer is
+moved over.
 
 **Cadence:** poll topology **slower than metrics** (≈5–15 min); set
 `otel.entity.interval` to ≈**3× the topology cadence** (not the metric cadence) or
 the liveness sweeper reaps devices between polls. Emit a **full snapshot per cycle
 as one OTLP export** (one batched durable append); **no sampling** — a partial
-snapshot would read as deletes. The committed conformance fixture carries the frozen
-`serial:`/`mac:` example with an `adjacent_to` edge.
+snapshot would read as deletes. The committed conformance fixture carries the
+`serial:`/`mac:` switches with their **`network.interface` ports** and a bare
+**`connected_to`** edge (the topology-as-entities model).
 
 *(A weighted multi-source identity model — evidence + `same_as` edges with
 `confidence` + a derived canonical view — is the additive Phase-2 path for sources

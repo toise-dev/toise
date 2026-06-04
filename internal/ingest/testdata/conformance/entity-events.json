@@ -557,6 +557,126 @@
             {
               "attributes": [
                 {
+                  "key": "otel.entity.event.type",
+                  "value": {
+                    "stringValue": "entity_state"
+                  }
+                },
+                {
+                  "key": "otel.entity.type",
+                  "value": {
+                    "stringValue": "network.interface"
+                  }
+                },
+                {
+                  "key": "otel.entity.id",
+                  "value": {
+                    "kvlistValue": {
+                      "values": [
+                        {
+                          "key": "interface.name",
+                          "value": {
+                            "stringValue": "Gi1/0/1"
+                          }
+                        },
+                        {
+                          "key": "network.device.id",
+                          "value": {
+                            "stringValue": "serial:9:FOC2150X0AB"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "otel.entity.attributes",
+                  "value": {
+                    "kvlistValue": {
+                      "values": [
+                        {
+                          "key": "oper_state",
+                          "value": {
+                            "stringValue": "up"
+                          }
+                        },
+                        {
+                          "key": "speed",
+                          "value": {
+                            "intValue": "1000000000"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "body": {},
+              "timeUnixNano": "1780272540000000000"
+            },
+            {
+              "attributes": [
+                {
+                  "key": "otel.entity.event.type",
+                  "value": {
+                    "stringValue": "entity_state"
+                  }
+                },
+                {
+                  "key": "otel.entity.type",
+                  "value": {
+                    "stringValue": "network.interface"
+                  }
+                },
+                {
+                  "key": "otel.entity.id",
+                  "value": {
+                    "kvlistValue": {
+                      "values": [
+                        {
+                          "key": "interface.name",
+                          "value": {
+                            "stringValue": "Gi1/0/24"
+                          }
+                        },
+                        {
+                          "key": "network.device.id",
+                          "value": {
+                            "stringValue": "mac:00:1a:2b:3c:4d:5e"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "otel.entity.attributes",
+                  "value": {
+                    "kvlistValue": {
+                      "values": [
+                        {
+                          "key": "oper_state",
+                          "value": {
+                            "stringValue": "up"
+                          }
+                        },
+                        {
+                          "key": "speed",
+                          "value": {
+                            "intValue": "1000000000"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "body": {},
+              "timeUnixNano": "1780272600000000000"
+            },
+            {
+              "attributes": [
+                {
                   "key": "entity.relation.event.type",
                   "value": {
                     "stringValue": "state"
@@ -565,7 +685,7 @@
                 {
                   "key": "entity.relation.type",
                   "value": {
-                    "stringValue": "adjacent_to"
+                    "stringValue": "has_interface"
                   }
                 },
                 {
@@ -592,11 +712,56 @@
                 {
                   "key": "entity.relation.to.type",
                   "value": {
-                    "stringValue": "network.device"
+                    "stringValue": "network.interface"
                   }
                 },
                 {
                   "key": "entity.relation.to.id",
+                  "value": {
+                    "kvlistValue": {
+                      "values": [
+                        {
+                          "key": "interface.name",
+                          "value": {
+                            "stringValue": "Gi1/0/1"
+                          }
+                        },
+                        {
+                          "key": "network.device.id",
+                          "value": {
+                            "stringValue": "serial:9:FOC2150X0AB"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "body": {},
+              "timeUnixNano": "1780272660000000000"
+            },
+            {
+              "attributes": [
+                {
+                  "key": "entity.relation.event.type",
+                  "value": {
+                    "stringValue": "state"
+                  }
+                },
+                {
+                  "key": "entity.relation.type",
+                  "value": {
+                    "stringValue": "has_interface"
+                  }
+                },
+                {
+                  "key": "entity.relation.from.type",
+                  "value": {
+                    "stringValue": "network.device"
+                  }
+                },
+                {
+                  "key": "entity.relation.from.id",
                   "value": {
                     "kvlistValue": {
                       "values": [
@@ -611,20 +776,26 @@
                   }
                 },
                 {
-                  "key": "entity.relation.attributes",
+                  "key": "entity.relation.to.type",
+                  "value": {
+                    "stringValue": "network.interface"
+                  }
+                },
+                {
+                  "key": "entity.relation.to.id",
                   "value": {
                     "kvlistValue": {
                       "values": [
                         {
-                          "key": "local_port",
+                          "key": "interface.name",
                           "value": {
-                            "stringValue": "Gi1/0/1"
+                            "stringValue": "Gi1/0/24"
                           }
                         },
                         {
-                          "key": "remote_port",
+                          "key": "network.device.id",
                           "value": {
-                            "stringValue": "Gi1/0/24"
+                            "stringValue": "mac:00:1a:2b:3c:4d:5e"
                           }
                         }
                       ]
@@ -633,7 +804,79 @@
                 }
               ],
               "body": {},
-              "timeUnixNano": "1780272540000000000"
+              "timeUnixNano": "1780272720000000000"
+            },
+            {
+              "attributes": [
+                {
+                  "key": "entity.relation.event.type",
+                  "value": {
+                    "stringValue": "state"
+                  }
+                },
+                {
+                  "key": "entity.relation.type",
+                  "value": {
+                    "stringValue": "connected_to"
+                  }
+                },
+                {
+                  "key": "entity.relation.from.type",
+                  "value": {
+                    "stringValue": "network.interface"
+                  }
+                },
+                {
+                  "key": "entity.relation.from.id",
+                  "value": {
+                    "kvlistValue": {
+                      "values": [
+                        {
+                          "key": "interface.name",
+                          "value": {
+                            "stringValue": "Gi1/0/1"
+                          }
+                        },
+                        {
+                          "key": "network.device.id",
+                          "value": {
+                            "stringValue": "serial:9:FOC2150X0AB"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "entity.relation.to.type",
+                  "value": {
+                    "stringValue": "network.interface"
+                  }
+                },
+                {
+                  "key": "entity.relation.to.id",
+                  "value": {
+                    "kvlistValue": {
+                      "values": [
+                        {
+                          "key": "interface.name",
+                          "value": {
+                            "stringValue": "Gi1/0/24"
+                          }
+                        },
+                        {
+                          "key": "network.device.id",
+                          "value": {
+                            "stringValue": "mac:00:1a:2b:3c:4d:5e"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "body": {},
+              "timeUnixNano": "1780272780000000000"
             }
           ],
           "scope": {}
