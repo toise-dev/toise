@@ -1,6 +1,9 @@
 # 20. Weighted multi-source identity (evidence + same_as + canonical view)
 
-- Status: Proposed — Phase 2 draft (not implemented)
+- Status: Proposed — Phase 2 draft (not implemented). **Reclassified as a *surcouche*
+  by ADR 0022**: weighted multi-source identity (evidence + `same_as` + canonical view)
+  is *supposed* correlation, so it lives outside the fact-only engine — in a consumer
+  or a clearly separated optional layer, never in the source of truth.
 - Date: 2026-06-03
 
 ## Context
