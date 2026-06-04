@@ -119,13 +119,22 @@ func buildConformanceLogs() plog.Logs {
 	// 7-8: the db goes away — remove its edge first (endpoints must be live), then delete it.
 	relation(evRelDelete, model.RelMonitors, model.TypeServiceInstance, agentID, model.TypeDatabase, dbID, nil)
 	entity(evEntityDelete, model.TypeDatabase, dbID, nil)
-	// 9-11: discovered network assets (SNMP topology, Lot 5) and a link-layer
-	// adjacency. Identity is anchored on observer-independent SNMP facts (serial,
-	// then LLDP chassis-id); the mutable mgmt IP and sysName are descriptive only.
-	// adjacent_to is one directed edge polled->neighbor carrying the port pair.
+	// 9-15: discovered network assets as the topology-as-entities model (ADR 0022):
+	// switches, their **ports as `network.interface` entities**, and a **bare
+	// `connected_to`** (port-to-port) adjacency. No edge attributes — the ports carry
+	// their own facts (oper_state, speed); device-level adjacency is *derived* at read,
+	// not stored. Device identity stays anchored on observer-independent SNMP facts;
+	// the mutable mgmt IP and sysName are descriptive only. Port identity is composite
+	// (the device id + the interface name). Endpoints exist before their edges.
+	porta := map[string]any{"network.device.id": "serial:9:FOC2150X0AB", "interface.name": "Gi1/0/1"}
+	portb := map[string]any{"network.device.id": "mac:00:1a:2b:3c:4d:5e", "interface.name": "Gi1/0/24"}
 	entity(evEntityState, model.TypeNetworkDevice, sw1, map[string]any{"device.role": "switch", "sys.name": "core-sw-01", "mgmt.ip": "10.0.0.1"})
 	entity(evEntityState, model.TypeNetworkDevice, sw2, map[string]any{"device.role": "switch", "sys.name": "core-sw-02", "mgmt.ip": "10.0.0.2"})
-	relation(evRelState, model.RelAdjacentTo, model.TypeNetworkDevice, sw1, model.TypeNetworkDevice, sw2, map[string]any{"local_port": "Gi1/0/1", "remote_port": "Gi1/0/24"})
+	entity(evEntityState, model.TypeNetworkInterface, porta, map[string]any{"oper_state": "up", "speed": int64(1_000_000_000)})
+	entity(evEntityState, model.TypeNetworkInterface, portb, map[string]any{"oper_state": "up", "speed": int64(1_000_000_000)})
+	relation(evRelState, model.RelHasInterface, model.TypeNetworkDevice, sw1, model.TypeNetworkInterface, porta, nil)
+	relation(evRelState, model.RelHasInterface, model.TypeNetworkDevice, sw2, model.TypeNetworkInterface, portb, nil)
+	relation(evRelState, model.RelConnectedTo, model.TypeNetworkInterface, porta, model.TypeNetworkInterface, portb, nil)
 
 	return logs
 }
@@ -200,14 +209,14 @@ func TestConformanceFixture(t *testing.T) {
 		}
 	}
 
-	// Final live graph: host, service.instance, and the two network.devices
-	// (serial:… and mac:…); the db was deleted.
-	if got := graph.EntityCount(); got != 4 {
-		t.Errorf("EntityCount = %d, want 4", got)
+	// Final live graph: host, service.instance, the two network.devices (serial:… and
+	// mac:…) and their two network.interface ports; the db was deleted.
+	if got := graph.EntityCount(); got != 6 {
+		t.Errorf("EntityCount = %d, want 6", got)
 	}
 	counts := graph.CountByType()
 	for typ, want := range map[string]int{
-		model.TypeHost: 1, model.TypeServiceInstance: 1, model.TypeNetworkDevice: 2,
+		model.TypeHost: 1, model.TypeServiceInstance: 1, model.TypeNetworkDevice: 2, model.TypeNetworkInterface: 2,
 	} {
 		if counts[typ] != want {
 			t.Errorf("live %s = %d, want %d", typ, counts[typ], want)
@@ -216,8 +225,9 @@ func TestConformanceFixture(t *testing.T) {
 	if counts[model.TypeDatabase] != 0 {
 		t.Errorf("db should be deleted, but %d live", counts[model.TypeDatabase])
 	}
-	if got := graph.RelationCount(); got != 2 {
-		t.Errorf("RelationCount = %d, want 2 (runs_on->host, adjacent_to)", got)
+	// runs_on (embedded) + 2× has_interface + connected_to; monitors was removed.
+	if got := graph.RelationCount(); got != 4 {
+		t.Errorf("RelationCount = %d, want 4", got)
 	}
 	if n := len(graph.ListRelations(model.RelRunsOn, "", "")); n != 1 {
 		t.Errorf("runs_on relations = %d, want 1 (agent runs on the host)", n)
@@ -225,8 +235,11 @@ func TestConformanceFixture(t *testing.T) {
 	if n := len(graph.ListRelations(model.RelMonitors, "", "")); n != 0 {
 		t.Errorf("monitors relations = %d, want 0 (the one to db was removed)", n)
 	}
-	if n := len(graph.ListRelations(model.RelAdjacentTo, "", "")); n != 1 {
-		t.Errorf("adjacent_to relations = %d, want 1", n)
+	if n := len(graph.ListRelations(model.RelHasInterface, "", "")); n != 2 {
+		t.Errorf("has_interface relations = %d, want 2 (each switch has its port)", n)
+	}
+	if n := len(graph.ListRelations(model.RelConnectedTo, "", "")); n != 1 {
+		t.Errorf("connected_to relations = %d, want 1 (port-to-port adjacency)", n)
 	}
 
 	// The contract's classification outcomes are all exercised.
