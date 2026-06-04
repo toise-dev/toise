@@ -199,8 +199,13 @@ func TestRegistry(t *testing.T) {
 	if def, ok := RelationDef(RelListensOn); !ok || def.From != TypeServiceListener || def.To != TypeNetworkInterface {
 		t.Error("relation def wrong")
 	}
-	if len(EntityTypes()) != 9 || len(RelationTypes()) != 9 {
+	if len(EntityTypes()) != 9 || len(RelationTypes()) != 10 {
 		t.Errorf("registry counts: %d entity, %d relation", len(EntityTypes()), len(RelationTypes()))
+	}
+	// connected_to (topology-as-entities, ADR 0022) is registered as a bare
+	// interface<->interface edge.
+	if def, ok := RelationDef(RelConnectedTo); !ok || def.From != TypeNetworkInterface || def.To != TypeNetworkInterface {
+		t.Error("connected_to relation def wrong")
 	}
 	// producer-vocabulary types are registered
 	for _, typ := range []string{TypeServiceInstance, TypeDatabase, TypeNetworkDevice} {
