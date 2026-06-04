@@ -108,6 +108,48 @@
                       ]
                     }
                   }
+                },
+                {
+                  "key": "entity.relationships",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "type",
+                                "value": {
+                                  "stringValue": "runs_on"
+                                }
+                              },
+                              {
+                                "key": "entity.type",
+                                "value": {
+                                  "stringValue": "host"
+                                }
+                              },
+                              {
+                                "key": "entity.id",
+                                "value": {
+                                  "kvlistValue": {
+                                    "values": [
+                                      {
+                                        "key": "host.id",
+                                        "value": {
+                                          "stringValue": "h-001"
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
                 }
               ],
               "body": {},
@@ -184,66 +226,6 @@
                 {
                   "key": "entity.relation.type",
                   "value": {
-                    "stringValue": "runs_on"
-                  }
-                },
-                {
-                  "key": "entity.relation.from.type",
-                  "value": {
-                    "stringValue": "service.instance"
-                  }
-                },
-                {
-                  "key": "entity.relation.from.id",
-                  "value": {
-                    "kvlistValue": {
-                      "values": [
-                        {
-                          "key": "service.instance.id",
-                          "value": {
-                            "stringValue": "agent-7f3a"
-                          }
-                        }
-                      ]
-                    }
-                  }
-                },
-                {
-                  "key": "entity.relation.to.type",
-                  "value": {
-                    "stringValue": "host"
-                  }
-                },
-                {
-                  "key": "entity.relation.to.id",
-                  "value": {
-                    "kvlistValue": {
-                      "values": [
-                        {
-                          "key": "host.id",
-                          "value": {
-                            "stringValue": "h-001"
-                          }
-                        }
-                      ]
-                    }
-                  }
-                }
-              ],
-              "body": {},
-              "timeUnixNano": "1780272180000000000"
-            },
-            {
-              "attributes": [
-                {
-                  "key": "entity.relation.event.type",
-                  "value": {
-                    "stringValue": "state"
-                  }
-                },
-                {
-                  "key": "entity.relation.type",
-                  "value": {
                     "stringValue": "monitors"
                   }
                 },
@@ -291,7 +273,7 @@
                 }
               ],
               "body": {},
-              "timeUnixNano": "1780272240000000000"
+              "timeUnixNano": "1780272180000000000"
             },
             {
               "attributes": [
@@ -357,7 +339,7 @@
                 }
               ],
               "body": {},
-              "timeUnixNano": "1780272300000000000"
+              "timeUnixNano": "1780272240000000000"
             },
             {
               "attributes": [
@@ -417,7 +399,7 @@
                 }
               ],
               "body": {},
-              "timeUnixNano": "1780272360000000000"
+              "timeUnixNano": "1780272300000000000"
             },
             {
               "attributes": [
@@ -450,7 +432,7 @@
                 }
               ],
               "body": {},
-              "timeUnixNano": "1780272420000000000"
+              "timeUnixNano": "1780272360000000000"
             },
             {
               "attributes": [
@@ -510,7 +492,7 @@
                 }
               ],
               "body": {},
-              "timeUnixNano": "1780272480000000000"
+              "timeUnixNano": "1780272420000000000"
             },
             {
               "attributes": [
@@ -570,7 +552,7 @@
                 }
               ],
               "body": {},
-              "timeUnixNano": "1780272540000000000"
+              "timeUnixNano": "1780272480000000000"
             },
             {
               "attributes": [
@@ -651,7 +633,7 @@
                 }
               ],
               "body": {},
-              "timeUnixNano": "1780272600000000000"
+              "timeUnixNano": "1780272540000000000"
             }
           ],
           "scope": {}
