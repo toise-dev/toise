@@ -41,6 +41,18 @@ const (
 	attrRelToType    = "entity.relation.to.type"
 	attrRelToID      = "entity.relation.to.id"
 	attrRelAttrs     = "entity.relation.attributes"
+
+	// Embedded relationships (OTel entity-events spec, PR #4836 — approved, not yet
+	// merged): an entity *state* event MAY carry an `entity.relationships` array;
+	// each descriptor is a map with the relationship `type` and the target's
+	// `entity.type` + `entity.id` (map). Toise ingests this additively, alongside
+	// the entity.relation.* extension, and the boundary translates it to the
+	// engine's first-class relation events (ADR 0022 / migration plan). The key
+	// names follow #4836 and will be revisited if they change before merge.
+	attrEntityRelationships = "entity.relationships"
+	relDescType             = "type"
+	relDescEntityType       = "entity.type"
+	relDescEntityID         = "entity.id"
 )
 
 // Lifecycle values: entity events on otel.entity.event.type, relation events on

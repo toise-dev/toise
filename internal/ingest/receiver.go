@@ -33,7 +33,7 @@ func NewReceiver(e *change.Engine, logger *slog.Logger) *Receiver {
 		logger = slog.Default()
 	}
 	srv := grpc.NewServer()
-	ls := &logsServer{engine: e, logger: logger}
+	ls := &logsServer{engine: e, logger: logger, embedded: newEmbeddedReconciler()}
 	plogotlp.RegisterGRPCServer(srv, ls)
 	return &Receiver{srv: srv, logs: ls, logger: logger}
 }
@@ -53,8 +53,9 @@ func (r *Receiver) Stop() { r.srv.GracefulStop() }
 // logsServer implements the OTLP logs service.
 type logsServer struct {
 	plogotlp.UnimplementedGRPCServer
-	engine *change.Engine
-	logger *slog.Logger
+	engine   *change.Engine
+	logger   *slog.Logger
+	embedded *embeddedReconciler
 }
 
 // Export ingests a batch of OTLP logs, routing entity-event LogRecords to the
@@ -75,10 +76,19 @@ func (s *logsServer) Export(_ context.Context, req plogotlp.ExportRequest) (plog
 			for j := 0; j < sls.Len() && routeErr == nil; j++ {
 				recs := sls.At(j).LogRecords()
 				for k := 0; k < recs.Len(); k++ {
-					ok, drop, err := routeRecord(b, recs.At(k), producer)
+					lr := recs.At(k)
+					ok, drop, err := routeRecord(b, lr, producer)
 					dropped = append(dropped, drop...)
 					if err != nil {
 						routeErr = err
+						break
+					}
+					// Embedded relationships ride on entity-state events (spec PR
+					// #4836); reconcile them additively alongside routeRecord.
+					edrop, eerr := s.embedded.handle(b, lr)
+					dropped = append(dropped, edrop...)
+					if eerr != nil {
+						routeErr = eerr
 						break
 					}
 					if ok {

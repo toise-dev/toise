@@ -98,6 +98,25 @@ out-of-order delivery (OTLP guarantees no inter-batch order) never silently lose
 edges. With the buffer disabled, a missing endpoint is a retriable ingest error
 instead. See *Robustness backstops* below.
 
+### Embedded relationships — the OTel standard, ingested additively
+
+The OTel entity-events spec (PR #4836, approved-not-merged) models relationships
+**embedded** in an entity *state* event: an `entity.relationships` array, each
+descriptor a map `{ type, entity.type, entity.id }` naming the **target** (the
+source is the emitting entity). There is no edge attribute and no explicit edge
+delete — a relation a producer stops listing on its source's state is **removed by
+absence**.
+
+Toise **ingests this additively, today** (alongside the extension above): the ingest
+boundary parses `entity.relationships` on each entity-state event and translates the
+descriptors into the engine's first-class relation events (`from` = the emitting
+entity, `to` = the target), reconciling per source — new descriptors are observed,
+dropped ones are removed. This is the **direction of travel** per
+[ADR 0022](../architecture/adr/0022-engine-stores-facts-only.md): the standard
+embedded form is the wire model the engine consumes, the `entity.relation.*`
+extension is transitional, and attribute-bearing concerns move onto entities. See
+`docs/architecture/migration-embedded-relationships.md`.
+
 ## Mapping table
 
 | OTel concept                              | Toise field                                                                 |
