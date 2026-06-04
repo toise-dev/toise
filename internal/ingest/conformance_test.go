@@ -66,6 +66,30 @@ func buildConformanceLogs() plog.Logs {
 			putMap(a.PutEmptyMap(attrRelAttrs), attrs)
 		}
 	}
+	// entityRels appends an entity-state record carrying embedded relationships (the
+	// OTel spec form, PR #4836): the relationships ride on the entity's state event
+	// as an entity.relationships array; the source is this entity, each descriptor
+	// names the target.
+	type embRel struct {
+		typ, toType string
+		toID        map[string]any
+	}
+	entityRels := func(typ string, id, attrs map[string]any, rels []embRel) {
+		a := rec().Attributes()
+		a.PutStr(attrEventType, evEntityState)
+		a.PutStr(attrEntityType, typ)
+		putMap(a.PutEmptyMap(attrEntityID), id)
+		if attrs != nil {
+			putMap(a.PutEmptyMap(attrEntityAttrs), attrs)
+		}
+		sl := a.PutEmptySlice(attrEntityRelationships)
+		for _, r := range rels {
+			m := sl.AppendEmpty().SetEmptyMap()
+			m.PutStr(relDescType, r.typ)
+			m.PutStr(relDescEntityType, r.toType)
+			putMap(m.PutEmptyMap(relDescEntityID), r.toID)
+		}
+	}
 
 	hostID := map[string]any{"host.id": "h-001"}
 	agentID := map[string]any{"service.instance.id": "agent-7f3a"}
@@ -80,12 +104,15 @@ func buildConformanceLogs() plog.Logs {
 	sw2 := map[string]any{"network.device.id": "mac:00:1a:2b:3c:4d:5e"}
 
 	// 1-3: nodes (standard OTel). Endpoints exist before the edges reference them.
+	// The agent carries its runs_on -> host as an EMBEDDED relationship (the OTel
+	// spec form, PR #4836): the edge rides on the agent's state event, no separate
+	// record. The host (1) exists before this edge is asserted.
 	entity(evEntityState, model.TypeHost, hostID, map[string]any{"host.name": "web-server-1", "os.type": "linux"})
-	entity(evEntityState, model.TypeServiceInstance, agentID, map[string]any{"service.name": "senhub-agent", "service.version": "1.0.0"})
+	entityRels(model.TypeServiceInstance, agentID, map[string]any{"service.name": "senhub-agent", "service.version": "1.0.0"},
+		[]embRel{{typ: model.RelRunsOn, toType: model.TypeHost, toID: hostID}})
 	entity(evEntityState, model.TypeDatabase, dbID, map[string]any{"db.system.name": "postgresql", "server.address": "10.0.1.5", "server.port": int64(5432)})
-	// 4-5: edges. The agent runs_on the host (Lot 1, deployment) and monitors the
-	// db (Lot 2, observation) — distinct relation types.
-	relation(evRelState, model.RelRunsOn, model.TypeServiceInstance, agentID, model.TypeHost, hostID, nil)
+	// 4: the agent monitors the db (Lot 2, observation) via the entity.relation.*
+	// extension — both wire forms (embedded above, extension here) are exercised.
 	relation(evRelState, model.RelMonitors, model.TypeServiceInstance, agentID, model.TypeDatabase, dbID, nil)
 	// 6: descriptive attribute added -> entity.attribute_updated.
 	entity(evEntityState, model.TypeDatabase, dbID, map[string]any{"db.system.name": "postgresql", "server.address": "10.0.1.5", "server.port": int64(5432), "db.connection.count": int64(12)})
@@ -148,6 +175,7 @@ func TestConformanceFixture(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 	graph := projection.New()
 	eng := change.New(graph, st)
+	recon := newEmbeddedReconciler()
 
 	rls := logs.ResourceLogs()
 	for i := 0; i < rls.Len(); i++ {
@@ -155,12 +183,18 @@ func TestConformanceFixture(t *testing.T) {
 		for j := 0; j < sls.Len(); j++ {
 			recs := sls.At(j).LogRecords()
 			for k := 0; k < recs.Len(); k++ {
-				handled, _, rerr := routeRecord(eng, recs.At(k), "")
+				lr := recs.At(k)
+				handled, _, rerr := routeRecord(eng, lr, "")
 				if rerr != nil {
 					t.Fatalf("record %d: ingest error: %v", k, rerr)
 				}
 				if !handled {
 					t.Fatalf("record %d: not recognized as an entity event", k)
+				}
+				// Embedded relationships ride on entity-state events (mirrors the
+				// receiver's Export path).
+				if _, herr := recon.handle(eng, lr); herr != nil {
+					t.Fatalf("record %d: embedded reconcile error: %v", k, herr)
 				}
 			}
 		}
