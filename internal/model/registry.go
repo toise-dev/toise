@@ -45,7 +45,13 @@ const (
 	RelMonitors   = "monitors"    // a service.instance monitors a target entity
 	RelRoutesVia  = "routes_via"  // a network.device routes traffic via another
 	RelForwardsTo = "forwards_to" // a network.device forwards traffic to another
-	RelAdjacentTo = "adjacent_to" // two network.devices are link-layer adjacent
+	RelAdjacentTo = "adjacent_to" // two network.devices are link-layer adjacent (device-level)
+	// RelConnectedTo is the bare, port-to-port link-layer adjacency in the
+	// topology-as-entities model (ADR 0022): ports are network.interface entities,
+	// so the edge carries no attributes (the ports do). It is the standard, spec-
+	// embeddable form that supersedes adjacent_to + port attributes; device-level
+	// adjacency is derived from it at read time, not stored.
+	RelConnectedTo = "connected_to"
 )
 
 // RelationTypeDef describes a known relation type and its constraints.
@@ -79,10 +85,11 @@ var relationTypes = map[string]RelationTypeDef{
 	RelNextHopVia:   {Type: RelNextHopVia, From: TypeNetworkRoute, To: TypeNetworkAddress, Structural: true},
 	RelListensOn:    {Type: RelListensOn, From: TypeServiceListener, To: TypeNetworkInterface, Structural: true},
 	// producer vocabulary (From/To advisory, not runtime-enforced)
-	RelMonitors:   {Type: RelMonitors, From: TypeServiceInstance, To: TypeHost, Structural: true},
-	RelRoutesVia:  {Type: RelRoutesVia, From: TypeNetworkDevice, To: TypeNetworkDevice, Structural: true},
-	RelForwardsTo: {Type: RelForwardsTo, From: TypeNetworkDevice, To: TypeNetworkDevice, Structural: true},
-	RelAdjacentTo: {Type: RelAdjacentTo, From: TypeNetworkDevice, To: TypeNetworkDevice, Structural: true},
+	RelMonitors:    {Type: RelMonitors, From: TypeServiceInstance, To: TypeHost, Structural: true},
+	RelRoutesVia:   {Type: RelRoutesVia, From: TypeNetworkDevice, To: TypeNetworkDevice, Structural: true},
+	RelForwardsTo:  {Type: RelForwardsTo, From: TypeNetworkDevice, To: TypeNetworkDevice, Structural: true},
+	RelAdjacentTo:  {Type: RelAdjacentTo, From: TypeNetworkDevice, To: TypeNetworkDevice, Structural: true},
+	RelConnectedTo: {Type: RelConnectedTo, From: TypeNetworkInterface, To: TypeNetworkInterface, Structural: true},
 }
 
 // IsKnownEntityType reports whether t is a registered entity type.

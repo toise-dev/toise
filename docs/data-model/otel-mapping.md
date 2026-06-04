@@ -316,6 +316,20 @@ edges re-pointed and the stale node expiring by cascade + interval).
 traversal is direction-agnostic, so no reciprocal duplicate), carrying `local_port`
 / `remote_port` as descriptive edge attributes.
 
+**Direction of travel — topology as entities (ADR 0022).** The form above carries
+edge attributes, which the OTel embedded relationship model cannot. The target model
+promotes them to entities so edges stay bare: a **port is a `network.interface`
+entity** (identity `{network.device.id, interface.name}`, with `speed`/`oper_state`
+as its attributes), linked by `has_interface` (device→interface), and adjacency is a
+**bare `connected_to`** (interface↔interface) — the spec-embeddable form that
+supersedes `adjacent_to` + port attributes. Likewise a route's `metric` rides on the
+`network.route` entity, an address's `preferred` flag on the `network.address`
+entity, and **provenance** (how an edge was observed) on the **instrumentation
+scope**, never on the edge. Device-level `adjacent_to` becomes a **derived** read-side
+view (a surcouche), not a stored fact. `connected_to` is **registered now**; the
+producer emission migrates with the contract resync (the `adjacent_to`+ports form
+above remains the transitional shape until then).
+
 **Cadence:** poll topology **slower than metrics** (≈5–15 min); set
 `otel.entity.interval` to ≈**3× the topology cadence** (not the metric cadence) or
 the liveness sweeper reaps devices between polls. Emit a **full snapshot per cycle
