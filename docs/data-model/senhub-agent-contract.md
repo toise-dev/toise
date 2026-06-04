@@ -156,6 +156,33 @@ and later `netscaler`, `veeam`, `redfish`, `citrix`, `ibmi`, `network.device`
   `entPhysicalClass=3`) both fall back to the globally-unique `engine:<engineID>`
   (see `otel-mapping.md`).
 
+### Migration to the embedded OTel standard (ADR 0022)
+
+The OTel entity-events spec landed relationships **embedded** in entity-state events
+(spec PR #4836), and Toise's engine is now defined as a **faithful, facts-only store
+of that standard** (ADR 0022). The shapes above are **transitional**; the target the
+producer migrates to:
+
+- **Relations move from separate `entity.relation.*` records to embedded
+  `entity.relationships`** on the source entity's state event — each descriptor a map
+  `{ type, entity.type, entity.id }` naming the target. Removal is **by absence** (a
+  relation the source stops listing is removed); no explicit relation-delete on the
+  wire. Toise **ingests embedded today** (additive), and the extension keeps working
+  through the transition, so the producer can move at its own pace.
+- **Topology becomes entities; edges become bare.** A port is a `network.interface`
+  entity (`{network.device.id, interface.name}`, with `speed`/`oper_state` as
+  attributes), linked by `has_interface` (device→port); adjacency is a **bare
+  `connected_to`** (port↔port), replacing `adjacent_to` + `{local_port, remote_port}`.
+  A route's `metric` rides on the `network.route` entity, an address's `preferred` on
+  `network.address`, and **provenance** (`source`) on the **instrumentation scope** —
+  never on the edge.
+- **Identity is unchanged** (`network.device.id` precedence `serial:<PEN>`/…, exact
+  matching, per-producer liveness) — those are facts and stay.
+
+The **conformance fixture now demonstrates this target model**. This contract resync
+is tracked at #73. See ADR 0022 and
+`docs/architecture/migration-embedded-relationships.md`.
+
 ### Planning & status
 
 `#185` is **non-blocking** for Toise phase 1 (shipped with a synthetic producer,
