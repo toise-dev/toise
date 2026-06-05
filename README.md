@@ -91,6 +91,11 @@ directory. The public website is at [toise.dev](https://toise.dev).
 see [Configuring toise-server](./docs/operations/configuration.md) and the
 annotated [`examples/toise-server.yaml`](./examples/toise-server.yaml).
 
+The query surfaces are documented in
+[GraphQL API reference](./docs/reference/graphql.md) (schema, pagination,
+bi-temporal queries, guardrails) and the MCP tools
+([ADR 0011](./docs/architecture/adr/0011-mcp-server-design.md)).
+
 ## Contributing
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) and
