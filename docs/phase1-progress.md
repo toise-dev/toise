@@ -155,6 +155,44 @@ fixture (the executable contract).
   weighted multi-source identity model (evidence + `same_as` + canonical view) is the
   additive **Phase-2 path — ADR 0020 (draft)**; Lot 5 ships exact / producer-resolved.
 
+## Post-0.1.1 — engine stores facts only; relationships embedded-only (ADR 0021/0022, #74)
+
+A design pass on the relationship model (issue #65) settled a founding principle:
+**the Toise engine is a faithful, facts-only store of the OTel entity-events
+standard** — it stores asserted facts, never derived or inferred data; the change
+taxonomy and bi-temporality are the engine's temporal truth, and everything derived
+is a consumer-side *surcouche*. **ADR 0021** draws the human-interface boundary
+(dataviz / NL are edge surcouches, not core); **ADR 0022** defines the facts-only
+engine and its consequences.
+
+The OTel entity-events spec merged relationships **embedded** in entity-state events
+(semconv PR #4836). Toise is pre-1.0/alpha, so the migration was taken as a **clean
+break**, not a staged transition:
+
+- **Embedded-only relationships (#74, merged in #81):** the separate vendor-neutral
+  `entity.relation.*` extension is **removed outright** — its attributes,
+  strict-purity routing, conversion, and per-edge delete/interval paths are gone.
+  Relations now ride on the source entity's `entity_state` as an
+  `entity.relationships` array (`{type, entity.type, entity.id}` naming the target);
+  removal is **by absence**. The ingest boundary translates each descriptor into the
+  engine's first-class relation events, so the engine, taxonomy, and bi-temporality
+  are **unchanged**. Edge liveness derives from the source entity (cascade on delete
+  + its `otel.entity.interval`); there is no separate per-edge delete or interval.
+- **Topology as entities:** because embedded relationships carry no edge attributes,
+  ports become **`network.interface` entities** linked by `has_interface`, adjacency
+  is a **bare `connected_to`**, a route's `metric` and an address's `preferred` move
+  onto their entities, and provenance moves to the instrumentation scope. The Lot 5
+  `adjacent_to` + `{local_port, remote_port}` attributed form is superseded;
+  device-level adjacency is a derived read-side view.
+- **Conformance fixture rewritten embedded-only** and regenerated (the executable
+  contract: **6 live entities / 4 relations**, `monitors` added then removed by
+  absence, topology via embedded `has_interface`/`connected_to`); `toise-probe`
+  emits embedded relationships. Docs (`otel-mapping.md`, `senhub-agent-contract.md`,
+  `migration-embedded-relationships.md`) are embedded-only.
+
+Toise-side tracking: #65 (decision), #69–#73 (migration), **#74 (extension removal,
+merged in #81)**. Producer-side resync: senhub-agent #222.
+
 ## Key cross-cutting rules (brief v2)
 
 - **Bi-temporality (patch 2):** default queries operate in `event_time` space (reality view). `asKnownAt` opt-in constrains to `recorded_at <= t` (audit view). Every event exposes both `eventTime` and `recordedAt`. Schema descriptions must teach the LLM which mode to pick.
@@ -186,6 +224,9 @@ fixture (the executable contract).
 | 0017 | entity-identity-and-stability — *was patch-3 "0006", reassigned* | M1 | superseded by 0018 |
 | 0018 | exact-identity-matching (supersedes 0017's tolerant matching) | post-phase-1 | written |
 | 0019 | per-producer-reference-counting (multi-producer liveness) | post-phase-1 | written |
+| 0020 | weighted-multi-source-identity (Phase-2 path for non-convergent sources) | post-phase-1 | draft |
+| 0021 | human-interface-boundary (dataviz/NL are edge surcouches, not core) | post-phase-1 | written |
+| 0022 | engine-stores-facts-only (embedded relationships; topology as entities) | post-phase-1 | written |
 
 ## Demo scenario (patch 9)
 
