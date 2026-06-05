@@ -87,6 +87,10 @@ phase.
 Design notes, architecture decisions, and roadmap live in the [`docs/`](./docs)
 directory. The public website is at [toise.dev](https://toise.dev).
 
+`toise-server` is configured by a YAML file, environment variables, or flags —
+see [Configuring toise-server](./docs/operations/configuration.md) and the
+annotated [`examples/toise-server.yaml`](./examples/toise-server.yaml).
+
 ## Contributing
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) and
