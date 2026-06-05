@@ -172,12 +172,13 @@ break**, not a staged transition:
 - **Embedded-only relationships (#74, merged in #81):** the separate vendor-neutral
   `entity.relation.*` extension is **removed outright** — its attributes,
   strict-purity routing, conversion, and per-edge delete/interval paths are gone.
-  Relations now ride on the source entity's `entity_state` as an
-  `entity.relationships` array (`{type, entity.type, entity.id}` naming the target);
-  removal is **by absence**. The ingest boundary translates each descriptor into the
-  engine's first-class relation events, so the engine, taxonomy, and bi-temporality
-  are **unchanged**. Edge liveness derives from the source entity (cascade on delete
-  + its `otel.entity.interval`); there is no separate per-edge delete or interval.
+  Relations now ride on the source entity's `entity.state` as an
+  `entity.relationships` array (`{relationship.type, entity.type, entity.id}` naming
+  the target); removal is **by absence**. The ingest boundary translates each
+  descriptor into the engine's first-class relation events, so the engine, taxonomy,
+  and bi-temporality are **unchanged**. Edge liveness derives from the source entity
+  (cascade on delete + its `entity.report.interval`); there is no separate per-edge
+  delete or interval.
 - **Topology as entities:** because embedded relationships carry no edge attributes,
   ports become **`network.interface` entities** linked by `has_interface`, adjacency
   is a **bare `connected_to`**, a route's `metric` and an address's `preferred` move

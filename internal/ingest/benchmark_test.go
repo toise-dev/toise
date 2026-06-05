@@ -7,13 +7,13 @@ import (
 )
 
 // BenchmarkRouteEntityState measures converting and dispatching an
-// entity_state LogRecord (conversion only; excludes gRPC transport).
+// entity.state LogRecord (conversion only; excludes gRPC transport).
 func BenchmarkRouteEntityState(b *testing.B) {
 	lr := newRecord(evEntityState)
 	a := lr.Attributes()
 	a.PutStr(attrEntityType, model.TypeHost)
 	a.PutEmptyMap(attrEntityID).PutStr("host.id", "h1")
-	am := a.PutEmptyMap(attrEntityAttrs)
+	am := a.PutEmptyMap(attrEntityDesc)
 	am.PutStr("status", "up")
 	am.PutInt("cpu.count", 8)
 

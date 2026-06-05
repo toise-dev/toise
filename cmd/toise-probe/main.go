@@ -1,8 +1,9 @@
 // Command toise-probe is a real OTLP/gRPC producer for demos and end-to-end
-// testing. It speaks the producer contract (standard otel.entity.* nodes with
-// relationships embedded on each entity-state event, a Resource service.instance.id
-// for per-producer reference counting) and, unlike toise-demo (which writes the
-// store directly), exercises the live ingestion path over the network.
+// testing. It speaks the producer contract (OTel entity-events: `entity.state` /
+// `entity.delete` LogRecords with relationships embedded on each state event, a
+// Resource service.instance.id for per-producer reference counting) and, unlike
+// toise-demo (which writes the store directly), exercises the live ingestion path
+// over the network.
 //
 // By default it heartbeats a small infrastructure topology and plays an evolving
 // scenario (a process restart, an interface flap, a container appearing and
@@ -45,7 +46,7 @@ func main() {
 func run() error {
 	addr := flag.String("addr", "127.0.0.1:4317", "toise-server OTLP/gRPC address")
 	producer := flag.String("producer", "toise-probe-1", "this agent's service.instance.id (OTLP Resource)")
-	interval := flag.Duration("interval", 30*time.Second, "otel.entity.interval emitted (liveness TTL)")
+	interval := flag.Duration("interval", 30*time.Second, "entity.report.interval emitted (liveness TTL; sent as whole seconds)")
 	heartbeat := flag.Duration("heartbeat", 0, "re-emit period; default interval/3 so entities stay live")
 	once := flag.Bool("once", false, "emit one batch and exit (no heartbeat, no scenario)")
 	hosts := flag.Int("hosts", 1, "number of hosts; 1 plays the narrative scenario, >1 generates a multi-machine fabric")
@@ -347,7 +348,7 @@ func (p *producerConn) emit(producer string, t *topo, deleted []*entity, interva
 	rl.Resource().Attributes().PutStr("service.instance.id", producer)
 	sl := rl.ScopeLogs().AppendEmpty()
 	now := pcommon.NewTimestampFromTime(time.Now())
-	ms := interval.Milliseconds()
+	secs := int64(interval.Seconds())
 
 	rec := func() plog.LogRecord {
 		lr := sl.LogRecords().AppendEmpty()
@@ -355,10 +356,11 @@ func (p *producerConn) emit(producer string, t *topo, deleted []*entity, interva
 		return lr
 	}
 	for _, e := range deleted {
-		a := rec().Attributes()
-		a.PutStr("otel.entity.event.type", "entity_delete")
-		a.PutStr("otel.entity.type", e.typ)
-		putMap(a.PutEmptyMap("otel.entity.id"), e.id)
+		lr := rec()
+		lr.SetEventName("entity.delete")
+		a := lr.Attributes()
+		a.PutStr("entity.type", e.typ)
+		putMap(a.PutEmptyMap("entity.id"), e.id)
 	}
 	// Relationships ride embedded on their source entity's state event (the OTel
 	// standard, the sole on-wire edge form). Index each relation under its source so
@@ -372,17 +374,18 @@ func (p *producerConn) emit(producer string, t *topo, deleted []*entity, interva
 	}
 	for _, h := range t.order {
 		e := t.ents[h]
-		a := rec().Attributes()
-		a.PutStr("otel.entity.event.type", "entity_state")
-		a.PutStr("otel.entity.type", e.typ)
-		putMap(a.PutEmptyMap("otel.entity.id"), e.id)
-		putMap(a.PutEmptyMap("otel.entity.attributes"), e.attrs)
-		a.PutInt("otel.entity.interval", ms)
+		lr := rec()
+		lr.SetEventName("entity.state")
+		a := lr.Attributes()
+		a.PutStr("entity.type", e.typ)
+		putMap(a.PutEmptyMap("entity.id"), e.id)
+		putMap(a.PutEmptyMap("entity.description"), e.attrs)
+		a.PutInt("entity.report.interval", secs)
 		if rels := relsBySource[endpointKey(e.typ, e.id)]; len(rels) > 0 {
 			slv := a.PutEmptySlice("entity.relationships")
 			for _, r := range rels {
 				m := slv.AppendEmpty().SetEmptyMap()
-				m.PutStr("type", r.typ)
+				m.PutStr("relationship.type", r.typ)
 				m.PutStr("entity.type", r.toType)
 				putMap(m.PutEmptyMap("entity.id"), r.toID)
 			}

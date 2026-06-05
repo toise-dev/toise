@@ -61,18 +61,18 @@ func export(t *testing.T, c plogotlp.GRPCClient, ld plog.Logs) {
 	}
 }
 
-func entityRecord(sl plog.ScopeLogs, eventType, entType string, ident, attrs map[string]string) {
+func entityRecord(sl plog.ScopeLogs, eventName, entType string, ident, attrs map[string]string) {
 	lr := sl.LogRecords().AppendEmpty()
 	lr.SetTimestamp(pcommon.NewTimestampFromTime(t0))
+	lr.SetEventName(eventName)
 	a := lr.Attributes()
-	a.PutStr(attrEventType, eventType)
 	a.PutStr(attrEntityType, entType)
 	idm := a.PutEmptyMap(attrEntityID)
 	for k, v := range ident {
 		idm.PutStr(k, v)
 	}
 	if attrs != nil {
-		am := a.PutEmptyMap(attrEntityAttrs)
+		am := a.PutEmptyMap(attrEntityDesc)
 		for k, v := range attrs {
 			am.PutStr(k, v)
 		}
@@ -160,8 +160,8 @@ func TestReceiverEntityDelete(t *testing.T) {
 func embeddedEntity(sl plog.ScopeLogs, when time.Time, typ string, id map[string]string, rels []relDesc) {
 	lr := sl.LogRecords().AppendEmpty()
 	lr.SetTimestamp(pcommon.NewTimestampFromTime(when))
+	lr.SetEventName(evEntityState)
 	a := lr.Attributes()
-	a.PutStr(attrEventType, evEntityState)
 	a.PutStr(attrEntityType, typ)
 	idm := a.PutEmptyMap(attrEntityID)
 	for k, v := range id {

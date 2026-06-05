@@ -28,10 +28,11 @@ const conformanceFile = "testdata/conformance/entity-events.json"
 // define the producer<->consumer contract (docs/data-model/otel-mapping.md and
 // senhub-agent-contract.md). The marshaled OTLP/JSON is the shared conformance
 // artifact: senhub-agent (#185) emits to reproduce it, Toise ingests it here and
-// asserts the resulting graph. Every record uses the agreed conventions — the
-// standard otel.entity.* shape for nodes, relationships **embedded** on entity
-// state events (the sole on-wire edge form, ADR 0022), flat scalar maps, endpoints
-// emitted before their edges, and an explicit entity_delete.
+// asserts the resulting graph. Every record uses the agreed conventions — the OTel
+// entity-events shape for nodes (EventName entity.state/entity.delete, entity.type/
+// entity.id/entity.description), relationships **embedded** on entity state events
+// (the sole on-wire edge form, ADR 0022), flat scalar maps, endpoints emitted before
+// their edges, and an explicit entity.delete.
 func buildConformanceLogs() plog.Logs {
 	logs := plog.NewLogs()
 	sl := logs.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty()
@@ -54,12 +55,13 @@ func buildConformanceLogs() plog.Logs {
 	// entity.relationships descriptor naming the target (the sole on-wire edge form,
 	// ADR 0022). Removal is by absence — a re-emit that drops a descriptor removes it.
 	entity := func(event, typ string, id, attrs map[string]any, rels ...embRel) {
-		a := rec().Attributes()
-		a.PutStr(attrEventType, event)
+		lr := rec()
+		lr.SetEventName(event)
+		a := lr.Attributes()
 		a.PutStr(attrEntityType, typ)
 		putMap(a.PutEmptyMap(attrEntityID), id)
 		if attrs != nil {
-			putMap(a.PutEmptyMap(attrEntityAttrs), attrs)
+			putMap(a.PutEmptyMap(attrEntityDesc), attrs)
 		}
 		if len(rels) > 0 {
 			slv := a.PutEmptySlice(attrEntityRelationships)

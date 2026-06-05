@@ -11,38 +11,39 @@ import (
 	"github.com/toise-dev/toise/internal/model"
 )
 
-// LogRecord attribute keys for the phase-1 entity-event convention. See ADR
-// 0009 and docs/data-model/otel-mapping.md.
+// LogRecord attribute keys for the merged OTel entity-events convention
+// (specification/entities/entity-events.md, merged 2026-06-04). See ADR 0009,
+// ADR 0022, and docs/data-model/otel-mapping.md.
 const (
-	attrEventType   = "otel.entity.event.type"
-	attrEntityType  = "otel.entity.type"
-	attrEntityID    = "otel.entity.id"
-	attrEntityAttrs = "otel.entity.attributes"
-	// interval is the producer's heartbeat cadence in milliseconds; it is a
+	attrEntityType = "entity.type"
+	attrEntityID   = "entity.id"
+	attrEntityDesc = "entity.description" // descriptive (non-identifying) attributes
+	// report interval is the producer's heartbeat cadence in SECONDS; it is a
 	// liveness backstop (a stale entity is expired), not a primary delete signal.
-	attrEntityInterval = "otel.entity.interval"
+	attrEntityInterval = "entity.report.interval"
 
 	// resAttrProducer is the OTLP Resource attribute identifying the producing
 	// agent; liveness is reference-counted per producer (ADR 0019).
 	resAttrProducer = "service.instance.id"
 
-	// Embedded relationships (OTel entity-events spec, PR #4836): an entity *state*
-	// event MAY carry an `entity.relationships` array; each descriptor is a map with
-	// the relationship `type` and the target's `entity.type` + `entity.id` (map).
-	// This is the sole on-wire relationship form (ADR 0022): the source is implicit
-	// (the entity carrying the array) and removal is by absence on re-emit (no
-	// explicit relation-delete). The ingest boundary translates each descriptor into
-	// the engine's first-class relation events. See docs/data-model/otel-mapping.md.
+	// Embedded relationships: an entity *state* event MAY carry an
+	// `entity.relationships` array; each descriptor is a map with the
+	// `relationship.type` and the target's `entity.type` + `entity.id` (map). This is
+	// the sole on-wire relationship form (ADR 0022): the source is implicit (the
+	// entity carrying the array) and removal is by absence on re-emit (no explicit
+	// relation-delete). The ingest boundary translates each descriptor into the
+	// engine's first-class relation events. See docs/data-model/otel-mapping.md.
 	attrEntityRelationships = "entity.relationships"
-	relDescType             = "type"
+	relDescType             = "relationship.type"
 	relDescEntityType       = "entity.type"
 	relDescEntityID         = "entity.id"
 )
 
-// Lifecycle values for otel.entity.event.type.
+// Entity lifecycle events are identified by the LogRecord EventName (OTel spec),
+// not by an attribute.
 const (
-	evEntityState  = "entity_state"
-	evEntityDelete = "entity_delete"
+	evEntityState  = "entity.state"
+	evEntityDelete = "entity.delete"
 )
 
 // engine is the subset of *change.Engine the receiver routes to.
@@ -63,11 +64,7 @@ func routeRecord(e engine, lr plog.LogRecord, producer string) (handled bool, dr
 	attrs := lr.Attributes()
 	when := eventTimeOf(lr)
 
-	et, ok := strAttr(attrs, attrEventType)
-	if !ok {
-		return false, nil, nil // not an entity event (relations ride embedded on entity events)
-	}
-	switch et {
+	switch lr.EventName() {
 	case evEntityState:
 		obs, drop, oerr := entityObs(attrs, when)
 		if oerr != nil {
@@ -98,13 +95,13 @@ func entityObs(attrs pcommon.Map, when time.Time) (change.EntityObservation, []s
 	if !ok || len(ident) == 0 {
 		return change.EntityObservation{}, identDropped, fmt.Errorf("missing or empty %s", attrEntityID)
 	}
-	descriptive, descDropped, _ := mapAttr(attrs, attrEntityAttrs)
+	descriptive, descDropped, _ := mapAttr(attrs, attrEntityDesc)
 	dropped := make([]string, 0, len(identDropped)+len(descDropped))
 	dropped = append(dropped, identDropped...)
 	dropped = append(dropped, descDropped...)
 	var interval time.Duration
-	if ms, ok := intAttr(attrs, attrEntityInterval); ok && ms > 0 {
-		interval = time.Duration(ms) * time.Millisecond
+	if s, ok := intAttr(attrs, attrEntityInterval); ok && s > 0 {
+		interval = time.Duration(s) * time.Second
 	}
 	return change.EntityObservation{
 		Type:       typ,
