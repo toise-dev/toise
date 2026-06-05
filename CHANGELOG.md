@@ -9,6 +9,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
+## [0.2.0] - unreleased
+
+**A breaking wire-contract release.** 0.2.0 realigns Toise onto the **merged**
+OpenTelemetry entity-events specification (`specification/entities/entity-events.md`,
+merged 2026-06-04) and removes the transitional relation extension. What changes is
+the **wire contract producers emit**; stored event-log data and the GraphQL/MCP
+query schemas are unaffected. Toise is pre-1.0/alpha, so this is a clean break with
+no compatibility shim — update producers in lockstep. See the
+[0.1 → 0.2 migration guide](docs/migration/0.1-to-0.2.md).
+
+### Changed
+
+- **Relationships are embedded-only.** Edges now ride **embedded** on the source
+  entity's state event as an `entity.relationships` array (`{ relationship.type,
+  entity.type, entity.id }` naming the target); removal is by absence. The engine,
+  change taxonomy, and bi-temporality are unchanged — the ingest boundary still
+  translates each descriptor into a first-class relation event (ADR 0022). (#69,
+  #70, #71, #72, #74)
+- **Ingest realigned onto the merged OTel entity-events spec.** Entity events are
+  identified by the LogRecord **`EventName`** (`entity.state` / `entity.delete`),
+  not an attribute; attribute keys drop the `otel.` prefix and rename
+  (`entity.type`, `entity.id`, `entity.description`); the liveness interval is
+  **`entity.report.interval` in seconds** (was `otel.entity.interval` in
+  milliseconds — a unit fix); the relationship descriptor field is
+  `relationship.type`; `entity.id` is typed `map<string,string>`. (#80)
+- **Process identity follows the OTel semantic conventions** —
+  `{ process.pid, process.creation.time }` so PID reuse across a restart is a new
+  process, not a mutated one. (#62)
+
+### Added
+
+- **Layered configuration for `toise-server`** — built-in defaults < YAML file
+  (`--config` / `TOISE_CONFIG`) < environment (`TOISE_*`) < flags. Unknown YAML keys
+  are rejected; secrets are sourced from the environment only. The flag surface is
+  unchanged. (ADR 0023; `docs/operations/configuration.md`;
+  `examples/toise-server.yaml`) (#46)
+- **GraphQL API reference** — schema, Relay pagination, the bi-temporal
+  `eventTime`/`recordedAt`/`asKnownAt` model, worked example queries, and the
+  guardrails. (`docs/reference/graphql.md`) (#85)
+- **`connected_to` relation type and topology-as-entities** — ports as
+  `network.interface` entities linked by `has_interface`, with bare `connected_to`
+  adjacency, so edges stay attribute-free under the embedded model. (#71)
+- **`graph-viz` example** — a live GraphQL-subscriptions client rendering the graph
+  in real time. (#59)
+- Architecture decisions: **ADR 0021** (human interfaces live at the edge, not the
+  core), **ADR 0022** (the engine stores facts only), **ADR 0023** (layered
+  configuration).
+
+### Removed
+
+- **The `entity.relation.*` relation extension** — separate relation LogRecords,
+  edge attributes, and the strict-purity routing path are gone. Relationships are
+  embedded-only (see *Changed*). (#74)
+
+### Fixed
+
+- **WebSocket subscriptions no longer hit the per-request timeout.** The GraphQL
+  subscription upgrade is routed around `http.TimeoutHandler` (which cannot hijack
+  the connection), so long-lived subscriptions work. (#57)
+
 ## [0.1.1] - 2026-06-02
 
 First real-world validation against the **real senhub-agent** producer, which
