@@ -41,11 +41,11 @@ func (f *fakeEngine) RemoveRelation(o change.RelationObservation) (model.Event, 
 	return model.Event{}, true, nil
 }
 
-func newRecord(eventType string) plog.LogRecord {
+func newRecord(eventName string) plog.LogRecord {
 	lr := plog.NewLogRecord()
 	lr.SetTimestamp(pcommon.NewTimestampFromTime(time.Unix(1_700_000_000, 0)))
-	if eventType != "" {
-		lr.Attributes().PutStr(attrEventType, eventType)
+	if eventName != "" {
+		lr.SetEventName(eventName)
 	}
 	return lr
 }
@@ -56,7 +56,7 @@ func TestRouteEntityState(t *testing.T) {
 	a.PutStr(attrEntityType, model.TypeHost)
 	id := a.PutEmptyMap(attrEntityID)
 	id.PutStr("host.id", "h1")
-	attrs := a.PutEmptyMap(attrEntityAttrs)
+	attrs := a.PutEmptyMap(attrEntityDesc)
 	attrs.PutInt("cpu.count", 8)
 	attrs.PutBool("up", true)
 	attrs.PutDouble("load", 0.5)
@@ -83,7 +83,7 @@ func TestRouteEntityState(t *testing.T) {
 }
 
 func TestRouteIgnoresNonEntity(t *testing.T) {
-	lr := newRecord("") // no otel.entity.event.type
+	lr := newRecord("") // no EventName
 	lr.Body().SetStr("plain log")
 	f := &fakeEngine{}
 	handled, _, err := routeRecord(f, lr, "")
@@ -102,7 +102,7 @@ func TestRouteSurfacesDroppedNonScalar(t *testing.T) {
 	a := lr.Attributes()
 	a.PutStr(attrEntityType, model.TypeHost)
 	a.PutEmptyMap(attrEntityID).PutStr("host.id", "h1")
-	attrs := a.PutEmptyMap(attrEntityAttrs)
+	attrs := a.PutEmptyMap(attrEntityDesc)
 	attrs.PutStr("os.type", "linux") // scalar: kept
 	attrs.PutEmptyMap("nested")      // non-scalar: dropped and reported
 	attrs.PutEmptySlice("tags")      // non-scalar: dropped and reported
@@ -115,7 +115,7 @@ func TestRouteSurfacesDroppedNonScalar(t *testing.T) {
 	for _, k := range dropped {
 		got[k] = true
 	}
-	if !got["otel.entity.attributes.nested"] || !got["otel.entity.attributes.tags"] {
+	if !got["entity.description.nested"] || !got["entity.description.tags"] {
 		t.Errorf("dropped = %v, want the nested map and slice keys surfaced", dropped)
 	}
 	if len(f.lastEntity.Attributes) != 1 || f.lastEntity.Attributes[0].Key != "os.type" {
@@ -128,7 +128,7 @@ func TestRouteParsesInterval(t *testing.T) {
 	a := lr.Attributes()
 	a.PutStr(attrEntityType, model.TypeHost)
 	a.PutEmptyMap(attrEntityID).PutStr("host.id", "h1")
-	a.PutInt(attrEntityInterval, 60_000) // 60s in milliseconds
+	a.PutInt(attrEntityInterval, 60) // 60 seconds
 	f := &fakeEngine{}
 	if _, _, err := routeRecord(f, lr, ""); err != nil {
 		t.Fatal(err)
@@ -155,7 +155,7 @@ func TestRouteSetsProducer(t *testing.T) {
 func TestRouteEntityMissingID(t *testing.T) {
 	lr := newRecord(evEntityState)
 	lr.Attributes().PutStr(attrEntityType, model.TypeHost)
-	// no otel.entity.id
+	// no entity.id
 	f := &fakeEngine{}
 	handled, _, err := routeRecord(f, lr, "")
 	if !handled || err == nil {

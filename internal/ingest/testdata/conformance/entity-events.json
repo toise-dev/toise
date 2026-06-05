@@ -8,19 +8,13 @@
             {
               "attributes": [
                 {
-                  "key": "otel.entity.event.type",
-                  "value": {
-                    "stringValue": "entity_state"
-                  }
-                },
-                {
-                  "key": "otel.entity.type",
+                  "key": "entity.type",
                   "value": {
                     "stringValue": "host"
                   }
                 },
                 {
-                  "key": "otel.entity.id",
+                  "key": "entity.id",
                   "value": {
                     "kvlistValue": {
                       "values": [
@@ -35,7 +29,7 @@
                   }
                 },
                 {
-                  "key": "otel.entity.attributes",
+                  "key": "entity.description",
                   "value": {
                     "kvlistValue": {
                       "values": [
@@ -57,24 +51,19 @@
                 }
               ],
               "body": {},
+              "eventName": "entity.state",
               "timeUnixNano": "1780272000000000000"
             },
             {
               "attributes": [
                 {
-                  "key": "otel.entity.event.type",
-                  "value": {
-                    "stringValue": "entity_state"
-                  }
-                },
-                {
-                  "key": "otel.entity.type",
+                  "key": "entity.type",
                   "value": {
                     "stringValue": "service.instance"
                   }
                 },
                 {
-                  "key": "otel.entity.id",
+                  "key": "entity.id",
                   "value": {
                     "kvlistValue": {
                       "values": [
@@ -89,7 +78,7 @@
                   }
                 },
                 {
-                  "key": "otel.entity.attributes",
+                  "key": "entity.description",
                   "value": {
                     "kvlistValue": {
                       "values": [
@@ -118,7 +107,7 @@
                           "kvlistValue": {
                             "values": [
                               {
-                                "key": "type",
+                                "key": "relationship.type",
                                 "value": {
                                   "stringValue": "runs_on"
                                 }
@@ -153,24 +142,19 @@
                 }
               ],
               "body": {},
+              "eventName": "entity.state",
               "timeUnixNano": "1780272060000000000"
             },
             {
               "attributes": [
                 {
-                  "key": "otel.entity.event.type",
-                  "value": {
-                    "stringValue": "entity_state"
-                  }
-                },
-                {
-                  "key": "otel.entity.type",
+                  "key": "entity.type",
                   "value": {
                     "stringValue": "db"
                   }
                 },
                 {
-                  "key": "otel.entity.id",
+                  "key": "entity.id",
                   "value": {
                     "kvlistValue": {
                       "values": [
@@ -185,7 +169,7 @@
                   }
                 },
                 {
-                  "key": "otel.entity.attributes",
+                  "key": "entity.description",
                   "value": {
                     "kvlistValue": {
                       "values": [
@@ -213,24 +197,19 @@
                 }
               ],
               "body": {},
+              "eventName": "entity.state",
               "timeUnixNano": "1780272120000000000"
             },
             {
               "attributes": [
                 {
-                  "key": "otel.entity.event.type",
-                  "value": {
-                    "stringValue": "entity_state"
-                  }
-                },
-                {
-                  "key": "otel.entity.type",
+                  "key": "entity.type",
                   "value": {
                     "stringValue": "service.instance"
                   }
                 },
                 {
-                  "key": "otel.entity.id",
+                  "key": "entity.id",
                   "value": {
                     "kvlistValue": {
                       "values": [
@@ -245,7 +224,7 @@
                   }
                 },
                 {
-                  "key": "otel.entity.attributes",
+                  "key": "entity.description",
                   "value": {
                     "kvlistValue": {
                       "values": [
@@ -274,7 +253,7 @@
                           "kvlistValue": {
                             "values": [
                               {
-                                "key": "type",
+                                "key": "relationship.type",
                                 "value": {
                                   "stringValue": "runs_on"
                                 }
@@ -307,7 +286,7 @@
                           "kvlistValue": {
                             "values": [
                               {
-                                "key": "type",
+                                "key": "relationship.type",
                                 "value": {
                                   "stringValue": "monitors"
                                 }
@@ -342,24 +321,19 @@
                 }
               ],
               "body": {},
+              "eventName": "entity.state",
               "timeUnixNano": "1780272180000000000"
             },
             {
               "attributes": [
                 {
-                  "key": "otel.entity.event.type",
-                  "value": {
-                    "stringValue": "entity_state"
-                  }
-                },
-                {
-                  "key": "otel.entity.type",
+                  "key": "entity.type",
                   "value": {
                     "stringValue": "db"
                   }
                 },
                 {
-                  "key": "otel.entity.id",
+                  "key": "entity.id",
                   "value": {
                     "kvlistValue": {
                       "values": [
@@ -374,7 +348,7 @@
                   }
                 },
                 {
-                  "key": "otel.entity.attributes",
+                  "key": "entity.description",
                   "value": {
                     "kvlistValue": {
                       "values": [
@@ -408,24 +382,19 @@
                 }
               ],
               "body": {},
+              "eventName": "entity.state",
               "timeUnixNano": "1780272240000000000"
             },
             {
               "attributes": [
                 {
-                  "key": "otel.entity.event.type",
-                  "value": {
-                    "stringValue": "entity_state"
-                  }
-                },
-                {
-                  "key": "otel.entity.type",
+                  "key": "entity.type",
                   "value": {
                     "stringValue": "service.instance"
                   }
                 },
                 {
-                  "key": "otel.entity.id",
+                  "key": "entity.id",
                   "value": {
                     "kvlistValue": {
                       "values": [
@@ -440,7 +409,7 @@
                   }
                 },
                 {
-                  "key": "otel.entity.attributes",
+                  "key": "entity.description",
                   "value": {
                     "kvlistValue": {
                       "values": [
@@ -469,7 +438,7 @@
                           "kvlistValue": {
                             "values": [
                               {
-                                "key": "type",
+                                "key": "relationship.type",
                                 "value": {
                                   "stringValue": "runs_on"
                                 }
@@ -504,24 +473,19 @@
                 }
               ],
               "body": {},
+              "eventName": "entity.state",
               "timeUnixNano": "1780272300000000000"
             },
             {
               "attributes": [
                 {
-                  "key": "otel.entity.event.type",
-                  "value": {
-                    "stringValue": "entity_delete"
-                  }
-                },
-                {
-                  "key": "otel.entity.type",
+                  "key": "entity.type",
                   "value": {
                     "stringValue": "db"
                   }
                 },
                 {
-                  "key": "otel.entity.id",
+                  "key": "entity.id",
                   "value": {
                     "kvlistValue": {
                       "values": [
@@ -537,24 +501,19 @@
                 }
               ],
               "body": {},
+              "eventName": "entity.delete",
               "timeUnixNano": "1780272360000000000"
             },
             {
               "attributes": [
                 {
-                  "key": "otel.entity.event.type",
-                  "value": {
-                    "stringValue": "entity_state"
-                  }
-                },
-                {
-                  "key": "otel.entity.type",
+                  "key": "entity.type",
                   "value": {
                     "stringValue": "network.interface"
                   }
                 },
                 {
-                  "key": "otel.entity.id",
+                  "key": "entity.id",
                   "value": {
                     "kvlistValue": {
                       "values": [
@@ -575,7 +534,7 @@
                   }
                 },
                 {
-                  "key": "otel.entity.attributes",
+                  "key": "entity.description",
                   "value": {
                     "kvlistValue": {
                       "values": [
@@ -597,24 +556,19 @@
                 }
               ],
               "body": {},
+              "eventName": "entity.state",
               "timeUnixNano": "1780272420000000000"
             },
             {
               "attributes": [
                 {
-                  "key": "otel.entity.event.type",
-                  "value": {
-                    "stringValue": "entity_state"
-                  }
-                },
-                {
-                  "key": "otel.entity.type",
+                  "key": "entity.type",
                   "value": {
                     "stringValue": "network.interface"
                   }
                 },
                 {
-                  "key": "otel.entity.id",
+                  "key": "entity.id",
                   "value": {
                     "kvlistValue": {
                       "values": [
@@ -635,7 +589,7 @@
                   }
                 },
                 {
-                  "key": "otel.entity.attributes",
+                  "key": "entity.description",
                   "value": {
                     "kvlistValue": {
                       "values": [
@@ -664,7 +618,7 @@
                           "kvlistValue": {
                             "values": [
                               {
-                                "key": "type",
+                                "key": "relationship.type",
                                 "value": {
                                   "stringValue": "connected_to"
                                 }
@@ -705,24 +659,19 @@
                 }
               ],
               "body": {},
+              "eventName": "entity.state",
               "timeUnixNano": "1780272480000000000"
             },
             {
               "attributes": [
                 {
-                  "key": "otel.entity.event.type",
-                  "value": {
-                    "stringValue": "entity_state"
-                  }
-                },
-                {
-                  "key": "otel.entity.type",
+                  "key": "entity.type",
                   "value": {
                     "stringValue": "network.device"
                   }
                 },
                 {
-                  "key": "otel.entity.id",
+                  "key": "entity.id",
                   "value": {
                     "kvlistValue": {
                       "values": [
@@ -737,7 +686,7 @@
                   }
                 },
                 {
-                  "key": "otel.entity.attributes",
+                  "key": "entity.description",
                   "value": {
                     "kvlistValue": {
                       "values": [
@@ -772,7 +721,7 @@
                           "kvlistValue": {
                             "values": [
                               {
-                                "key": "type",
+                                "key": "relationship.type",
                                 "value": {
                                   "stringValue": "has_interface"
                                 }
@@ -813,24 +762,19 @@
                 }
               ],
               "body": {},
+              "eventName": "entity.state",
               "timeUnixNano": "1780272540000000000"
             },
             {
               "attributes": [
                 {
-                  "key": "otel.entity.event.type",
-                  "value": {
-                    "stringValue": "entity_state"
-                  }
-                },
-                {
-                  "key": "otel.entity.type",
+                  "key": "entity.type",
                   "value": {
                     "stringValue": "network.device"
                   }
                 },
                 {
-                  "key": "otel.entity.id",
+                  "key": "entity.id",
                   "value": {
                     "kvlistValue": {
                       "values": [
@@ -845,7 +789,7 @@
                   }
                 },
                 {
-                  "key": "otel.entity.attributes",
+                  "key": "entity.description",
                   "value": {
                     "kvlistValue": {
                       "values": [
@@ -880,7 +824,7 @@
                           "kvlistValue": {
                             "values": [
                               {
-                                "key": "type",
+                                "key": "relationship.type",
                                 "value": {
                                   "stringValue": "has_interface"
                                 }
@@ -921,6 +865,7 @@
                 }
               ],
               "body": {},
+              "eventName": "entity.state",
               "timeUnixNano": "1780272600000000000"
             }
           ],

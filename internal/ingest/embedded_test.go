@@ -19,8 +19,8 @@ type relDesc struct {
 func embeddedRecord(srcType string, srcID map[string]string, rels []relDesc) plog.LogRecord {
 	lr := plog.NewLogRecord()
 	lr.SetTimestamp(pcommon.NewTimestampFromTime(time.Unix(1_700_000_100, 0)))
+	lr.SetEventName(evEntityState)
 	a := lr.Attributes()
-	a.PutStr(attrEventType, evEntityState)
 	a.PutStr(attrEntityType, srcType)
 	idm := a.PutEmptyMap(attrEntityID)
 	for k, v := range srcID {
@@ -86,7 +86,7 @@ func TestEmbeddedReconcilerEntityDeleteForgets(t *testing.T) {
 	// Delete the source: the engine cascades its incident relations, so the
 	// reconciler just forgets its bookkeeping.
 	del := embeddedRecord("service.instance", svc, nil)
-	del.Attributes().PutStr(attrEventType, evEntityDelete)
+	del.SetEventName(evEntityDelete)
 	if _, err := r.handle(f, del); err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestEmbeddedReconcilerEntityDeleteForgets(t *testing.T) {
 func TestEmbeddedReconcilerIgnoresNonEntity(t *testing.T) {
 	r := newEmbeddedReconciler()
 	f := &fakeEngine{}
-	// A record with no otel.entity.event.type is not an entity event: nothing to reconcile.
+	// A record with no EventName is not an entity event: nothing to reconcile.
 	if drop, err := r.handle(f, newRecord("")); err != nil || drop != nil {
 		t.Fatalf("non-entity record: drop=%v err=%v, want nil/nil", drop, err)
 	}

@@ -20,30 +20,34 @@ default and what senhub-agent ships, so it works out of the box with no
 
 ## Wire shape: the exact LogRecord attributes Toise reads
 
-The ingest boundary classifies each `LogRecord` by its lifecycle key
-`otel.entity.event.type` (`entity_state` / `entity_delete`): a record carrying it
-is an **entity event**, a record without it is ignored (treated as an ordinary
-log). **Relationships are not separate records** — they ride **embedded** on
-entity-state events (the OTel standard, see below). The scope is **not**
-inspected — Toise does not require the experimental `otel.entity.entity_event=true`
-instrumentation-scope flag; a producer may set it for spec fidelity, but Toise
-neither reads nor requires it.
+The ingest boundary classifies each `LogRecord` by its **`EventName`**: a record
+whose EventName is `entity.state` or `entity.delete` is an **entity event**, any
+other record is ignored (treated as an ordinary log). This follows the merged OTel
+entity-events spec (`specification/entities/entity-events.md`, **merged 2026-06-04**),
+which models entity events as Logs-Data-Model **Events** keyed by `EventName` — not
+by a payload attribute. **Relationships are not separate records** — they ride
+**embedded** on `entity.state` events (see below).
 
-### Entity events (standard OTel convention)
+### Entity events (OTel entity-events convention)
 
-| LogRecord attribute        | Type    | Required | Meaning                                                |
+The event is identified by the LogRecord **`EventName`** (`entity.state` /
+`entity.delete`); the rest is carried in LogRecord attributes:
+
+| Carrier                    | Type    | Required | Meaning                                                |
 | -------------------------- | ------- | -------- | ------------------------------------------------------ |
-| `otel.entity.event.type`   | string  | yes      | `entity_state` (upsert) or `entity_delete` (soft delete) |
-| `otel.entity.type`         | string  | yes      | the entity type — **must be in Toise's type registry** |
-| `otel.entity.id`           | **map** | yes      | identifying attributes (the entity's identity)         |
-| `otel.entity.attributes`   | **map** | no       | descriptive, non-identifying attributes                |
-| `otel.entity.interval`     | int     | no       | heartbeat cadence in **milliseconds**; arms the liveness backstop (see *Entity liveness*) |
+| `EventName` (LogRecord)    | string  | yes      | `entity.state` (upsert) or `entity.delete` (soft delete) |
+| `entity.type`              | string  | yes      | the entity type — **must be in Toise's type registry** |
+| `entity.id`                | **map** | yes      | identifying attributes (the entity's identity); spec type `map<string,string>` |
+| `entity.description`       | **map** | no       | descriptive, non-identifying attributes                |
+| `entity.report.interval`   | int     | no       | heartbeat cadence in **seconds**; arms the liveness backstop (see *Entity liveness*) |
 | `LogRecord.Timestamp`      | —       | yes      | becomes `event_time` (falls back to `ObservedTimestamp`, then ingest time) |
 
 Notes:
 
-- `otel.entity.id` and `otel.entity.attributes` are genuine OTLP **maps**
-  (`AnyValue` kvlist), parsed structurally — see *AnyValue restriction* below.
+- `entity.id` and `entity.description` are genuine OTLP **maps**
+  (`AnyValue` kvlist), parsed structurally — see *AnyValue restriction* below. The
+  spec types `entity.id` as `map<string,string>`; Toise's parser is more permissive
+  (it accepts typed scalars) but producers should keep identity values as strings.
 - The OTLP **Resource** `service.instance.id` identifies the producing agent and
   keys per-producer liveness reference counting (ADR 0019; see *Entity liveness*).
   Producers should set it on every export.
@@ -52,17 +56,17 @@ Notes:
 
 ### Relationships — embedded on entity-state events (OTel standard)
 
-Relationships are carried **embedded** in an entity *state* event, per the OTel
-entity-events spec ([PR #4836](https://github.com/open-telemetry/semantic-conventions/pull/4836)):
-an `entity.relationships` array on the source entity, each descriptor a map naming
-the **target** (the source is the emitting entity). This is the **sole on-wire
+Relationships are carried **embedded** in an `entity.state` event, per the merged
+OTel entity-events spec (`specification/entities/entity-events.md`): an
+`entity.relationships` array on the source entity, each descriptor a map naming the
+**target** (the source is the emitting entity). This is the **sole on-wire
 relationship form** — there is no separate relation record and no edge-attribute
 channel ([ADR 0022](../architecture/adr/0022-engine-stores-facts-only.md): the
 engine stores the standard's facts, nothing else).
 
 | `entity.relationships[]` descriptor field | Type    | Required | Meaning                                             |
 | ----------------------------------------- | ------- | -------- | --------------------------------------------------- |
-| `type`                                    | string  | yes      | the relation type — **must be in Toise's registry** |
+| `relationship.type`                       | string  | yes      | the relation type — **must be in Toise's registry** |
 | `entity.type`                             | string  | yes      | the **target** endpoint entity type                 |
 | `entity.id`                               | **map** | yes      | the **target** endpoint identity                    |
 
@@ -75,7 +79,7 @@ per-source bookkeeping is in-memory; after a restart the first re-emit
 re-establishes the set, and the interval liveness backstop covers a producer that
 vanishes (see *Edge liveness*).
 
-**No edge attributes.** A relationship descriptor carries only `type` + target;
+**No edge attributes.** A relationship descriptor carries only `relationship.type` + target;
 anything that wants to describe *how* two things relate becomes an **entity** (a
 port is a `network.interface`, a route is a `network.route`) or rides on the
 instrumentation scope (provenance) — never on the edge. See *topology as entities*
@@ -83,7 +87,7 @@ below.
 
 **Endpoint resolution is by exact identity**, against a **live** entity by
 `(type, identity)`. The descriptor's `entity.id` must be the target's current
-identity. Producers should emit the endpoint `entity_state` events **before** the
+identity. Producers should emit the endpoint `entity.state` events **before** the
 entity whose state embeds the edge, but ordering is **not required**: with the
 **reconciliation buffer** enabled (`--relation-buffer-ttl`, on by default in
 `toise-server`), an edge whose endpoint is not yet present is **parked** and
@@ -109,8 +113,8 @@ endpoint is a retriable ingest error instead. See *Robustness backstops* below.
 Toise's typed `Value` is a deliberate subset of OTel `AnyValue`. Only the four
 scalar kinds — `string`, `int64`, `double`, `bool` — are supported in phase 1.
 
-The `id` / `attributes` (and relation-endpoint id) attributes are themselves
-**maps**, and Toise reads them structurally: it iterates the **top-level**
+The `entity.id` / `entity.description` (and relation-endpoint id) attributes are
+themselves **maps**, and Toise reads them structurally: it iterates the **top-level**
 map and keeps each entry whose **leaf value is one of the four scalars**. A
 non-scalar leaf (a nested `kvlist`/`array`/`bytes`) is dropped — the boundary does
 **not** recurse into nested structures.
@@ -123,22 +127,22 @@ would be discarded).
 
 **No silent loss:** dropping a nested value is **surfaced**, not silent — the
 boundary logs a `Warn` naming the dropped key(s) (e.g.
-`otel.entity.attributes.foo`) so the loss is observable. Pre-flattening remains
+`entity.description.foo`) so the loss is observable. Pre-flattening remains
 the producer's contract; the consumer never drops data quietly.
 
 ### Entity liveness — explicit delete primary, interval backstop
 
 Liveness uses **two mechanisms, not one**:
 
-1. **Explicit `entity_delete` is the primary signal.** When a producer knows an
-   entity is gone, it emits `entity_delete` and Toise soft-deletes it. A heartbeat
-   is a re-emitted `entity_state` (unchanged → `entity.unchanged`, coalesced under
+1. **Explicit `entity.delete` is the primary signal.** When a producer knows an
+   entity is gone, it emits `entity.delete` and Toise soft-deletes it. A heartbeat
+   is a re-emitted `entity.state` (unchanged → `entity.unchanged`, coalesced under
    retention, ADR 0013).
-2. **`otel.entity.interval` is a backstop.** A producer often *misses* the clean
+2. **`entity.report.interval` is a backstop.** A producer often *misses* the clean
    delete — `kill -9`, crash, host powered off, network partition — so relying on
    the explicit delete alone accumulates zombie entities. OTel's `Interval` exists
    exactly for this ("resilient to event losses"). An entity observed with an
-   `otel.entity.interval` (heartbeat cadence, in ms) is armed with a deadline; a
+   `entity.report.interval` (heartbeat cadence, in **seconds**) is armed with a deadline; a
    periodic sweeper (`toise-server --liveness-sweep-interval`, default 30s) expires
    it with `entity.deleted` if it is not re-asserted within the interval. The
    producer should **size the interval to include slack** (e.g. a few heartbeats)
@@ -160,7 +164,7 @@ To retire an edge **while both endpoints stay live** (e.g. an agent stops
 monitoring a still-running db), the producer simply **stops listing that
 descriptor** on the source's next state event: the reconciler removes it by
 absence. Because the edge rides on the source entity, a *missed* removal is covered
-by the **source's own `otel.entity.interval`** — when the producer vanishes, the
+by the **source's own `entity.report.interval`** — when the producer vanishes, the
 source expires and its incident edges cascade out. There is no separate per-edge
 delete or per-edge interval; the source entity's liveness is the edge's liveness.
 
@@ -171,7 +175,7 @@ entity, the set of producers asserting it (keyed by the OTLP **Resource
 `service.instance.id`**, which producers already set), each with its own interval
 deadline. An entity is **live while any producer references it**; it is deleted
 only when the **last** reference is released — by that producer's explicit
-`entity_delete` or by its interval lapsing. So an explicit delete (or a crash) by
+`entity.delete` or by its interval lapsing. So an explicit delete (or a crash) by
 one of several agents observing the same entity no longer flaps it: a `delete`
 from one producer is a silent release while others still observe.
 
@@ -182,7 +186,7 @@ producers both omitting `service.instance.id` would collapse into one anonymous
 reference — a misconfiguration.)
 
 **Corollary — shared entities carry only observer-independent attributes.** Because
-`entity_state` is full-state and identity is shared across producers, a shared
+`entity.state` is full-state and identity is shared across producers, a shared
 entity must only carry attributes that are **independent of the observer** (system
 name, version, …). Anything *per-observer* ("**this** agent monitors this db") is a
 distinct **`monitors` relation** per agent — never an entity attribute, which would
@@ -303,7 +307,7 @@ and the **conformance fixture demonstrates this model** (port entities + bare
 `connected_to`).
 
 **Cadence:** poll topology **slower than metrics** (≈5–15 min); set
-`otel.entity.interval` to ≈**3× the topology cadence** (not the metric cadence) or
+`entity.report.interval` to ≈**3× the topology cadence** (not the metric cadence) or
 the liveness sweeper reaps devices between polls. Emit a **full snapshot per cycle
 as one OTLP export** (one batched durable append); **no sampling** — a partial
 snapshot would read as deletes. The committed conformance fixture carries the
@@ -317,9 +321,9 @@ producer-resolved and needs none of it.)*
 
 ### Type registry — types must be known
 
-`otel.entity.type` and each embedded relationship descriptor's `type` are validated
-against Toise's **type registry**; an unregistered type is **rejected** at the
-boundary. The registry is:
+`entity.type` and each embedded relationship descriptor's `relationship.type` are
+validated against Toise's **type registry**; an unregistered type is **rejected** at
+the boundary. The registry is:
 
 - **entities:** `host`, `process`, `network.interface`, `network.address`,
   `network.route`, `service.listener`, and the producer vocabulary
@@ -352,12 +356,12 @@ planned:
 | Concern | Decision | Status |
 | ------- | -------- | ------ |
 | Entity collisions | exact-Id matching (no fuzzy merge) | **done** (ADR 0018) |
-| Missed entity deletes | explicit `entity_delete` + `otel.entity.interval` TTL backstop | **done** |
+| Missed entity deletes | explicit `entity.delete` + `entity.report.interval` TTL backstop | **done** |
 | Edge liveness | derived from endpoints (cascade `relation.removed`) + removal-by-absence on the source's state | **done** |
 | Out-of-order edges | reconciliation buffer (park & flush, opt-in) | **done** |
 | Nested values | explicit `Warn` on drop (never silent) | **done** |
 | Multi-producer liveness | per-producer reference counting (keyed by Resource `service.instance.id`) | **done** (ADR 0019) |
-| Scope flag `otel.entity.entity_event=true` | accepted and ignored (never rejected) — interop fast-path for other OTel producers | done |
+| Event identification | by LogRecord `EventName` (`entity.state`/`entity.delete`), per the merged spec — no payload attribute, no scope flag | **done** |
 
 ### Timestamps
 

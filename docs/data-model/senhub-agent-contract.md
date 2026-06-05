@@ -45,25 +45,24 @@ sides implement the *same* wire shape. Round 2 incorporates the senhub-agent
 feedback on #185; the guiding principle is **no silent loss or collision** for an
 infrastructure source of truth.
 
-### Nodes — standard OTel entity events
+### Nodes — OTel entity events (merged spec, 2026-06-04)
 
-senhub-agent emits **`entity_state` / `entity_delete`** LogRecords with the
-standard `otel.entity.*` attributes (`type`, `id` map, `attributes` map; lifecycle
-in `otel.entity.event.type`). Toise classifies a record by the **presence of
-`otel.entity.event.type`**. The `otel.entity.entity_event=true` scope flag is
-**accepted and ignored** — never required, never rejected (it is an interop
-fast-path for other OTel producers/collectors). `otel.entity.*` is never bent to
-carry non-standard data.
+senhub-agent emits LogRecords whose **`EventName`** is **`entity.state`** (upsert)
+or **`entity.delete`** (soft delete), per the merged OTel entity-events spec
+(`specification/entities/entity-events.md`). The payload is in LogRecord attributes:
+**`entity.type`**, **`entity.id`** (map, `map<string,string>` — keep identity values
+as strings), **`entity.description`** (descriptive attribute map), and
+**`entity.report.interval`** (seconds). Toise classifies a record by its EventName
+— there is no payload event-type attribute and no scope flag.
 
-### Relations — embedded on entity-state events (OTel standard)
+### Relations — embedded on entity.state events (OTel standard)
 
-Relationships ride **embedded** on the source entity's `entity_state` event per the
-OTel entity-events spec ([PR #4836](https://github.com/open-telemetry/semantic-conventions/pull/4836)):
-an `entity.relationships` array, each descriptor a map `{ type, entity.type,
-entity.id }` naming the **target** (the source is the emitting entity). This is the
-**sole on-wire relationship form** — there is no separate relation record and no
-edge-attribute channel (ADR 0022: the engine stores the standard's facts, nothing
-else).
+Relationships ride **embedded** on the source entity's `entity.state` event per the
+merged spec: an `entity.relationships` array, each descriptor a map
+`{ relationship.type, entity.type, entity.id }` naming the **target** (the source is
+the emitting entity). This is the **sole on-wire relationship form** — there is no
+separate relation record and no edge-attribute channel (ADR 0022: the engine stores
+the standard's facts, nothing else).
 
 Removal is **by absence**: a relationship the source stops listing on its next
 state event is removed — there is **no explicit relation-delete** on the wire. The
@@ -77,7 +76,7 @@ rather than required ordering — see *Robustness*.
 
 ### Values — flat maps of scalars, no silent drop
 
-`id` and `attributes` are OTLP maps. Toise keeps **scalar leaves**
+`entity.id` and `entity.description` are OTLP maps. Toise keeps **scalar leaves**
 (`string`/`int64`/`double`/`bool`) of the **top-level** map; nested values are
 dropped. The agent **pre-flattens** with dotted keys (`server.address`,
 `server.port`). The drop is **surfaced** (a `Warn` naming the dropped key), never
@@ -90,7 +89,7 @@ silent.
 silently merged; a single unique key is valid. Never put a mutable value (pid,
 leased IP) in the identity — those are descriptive attributes. Agreed identities:
 
-| Entity | Identity (`otel.entity.id`) | Notes |
+| Entity | Identity (`entity.id`) | Notes |
 | ------ | --------------------------- | ----- |
 | `host` | `{host.id}` (machine-id) | `host.name` descriptive |
 | `service.instance` | `{service.instance.id}` (agent key) | the agent |
@@ -101,9 +100,9 @@ leased IP) in the identity — those are descriptive attributes. Agreed identiti
 ### Time & liveness — explicit delete + interval backstop
 
 `event_time` = LogRecord `Timestamp`; `recorded_at` stamped by Toise. Liveness uses
-**both**: an explicit **`entity_delete`** as the primary signal **and**
-`otel.entity.interval` (ms, sized with slack — the agent emits 3× its heartbeat
-cadence) as a TTL backstop for missed deletes (`kill -9`, crash, host off, net
+**both**: an explicit **`entity.delete`** as the primary signal **and**
+`entity.report.interval` (seconds, sized with slack — the agent emits 3× its
+heartbeat cadence) as a TTL backstop for missed deletes (`kill -9`, crash, host off, net
 partition). Toise expires entities not re-asserted within their interval.
 
 **Edge liveness is derived from endpoints (decided Q2 = Option A):** deleting an
@@ -113,11 +112,11 @@ endpoints alive and the edges live with them. To retire an edge while both
 endpoints stay live (e.g. the agent stops monitoring a still-running db), the agent
 **drops that descriptor** from the source's next state event; the reconciler removes
 it by absence. A *missed* such removal is covered by the **source entity's own
-`otel.entity.interval`** — no separate per-edge delete or interval exists.
+`entity.report.interval`** — no separate per-edge delete or interval exists.
 
 **Multi-producer liveness — per-producer reference counting (Q1, done):** liveness
 is reference-counted **per producer**, keyed by the Resource `service.instance.id`
-(ADR 0019). Several agents on the same entity converge; an explicit `entity_delete`
+(ADR 0019). Several agents on the same entity converge; an explicit `entity.delete`
 (or an interval lapse) by one is a **silent release** — the entity stays live while
 any other producer references it, and is deleted only when the **last** reference
 goes. No flap, and no producer change beyond keeping `service.instance.id` on the

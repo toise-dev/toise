@@ -45,8 +45,8 @@ func newEmbeddedReconciler() *embeddedReconciler {
 // dropped, so the caller can surface the loss rather than discard it silently.
 func (r *embeddedReconciler) handle(e engine, lr plog.LogRecord) (dropped []string, err error) {
 	attrs := lr.Attributes()
-	et, ok := strAttr(attrs, attrEventType)
-	if !ok {
+	et := lr.EventName()
+	if et != evEntityState && et != evEntityDelete {
 		return nil, nil // not an entity event
 	}
 	sourceType, okT := strAttr(attrs, attrEntityType)
