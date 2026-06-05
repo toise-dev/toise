@@ -1,6 +1,6 @@
 // Command toise-probe is a real OTLP/gRPC producer for demos and end-to-end
-// testing. It speaks the producer contract (standard otel.entity.* nodes, the
-// vendor-neutral entity.relation.* edge extension, a Resource service.instance.id
+// testing. It speaks the producer contract (standard otel.entity.* nodes with
+// relationships embedded on each entity-state event, a Resource service.instance.id
 // for per-producer reference counting) and, unlike toise-demo (which writes the
 // store directly), exercises the live ingestion path over the network.
 //
@@ -23,6 +23,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sort"
 	"syscall"
 	"time"
 
@@ -359,6 +360,16 @@ func (p *producerConn) emit(producer string, t *topo, deleted []*entity, interva
 		a.PutStr("otel.entity.type", e.typ)
 		putMap(a.PutEmptyMap("otel.entity.id"), e.id)
 	}
+	// Relationships ride embedded on their source entity's state event (the OTel
+	// standard, the sole on-wire edge form). Index each relation under its source so
+	// the entity loop can attach the full current set; removal is by absence — an edge
+	// dropped from t.rels simply stops appearing.
+	relsBySource := make(map[string][]relation, len(t.relOrder))
+	for _, h := range t.relOrder {
+		r := t.rels[h]
+		k := endpointKey(r.fromType, r.fromID)
+		relsBySource[k] = append(relsBySource[k], r)
+	}
 	for _, h := range t.order {
 		e := t.ents[h]
 		a := rec().Attributes()
@@ -367,16 +378,15 @@ func (p *producerConn) emit(producer string, t *topo, deleted []*entity, interva
 		putMap(a.PutEmptyMap("otel.entity.id"), e.id)
 		putMap(a.PutEmptyMap("otel.entity.attributes"), e.attrs)
 		a.PutInt("otel.entity.interval", ms)
-	}
-	for _, h := range t.relOrder {
-		r := t.rels[h]
-		a := rec().Attributes()
-		a.PutStr("entity.relation.event.type", "state")
-		a.PutStr("entity.relation.type", r.typ)
-		a.PutStr("entity.relation.from.type", r.fromType)
-		putMap(a.PutEmptyMap("entity.relation.from.id"), r.fromID)
-		a.PutStr("entity.relation.to.type", r.toType)
-		putMap(a.PutEmptyMap("entity.relation.to.id"), r.toID)
+		if rels := relsBySource[endpointKey(e.typ, e.id)]; len(rels) > 0 {
+			slv := a.PutEmptySlice("entity.relationships")
+			for _, r := range rels {
+				m := slv.AppendEmpty().SetEmptyMap()
+				m.PutStr("type", r.typ)
+				m.PutStr("entity.type", r.toType)
+				putMap(m.PutEmptyMap("entity.id"), r.toID)
+			}
+		}
 	}
 
 	// A large fabric is a big batch; the ingest boundary commits each record with
@@ -415,6 +425,22 @@ func putMap(m pcommon.Map, kvs map[string]any) {
 			m.PutBool(k, x)
 		}
 	}
+}
+
+// endpointKey builds a stable string from an entity type + identity map so a
+// relation can be indexed by its source endpoint (the entity whose state will carry
+// it as an embedded relationship).
+func endpointKey(typ string, idm map[string]any) string {
+	keys := make([]string, 0, len(idm))
+	for k := range idm {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	key := typ
+	for _, k := range keys {
+		key += fmt.Sprintf("\x00%s=%v", k, idm[k])
+	}
+	return key
 }
 
 func sameID(a, b map[string]any) bool {

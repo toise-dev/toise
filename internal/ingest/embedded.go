@@ -15,15 +15,15 @@ import (
 )
 
 // embeddedReconciler ingests the OTel entity-events spec's embedded relationship
-// model (spec PR #4836, approved-not-merged): an entity *state* event carries an
-// `entity.relationships` array, and the relationship lifecycle is the source
-// entity's — a relation a producer stops listing on its entity's state is removed
-// (no explicit relation-delete on the wire).
+// model (spec PR #4836): an entity *state* event carries an `entity.relationships`
+// array, and the relationship lifecycle is the source entity's — a relation a
+// producer stops listing on its entity's state is removed (no explicit
+// relation-delete on the wire).
 //
 // Per ADR 0022 this lives at the ingest boundary: it translates the embedded wire
 // form into the engine's first-class relation events (ObserveRelation /
-// RemoveRelation), leaving the engine unchanged. It is **additive** — the
-// entity.relation.* extension keeps working unchanged.
+// RemoveRelation), leaving the engine unchanged. Embedded relationships are the
+// sole on-wire relationship form.
 //
 // State is the set of embedded relations each source entity currently asserts,
 // keyed by a stable wire-identity string (source → relation key → observation),

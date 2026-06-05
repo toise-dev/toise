@@ -79,32 +79,15 @@ func entityRecord(sl plog.ScopeLogs, eventType, entType string, ident, attrs map
 	}
 }
 
-func relationRecord(sl plog.ScopeLogs, eventType, relType, fromType string, fromID map[string]string, toType string, toID map[string]string) {
-	lr := sl.LogRecords().AppendEmpty()
-	lr.SetTimestamp(pcommon.NewTimestampFromTime(t0))
-	a := lr.Attributes()
-	a.PutStr(attrRelEventType, eventType)
-	a.PutStr(attrRelType, relType)
-	a.PutStr(attrRelFromType, fromType)
-	fm := a.PutEmptyMap(attrRelFromID)
-	for k, v := range fromID {
-		fm.PutStr(k, v)
-	}
-	a.PutStr(attrRelToType, toType)
-	tm := a.PutEmptyMap(attrRelToID)
-	for k, v := range toID {
-		tm.PutStr(k, v)
-	}
-}
-
 func TestReceiverEntityAndRelation(t *testing.T) {
 	client, g := startReceiver(t)
 
 	ld := plog.NewLogs()
 	sl := ld.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty()
+	// the host exists before the process that embeds a runs_on -> host edge.
 	entityRecord(sl, evEntityState, model.TypeHost, map[string]string{"host.id": "h1"}, map[string]string{"status": "up"})
-	entityRecord(sl, evEntityState, model.TypeProcess, map[string]string{"pid": "100"}, nil)
-	relationRecord(sl, evRelState, model.RelRunsOn, model.TypeProcess, map[string]string{"pid": "100"}, model.TypeHost, map[string]string{"host.id": "h1"})
+	embeddedEntity(sl, t0, model.TypeProcess, map[string]string{"pid": "100"},
+		[]relDesc{{relType: model.RelRunsOn, toType: model.TypeHost, toID: map[string]string{"host.id": "h1"}}})
 	// a non-entity log record must be ignored
 	sl.LogRecords().AppendEmpty().Body().SetStr("unrelated log line")
 

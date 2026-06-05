@@ -104,8 +104,8 @@ func TestEmbeddedReconcilerEntityDeleteForgets(t *testing.T) {
 func TestEmbeddedReconcilerIgnoresNonEntity(t *testing.T) {
 	r := newEmbeddedReconciler()
 	f := &fakeEngine{}
-	// A relation-extension record (no otel.entity.event.type) is not ours.
-	if drop, err := r.handle(f, newRelRecord(evRelState)); err != nil || drop != nil {
+	// A record with no otel.entity.event.type is not an entity event: nothing to reconcile.
+	if drop, err := r.handle(f, newRecord("")); err != nil || drop != nil {
 		t.Fatalf("non-entity record: drop=%v err=%v, want nil/nil", drop, err)
 	}
 	if f.relAdds != 0 {
