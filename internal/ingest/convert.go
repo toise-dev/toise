@@ -26,42 +26,23 @@ const (
 	// agent; liveness is reference-counted per producer (ADR 0019).
 	resAttrProducer = "service.instance.id"
 
-	// The relation extension uses a vendor-neutral namespace (neither a producer
-	// nor a consumer prefix) so any producer/consumer can speak it and it maps
-	// 1:1 onto the future OTel relationships standard (OTEP 0256 Future Work).
-	// Strict purity: a relation record carries NO otel.entity.* attribute (its own
-	// lifecycle key is entity.relation.event.type), so a standard OTel
-	// entity-events consumer sees no malformed entity event and cleanly ignores it.
-	// See docs/data-model/otel-mapping.md.
-	attrRelEventType = "entity.relation.event.type"
-	attrRelInterval  = "entity.relation.interval" // heartbeat cadence in ms; edge liveness backstop
-	attrRelType      = "entity.relation.type"
-	attrRelFromType  = "entity.relation.from.type"
-	attrRelFromID    = "entity.relation.from.id"
-	attrRelToType    = "entity.relation.to.type"
-	attrRelToID      = "entity.relation.to.id"
-	attrRelAttrs     = "entity.relation.attributes"
-
-	// Embedded relationships (OTel entity-events spec, PR #4836 — approved, not yet
-	// merged): an entity *state* event MAY carry an `entity.relationships` array;
-	// each descriptor is a map with the relationship `type` and the target's
-	// `entity.type` + `entity.id` (map). Toise ingests this additively, alongside
-	// the entity.relation.* extension, and the boundary translates it to the
-	// engine's first-class relation events (ADR 0022 / migration plan). The key
-	// names follow #4836 and will be revisited if they change before merge.
+	// Embedded relationships (OTel entity-events spec, PR #4836): an entity *state*
+	// event MAY carry an `entity.relationships` array; each descriptor is a map with
+	// the relationship `type` and the target's `entity.type` + `entity.id` (map).
+	// This is the sole on-wire relationship form (ADR 0022): the source is implicit
+	// (the entity carrying the array) and removal is by absence on re-emit (no
+	// explicit relation-delete). The ingest boundary translates each descriptor into
+	// the engine's first-class relation events. See docs/data-model/otel-mapping.md.
 	attrEntityRelationships = "entity.relationships"
 	relDescType             = "type"
 	relDescEntityType       = "entity.type"
 	relDescEntityID         = "entity.id"
 )
 
-// Lifecycle values: entity events on otel.entity.event.type, relation events on
-// entity.relation.event.type.
+// Lifecycle values for otel.entity.event.type.
 const (
 	evEntityState  = "entity_state"
 	evEntityDelete = "entity_delete"
-	evRelState     = "state"
-	evRelDelete    = "delete"
 )
 
 // engine is the subset of *change.Engine the receiver routes to.
@@ -82,51 +63,30 @@ func routeRecord(e engine, lr plog.LogRecord, producer string) (handled bool, dr
 	attrs := lr.Attributes()
 	when := eventTimeOf(lr)
 
-	if et, ok := strAttr(attrs, attrEventType); ok { // entity event (standard OTel)
-		switch et {
-		case evEntityState:
-			obs, drop, oerr := entityObs(attrs, when)
-			if oerr != nil {
-				return true, drop, oerr
-			}
-			obs.Producer = producer
-			_, oerr = e.ObserveEntity(obs)
-			return true, drop, oerr
-		case evEntityDelete:
-			obs, drop, oerr := entityObs(attrs, when)
-			if oerr != nil {
-				return true, drop, oerr
-			}
-			obs.Producer = producer
-			_, _, oerr = e.DeleteEntity(obs)
-			return true, drop, oerr
-		default:
-			return false, nil, nil
-		}
+	et, ok := strAttr(attrs, attrEventType)
+	if !ok {
+		return false, nil, nil // not an entity event (relations ride embedded on entity events)
 	}
-
-	if rt, ok := strAttr(attrs, attrRelEventType); ok { // relation event (extension)
-		switch rt {
-		case evRelState:
-			obs, drop, oerr := relationObs(attrs, when)
-			if oerr != nil {
-				return true, drop, oerr
-			}
-			_, _, oerr = e.ObserveRelation(obs)
+	switch et {
+	case evEntityState:
+		obs, drop, oerr := entityObs(attrs, when)
+		if oerr != nil {
 			return true, drop, oerr
-		case evRelDelete:
-			obs, drop, oerr := relationObs(attrs, when)
-			if oerr != nil {
-				return true, drop, oerr
-			}
-			_, _, oerr = e.RemoveRelation(obs)
-			return true, drop, oerr
-		default:
-			return false, nil, nil
 		}
+		obs.Producer = producer
+		_, oerr = e.ObserveEntity(obs)
+		return true, drop, oerr
+	case evEntityDelete:
+		obs, drop, oerr := entityObs(attrs, when)
+		if oerr != nil {
+			return true, drop, oerr
+		}
+		obs.Producer = producer
+		_, _, oerr = e.DeleteEntity(obs)
+		return true, drop, oerr
+	default:
+		return false, nil, nil
 	}
-
-	return false, nil, nil // neither an entity nor a relation event
 }
 
 func entityObs(attrs pcommon.Map, when time.Time) (change.EntityObservation, []string, error) {
@@ -150,37 +110,6 @@ func entityObs(attrs pcommon.Map, when time.Time) (change.EntityObservation, []s
 		Type:       typ,
 		Identity:   ident,
 		Attributes: descriptive,
-		Interval:   interval,
-		EventTime:  when,
-	}, dropped, nil
-}
-
-func relationObs(attrs pcommon.Map, when time.Time) (change.RelationObservation, []string, error) {
-	relType, ok := strAttr(attrs, attrRelType)
-	if !ok {
-		return change.RelationObservation{}, nil, fmt.Errorf("missing %s", attrRelType)
-	}
-	fromType, okFT := strAttr(attrs, attrRelFromType)
-	fromID, fromDropped, okFI := mapAttr(attrs, attrRelFromID)
-	toType, okTT := strAttr(attrs, attrRelToType)
-	toID, toDropped, okTI := mapAttr(attrs, attrRelToID)
-	var dropped []string
-	dropped = append(dropped, fromDropped...)
-	dropped = append(dropped, toDropped...)
-	if !okFT || !okFI || !okTT || !okTI {
-		return change.RelationObservation{}, dropped, fmt.Errorf("relation %q missing endpoint attributes", relType)
-	}
-	relAttrs, attrDropped, _ := mapAttr(attrs, attrRelAttrs)
-	dropped = append(dropped, attrDropped...)
-	var interval time.Duration
-	if ms, ok := intAttr(attrs, attrRelInterval); ok && ms > 0 {
-		interval = time.Duration(ms) * time.Millisecond
-	}
-	return change.RelationObservation{
-		Type:       relType,
-		From:       change.EndpointRef{Type: fromType, Identity: fromID},
-		To:         change.EndpointRef{Type: toType, Identity: toID},
-		Attributes: relAttrs,
 		Interval:   interval,
 		EventTime:  when,
 	}, dropped, nil

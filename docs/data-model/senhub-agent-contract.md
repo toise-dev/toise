@@ -34,9 +34,9 @@ carrying the entity data-model semantic conventions Toise consumes).
 To become a Toise producer, senhub-agent needs an entity-event emitter that maps
 its collected inventory/topology into OTLP LogRecords following the OTel Entity
 Data Model — per entity a `type`, an identifying attribute set, a descriptive
-attribute set, and an `event_time` — plus relation edges via the Toise extension.
-The exact wire mapping is in [`otel-mapping.md`](./otel-mapping.md); the agreed
-shape and conventions are below.
+attribute set, and an `event_time` — plus relationships **embedded** on those
+entity-state events (the OTel standard). The exact wire mapping is in
+[`otel-mapping.md`](./otel-mapping.md); the agreed shape and conventions are below.
 
 ## Producer ↔ consumer contract (converged 2026-06)
 
@@ -55,26 +55,25 @@ in `otel.entity.event.type`). Toise classifies a record by the **presence of
 fast-path for other OTel producers/collectors). `otel.entity.*` is never bent to
 carry non-standard data.
 
-### Relations — the vendor-neutral `entity.relation.*` extension
+### Relations — embedded on entity-state events (OTel standard)
 
-OTel does not model relationships yet (OTEP 0256 *Future Work*, which cites exactly
-`process runs_on host`). Edges use a **vendor-neutral** extension — neither
-`toise.*` (consumer) nor `senhub.*` (producer) — chosen so any producer/consumer
-can speak it and it maps **1:1 onto the future OTel standard**, making migration
-trivial for everyone. `otel.entity.relationship.*` is deliberately avoided (it
-would squat the reserved OTel namespace before the spec exists).
+Relationships ride **embedded** on the source entity's `entity_state` event per the
+OTel entity-events spec ([PR #4836](https://github.com/open-telemetry/semantic-conventions/pull/4836)):
+an `entity.relationships` array, each descriptor a map `{ type, entity.type,
+entity.id }` naming the **target** (the source is the emitting entity). This is the
+**sole on-wire relationship form** — there is no separate relation record and no
+edge-attribute channel (ADR 0022: the engine stores the standard's facts, nothing
+else).
 
-**Strict purity:** a relation record carries **no `otel.entity.*` attribute** —
-its lifecycle is `entity.relation.event.type` ∈ {`state`, `delete`}, plus
-`entity.relation.type`, `entity.relation.from.{type,id}`,
-`entity.relation.to.{type,id}`, and optional `entity.relation.attributes`. A
-relation thus never looks like a malformed entity event to a standard OTel
-consumer (which keys off `otel.entity.*`); it is cleanly ignored there. Both sides
-commit to migrating to the OTel standard once it lands.
+Removal is **by absence**: a relationship the source stops listing on its next
+state event is removed — there is **no explicit relation-delete** on the wire. The
+agent therefore emits each entity's *full current* relationship set every state
+event (like its attribute set), never an incremental add/remove.
 
-Endpoints resolve by **exact identity** against live entities; reference each by
-its current identity. Emit endpoints **before** their edge. Out-of-order edges are
-handled by a reconciliation buffer rather than required ordering — see *Robustness*.
+Endpoints resolve by **exact identity** against live entities; reference each
+target by its current identity. Emit endpoint entities **before** the entity whose
+state embeds the edge. Out-of-order edges are handled by a reconciliation buffer
+rather than required ordering — see *Robustness*.
 
 ### Values — flat maps of scalars, no silent drop
 
@@ -109,10 +108,12 @@ partition). Toise expires entities not re-asserted within their interval.
 
 **Edge liveness is derived from endpoints (decided Q2 = Option A):** deleting an
 entity (explicitly or by expiry) **cascades `relation.removed`** for its incident
-edges, so the agent does **not** emit a relation interval — keep the endpoints
-alive and the edges live with them. `relation_delete` retires an edge while both
-endpoints live; an *optional* `entity.relation.interval` exists as a backstop for a
-missed such delete, but the agent can ignore it.
+edges, so the agent does **not** track edge liveness separately — keep the
+endpoints alive and the edges live with them. To retire an edge while both
+endpoints stay live (e.g. the agent stops monitoring a still-running db), the agent
+**drops that descriptor** from the source's next state event; the reconciler removes
+it by absence. A *missed* such removal is covered by the **source entity's own
+`otel.entity.interval`** — no separate per-edge delete or interval exists.
 
 **Multi-producer liveness — per-producer reference counting (Q1, done):** liveness
 is reference-counted **per producer**, keyed by the Resource `service.instance.id`
@@ -156,31 +157,29 @@ and later `netscaler`, `veeam`, `redfish`, `citrix`, `ibmi`, `network.device`
   `entPhysicalClass=3`) both fall back to the globally-unique `engine:<engineID>`
   (see `otel-mapping.md`).
 
-### Migration to the embedded OTel standard (ADR 0022)
+### Topology as entities — edges stay bare (ADR 0022)
 
-The OTel entity-events spec landed relationships **embedded** in entity-state events
-(spec PR #4836), and Toise's engine is now defined as a **faithful, facts-only store
-of that standard** (ADR 0022). The shapes above are **transitional**; the target the
-producer migrates to:
+Toise's engine is a **faithful, facts-only store** of the OTel entity-events
+standard (ADR 0022), and the embedded relationship model carries **no edge
+attributes**. So anything a producer would have hung on an edge becomes an
+**entity** instead:
 
-- **Relations move from separate `entity.relation.*` records to embedded
-  `entity.relationships`** on the source entity's state event — each descriptor a map
-  `{ type, entity.type, entity.id }` naming the target. Removal is **by absence** (a
-  relation the source stops listing is removed); no explicit relation-delete on the
-  wire. Toise **ingests embedded today** (additive), and the extension keeps working
-  through the transition, so the producer can move at its own pace.
-- **Topology becomes entities; edges become bare.** A port is a `network.interface`
-  entity (`{network.device.id, interface.name}`, with `speed`/`oper_state` as
-  attributes), linked by `has_interface` (device→port); adjacency is a **bare
-  `connected_to`** (port↔port), replacing `adjacent_to` + `{local_port, remote_port}`.
-  A route's `metric` rides on the `network.route` entity, an address's `preferred` on
-  `network.address`, and **provenance** (`source`) on the **instrumentation scope** —
-  never on the edge.
+- **Ports are entities.** A port is a `network.interface` entity
+  (`{network.device.id, interface.name}`, with `speed`/`oper_state` as attributes),
+  linked by `has_interface` (device→port); physical adjacency is a **bare
+  `connected_to`** (port↔port) — never `adjacent_to` carrying `{local_port,
+  remote_port}`.
+- **Attribute-bearing facts move onto their entity.** A route's `metric` rides on the
+  `network.route` entity, an address's `preferred` on `network.address`, and
+  **provenance** (`source`/how an edge was observed) on the **instrumentation
+  scope** — never on the edge.
 - **Identity is unchanged** (`network.device.id` precedence `serial:<PEN>`/…, exact
   matching, per-producer liveness) — those are facts and stay.
 
-The **conformance fixture now demonstrates this target model**. This contract resync
-is tracked at #73. See ADR 0022 and
+The **conformance fixture demonstrates this model** (port entities + embedded
+`has_interface`/`connected_to`). The producer-side resync is tracked at
+[senhub-agent #222](https://github.com/senhub-io/senhub-agent/issues/222); the
+Toise-side contract is tracked at #73. See ADR 0022 and
 `docs/architecture/migration-embedded-relationships.md`.
 
 ### Planning & status
@@ -192,12 +191,12 @@ from this round:
 
 | Item | Status |
 | ---- | ------ |
-| Vendor-neutral `entity.relation.*` keys | **done** (PR #17) |
+| Embedded `entity.relationships` ingestion (sole on-wire form) | **done** (#74) |
 | Producer vocabulary in the registry | **done** (PR #16) |
-| Conformance fixture / contract test | **done** (PR #17) |
+| Conformance fixture / contract test | **done** (embedded-only, #74) |
 | Exact-Id matching (retire fuzzy `identity_changed`) | **done** (ADR 0018) |
 | Entity interval TTL sweeper | **done** (`--liveness-sweep-interval`) |
-| Edge liveness derived from endpoints (cascade) + optional per-edge TTL | **done** |
+| Edge liveness derived from endpoints (cascade) + removal-by-absence | **done** |
 | Out-of-order edge reconciliation buffer | **done** (opt-in, `--relation-buffer-ttl`) |
 | Explicit `Warn` on dropped nested value | **done** |
 | Multi-producer liveness (per-producer ref-counting) | **done** (ADR 0019) |
@@ -205,7 +204,8 @@ from this round:
 ## Follow-up
 
 - **senhub-agent #185** implements the emitter against the converged contract:
-  standard OTel nodes (unblocked today) and `entity.relation.*` edges. Emit to
+  standard OTel nodes with **embedded `entity.relationships`** (the sole edge form,
+  per [#222](https://github.com/senhub-io/senhub-agent/issues/222)). Emit to
   reproduce the shared conformance fixture
   (`internal/ingest/testdata/conformance/entity-events.json`).
 - **Toise (this repo)** has landed exact-Id matching (ADR 0018) and ships the

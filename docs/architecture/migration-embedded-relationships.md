@@ -1,12 +1,18 @@
 # Migration plan — embedded relationships & a facts-only engine
 
+> **Status (2026-06): executed as a clean break.** Toise is pre-1.0/alpha, so the
+> staged "additive, no-breakage" transition below was **collapsed**: embedded
+> `entity.relationships` is now the **sole** on-wire relationship form and the
+> `entity.relation.*` extension was **removed outright** (#74), not deprecated over a
+> compat window. Phases A–C all landed; the producer-side resync is tracked at
+> [senhub-agent #222](https://github.com/senhub-io/senhub-agent/issues/222). The
+> phased text is kept below as the design record.
+
 Implements the decision in [ADR 0022](./adr/0022-engine-stores-facts-only.md) (which
 resolves issue #65). The engine stores only asserted facts as OTel entity-events;
-relationships move from the separate `entity.relation.*` extension to the spec's
-**embedded** `entity.relationships`, attribute-bearing concerns become **entities**,
-provenance moves to the **observer scope**, and edge attributes are retired. The
-pivot is **staged and deliberate** — the spec (PR #4836) is approved-not-merged and
-the OTel libraries we pin (ADR 0015) do not emit embedded relationships yet.
+relationships moved from the separate `entity.relation.*` extension to the spec's
+**embedded** `entity.relationships`, attribute-bearing concerns became **entities**,
+provenance moves to the **observer scope**, and edge attributes are retired.
 
 ## Current → target
 
@@ -54,9 +60,10 @@ precedence `serial:<PEN>`/…) stays — it is fact.
   relationships, not attributed edges. Cross-repo; coordinated with the producer (not
   unilateral).
 
-### Phase C — retire the extension
-- Mark `entity.relation.*` deprecated in the docs; once producers emit embedded,
-  remove the extension ingestion + strict-purity routing and the edge-attribute paths.
+### Phase C — retire the extension (done, #74)
+- The `entity.relation.*` extension ingestion, its strict-purity routing, and the
+  edge-attribute paths were **removed outright** (no deprecation window — alpha). The
+  conformance fixture and the contract docs are embedded-only.
 
 ## Sequencing & gating
 - **Phase A is safe to start now** (purely additive) — but end-to-end testing against a
@@ -86,5 +93,5 @@ precedence `serial:<PEN>`/…) stays — it is fact.
 3. **[Phase B]** Topology as entities: ports → `network.interface`, `has_interface`, bare `connected_to`; `metric`→route, `preferred`→address; provenance→scope.
 4. **[Phase B]** Rewrite the conformance fixture to embedded + entities (drop edge attributes).
 5. **[Phase B, producer lane]** senhub-agent contract resync (Lot 5) — cross-repo coordination.
-6. **[Phase C]** Deprecate then remove the `entity.relation.*` extension + strict-purity routing.
+6. **[Phase C — done, #74]** Remove the `entity.relation.*` extension + strict-purity routing.
 7. Close #65 (decided by ADR 0022); track implementation via the issues above.

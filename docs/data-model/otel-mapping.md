@@ -20,10 +20,11 @@ default and what senhub-agent ships, so it works out of the box with no
 
 ## Wire shape: the exact LogRecord attributes Toise reads
 
-The ingest boundary classifies each `LogRecord` by **which lifecycle key is
-present**: `otel.entity.event.type` marks an **entity event** (standard OTel),
-`entity.relation.event.type` marks a **relation event** (the extension). A record
-with neither is ignored (treated as an ordinary log). The scope is **not**
+The ingest boundary classifies each `LogRecord` by its lifecycle key
+`otel.entity.event.type` (`entity_state` / `entity_delete`): a record carrying it
+is an **entity event**, a record without it is ignored (treated as an ordinary
+log). **Relationships are not separate records** — they ride **embedded** on
+entity-state events (the OTel standard, see below). The scope is **not**
 inspected — Toise does not require the experimental `otel.entity.entity_event=true`
 instrumentation-scope flag; a producer may set it for spec fidelity, but Toise
 neither reads nor requires it.
@@ -49,73 +50,47 @@ Notes:
 - A `schema_url` is part of the model but is **not currently read** at the OTLP
   boundary; entities ingested via OTLP carry an empty schema URL for now.
 
-### Relation events — the `entity.relation.*` extension (non-standard)
+### Relationships — embedded on entity-state events (OTel standard)
 
-The OTel Entity Data Model does **not yet model entity-to-entity relationships**;
-[OTEP 0256](https://github.com/open-telemetry/oteps/blob/main/text/entities/0256-entities-data-model.md)
-lists relationships as explicit *Future Work* (citing exactly cases like
-"Process runs on Host"). Toise needs a temporal **graph**, so it ingests edges
-today via a **vendor-neutral, non-standard extension** that never pretends to be
-standard OTel. It rides the same LogRecord convention:
+Relationships are carried **embedded** in an entity *state* event, per the OTel
+entity-events spec ([PR #4836](https://github.com/open-telemetry/semantic-conventions/pull/4836)):
+an `entity.relationships` array on the source entity, each descriptor a map naming
+the **target** (the source is the emitting entity). This is the **sole on-wire
+relationship form** — there is no separate relation record and no edge-attribute
+channel ([ADR 0022](../architecture/adr/0022-engine-stores-facts-only.md): the
+engine stores the standard's facts, nothing else).
 
-| LogRecord attribute            | Type    | Required | Meaning                                              |
-| ------------------------------ | ------- | -------- | ---------------------------------------------------- |
-| `entity.relation.event.type`   | string  | yes      | `state` (upsert) or `delete`                         |
-| `entity.relation.interval`     | int     | no       | heartbeat cadence in **milliseconds**; arms the edge liveness backstop |
-| `entity.relation.type`         | string  | yes      | the relation type — **must be in Toise's registry**  |
-| `entity.relation.from.type`    | string  | yes      | source endpoint entity type                          |
-| `entity.relation.from.id`      | **map** | yes      | source endpoint identity                             |
-| `entity.relation.to.type`      | string  | yes      | target endpoint entity type                          |
-| `entity.relation.to.id`        | **map** | yes      | target endpoint identity                             |
-| `entity.relation.attributes`   | **map** | no       | descriptive edge attributes                          |
+| `entity.relationships[]` descriptor field | Type    | Required | Meaning                                             |
+| ----------------------------------------- | ------- | -------- | --------------------------------------------------- |
+| `type`                                    | string  | yes      | the relation type — **must be in Toise's registry** |
+| `entity.type`                             | string  | yes      | the **target** endpoint entity type                 |
+| `entity.id`                               | **map** | yes      | the **target** endpoint identity                    |
 
-**Why `entity.relation.*` (vendor-neutral), not `toise.*` or `senhub.*`:** the
-extension carries neither a consumer prefix (`toise.*`) nor a producer prefix
-(`senhub.*`). A neutral name lets any producer and any consumer speak it, and is
-shaped to map **1:1 onto the eventual OTel relationships standard**, so migration
-is trivial for everyone. We deliberately avoid `otel.entity.relationship.*` too —
-that would squat the reserved OTel namespace before the spec exists. The extension
-is explicitly **transitional** and both sides commit to migrating to the standard
-once it lands.
+The ingest boundary parses `entity.relationships` on each entity-state event and
+translates each descriptor into the engine's first-class relation event (`from` =
+the emitting entity, `to` = the descriptor target), **reconciling per source**: new
+descriptors are observed, and a descriptor the source **stops listing** is
+**removed by absence** — there is no explicit relation-delete on the wire. The
+per-source bookkeeping is in-memory; after a restart the first re-emit
+re-establishes the set, and the interval liveness backstop covers a producer that
+vanishes (see *Edge liveness*).
 
-**Strict purity:** a relation record carries **no `otel.entity.*` attribute at
-all** — its lifecycle is the neutral `entity.relation.event.type` (`state` /
-`delete`), never `otel.entity.event.type`. This matters for interop: a record with
-`otel.entity.event.type=relation_state` but no `otel.entity.type`/`id` would look
-like a *malformed* entity event to a standard OTel entity-events consumer; carrying
-no `otel.entity.*`, the relation record is instead cleanly ignored by such a
-consumer. The boundary routes by which lifecycle key is present:
-`otel.entity.event.type` → entity event, `entity.relation.event.type` → relation.
+**No edge attributes.** A relationship descriptor carries only `type` + target;
+anything that wants to describe *how* two things relate becomes an **entity** (a
+port is a `network.interface`, a route is a `network.route`) or rides on the
+instrumentation scope (provenance) — never on the edge. See *topology as entities*
+below.
 
 **Endpoint resolution is by exact identity**, against a **live** entity by
-`(type, identity)`. Endpoint identities must be the entity's current identity.
-Producers should still emit the endpoint `entity_state` events **before** the
-edge, but ordering is **not required**: with the **reconciliation buffer** enabled
-(`--relation-buffer-ttl`, on by default in `toise-server`), an edge whose endpoint
-is not yet present is **parked** and retried as later entities arrive, and dropped
-with a `Warn` only if its endpoints have not appeared within the TTL — so
-out-of-order delivery (OTLP guarantees no inter-batch order) never silently loses
-edges. With the buffer disabled, a missing endpoint is a retriable ingest error
-instead. See *Robustness backstops* below.
-
-### Embedded relationships — the OTel standard, ingested additively
-
-The OTel entity-events spec (PR #4836, approved-not-merged) models relationships
-**embedded** in an entity *state* event: an `entity.relationships` array, each
-descriptor a map `{ type, entity.type, entity.id }` naming the **target** (the
-source is the emitting entity). There is no edge attribute and no explicit edge
-delete — a relation a producer stops listing on its source's state is **removed by
-absence**.
-
-Toise **ingests this additively, today** (alongside the extension above): the ingest
-boundary parses `entity.relationships` on each entity-state event and translates the
-descriptors into the engine's first-class relation events (`from` = the emitting
-entity, `to` = the target), reconciling per source — new descriptors are observed,
-dropped ones are removed. This is the **direction of travel** per
-[ADR 0022](../architecture/adr/0022-engine-stores-facts-only.md): the standard
-embedded form is the wire model the engine consumes, the `entity.relation.*`
-extension is transitional, and attribute-bearing concerns move onto entities. See
-`docs/architecture/migration-embedded-relationships.md`.
+`(type, identity)`. The descriptor's `entity.id` must be the target's current
+identity. Producers should emit the endpoint `entity_state` events **before** the
+entity whose state embeds the edge, but ordering is **not required**: with the
+**reconciliation buffer** enabled (`--relation-buffer-ttl`, on by default in
+`toise-server`), an edge whose endpoint is not yet present is **parked** and
+retried as later entities arrive, and dropped with a `Warn` only if its endpoints
+have not appeared within the TTL — so out-of-order delivery (OTLP guarantees no
+inter-batch order) never silently loses edges. With the buffer disabled, a missing
+endpoint is a retriable ingest error instead. See *Robustness backstops* below.
 
 ## Mapping table
 
@@ -181,12 +156,13 @@ from its endpoints**: when an entity is deleted — explicitly or by expiry — 
 (heartbeat + interval) and the edges live with them; let a node die and its edges
 die with it.
 
-`relation_delete` remains available for retiring an edge while both endpoints
-live (e.g. an agent stops monitoring a still-running db). As an **optional**
-backstop for a *missed* such delete, a relation may carry its own
-`entity.relation.interval` (ms) — Toise then expires that edge with
-`relation.removed` if it is not re-asserted in time. Most producers can ignore it
-and rely on endpoint-derived liveness plus explicit `relation_delete`.
+To retire an edge **while both endpoints stay live** (e.g. an agent stops
+monitoring a still-running db), the producer simply **stops listing that
+descriptor** on the source's next state event: the reconciler removes it by
+absence. Because the edge rides on the source entity, a *missed* removal is covered
+by the **source's own `otel.entity.interval`** — when the producer vanishes, the
+source expires and its incident edges cascade out. There is no separate per-edge
+delete or per-edge interval; the source entity's liveness is the edge's liveness.
 
 #### Multi-producer liveness — per-producer reference counting
 
@@ -312,25 +288,19 @@ ids are the **unresolved exception**. This keeps Lot 5 fully exact and minimizes
 identity-promotion churn (a provisional→canonical promotion is a delete+create, with
 edges re-pointed and the stale node expiring by cascade + interval).
 
-`adjacent_to` is emitted as **one directed edge, polled→neighbor** (Toise neighbor
-traversal is direction-agnostic, so no reciprocal duplicate), carrying `local_port`
-/ `remote_port` as descriptive edge attributes.
-
-**Direction of travel — topology as entities (ADR 0022).** The form above carries
-edge attributes, which the OTel embedded relationship model cannot. The target model
-promotes them to entities so edges stay bare: a **port is a `network.interface`
-entity** (identity `{network.device.id, interface.name}`, with `speed`/`oper_state`
-as its attributes), linked by `has_interface` (device→interface), and adjacency is a
-**bare `connected_to`** (interface↔interface) — the spec-embeddable form that
-supersedes `adjacent_to` + port attributes. Likewise a route's `metric` rides on the
+**Topology as entities (ADR 0022).** Because the embedded relationship model carries
+**no edge attributes**, anything an edge would have described is promoted to an
+entity so edges stay bare. A **port is a `network.interface` entity** (identity
+`{network.device.id, interface.name}`, with `speed`/`oper_state` as its attributes),
+linked by `has_interface` (device→interface); physical adjacency is a **bare
+`connected_to`** (interface↔interface). Likewise a route's `metric` rides on the
 `network.route` entity, an address's `preferred` flag on the `network.address`
 entity, and **provenance** (how an edge was observed) on the **instrumentation
-scope**, never on the edge. Device-level `adjacent_to` becomes a **derived** read-side
-view (a surcouche), not a stored fact. `connected_to` is **registered** and the
-**conformance fixture now demonstrates this target model** (port entities + bare
-`connected_to`). The producer emission migrates with the contract resync; Toise still
-**ingests** the transitional `adjacent_to`+ports form above until the producer is
-moved over.
+scope**, never on the edge. Device-level adjacency (the former `adjacent_to` with
+`local_port`/`remote_port`) becomes a **derived** read-side view (a surcouche) over
+the port `connected_to` edges, not a stored fact. `connected_to` is **registered**
+and the **conformance fixture demonstrates this model** (port entities + bare
+`connected_to`).
 
 **Cadence:** poll topology **slower than metrics** (≈5–15 min); set
 `otel.entity.interval` to ≈**3× the topology cadence** (not the metric cadence) or
@@ -347,17 +317,17 @@ producer-resolved and needs none of it.)*
 
 ### Type registry — types must be known
 
-`otel.entity.type` and `entity.relation.type` are validated against Toise's
-**type registry**; an unregistered type is **rejected** at the boundary. The
-registry is:
+`otel.entity.type` and each embedded relationship descriptor's `type` are validated
+against Toise's **type registry**; an unregistered type is **rejected** at the
+boundary. The registry is:
 
 - **entities:** `host`, `process`, `network.interface`, `network.address`,
   `network.route`, `service.listener`, and the producer vocabulary
   `service.instance`, `db`, `network.device`;
 - **relations:** `runs_on`, `has_interface`, `bound_to`, `next_hop_via`,
-  `listens_on`, and the producer vocabulary `monitors`, `routes_via`,
-  `forwards_to`, `adjacent_to` (each with declared endpoint types and a
-  structural flag).
+  `listens_on`, `connected_to`, and the producer vocabulary `monitors`,
+  `routes_via`, `forwards_to`, `adjacent_to` (each with declared endpoint types and
+  a structural flag).
 
 `runs_on` is the foundational producer edge — `service.instance --runs_on--> host`
 as well as the existing `process --runs_on--> host`. Endpoint-type pairings are
@@ -383,7 +353,7 @@ planned:
 | ------- | -------- | ------ |
 | Entity collisions | exact-Id matching (no fuzzy merge) | **done** (ADR 0018) |
 | Missed entity deletes | explicit `entity_delete` + `otel.entity.interval` TTL backstop | **done** |
-| Edge liveness | derived from endpoints (cascade `relation.removed`); optional per-edge `entity.relation.interval` | **done** |
+| Edge liveness | derived from endpoints (cascade `relation.removed`) + removal-by-absence on the source's state | **done** |
 | Out-of-order edges | reconciliation buffer (park & flush, opt-in) | **done** |
 | Nested values | explicit `Warn` on drop (never silent) | **done** |
 | Multi-producer liveness | per-producer reference counting (keyed by Resource `service.instance.id`) | **done** (ADR 0019) |

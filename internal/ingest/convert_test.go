@@ -50,15 +50,6 @@ func newRecord(eventType string) plog.LogRecord {
 	return lr
 }
 
-// newRelRecord builds a relation record carrying only the neutral relation
-// lifecycle key (no otel.entity.* — strict purity).
-func newRelRecord(relEvent string) plog.LogRecord {
-	lr := plog.NewLogRecord()
-	lr.SetTimestamp(pcommon.NewTimestampFromTime(time.Unix(1_700_000_000, 0)))
-	lr.Attributes().PutStr(attrRelEventType, relEvent)
-	return lr
-}
-
 func TestRouteEntityState(t *testing.T) {
 	lr := newRecord(evEntityState)
 	a := lr.Attributes()
@@ -147,24 +138,6 @@ func TestRouteParsesInterval(t *testing.T) {
 	}
 }
 
-func TestRouteParsesRelationInterval(t *testing.T) {
-	lr := newRelRecord(evRelState)
-	a := lr.Attributes()
-	a.PutStr(attrRelType, model.RelRunsOn)
-	a.PutStr(attrRelFromType, model.TypeProcess)
-	a.PutEmptyMap(attrRelFromID).PutStr("process.executable.name", "nginx")
-	a.PutStr(attrRelToType, model.TypeHost)
-	a.PutEmptyMap(attrRelToID).PutStr("host.id", "h1")
-	a.PutInt(attrRelInterval, 60_000) // 60s in milliseconds
-	f := &fakeEngine{}
-	if _, _, err := routeRecord(f, lr, ""); err != nil {
-		t.Fatal(err)
-	}
-	if f.lastRelation.Interval != time.Minute {
-		t.Errorf("relation interval = %v, want 1m", f.lastRelation.Interval)
-	}
-}
-
 func TestRouteSetsProducer(t *testing.T) {
 	lr := newRecord(evEntityState)
 	a := lr.Attributes()
@@ -198,44 +171,5 @@ func TestRouteEntityDelete(t *testing.T) {
 	f := &fakeEngine{}
 	if handled, _, err := routeRecord(f, lr, ""); !handled || err != nil || f.deletes != 1 {
 		t.Errorf("delete: handled=%v err=%v deletes=%d", handled, err, f.deletes)
-	}
-}
-
-func TestRouteRelation(t *testing.T) {
-	lr := newRelRecord(evRelState)
-	a := lr.Attributes()
-	a.PutStr(attrRelType, model.RelRunsOn)
-	a.PutStr(attrRelFromType, model.TypeProcess)
-	a.PutEmptyMap(attrRelFromID).PutStr("pid", "100")
-	a.PutStr(attrRelToType, model.TypeHost)
-	a.PutEmptyMap(attrRelToID).PutStr("host.id", "h1")
-	f := &fakeEngine{}
-	if handled, _, err := routeRecord(f, lr, ""); !handled || err != nil || f.relAdds != 1 {
-		t.Errorf("relation: handled=%v err=%v relAdds=%d", handled, err, f.relAdds)
-	}
-	if f.lastRelation.From.Type != model.TypeProcess || f.lastRelation.To.Type != model.TypeHost {
-		t.Errorf("relation obs = %+v", f.lastRelation)
-	}
-
-	// relation delete
-	lr2 := newRelRecord(evRelDelete)
-	a2 := lr2.Attributes()
-	a2.PutStr(attrRelType, model.RelRunsOn)
-	a2.PutStr(attrRelFromType, model.TypeProcess)
-	a2.PutEmptyMap(attrRelFromID).PutStr("pid", "100")
-	a2.PutStr(attrRelToType, model.TypeHost)
-	a2.PutEmptyMap(attrRelToID).PutStr("host.id", "h1")
-	if handled, _, err := routeRecord(f, lr2, ""); !handled || err != nil || f.relRemoves != 1 {
-		t.Errorf("relation delete: handled=%v err=%v relRemoves=%d", handled, err, f.relRemoves)
-	}
-}
-
-func TestRouteRelationMissingEndpoint(t *testing.T) {
-	lr := newRelRecord(evRelState)
-	lr.Attributes().PutStr(attrRelType, model.RelRunsOn)
-	// no endpoints
-	f := &fakeEngine{}
-	if handled, _, err := routeRecord(f, lr, ""); !handled || err == nil {
-		t.Errorf("missing endpoints: handled=%v err=%v", handled, err)
 	}
 }

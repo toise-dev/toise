@@ -29,9 +29,9 @@ const conformanceFile = "testdata/conformance/entity-events.json"
 // senhub-agent-contract.md). The marshaled OTLP/JSON is the shared conformance
 // artifact: senhub-agent (#185) emits to reproduce it, Toise ingests it here and
 // asserts the resulting graph. Every record uses the agreed conventions — the
-// standard otel.entity.* shape for nodes, the vendor-neutral entity.relation.*
-// extension for edges, flat scalar maps, endpoints emitted before their edges,
-// and an explicit entity_delete.
+// standard otel.entity.* shape for nodes, relationships **embedded** on entity
+// state events (the sole on-wire edge form, ADR 0022), flat scalar maps, endpoints
+// emitted before their edges, and an explicit entity_delete.
 func buildConformanceLogs() plog.Logs {
 	logs := plog.NewLogs()
 	sl := logs.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty()
@@ -43,7 +43,17 @@ func buildConformanceLogs() plog.Logs {
 		n++
 		return lr
 	}
-	entity := func(event, typ string, id, attrs map[string]any) {
+	// embRel is a single embedded relationship descriptor (OTel spec form, PR #4836):
+	// the relationship type and its target entity. The source is the entity carrying it.
+	type embRel struct {
+		typ, toType string
+		toID        map[string]any
+	}
+	// entity emits an entity lifecycle event. An entity_state MAY carry embedded
+	// relationships: each rides on the source entity's state event as an
+	// entity.relationships descriptor naming the target (the sole on-wire edge form,
+	// ADR 0022). Removal is by absence — a re-emit that drops a descriptor removes it.
+	entity := func(event, typ string, id, attrs map[string]any, rels ...embRel) {
 		a := rec().Attributes()
 		a.PutStr(attrEventType, event)
 		a.PutStr(attrEntityType, typ)
@@ -51,48 +61,20 @@ func buildConformanceLogs() plog.Logs {
 		if attrs != nil {
 			putMap(a.PutEmptyMap(attrEntityAttrs), attrs)
 		}
-	}
-	// relation carries only the neutral relation lifecycle key (strict purity):
-	// no otel.entity.* attribute, so a standard OTel entity consumer ignores it.
-	relation := func(event, relType, fromType string, fromID map[string]any, toType string, toID map[string]any, attrs map[string]any) {
-		a := rec().Attributes()
-		a.PutStr(attrRelEventType, event)
-		a.PutStr(attrRelType, relType)
-		a.PutStr(attrRelFromType, fromType)
-		putMap(a.PutEmptyMap(attrRelFromID), fromID)
-		a.PutStr(attrRelToType, toType)
-		putMap(a.PutEmptyMap(attrRelToID), toID)
-		if attrs != nil {
-			putMap(a.PutEmptyMap(attrRelAttrs), attrs)
-		}
-	}
-	// entityRels appends an entity-state record carrying embedded relationships (the
-	// OTel spec form, PR #4836): the relationships ride on the entity's state event
-	// as an entity.relationships array; the source is this entity, each descriptor
-	// names the target.
-	type embRel struct {
-		typ, toType string
-		toID        map[string]any
-	}
-	entityRels := func(typ string, id, attrs map[string]any, rels []embRel) {
-		a := rec().Attributes()
-		a.PutStr(attrEventType, evEntityState)
-		a.PutStr(attrEntityType, typ)
-		putMap(a.PutEmptyMap(attrEntityID), id)
-		if attrs != nil {
-			putMap(a.PutEmptyMap(attrEntityAttrs), attrs)
-		}
-		sl := a.PutEmptySlice(attrEntityRelationships)
-		for _, r := range rels {
-			m := sl.AppendEmpty().SetEmptyMap()
-			m.PutStr(relDescType, r.typ)
-			m.PutStr(relDescEntityType, r.toType)
-			putMap(m.PutEmptyMap(relDescEntityID), r.toID)
+		if len(rels) > 0 {
+			slv := a.PutEmptySlice(attrEntityRelationships)
+			for _, r := range rels {
+				m := slv.AppendEmpty().SetEmptyMap()
+				m.PutStr(relDescType, r.typ)
+				m.PutStr(relDescEntityType, r.toType)
+				putMap(m.PutEmptyMap(relDescEntityID), r.toID)
+			}
 		}
 	}
 
 	hostID := map[string]any{"host.id": "h-001"}
 	agentID := map[string]any{"service.instance.id": "agent-7f3a"}
+	agentAttrs := map[string]any{"service.name": "senhub-agent", "service.version": "1.0.0"}
 	dbID := map[string]any{"db.instance.id": "postgresql:7311168095704935424"} // stable source id (PG system_identifier), NOT network-derived
 	// network.device.id is a single key whose value is subtype-prefixed and chosen by
 	// the producer's precedence: serial:<PEN>:<n> > engine: > mac: (LLDP) > name: >
@@ -102,39 +84,45 @@ func buildConformanceLogs() plog.Logs {
 	// descriptive attributes, never as identity.
 	sw1 := map[string]any{"network.device.id": "serial:9:FOC2150X0AB"}
 	sw2 := map[string]any{"network.device.id": "mac:00:1a:2b:3c:4d:5e"}
-
-	// 1-3: nodes (standard OTel). Endpoints exist before the edges reference them.
-	// The agent carries its runs_on -> host as an EMBEDDED relationship (the OTel
-	// spec form, PR #4836): the edge rides on the agent's state event, no separate
-	// record. The host (1) exists before this edge is asserted.
-	entity(evEntityState, model.TypeHost, hostID, map[string]any{"host.name": "web-server-1", "os.type": "linux"})
-	entityRels(model.TypeServiceInstance, agentID, map[string]any{"service.name": "senhub-agent", "service.version": "1.0.0"},
-		[]embRel{{typ: model.RelRunsOn, toType: model.TypeHost, toID: hostID}})
-	entity(evEntityState, model.TypeDatabase, dbID, map[string]any{"db.system.name": "postgresql", "server.address": "10.0.1.5", "server.port": int64(5432)})
-	// 4: the agent monitors the db (Lot 2, observation) via the entity.relation.*
-	// extension — both wire forms (embedded above, extension here) are exercised.
-	relation(evRelState, model.RelMonitors, model.TypeServiceInstance, agentID, model.TypeDatabase, dbID, nil)
-	// 6: descriptive attribute added -> entity.attribute_updated.
-	entity(evEntityState, model.TypeDatabase, dbID, map[string]any{"db.system.name": "postgresql", "server.address": "10.0.1.5", "server.port": int64(5432), "db.connection.count": int64(12)})
-	// 7-8: the db goes away — remove its edge first (endpoints must be live), then delete it.
-	relation(evRelDelete, model.RelMonitors, model.TypeServiceInstance, agentID, model.TypeDatabase, dbID, nil)
-	entity(evEntityDelete, model.TypeDatabase, dbID, nil)
-	// 9-15: discovered network assets as the topology-as-entities model (ADR 0022):
-	// switches, their **ports as `network.interface` entities**, and a **bare
-	// `connected_to`** (port-to-port) adjacency. No edge attributes — the ports carry
-	// their own facts (oper_state, speed); device-level adjacency is *derived* at read,
-	// not stored. Device identity stays anchored on observer-independent SNMP facts;
-	// the mutable mgmt IP and sysName are descriptive only. Port identity is composite
-	// (the device id + the interface name). Endpoints exist before their edges.
-	porta := map[string]any{"network.device.id": "serial:9:FOC2150X0AB", "interface.name": "Gi1/0/1"}
+	porta := map[string]any{"network.device.id": "serial:9:FOC2150X0AB", "interface.name": "Gi1/0/1"} // composite: device id + interface name
 	portb := map[string]any{"network.device.id": "mac:00:1a:2b:3c:4d:5e", "interface.name": "Gi1/0/24"}
-	entity(evEntityState, model.TypeNetworkDevice, sw1, map[string]any{"device.role": "switch", "sys.name": "core-sw-01", "mgmt.ip": "10.0.0.1"})
-	entity(evEntityState, model.TypeNetworkDevice, sw2, map[string]any{"device.role": "switch", "sys.name": "core-sw-02", "mgmt.ip": "10.0.0.2"})
-	entity(evEntityState, model.TypeNetworkInterface, porta, map[string]any{"oper_state": "up", "speed": int64(1_000_000_000)})
+
+	// 1-3: nodes. Endpoints exist before any edge references them. The agent carries
+	// its runs_on -> host as an EMBEDDED relationship on its state event; the host (1)
+	// exists first.
+	entity(evEntityState, model.TypeHost, hostID, map[string]any{"host.name": "web-server-1", "os.type": "linux"})
+	entity(evEntityState, model.TypeServiceInstance, agentID, agentAttrs,
+		embRel{model.RelRunsOn, model.TypeHost, hostID})
+	entity(evEntityState, model.TypeDatabase, dbID, map[string]any{"db.system.name": "postgresql", "server.address": "10.0.1.5", "server.port": int64(5432)})
+	// 4: the agent now also monitors the db (Lot 2) — the edge appears in its
+	// relationships set -> entity.relation added. runs_on is re-asserted (heartbeat).
+	entity(evEntityState, model.TypeServiceInstance, agentID, agentAttrs,
+		embRel{model.RelRunsOn, model.TypeHost, hostID},
+		embRel{model.RelMonitors, model.TypeDatabase, dbID})
+	// 5: descriptive attribute added on the db -> entity.attribute_updated.
+	entity(evEntityState, model.TypeDatabase, dbID, map[string]any{"db.system.name": "postgresql", "server.address": "10.0.1.5", "server.port": int64(5432), "db.connection.count": int64(12)})
+	// 6: the agent stops listing monitors -> removed by absence (no explicit
+	// relation-delete on the wire); runs_on stays.
+	entity(evEntityState, model.TypeServiceInstance, agentID, agentAttrs,
+		embRel{model.RelRunsOn, model.TypeHost, hostID})
+	// 7: the db goes away (its monitors edge is already gone, so the delete is clean).
+	entity(evEntityDelete, model.TypeDatabase, dbID, nil)
+	// 8-11: discovered network assets as the topology-as-entities model (ADR 0022):
+	// switches, their **ports as `network.interface` entities**, `has_interface`
+	// (device->port) and a **bare `connected_to`** (port-to-port) adjacency, all
+	// embedded. No edge attributes — the ports carry their own facts (oper_state,
+	// speed); device-level adjacency is *derived* at read, not stored. Device identity
+	// stays anchored on observer-independent SNMP facts; the mutable mgmt IP and
+	// sysName are descriptive only. Each edge's endpoints exist first: portb and porta
+	// precede the switches that embed has_interface, and porta embeds connected_to ->
+	// the already-present portb.
 	entity(evEntityState, model.TypeNetworkInterface, portb, map[string]any{"oper_state": "up", "speed": int64(1_000_000_000)})
-	relation(evRelState, model.RelHasInterface, model.TypeNetworkDevice, sw1, model.TypeNetworkInterface, porta, nil)
-	relation(evRelState, model.RelHasInterface, model.TypeNetworkDevice, sw2, model.TypeNetworkInterface, portb, nil)
-	relation(evRelState, model.RelConnectedTo, model.TypeNetworkInterface, porta, model.TypeNetworkInterface, portb, nil)
+	entity(evEntityState, model.TypeNetworkInterface, porta, map[string]any{"oper_state": "up", "speed": int64(1_000_000_000)},
+		embRel{model.RelConnectedTo, model.TypeNetworkInterface, portb})
+	entity(evEntityState, model.TypeNetworkDevice, sw1, map[string]any{"device.role": "switch", "sys.name": "core-sw-01", "mgmt.ip": "10.0.0.1"},
+		embRel{model.RelHasInterface, model.TypeNetworkInterface, porta})
+	entity(evEntityState, model.TypeNetworkDevice, sw2, map[string]any{"device.role": "switch", "sys.name": "core-sw-02", "mgmt.ip": "10.0.0.2"},
+		embRel{model.RelHasInterface, model.TypeNetworkInterface, portb})
 
 	return logs
 }
