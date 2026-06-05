@@ -14,7 +14,6 @@ package main
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"log/slog"
 	"net"
@@ -27,6 +26,7 @@ import (
 	"github.com/99designs/gqlgen/graphql/playground"
 
 	"github.com/toise-dev/toise/internal/change"
+	"github.com/toise-dev/toise/internal/config"
 	"github.com/toise-dev/toise/internal/debugui"
 	"github.com/toise-dev/toise/internal/graphql"
 	"github.com/toise-dev/toise/internal/graphql/resolvers"
@@ -38,34 +38,22 @@ import (
 )
 
 func main() {
-	listen := "127.0.0.1:8080"
-	otlpListen := "127.0.0.1:4317"
-	dataDir := "toise-data"
-	var mcpStdio bool
-	relationBufferTTL := 30 * time.Second
-	livenessSweepInterval := 30 * time.Second
-	cfg := store.DefaultConfig()
-
-	fs := flag.NewFlagSet("toise-server", flag.ExitOnError)
-	fs.StringVar(&listen, "listen", listen, "address for the GraphQL/HTTP server (loopback by default; phase 1 has no auth)")
-	fs.StringVar(&otlpListen, "otlp-listen", otlpListen, "address for the OTLP/gRPC ingestion server")
-	fs.StringVar(&dataDir, "data-dir", dataDir, "directory for the Pebble event log")
-	fs.BoolVar(&mcpStdio, "mcp-stdio", mcpStdio, "serve only the MCP server over stdio (for Claude Desktop); no HTTP or OTLP servers")
-	fs.DurationVar(&relationBufferTTL, "relation-buffer-ttl", relationBufferTTL,
-		"how long to hold an out-of-order edge waiting for its endpoints before dropping it (0 = disabled)")
-	fs.DurationVar(&livenessSweepInterval, "liveness-sweep-interval", livenessSweepInterval,
-		"how often to expire entities past their heartbeat interval (0 = disabled)")
-	fs.DurationVar(&cfg.RetentionMaxAge, "retention-max-age", cfg.RetentionMaxAge,
-		"maximum age of retained events (0 = unlimited)")
-	fs.DurationVar(&cfg.CompactionInterval, "retention-compaction-interval", cfg.CompactionInterval,
-		"interval between heartbeat-coalescing compactions")
-	if err := fs.Parse(os.Args[1:]); err != nil {
+	cfg, err := config.Load(os.Args[1:], os.Getenv)
+	if errors.Is(err, config.ErrHelp) {
+		os.Exit(0)
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
 
+	storeCfg := store.DefaultConfig()
+	storeCfg.RetentionMaxAge = cfg.RetentionMaxAge.D()
+	storeCfg.CompactionInterval = cfg.CompactionInterval.D()
+
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	if err := run(listen, otlpListen, dataDir, mcpStdio, relationBufferTTL, livenessSweepInterval, cfg, logger); err != nil {
+	if err := run(cfg.Listen, cfg.OTLPListen, cfg.DataDir, cfg.MCPStdio,
+		cfg.RelationBufferTTL.D(), cfg.LivenessSweepInterval.D(), storeCfg, logger); err != nil {
 		logger.Error("server failed", "err", err)
 		os.Exit(1)
 	}

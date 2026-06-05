@@ -228,6 +228,7 @@ merged in #81)**. Producer-side resync: senhub-agent #222.
 | 0020 | weighted-multi-source-identity (Phase-2 path for non-convergent sources) | post-phase-1 | draft |
 | 0021 | human-interface-boundary (dataviz/NL are edge surcouches, not core) | post-phase-1 | written |
 | 0022 | engine-stores-facts-only (embedded relationships; topology as entities) | post-phase-1 | written |
+| 0023 | layered-configuration (defaults < file < env < flags) | post-phase-1 | written |
 
 ## Demo scenario (patch 9)
 

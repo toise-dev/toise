@@ -1,0 +1,32 @@
+# Example toise-server configuration.
+#
+# Run with:  toise-server --config /etc/toise/toise-server.yaml
+#       or:  TOISE_CONFIG=/etc/toise/toise-server.yaml toise-server
+#
+# Precedence (lowest to highest): defaults < this file < TOISE_* env vars < flags.
+# Every key is OPTIONAL; an omitted key keeps its built-in default (shown below).
+# Durations are Go-duration strings: "30s", "5m", "1h30m". Unknown keys are an
+# error, so a typo fails loudly instead of being ignored.
+
+# --- Network -----------------------------------------------------------------
+# Phase 1 has no authentication: keep these on loopback / a trusted network.
+listen: 127.0.0.1:8080        # GraphQL/HTTP + MCP + debug UI    (env: TOISE_LISTEN)
+otlp_listen: 127.0.0.1:4317   # OTLP/gRPC ingestion             (env: TOISE_OTLP_LISTEN)
+
+# --- Storage -----------------------------------------------------------------
+data_dir: toise-data          # Pebble event-log directory       (env: TOISE_DATA_DIR)
+
+# --- Liveness & reconciliation ----------------------------------------------
+# How long to hold an out-of-order edge waiting for its endpoints (0 = disabled).
+relation_buffer_ttl: 30s              # env: TOISE_RELATION_BUFFER_TTL
+# How often to expire entities past their heartbeat interval (0 = disabled).
+liveness_sweep_interval: 30s          # env: TOISE_LIVENESS_SWEEP_INTERVAL
+
+# --- Retention ---------------------------------------------------------------
+retention_max_age: 0                  # max age of retained events; 0 = unlimited
+                                      #   env: TOISE_RETENTION_MAX_AGE
+retention_compaction_interval: 1h     # heartbeat-coalescing compaction cadence
+                                      #   env: TOISE_RETENTION_COMPACTION_INTERVAL
+
+# Note: --mcp-stdio (serve only MCP over stdio, for Claude Desktop) is a run mode,
+# not a steady-state config; pass it as a flag when you need it.
