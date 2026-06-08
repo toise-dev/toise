@@ -42,16 +42,28 @@ const (
 // `routes_via`/`adjacent_to` may be sourced from a `host` (Lot 4: a host's own
 // routing/ARP tables link it to discovered network.devices).
 const (
-	RelMonitors   = "monitors"    // a service.instance monitors a target entity
-	RelRoutesVia  = "routes_via"  // a network.device routes traffic via another
-	RelForwardsTo = "forwards_to" // a network.device forwards traffic to another
-	RelAdjacentTo = "adjacent_to" // two network.devices are link-layer adjacent (device-level)
+	RelMonitors = "monitors" // a service.instance monitors a target entity
+	// RelHasRoute attaches a routing-table entry to the device that holds it,
+	// mirroring has_interface (device -> port). The route's metric/protocol ride on
+	// the network.route entity (topology-as-entities, ADR 0022); next_hop_via links
+	// it onward.
+	RelHasRoute = "has_route"
 	// RelConnectedTo is the bare, port-to-port link-layer adjacency in the
 	// topology-as-entities model (ADR 0022): ports are network.interface entities,
 	// so the edge carries no attributes (the ports do). It is the standard, spec-
 	// embeddable form that supersedes adjacent_to + port attributes; device-level
 	// adjacency is derived from it at read time, not stored.
 	RelConnectedTo = "connected_to"
+
+	// Legacy device-level edges — superseded under topology-as-entities (ADR 0022)
+	// and NOT to be emitted by producers: routes_via is replaced by network.route +
+	// has_route + next_hop_via; adjacent_to by port-to-port connected_to; forwards_to
+	// (FDB) by connected_to to the learned port. They remain registered (so the
+	// boundary still accepts them) but the contract derives the device-level views at
+	// read time. See docs/data-model/otel-mapping.md.
+	RelRoutesVia  = "routes_via"  // legacy: use network.route + has_route + next_hop_via
+	RelForwardsTo = "forwards_to" // legacy: use connected_to to the learned port
+	RelAdjacentTo = "adjacent_to" // legacy: use port-to-port connected_to
 )
 
 // RelationTypeDef describes a known relation type and its constraints.
@@ -86,10 +98,12 @@ var relationTypes = map[string]RelationTypeDef{
 	RelListensOn:    {Type: RelListensOn, From: TypeServiceListener, To: TypeNetworkInterface, Structural: true},
 	// producer vocabulary (From/To advisory, not runtime-enforced)
 	RelMonitors:    {Type: RelMonitors, From: TypeServiceInstance, To: TypeHost, Structural: true},
-	RelRoutesVia:   {Type: RelRoutesVia, From: TypeNetworkDevice, To: TypeNetworkDevice, Structural: true},
-	RelForwardsTo:  {Type: RelForwardsTo, From: TypeNetworkDevice, To: TypeNetworkDevice, Structural: true},
-	RelAdjacentTo:  {Type: RelAdjacentTo, From: TypeNetworkDevice, To: TypeNetworkDevice, Structural: true},
+	RelHasRoute:    {Type: RelHasRoute, From: TypeNetworkDevice, To: TypeNetworkRoute, Structural: true},
 	RelConnectedTo: {Type: RelConnectedTo, From: TypeNetworkInterface, To: TypeNetworkInterface, Structural: true},
+	// legacy device-level edges (superseded; not emitted — see the const block)
+	RelRoutesVia:  {Type: RelRoutesVia, From: TypeNetworkDevice, To: TypeNetworkDevice, Structural: true},
+	RelForwardsTo: {Type: RelForwardsTo, From: TypeNetworkDevice, To: TypeNetworkDevice, Structural: true},
+	RelAdjacentTo: {Type: RelAdjacentTo, From: TypeNetworkDevice, To: TypeNetworkDevice, Structural: true},
 }
 
 // IsKnownEntityType reports whether t is a registered entity type.
