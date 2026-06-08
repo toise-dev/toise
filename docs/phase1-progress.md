@@ -229,6 +229,7 @@ merged in #81)**. Producer-side resync: senhub-agent #222.
 | 0021 | human-interface-boundary (dataviz/NL are edge surcouches, not core) | post-phase-1 | written |
 | 0022 | engine-stores-facts-only (embedded relationships; topology as entities) | post-phase-1 | written |
 | 0023 | layered-configuration (defaults < file < env < flags) | post-phase-1 | written |
+| 0024 | native-auth-and-tls (bearer tokens + TLS; revises 0014) | post-phase-1 | written |
 
 ## Demo scenario (patch 9)
 

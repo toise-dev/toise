@@ -74,7 +74,19 @@ type Config struct {
 	// AllowedOrigins is the browser Origin allowlist for WebSocket subscriptions
 	// (and CORS). Empty means same-origin only.
 	AllowedOrigins []string `yaml:"allowed_origins"`
+
+	// AuthTokens are accepted bearer tokens for the data surfaces (GraphQL, MCP,
+	// debug UI, OTLP ingest). Empty disables auth (trusted-network default). These
+	// are secrets: source them from TOISE_AUTH_TOKENS (env), never a flag.
+	AuthTokens []string `yaml:"auth_tokens"`
+	// TLSCertFile/TLSKeyFile enable native TLS on the HTTP and OTLP listeners when
+	// both are set.
+	TLSCertFile string `yaml:"tls_cert_file"`
+	TLSKeyFile  string `yaml:"tls_key_file"`
 }
+
+// TLSEnabled reports whether both a certificate and key are configured.
+func (c Config) TLSEnabled() bool { return c.TLSCertFile != "" && c.TLSKeyFile != "" }
 
 // Default returns the built-in configuration (the lowest-precedence layer). These
 // mirror the historical flag defaults: loopback listeners, no retention cap.
@@ -175,6 +187,15 @@ func (c *Config) applyEnv(getenv func(string) string) error {
 	if v := getenv("TOISE_ALLOWED_ORIGINS"); v != "" {
 		c.AllowedOrigins = splitOrigins(v)
 	}
+	if v := getenv("TOISE_AUTH_TOKENS"); v != "" {
+		c.AuthTokens = splitOrigins(v)
+	}
+	if v := getenv("TOISE_TLS_CERT_FILE"); v != "" {
+		c.TLSCertFile = v
+	}
+	if v := getenv("TOISE_TLS_KEY_FILE"); v != "" {
+		c.TLSKeyFile = v
+	}
 	return nil
 }
 
@@ -240,6 +261,8 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	debugUI := fs.Bool("debug-ui", cfg.DebugUI, "serve the debug UI at / (off under --production)")
 	allowedOrigins := fs.String("allowed-origins", strings.Join(cfg.AllowedOrigins, ","),
 		"comma-separated browser Origin allowlist for WebSocket/CORS (empty = same-origin only)")
+	tlsCertFile := fs.String("tls-cert-file", cfg.TLSCertFile, "PEM certificate file; with --tls-key-file, serves HTTP and OTLP over TLS")
+	tlsKeyFile := fs.String("tls-key-file", cfg.TLSKeyFile, "PEM private key file (pairs with --tls-cert-file)")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -258,6 +281,8 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	cfg.Playground = *playground
 	cfg.DebugUI = *debugUI
 	cfg.AllowedOrigins = splitOrigins(*allowedOrigins)
+	cfg.TLSCertFile = *tlsCertFile
+	cfg.TLSKeyFile = *tlsKeyFile
 	cfg.LogFormat = *logFormat
 	cfg.LogLevel = *logLevel
 

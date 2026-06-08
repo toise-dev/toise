@@ -26,7 +26,10 @@ import (
 	"time"
 
 	"github.com/99designs/gqlgen/graphql/playground"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 
+	"github.com/toise-dev/toise/internal/auth"
 	"github.com/toise-dev/toise/internal/change"
 	"github.com/toise-dev/toise/internal/config"
 	"github.com/toise-dev/toise/internal/debugui"
@@ -89,7 +92,24 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		change.WithLogger(logger),
 		change.WithRelationBuffer(cfg.RelationBufferTTL.D()))
 
-	receiver := ingest.NewReceiver(engine, logger)
+	// Optional bearer-token auth and TLS on the data surfaces (ADR 0024). Both
+	// off by default — the trusted-network posture (ADR 0014) is unchanged.
+	authn := auth.New(cfg.AuthTokens)
+	var grpcOpts []grpc.ServerOption
+	if authn.Enabled() {
+		grpcOpts = append(grpcOpts,
+			grpc.UnaryInterceptor(authn.UnaryInterceptor()),
+			grpc.StreamInterceptor(authn.StreamInterceptor()))
+	}
+	if cfg.TLSEnabled() {
+		creds, terr := credentials.NewServerTLSFromFile(cfg.TLSCertFile, cfg.TLSKeyFile)
+		if terr != nil {
+			return fmt.Errorf("loading TLS credentials: %w", terr)
+		}
+		grpcOpts = append(grpcOpts, grpc.Creds(creds))
+	}
+
+	receiver := ingest.NewReceiver(engine, logger, grpcOpts...)
 	lis, err := net.Listen("tcp", cfg.OTLPListen)
 	if err != nil {
 		return fmt.Errorf("otlp listen on %s: %w", cfg.OTLPListen, err)
@@ -121,7 +141,13 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		}
 		mux.Handle("/", ui)
 	}
-	httpSrv := &http.Server{Addr: cfg.Listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	// Auth wraps the data surfaces; the operational probes/scrape stay public.
+	public := map[string]bool{"/healthz": true, "/readyz": true, "/metrics": true}
+	httpSrv := &http.Server{
+		Addr:              cfg.Listen,
+		Handler:           authn.HTTPMiddleware(public)(mux),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -173,17 +199,29 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		}()
 	}
 
+	scheme := "http"
+	if cfg.TLSEnabled() {
+		scheme = "https"
+	}
 	fmt.Printf("Toise %s — the living map of your infrastructure\n", version.String())
 	logger.Info("toise-server ready",
-		"graphql", "http://"+cfg.Listen+"/graphql",
-		"mcp", "http://"+cfg.Listen+"/mcp",
-		"metrics", "http://"+cfg.Listen+"/metrics",
+		"graphql", scheme+"://"+cfg.Listen+"/graphql",
+		"mcp", scheme+"://"+cfg.Listen+"/mcp",
+		"metrics", scheme+"://"+cfg.Listen+"/metrics",
 		"otlp_grpc", cfg.OTLPListen,
 		"data_dir", cfg.DataDir,
+		"tls", cfg.TLSEnabled(),
+		"auth", authn.Enabled(),
 		"production", cfg.Production)
 
 	errc := make(chan error, 1)
-	go func() { errc <- httpSrv.ListenAndServe() }()
+	go func() {
+		if cfg.TLSEnabled() {
+			errc <- httpSrv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
+		} else {
+			errc <- httpSrv.ListenAndServe()
+		}
+	}()
 
 	select {
 	case err := <-errc:

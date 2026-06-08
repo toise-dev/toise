@@ -41,6 +41,13 @@ debug_ui: true                        # serve the debug UI at /  (env: TOISE_DEB
 allowed_origins: []                   # browser Origin allowlist (WS/CORS); [] = same-origin
                                       #   env: TOISE_ALLOWED_ORIGINS (comma-separated)
 
+# --- Auth & TLS (both off by default) ----------------------------------------
+# Bearer tokens are SECRETS — set them via TOISE_AUTH_TOKENS (env), never here:
+#   TOISE_AUTH_TOKENS="tok-a,tok-b" toise-server ...
+# Clients then send  Authorization: Bearer <token>  (HTTP and gRPC).
+tls_cert_file: ""                     # PEM cert; with the key, serves TLS  (env: TOISE_TLS_CERT_FILE)
+tls_key_file: ""                      # PEM private key                     (env: TOISE_TLS_KEY_FILE)
+
 # Note: --mcp-stdio (serve only MCP over stdio, for Claude Desktop) is a run mode,
 # not a steady-state config; pass it as a flag when you need it.
 # The server also exposes /healthz (liveness) and /readyz (readiness) on `listen`.

@@ -32,6 +32,9 @@ override one value with an env var or a flag for a one-off run. See
 | `playground` | `TOISE_PLAYGROUND` | `--playground` | `true` | serve the GraphQL playground at `/playground` |
 | `debug_ui` | `TOISE_DEBUG_UI` | `--debug-ui` | `true` | serve the debug UI at `/` |
 | `allowed_origins` | `TOISE_ALLOWED_ORIGINS` | `--allowed-origins` | (empty) | comma-separated browser Origin allowlist (WebSocket/CORS); empty = same-origin only |
+| `auth_tokens` | `TOISE_AUTH_TOKENS` | *(none — secret)* | (empty) | comma-separated bearer tokens; empty = auth disabled |
+| `tls_cert_file` | `TOISE_TLS_CERT_FILE` | `--tls-cert-file` | (empty) | PEM certificate; with the key, serves HTTP + OTLP over TLS |
+| `tls_key_file` | `TOISE_TLS_KEY_FILE` | `--tls-key-file` | (empty) | PEM private key (pairs with the cert) |
 
 Durations are Go-duration strings (`"30s"`, `"5m"`, `"1h30m"`). **Unknown YAML keys
 are rejected** — a typo fails at startup rather than being silently ignored.
@@ -68,9 +71,29 @@ TOISE_DATA_DIR=/tmp/scratch toise-server --config /etc/toise/toise-server.yaml
 toise-server --config /etc/toise/toise-server.yaml --listen 127.0.0.1:9999
 ```
 
-> **Security (phase 1).** There is no authentication yet (ADR 0014): keep `listen` /
-> `otlp_listen` on loopback or a trusted network. When auth and TLS land (#43),
-> their secrets will be sourced from the environment, never from flags.
+## Authentication & TLS
+
+Auth and TLS are **off by default** (the trusted-network posture). Enable them for a
+production deployment without a fronting proxy (ADR 0024, revising ADR 0014):
+
+- **Bearer tokens** guard the *data* surfaces — GraphQL, MCP, the debug UI, and OTLP
+  ingest. Set `TOISE_AUTH_TOKENS` to one or more comma-separated tokens; clients send
+  `Authorization: Bearer <token>` (HTTP header or gRPC metadata). **Tokens are
+  secrets**: source them from the environment, never a flag. `/healthz`, `/readyz`,
+  and `/metrics` stay public so probes and the scraper need no token.
+- **TLS**: set `tls_cert_file` and `tls_key_file` to serve the HTTP and OTLP
+  listeners over TLS.
+
+```sh
+TOISE_AUTH_TOKENS="$(cat /run/secrets/toise-token)" \
+  toise-server --production \
+    --tls-cert-file /etc/toise/tls.crt --tls-key-file /etc/toise/tls.key \
+    --listen 0.0.0.0:8443 --otlp-listen 0.0.0.0:4317
+```
+
+> A valid token grants full access (read + ingest); fine-grained scopes and mTLS are
+> future work. Producer identity for liveness stays keyed on the Resource
+> `service.instance.id` (ADR 0019), independent of the auth token.
 
 ## Hardening for production
 
