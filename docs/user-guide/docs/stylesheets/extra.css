@@ -84,3 +84,16 @@
 
 /* version selector a bit more prominent */
 .md-version__current { font-weight: 700; }
+
+/* Left nav: indent items nested under a section, with a hairline guide, so
+   sections read as distinct groups rather than a flat list. */
+.md-nav--primary .md-nav__list .md-nav__list {
+  margin-left: .55rem;
+  padding-left: .55rem;
+  border-left: 1px solid var(--ts-line);
+}
+[data-md-color-scheme="slate"] .md-nav--primary .md-nav__list .md-nav__list {
+  border-left-color: rgba(255, 255, 255, .12);
+}
+/* a touch more air above each section label */
+.md-nav--primary .md-nav__item--section { margin-top: .6rem; }
