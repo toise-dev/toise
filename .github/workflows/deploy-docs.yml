@@ -1,12 +1,22 @@
 name: Deploy Documentation
 
+# Versioned by tag (not rolling): each release tag publishes a frozen version of
+# the docs as they were at that tag, and stable tags move the `latest` alias.
+# Tags follow the project convention — no `v` prefix (e.g. 0.2.0, 0.3.0-beta1).
 on:
   push:
-    branches: [main]
-    paths:
-      - 'docs/user-guide/**'
-      - '.github/workflows/deploy-docs.yml'
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+'      # stable    -> publish + move `latest`
+      - '[0-9]+.[0-9]+.[0-9]+-*'    # pre-release -> publish version only
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version label to publish (e.g. 0.2.0)'
+        required: true
+      set_latest:
+        description: 'Also move the `latest` alias to this version'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -15,6 +25,9 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
+      # On a tag push this checks out the tagged commit, so the published docs
+      # reflect that release. On workflow_dispatch it checks out the triggering
+      # ref (e.g. main) and publishes it under the given version label.
       - name: Checkout docs source (toise)
         uses: actions/checkout@v4
         with:
@@ -46,10 +59,45 @@ jobs:
           git config user.name "toise-dev"
           git config user.email "toise-dev@users.noreply.github.com"
 
-      # Builds from the source repo's mkdocs.yml and publishes the rolling
-      # "latest" version into the landing repo's main branch under /docs. mike
-      # manages /docs/<version> + /docs/versions.json and leaves the landing
-      # root (the hand-edited index.html) alone.
+      # Resolve the version label and whether to move `latest`. Untrusted-ish
+      # inputs are read from env (never interpolated into the script), and the
+      # label is validated before use.
+      - name: Resolve version and alias
+        id: ver
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          INPUT_SET_LATEST: ${{ github.event.inputs.set_latest }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="$INPUT_VERSION"
+            SET_LATEST="$INPUT_SET_LATEST"
+          elif [ "$REF_TYPE" = "tag" ]; then
+            VERSION="$REF_NAME"
+            case "$VERSION" in
+              *-*) SET_LATEST="false" ;;   # pre-release: publish, don't move latest
+              *)   SET_LATEST="true"  ;;    # stable: move latest
+            esac
+          else
+            echo "Unsupported trigger ref: $REF_TYPE/$REF_NAME" >&2
+            exit 1
+          fi
+          # Validate: digits/dots with an optional alphanumeric pre-release suffix.
+          case "$VERSION" in
+            ''|*[!0-9.A-Za-z-]*)
+              echo "invalid version label: '$VERSION'" >&2; exit 1 ;;
+          esac
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "set_latest=$SET_LATEST" >> "$GITHUB_OUTPUT"
+          echo "Publishing docs version '$VERSION' (set_latest=$SET_LATEST)"
+
+      # Builds from the source repo's mkdocs.yml and publishes the version into
+      # the landing repo's main branch under /docs. mike manages
+      # /docs/<version> + /docs/versions.json and leaves the landing root (the
+      # hand-edited index.html) alone. A stable tag also moves the `latest`
+      # alias with --update-aliases.
       #
       # One-time setup, run manually after the first deploy so /docs/ redirects
       # to the latest version:
@@ -57,10 +105,17 @@ jobs:
       #     --deploy-prefix docs --branch main --push latest
       - name: Deploy with mike
         working-directory: site
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          SET_LATEST: ${{ steps.ver.outputs.set_latest }}
         run: |
+          alias_args=""
+          if [ "$SET_LATEST" = "true" ]; then
+            alias_args="latest --update-aliases"
+          fi
           mike deploy \
             --config-file ../src/docs/user-guide/mkdocs.yml \
             --deploy-prefix docs \
             --branch main \
             --push \
-            latest
+            "$VERSION" $alias_args
