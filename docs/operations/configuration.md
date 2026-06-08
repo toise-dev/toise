@@ -83,5 +83,28 @@ log backend, set `log_format: json` (and `log_level` as needed).
 
 `/metrics` exposes (Toise-specific, sampled at scrape time): `toise_build_info`,
 `toise_entities` (+ `toise_entities_by_type{type}`), `toise_relations`,
-`toise_events_total` (events appended to the log), and `toise_store_disk_bytes` —
+`toise_events_total` (events appended to the log), `toise_store_disk_bytes`, and
+`toise_events_pruned_total` / `toise_bytes_pruned_total` (retention pruning) —
 enough to build a Grafana dashboard of the graph's size and the store's growth.
+
+## Retention — bounding on-disk growth
+
+Two mechanisms keep the Pebble event log from growing without bound, both run on
+the `retention_compaction_interval` cadence (default 1h):
+
+- **Heartbeat coalescing** (always on) collapses runs of `entity.unchanged`
+  heartbeats, keeping their first and last record.
+- **Age pruning** (`retention_max_age`, off by default / `0` = unlimited) drops
+  events recorded before `now − retention_max_age`, **except the latest event of
+  every still-live entity and relation** — so a restart replays the same
+  current-state graph. With it set (e.g. `720h` for 30 days), on-disk size
+  stabilizes for a steady graph; the prune counters above track what was removed.
+
+Pruning is by **`recorded_at`** (storage age), not `event_time`, so a retroactively
+recorded old fact is not pruned the instant it lands.
+
+> **`asKnownAt` over pruned windows.** Pruning removes historical events, so an
+> `asKnownAt` audit query (or an `entityHistory` window) reaching **before the
+> retention horizon** returns a *truncated* view: only the retained tail (the
+> latest state per live entity) plus events inside the window survive. Keep
+> `retention_max_age` longer than the deepest audit you need.
