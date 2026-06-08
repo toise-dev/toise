@@ -1,0 +1,94 @@
+name: Release
+
+# Fires on a version tag (no "v" prefix, e.g. 0.2.0). The tag/release is cut by
+# the release-manager flow; this workflow attaches the build artifacts.
+on:
+  push:
+    tags: ["*.*.*"]
+
+permissions:
+  contents: read
+
+jobs:
+  binaries:
+    name: Binaries (${{ matrix.goos }}/${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    strategy:
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: darwin, goarch: amd64 }
+          - { goos: darwin, goarch: arm64 }
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          check-latest: true
+
+      - name: Build and package
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          COMMIT=$(git rev-parse --short HEAD)
+          LDFLAGS="-s -w -X github.com/toise-dev/toise/internal/version.Version=${VERSION} -X github.com/toise-dev/toise/internal/version.Commit=${COMMIT}"
+          DIST="toise_${VERSION}_${GOOS}_${GOARCH}"
+          mkdir -p "dist/${DIST}"
+          go build -ldflags "${LDFLAGS}" -o "dist/${DIST}/toise-server" ./cmd/toise-server
+          go build -ldflags "${LDFLAGS}" -o "dist/${DIST}/toise-probe" ./cmd/toise-probe
+          cp README.md LICENSE CHANGELOG.md "dist/${DIST}/"
+          tar -C dist -czf "dist/${DIST}.tar.gz" "${DIST}"
+          sha256sum "dist/${DIST}.tar.gz" | sed "s| .*| ${DIST}.tar.gz|" > "dist/${DIST}.tar.gz.sha256"
+
+      - name: Attach to the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
+
+  image:
+    name: Container image (ghcr.io)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push (multi-arch)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/toise-dev/toise:${{ github.ref_name }}
+            ghcr.io/toise-dev/toise:latest
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            COMMIT=${{ github.sha }}

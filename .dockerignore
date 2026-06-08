@@ -1,0 +1,13 @@
+# Keep the build context lean; the build stage only needs the Go sources.
+.git
+.github
+bin
+*.out
+coverage.out
+/toise-data
+/toise-demo-data
+/live-data
+docs
+examples
+deploy
+*.md

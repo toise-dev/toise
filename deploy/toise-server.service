@@ -1,0 +1,57 @@
+# Hardened systemd unit for toise-server.
+#
+# Setup:
+#   useradd --system --no-create-home --shell /usr/sbin/nologin toise
+#   install -d -o toise -g toise /etc/toise
+#   cp examples/toise-server.yaml /etc/toise/toise-server.yaml   # set data_dir: /var/lib/toise
+#   # secrets (bearer tokens) go in an env file, root-readable only:
+#   printf 'TOISE_AUTH_TOKENS=%s\n' "$(openssl rand -hex 32)" > /etc/toise/toise.env
+#   chmod 600 /etc/toise/toise.env
+#   cp deploy/toise-server.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now toise-server
+
+[Unit]
+Description=Toise - the living map of your infrastructure
+Documentation=https://toise.dev
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=toise
+Group=toise
+ExecStart=/usr/local/bin/toise-server --config /etc/toise/toise-server.yaml
+# Bearer tokens and other secrets come from the environment, never the command line.
+EnvironmentFile=-/etc/toise/toise.env
+Restart=on-failure
+RestartSec=5s
+
+# Persistent state lives in /var/lib/toise (set data_dir to it in the config).
+StateDirectory=toise
+StateDirectoryMode=0750
+
+# --- sandboxing ---
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

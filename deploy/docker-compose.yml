@@ -1,0 +1,28 @@
+# Minimal toise-server deployment. Pin a version in production
+# (e.g. ghcr.io/toise-dev/toise:0.2.0) rather than :latest.
+services:
+  toise:
+    image: ghcr.io/toise-dev/toise:latest
+    restart: unless-stopped
+    # Keep ports on loopback unless you enable TLS+auth (see below) and front or
+    # firewall them appropriately.
+    ports:
+      - "127.0.0.1:8080:8080" # GraphQL / MCP / debug UI
+      - "127.0.0.1:4317:4317" # OTLP/gRPC ingest
+    environment:
+      TOISE_LOG_FORMAT: json
+      # Enable bearer-token auth by setting one or more comma-separated tokens
+      # (a secret — prefer Docker/Compose secrets over inlining):
+      # TOISE_AUTH_TOKENS: "change-me"
+      # Lock down the dev surfaces for a public deployment:
+      # TOISE_PRODUCTION: "true"
+    command:
+      - "--listen=0.0.0.0:8080"
+      - "--otlp-listen=0.0.0.0:4317"
+      - "--data-dir=/data"
+    volumes:
+      # A named volume inherits /data's nonroot ownership from the image.
+      - toise-data:/data
+
+volumes:
+  toise-data:
