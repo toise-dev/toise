@@ -64,6 +64,16 @@ type Config struct {
 	CompactionInterval    Duration `yaml:"retention_compaction_interval"`
 	LogFormat             string   `yaml:"log_format"` // "text" or "json"
 	LogLevel              string   `yaml:"log_level"`  // debug | info | warn | error
+
+	// Production is a hardening profile: when true it forces GraphQLIntrospection,
+	// Playground, and DebugUI off regardless of their individual values.
+	Production           bool `yaml:"production"`
+	GraphQLIntrospection bool `yaml:"graphql_introspection"`
+	Playground           bool `yaml:"playground"`
+	DebugUI              bool `yaml:"debug_ui"`
+	// AllowedOrigins is the browser Origin allowlist for WebSocket subscriptions
+	// (and CORS). Empty means same-origin only.
+	AllowedOrigins []string `yaml:"allowed_origins"`
 }
 
 // Default returns the built-in configuration (the lowest-precedence layer). These
@@ -80,6 +90,10 @@ func Default() Config {
 		CompactionInterval:    Duration(time.Hour),
 		LogFormat:             "text",
 		LogLevel:              "info",
+		Production:            false,
+		GraphQLIntrospection:  true,
+		Playground:            true,
+		DebugUI:               true,
 	}
 }
 
@@ -141,7 +155,43 @@ func (c *Config) applyEnv(getenv func(string) string) error {
 			*e.dst = Duration(parsed)
 		}
 	}
+	for _, e := range []struct {
+		key string
+		dst *bool
+	}{
+		{"TOISE_PRODUCTION", &c.Production},
+		{"TOISE_GRAPHQL_INTROSPECTION", &c.GraphQLIntrospection},
+		{"TOISE_PLAYGROUND", &c.Playground},
+		{"TOISE_DEBUG_UI", &c.DebugUI},
+	} {
+		if v := getenv(e.key); v != "" {
+			b, err := strconv.ParseBool(v)
+			if err != nil {
+				return fmt.Errorf("%s: invalid bool %q: %w", e.key, v, err)
+			}
+			*e.dst = b
+		}
+	}
+	if v := getenv("TOISE_ALLOWED_ORIGINS"); v != "" {
+		c.AllowedOrigins = splitOrigins(v)
+	}
 	return nil
+}
+
+// splitOrigins parses a comma-separated origin list, trimming spaces and dropping
+// empty entries.
+func splitOrigins(s string) []string {
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // Load resolves the configuration from all layers in precedence order. getenv is
@@ -184,6 +234,12 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 		"interval between heartbeat-coalescing compactions")
 	logFormat := fs.String("log-format", cfg.LogFormat, "log output format: text or json")
 	logLevel := fs.String("log-level", cfg.LogLevel, "log level: debug, info, warn, or error")
+	production := fs.Bool("production", cfg.Production, "hardening profile: disable introspection, playground, and the debug UI")
+	introspection := fs.Bool("graphql-introspection", cfg.GraphQLIntrospection, "expose GraphQL introspection (off under --production)")
+	playground := fs.Bool("playground", cfg.Playground, "serve the GraphQL playground at /playground (off under --production)")
+	debugUI := fs.Bool("debug-ui", cfg.DebugUI, "serve the debug UI at / (off under --production)")
+	allowedOrigins := fs.String("allowed-origins", strings.Join(cfg.AllowedOrigins, ","),
+		"comma-separated browser Origin allowlist for WebSocket/CORS (empty = same-origin only)")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -197,8 +253,22 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	cfg.LivenessSweepInterval = Duration(*livenessSweepInterval)
 	cfg.RetentionMaxAge = Duration(*retentionMaxAge)
 	cfg.CompactionInterval = Duration(*compactionInterval)
+	cfg.Production = *production
+	cfg.GraphQLIntrospection = *introspection
+	cfg.Playground = *playground
+	cfg.DebugUI = *debugUI
+	cfg.AllowedOrigins = splitOrigins(*allowedOrigins)
 	cfg.LogFormat = *logFormat
 	cfg.LogLevel = *logLevel
+
+	// The production profile is a lockdown: it wins over the individual toggles so
+	// "be safe" can never be silently re-opened. For fine-grained control, set the
+	// toggles without --production.
+	if cfg.Production {
+		cfg.GraphQLIntrospection = false
+		cfg.Playground = false
+		cfg.DebugUI = false
+	}
 	return cfg, nil
 }
 

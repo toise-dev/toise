@@ -10,6 +10,49 @@ import (
 	"time"
 )
 
+func TestHardeningDefaults(t *testing.T) {
+	d := Default()
+	if !d.GraphQLIntrospection || !d.Playground || !d.DebugUI || d.Production {
+		t.Errorf("dev defaults: introspection=%v playground=%v debugUI=%v production=%v, want true/true/true/false",
+			d.GraphQLIntrospection, d.Playground, d.DebugUI, d.Production)
+	}
+}
+
+func TestProductionLockdownWinsOverToggles(t *testing.T) {
+	// --production forces all three off, even if a toggle tries to re-enable.
+	cfg, err := Load([]string{"--production", "--playground=true"}, env(nil))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.GraphQLIntrospection || cfg.Playground || cfg.DebugUI {
+		t.Errorf("production lockdown: introspection=%v playground=%v debugUI=%v, want all false",
+			cfg.GraphQLIntrospection, cfg.Playground, cfg.DebugUI)
+	}
+}
+
+func TestIndividualToggleWithoutProduction(t *testing.T) {
+	cfg, err := Load([]string{"--playground=false"}, env(nil))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Playground {
+		t.Error("playground should be off")
+	}
+	if !cfg.GraphQLIntrospection || !cfg.DebugUI {
+		t.Error("the other surfaces should stay on without --production")
+	}
+}
+
+func TestAllowedOriginsParsing(t *testing.T) {
+	cfg, err := Load(nil, env(map[string]string{"TOISE_ALLOWED_ORIGINS": "https://a.example, https://b.example , "}))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.AllowedOrigins) != 2 || cfg.AllowedOrigins[0] != "https://a.example" || cfg.AllowedOrigins[1] != "https://b.example" {
+		t.Errorf("allowed origins = %v, want [https://a.example https://b.example]", cfg.AllowedOrigins)
+	}
+}
+
 func TestLogConfig(t *testing.T) {
 	d := Default()
 	if d.LogFormat != "text" || d.LogLevel != "info" {
