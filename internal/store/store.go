@@ -54,6 +54,12 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+// DiskUsage returns the store's approximate on-disk size in bytes, for the
+// store_disk_bytes metric.
+func (s *Store) DiskUsage() uint64 {
+	return s.db.Metrics().DiskSpaceUsage()
+}
+
 // Healthy reports whether the store is operational by issuing a light read.
 // pebble.ErrNotFound is healthy (a never-written store); any other error — a
 // closed or broken DB — is not. Used by the /readyz probe.
