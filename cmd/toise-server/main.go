@@ -8,9 +8,11 @@
 // with --production. The MCP server can alternatively be run over stdio with
 // --mcp-stdio (for Claude Desktop).
 //
-// Phase 1 has no authentication: the servers default to loopback addresses and
-// are intended for trusted networks only (see the README security note and ADR
-// 0014).
+// The servers default to loopback addresses and no authentication — the
+// trusted-network posture (ADR 0014). For exposed deployments, bearer-token auth
+// and TLS are opt-in (ADR 0024), and --production locks down the development
+// surfaces. The graph is scoped per tenant by the X-Scope-OrgID metadata, each
+// tenant living under <data-dir>/<tenant>/ (ADR 0025).
 package main
 
 import (

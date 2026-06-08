@@ -4,7 +4,9 @@ Toise ships as a single Apache-2.0 Go binary with **no external runtime
 dependencies** — no cluster, no orchestrator, no database to provision. The
 storage engine ([Pebble](https://github.com/cockroachdb/pebble)) is embedded.
 
-Phase 1 is distributed as **source**; build it with the Go toolchain.
+Toise is distributed as **source** and as prebuilt release artifacts (static
+binaries and an OCI image); the quickest path is to build from source with the Go
+toolchain.
 
 ## Prerequisites
 
@@ -88,10 +90,11 @@ Or simulate a larger fabric in one process:
 All listeners bind to **loopback by default**. Exposing them to other hosts is
 an explicit choice — see [Configuration](configuration.md).
 
-!!! warning "No authentication in phase 1"
-    Toise has no authentication yet. Keep it on loopback or a trusted,
-    network-isolated segment. See
-    [Security (phase 1)](configuration.md#security-phase-1).
+!!! warning "No authentication by default"
+    Out of the box Toise has no authentication — keep it on loopback or a trusted,
+    network-isolated segment. For an exposed deployment, enable bearer-token auth
+    and TLS and run with `--production`. See
+    [Authentication & TLS](configuration.md#authentication--tls).
 
 ## Next steps
 

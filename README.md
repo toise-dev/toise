@@ -39,17 +39,21 @@ operator's questions about it directly.
 
 ## Status
 
-Toise is in early development. **Phase 1 is feature-complete**: it ingests OTLP
+Toise is pre-1.0 (alpha), but **production-capable as of 0.3.0**. It ingests OTLP
 entity events, maintains a bi-temporal event log and an in-memory graph with
-change classification, and serves that one read model through three surfaces —
+change classification, and serves that one read model — scoped **per tenant** —
+through three surfaces:
 
 - a **GraphQL** API (`/graphql`, with a playground at `/playground`),
 - a native **MCP** server (`/mcp` and stdio) for LLM assistants, and
 - a minimal **debug UI** (`/`) for operators —
 
-all from a single Go binary with no external runtime dependencies. We are not yet
-ready for production use, and there is no authentication yet (see below). Expect
-breaking changes.
+all from a single Go binary with no external runtime dependencies. 0.3.0 adds the
+operational surface for real deployments: native bearer-token auth and TLS, a
+`--production` lockdown, `/healthz`·`/readyz`·Prometheus `/metrics`, retention
+pruning, projection snapshots, packaged release artifacts, and multi-tenant
+isolation. Expect breaking changes between minor releases (each with a migration
+guide).
 
 ## Quickstart
 
@@ -73,14 +77,27 @@ container crash, multi-agent reference counting):
 The demo scenario and a set of example LLM prompts (with the MCP tool calls they
 map to) are in [`docs/demo/`](./docs/demo).
 
-## Security (phase 1)
+## Security
 
-Phase 1 has **no authentication**. Toise is intended to run only on trusted
-networks (private datacenter segments, VPN-protected networks); operators are
-responsible for network-level isolation. The server binds to `127.0.0.1` by
-default — exposing it to other hosts requires an explicit choice. Proper
-authentication (mTLS, OIDC, fine-grained authorization) is planned for a later
-phase.
+By default Toise binds to `127.0.0.1` and runs with **no authentication** — the
+trusted-network posture: run it on a private segment or behind a VPN and exposing
+it to other hosts is an explicit choice (ADR 0014).
+
+For exposed deployments, 0.3.0 adds opt-in hardening (ADR 0024):
+
+- **Bearer-token authentication** on the ingest and query surfaces, with tokens
+  supplied via the environment (`TOISE_AUTH_TOKENS`). The operational probes and
+  the metrics scrape stay public.
+- **TLS** from a cert/key pair.
+- **`--production`** to turn off GraphQL introspection, the playground, and the
+  debug UI in one move, plus an `allowed_origins` WebSocket allowlist.
+
+**Multi-tenancy:** a single instance serves multiple tenants with fully isolated
+graphs, scoped by the `X-Scope-OrgID` request metadata (or a `tenant.id` resource
+attribute). Authentication is not yet bound to a tenant — a valid token may set any
+`X-Scope-OrgID` — so isolation relies on the upstream OTel Collector authenticating
+each client and stamping its tenant. See
+[Configuration → Multi-tenancy](./docs/operations/configuration.md#multi-tenancy).
 
 ## Documentation
 

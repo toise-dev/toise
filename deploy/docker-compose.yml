@@ -1,5 +1,5 @@
 # Minimal toise-server deployment. Pin a version in production
-# (e.g. ghcr.io/toise-dev/toise:0.2.0) rather than :latest.
+# (e.g. ghcr.io/toise-dev/toise:0.3.0) rather than :latest.
 services:
   toise:
     image: ghcr.io/toise-dev/toise:latest

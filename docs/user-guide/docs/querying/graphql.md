@@ -17,7 +17,7 @@ and the design rationale is
 | Subscriptions | WebSocket (`graphql-ws`) on the same `/graphql` path |
 | Playground | `http://<listen>/playground` (interactive, introspection-backed) |
 | Introspection | **enabled** |
-| Auth | **none in phase 1** — keep `listen` on loopback / a trusted network |
+| Auth | **off by default** — optional bearer token (`Authorization: Bearer <token>`); keep `listen` on loopback / a trusted network otherwise |
 
 A first query with `curl`:
 
