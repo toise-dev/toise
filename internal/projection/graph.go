@@ -3,6 +3,7 @@ package projection
 import (
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/toise-dev/toise/internal/model"
 )
@@ -276,4 +277,37 @@ func (g *Graph) MatchIdentity(typ string, identity []model.KeyValue) (model.Enti
 		return id, true
 	}
 	return "", false
+}
+
+// SnapshotEvents returns synthetic create/add events that, applied in order to a
+// fresh graph, reconstruct the current live state: every live entity as an
+// EntityCreated, then every relation as a RelationAdded. Soft-deleted entities are
+// omitted (they are not part of the live graph). The given time stamps the events;
+// it is immaterial to reconstruction (Apply ignores event times). Used to write a
+// projection snapshot for fast restart (#49).
+func (g *Graph) SnapshotEvents(when time.Time) []model.Event {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	out := make([]model.Event, 0, len(g.entities)+len(g.relations))
+	for _, e := range g.entities {
+		out = append(out, model.Event{Entity: &model.EntityEvent{
+			EventID:       model.NewEventID(),
+			ChangeType:    model.EntityCreated,
+			Entity:        e,
+			EventTime:     when,
+			RecordedAt:    when,
+			SchemaVersion: model.SchemaVersion,
+		}})
+	}
+	for _, r := range g.relations {
+		out = append(out, model.Event{Relation: &model.RelationEvent{
+			EventID:       model.NewEventID(),
+			ChangeType:    model.RelationAdded,
+			Relation:      r,
+			EventTime:     when,
+			RecordedAt:    when,
+			SchemaVersion: model.SchemaVersion,
+		}})
+	}
+	return out
 }

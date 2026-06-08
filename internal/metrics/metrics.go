@@ -28,6 +28,8 @@ type Storer interface {
 	DiskUsage() uint64
 	PrunedEvents() uint64
 	PrunedBytes() uint64
+	SnapshotSeq() uint64
+	SnapshotsWritten() uint64
 }
 
 // Collector samples the live graph and store on each Prometheus scrape.
@@ -45,6 +47,8 @@ type Collector struct {
 	diskBytes      *prometheus.Desc
 	prunedEvents   *prometheus.Desc
 	prunedBytes    *prometheus.Desc
+	snapshotSeq    *prometheus.Desc
+	snapshots      *prometheus.Desc
 }
 
 // NewCollector builds a collector over the graph and store, stamping build info
@@ -71,6 +75,10 @@ func NewCollector(g Grapher, s Storer, version, commit string) *Collector {
 			"Total events removed by retention pruning.", nil, nil),
 		prunedBytes: prometheus.NewDesc("toise_bytes_pruned_total",
 			"Total approximate bytes removed by retention pruning.", nil, nil),
+		snapshotSeq: prometheus.NewDesc("toise_snapshot_seq",
+			"Reference sequence of the last projection snapshot written (0 if none).", nil, nil),
+		snapshots: prometheus.NewDesc("toise_snapshots_written_total",
+			"Total projection snapshots written.", nil, nil),
 	}
 }
 
@@ -84,6 +92,8 @@ func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.diskBytes
 	ch <- c.prunedEvents
 	ch <- c.prunedBytes
+	ch <- c.snapshotSeq
+	ch <- c.snapshots
 }
 
 // Collect implements prometheus.Collector, sampling the live state.
@@ -95,6 +105,8 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	ch <- prometheus.MustNewConstMetric(c.diskBytes, prometheus.GaugeValue, float64(c.store.DiskUsage()))
 	ch <- prometheus.MustNewConstMetric(c.prunedEvents, prometheus.CounterValue, float64(c.store.PrunedEvents()))
 	ch <- prometheus.MustNewConstMetric(c.prunedBytes, prometheus.CounterValue, float64(c.store.PrunedBytes()))
+	ch <- prometheus.MustNewConstMetric(c.snapshotSeq, prometheus.GaugeValue, float64(c.store.SnapshotSeq()))
+	ch <- prometheus.MustNewConstMetric(c.snapshots, prometheus.CounterValue, float64(c.store.SnapshotsWritten()))
 	for typ, n := range c.graph.CountByType() {
 		ch <- prometheus.MustNewConstMetric(c.entitiesByType, prometheus.GaugeValue, float64(n), typ)
 	}

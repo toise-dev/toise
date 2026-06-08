@@ -62,8 +62,9 @@ type Config struct {
 	LivenessSweepInterval Duration `yaml:"liveness_sweep_interval"`
 	RetentionMaxAge       Duration `yaml:"retention_max_age"`
 	CompactionInterval    Duration `yaml:"retention_compaction_interval"`
-	LogFormat             string   `yaml:"log_format"` // "text" or "json"
-	LogLevel              string   `yaml:"log_level"`  // debug | info | warn | error
+	SnapshotInterval      Duration `yaml:"snapshot_interval"` // 0 = disabled (replay full log on start)
+	LogFormat             string   `yaml:"log_format"`        // "text" or "json"
+	LogLevel              string   `yaml:"log_level"`         // debug | info | warn | error
 
 	// Production is a hardening profile: when true it forces GraphQLIntrospection,
 	// Playground, and DebugUI off regardless of their individual values.
@@ -158,6 +159,7 @@ func (c *Config) applyEnv(getenv func(string) string) error {
 		{"TOISE_LIVENESS_SWEEP_INTERVAL", &c.LivenessSweepInterval},
 		{"TOISE_RETENTION_MAX_AGE", &c.RetentionMaxAge},
 		{"TOISE_RETENTION_COMPACTION_INTERVAL", &c.CompactionInterval},
+		{"TOISE_SNAPSHOT_INTERVAL", &c.SnapshotInterval},
 	} {
 		if v := getenv(e.key); v != "" {
 			parsed, err := time.ParseDuration(v)
@@ -253,6 +255,8 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 		"maximum age of retained events (0 = unlimited)")
 	compactionInterval := fs.Duration("retention-compaction-interval", cfg.CompactionInterval.D(),
 		"interval between heartbeat-coalescing compactions")
+	snapshotInterval := fs.Duration("snapshot-interval", cfg.SnapshotInterval.D(),
+		"how often to snapshot the projection for fast restart (0 = disabled)")
 	logFormat := fs.String("log-format", cfg.LogFormat, "log output format: text or json")
 	logLevel := fs.String("log-level", cfg.LogLevel, "log level: debug, info, warn, or error")
 	production := fs.Bool("production", cfg.Production, "hardening profile: disable introspection, playground, and the debug UI")
@@ -276,6 +280,7 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	cfg.LivenessSweepInterval = Duration(*livenessSweepInterval)
 	cfg.RetentionMaxAge = Duration(*retentionMaxAge)
 	cfg.CompactionInterval = Duration(*compactionInterval)
+	cfg.SnapshotInterval = Duration(*snapshotInterval)
 	cfg.Production = *production
 	cfg.GraphQLIntrospection = *introspection
 	cfg.Playground = *playground

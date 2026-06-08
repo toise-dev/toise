@@ -47,6 +47,21 @@ dropped capabilities). It reads secrets from `/etc/toise/toise.env` (so bearer
 tokens never appear on the command line) and the config from
 `/etc/toise/toise-server.yaml`. The header of the file lists the setup steps.
 
+## Backup & restore
+
+The whole state is the Pebble **data-dir**. To back it up:
+
+- **Cold** (simplest, always consistent): stop the server, copy the data-dir
+  (`rsync -a /var/lib/toise/ backup/`), restart. Restore by pointing `--data-dir` at
+  the copy on a clean host — a replay rebuilds the same graph.
+- **Hot**: the store supports a Pebble *checkpoint* (a live, lock-free consistent
+  copy) — see `Store.Checkpoint`. A `snapshot_interval` snapshot is stored *inside*
+  the data-dir, so either backup method captures it and the restored host starts
+  fast.
+
+A restored data-dir is self-contained: there is no external state. After restore,
+the server replays from the latest snapshot plus the event tail.
+
 ## Production checklist
 
 - Pin a version (binary or image tag), not `latest`.

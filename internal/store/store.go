@@ -31,10 +31,12 @@ type Store struct {
 	db  *pebble.DB
 	cfg Config
 
-	mu           sync.Mutex // guards seq/counters and serializes appends
-	seq          uint64     // last assigned sequence
-	prunedEvents uint64     // cumulative events removed by retention pruning
-	prunedBytes  uint64     // cumulative approximate bytes removed by pruning
+	mu               sync.Mutex // guards seq/counters and serializes appends
+	seq              uint64     // last assigned sequence
+	prunedEvents     uint64     // cumulative events removed by retention pruning
+	prunedBytes      uint64     // cumulative approximate bytes removed by pruning
+	snapshotSeq      uint64     // reference sequence of the last written snapshot
+	snapshotsWritten uint64     // cumulative snapshots written
 }
 
 // Open opens (creating if needed) the event log at dir.
