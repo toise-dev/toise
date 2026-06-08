@@ -1,6 +1,8 @@
 # 14. No authentication in phase 1
 
-- Status: Accepted
+- Status: Revised by [ADR 0024](./0024-native-auth-and-tls.md) — no-auth is now a
+  configurable *default*, not a property of the system (native bearer auth + TLS
+  are available).
 - Date: 2026-05-29
 
 ## Context

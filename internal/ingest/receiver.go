@@ -28,11 +28,11 @@ type Receiver struct {
 }
 
 // NewReceiver builds a receiver routing to e. A nil logger uses slog.Default.
-func NewReceiver(e *change.Engine, logger *slog.Logger) *Receiver {
+func NewReceiver(e *change.Engine, logger *slog.Logger, opts ...grpc.ServerOption) *Receiver {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	srv := grpc.NewServer()
+	srv := grpc.NewServer(opts...)
 	ls := &logsServer{engine: e, logger: logger, embedded: newEmbeddedReconciler()}
 	plogotlp.RegisterGRPCServer(srv, ls)
 	return &Receiver{srv: srv, logs: ls, logger: logger}

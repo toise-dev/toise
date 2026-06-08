@@ -53,6 +53,26 @@ func TestAllowedOriginsParsing(t *testing.T) {
 	}
 }
 
+func TestAuthAndTLSConfig(t *testing.T) {
+	cfg, err := Load([]string{"--tls-cert-file", "/c.pem", "--tls-key-file", "/k.pem"},
+		env(map[string]string{"TOISE_AUTH_TOKENS": "tok1, tok2 , "}))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.AuthTokens) != 2 || cfg.AuthTokens[0] != "tok1" || cfg.AuthTokens[1] != "tok2" {
+		t.Errorf("auth tokens = %v, want [tok1 tok2]", cfg.AuthTokens)
+	}
+	if !cfg.TLSEnabled() {
+		t.Error("TLSEnabled should be true with both cert and key set")
+	}
+	if c2, _ := Load([]string{"--tls-cert-file", "/c.pem"}, env(nil)); c2.TLSEnabled() {
+		t.Error("TLSEnabled needs both cert AND key")
+	}
+	if d := Default(); d.TLSEnabled() || len(d.AuthTokens) != 0 {
+		t.Error("defaults: no TLS, no tokens")
+	}
+}
+
 func TestLogConfig(t *testing.T) {
 	d := Default()
 	if d.LogFormat != "text" || d.LogLevel != "info" {
