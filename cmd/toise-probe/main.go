@@ -167,15 +167,15 @@ func initialTopology(producer string) *topo {
 	agent := id("service.instance.id", producer)
 	eth0 := id("host.id", "srv-web-1", "interface.name", "eth0")
 	addr := id("network.address", "10.0.1.20")
-	route := id("host.id", "srv-web-1", "network.route.destination", "0.0.0.0/0")
+	route := id("host.id", "srv-web-1", "route.destination", "0.0.0.0/0")
 	nginx := id("service.endpoint", "srv-web-1:80")
 	dbid := id("db.instance.id", "postgresql:7311168095704935424")
 
 	t.addEntity("host", &entity{model.TypeHost, host, attr("host.name", "web-server-1", "os.type", "linux", "os.description", "Ubuntu 24.04")})
 	t.addEntity("agent", &entity{model.TypeServiceInstance, agent, attr("service.name", "senhub-agent", "service.version", "1.4.0")})
-	t.addEntity("eth0", &entity{model.TypeNetworkInterface, eth0, attr("oper_state", "up", "mac.address", "02:42:ac:11:00:14")})
+	t.addEntity("eth0", &entity{model.TypeNetworkInterface, eth0, attr("oper.state", "up", "mac.address", "02:42:ac:11:00:14")})
 	t.addEntity("addr", &entity{model.TypeNetworkAddress, addr, attr("prefix.length", int64(24))})
-	t.addEntity("route", &entity{model.TypeNetworkRoute, route, attr("next_hop", "10.0.1.1")})
+	t.addEntity("route", &entity{model.TypeNetworkRoute, route, attr("next_hop.ip", "10.0.1.1")})
 	t.addEntity("nginx", &entity{model.TypeServiceListener, nginx, attr("process.executable.name", "nginx", "process.pid", int64(1001), "transport", "tcp")})
 	t.addEntity("db", &entity{model.TypeDatabase, dbid, attr("db.system.name", "postgresql", "server.address", "10.0.1.45", "server.port", int64(5432), "db.connection.count", int64(7))})
 
@@ -208,10 +208,10 @@ func scenarioStep(t *topo, tick int) (deleted []*entity, note string) {
 		t.addRel("dockerd-eth0", relation{model.RelListensOn, model.TypeServiceListener, model.TypeNetworkInterface, dock, id("host.id", "srv-web-1", "interface.name", "eth0")})
 		return nil, "container daemon appears (dockerd) — entity.created + relation.added"
 	case 7:
-		t.ents["eth0"].attrs["oper_state"] = "down" // state key -> state_changed
+		t.ents["eth0"].attrs["oper.state"] = "down" // state key -> state_changed
 		return nil, "eth0 goes DOWN — state_changed (structural-ish)"
 	case 9:
-		t.ents["eth0"].attrs["oper_state"] = "up"
+		t.ents["eth0"].attrs["oper.state"] = "up"
 		return nil, "eth0 back UP — state_changed"
 	case 11:
 		return []*entity{t.removeEntity("dockerd")}, "container crashes (dockerd) — entity.deleted + edge cascade"
@@ -253,13 +253,13 @@ func fabricTopology(producer string, hosts, devices int) *topo {
 		hostID := id("host.id", fmt.Sprintf("srv-%04d", i))
 		ifID := id("host.id", fmt.Sprintf("srv-%04d", i), "interface.name", "eth0")
 		addrID := id("network.address", fmt.Sprintf("10.%d.%d.%d", s+1, (i%subnetSize)/250+1, i%subnetSize+10))
-		routeID := id("host.id", fmt.Sprintf("srv-%04d", i), "network.route.destination", "0.0.0.0/0")
+		routeID := id("host.id", fmt.Sprintf("srv-%04d", i), "route.destination", "0.0.0.0/0")
 		listenID := id("service.endpoint", fmt.Sprintf("srv-%04d:80", i))
 
 		t.addEntity(fmt.Sprintf("host-%d", i), &entity{model.TypeHost, hostID, attr("host.name", fmt.Sprintf("host-%04d", i), "os.type", "linux", "zone", fmt.Sprintf("rack-%02d", s))})
-		t.addEntity(fmt.Sprintf("iface-%d", i), &entity{model.TypeNetworkInterface, ifID, attr("oper_state", "up", "mac.address", fmt.Sprintf("02:42:ac:%02x:%02x:01", s, i%subnetSize))})
+		t.addEntity(fmt.Sprintf("iface-%d", i), &entity{model.TypeNetworkInterface, ifID, attr("oper.state", "up", "mac.address", fmt.Sprintf("02:42:ac:%02x:%02x:01", s, i%subnetSize))})
 		t.addEntity(fmt.Sprintf("addr-%d", i), &entity{model.TypeNetworkAddress, addrID, attr("prefix.length", int64(24))})
-		t.addEntity(fmt.Sprintf("route-%d", i), &entity{model.TypeNetworkRoute, routeID, attr("next_hop", fmt.Sprintf("10.%d.0.1", s+1))})
+		t.addEntity(fmt.Sprintf("route-%d", i), &entity{model.TypeNetworkRoute, routeID, attr("next_hop.ip", fmt.Sprintf("10.%d.0.1", s+1))})
 		t.addEntity(fmt.Sprintf("listener-%d", i), &entity{model.TypeServiceListener, listenID, attr("process.executable.name", "nginx", "process.pid", int64(1000+i), "transport", "tcp")})
 
 		t.addRel(fmt.Sprintf("hi-%d", i), relation{model.RelHasInterface, model.TypeHost, model.TypeNetworkInterface, hostID, ifID})
@@ -276,12 +276,28 @@ func fabricTopology(producer string, hosts, devices int) *topo {
 	}
 
 	for m := 0; m < devices; m++ {
-		dID := id("net.device.id", fmt.Sprintf("sw-%03d", m))
-		t.addEntity(fmt.Sprintf("dev-%d", m), &entity{model.TypeNetworkDevice, dID, attr("device.role", "switch", "vendor", "acme")})
+		devVal := fmt.Sprintf("name:sw-%03d", m)
+		dID := id("network.device.id", devVal)
+		t.addEntity(fmt.Sprintf("dev-%d", m), &entity{model.TypeNetworkDevice, dID, attr("device.role", "switch", "sys.name", fmt.Sprintf("sw-%03d", m), "vendor", "acme")})
 		t.addRel(fmt.Sprintf("mon-dev-%d", m), relation{model.RelMonitors, model.TypeServiceInstance, model.TypeNetworkDevice, agentID, dID})
-		if devices > 1 {
-			next := id("net.device.id", fmt.Sprintf("sw-%03d", (m+1)%devices))
-			t.addRel(fmt.Sprintf("adj-%d", m), relation{model.RelAdjacentTo, model.TypeNetworkDevice, model.TypeNetworkDevice, dID, next})
+		// A switch's ports are network.interface entities (topology-as-entities, ADR
+		// 0022): Gi0/1 faces the previous switch, Gi0/2 the next. has_interface
+		// attaches them; the ring is bare port-to-port connected_to, not adjacent_to.
+		portPrev := id("network.device.id", devVal, "interface.name", "Gi0/1")
+		portNext := id("network.device.id", devVal, "interface.name", "Gi0/2")
+		t.addEntity(fmt.Sprintf("swport-%d-a", m), &entity{model.TypeNetworkInterface, portPrev, attr("oper.state", "up", "speed", int64(10_000_000_000))})
+		t.addEntity(fmt.Sprintf("swport-%d-b", m), &entity{model.TypeNetworkInterface, portNext, attr("oper.state", "up", "speed", int64(10_000_000_000))})
+		t.addRel(fmt.Sprintf("dev-hi-%d-a", m), relation{model.RelHasInterface, model.TypeNetworkDevice, model.TypeNetworkInterface, dID, portPrev})
+		t.addRel(fmt.Sprintf("dev-hi-%d-b", m), relation{model.RelHasInterface, model.TypeNetworkDevice, model.TypeNetworkInterface, dID, portNext})
+	}
+	// Wire the ring with bare connected_to: sw-m's "next" port (Gi0/2) links to
+	// sw-(m+1)'s "prev" port (Gi0/1). All ports exist by now (endpoints first).
+	if devices > 1 {
+		for m := 0; m < devices; m++ {
+			next := (m + 1) % devices
+			a := id("network.device.id", fmt.Sprintf("name:sw-%03d", m), "interface.name", "Gi0/2")
+			b := id("network.device.id", fmt.Sprintf("name:sw-%03d", next), "interface.name", "Gi0/1")
+			t.addRel(fmt.Sprintf("conn-%d", m), relation{model.RelConnectedTo, model.TypeNetworkInterface, model.TypeNetworkInterface, a, b})
 		}
 	}
 	return t
@@ -303,10 +319,10 @@ func scaleStep(t *topo, tick int) (deleted []*entity, note string) {
 		switch (tick + k) % 3 {
 		case 0:
 			if e := t.ents[fmt.Sprintf("iface-%d", i)]; e != nil {
-				if e.attrs["oper_state"] == "up" {
-					e.attrs["oper_state"] = "down"
+				if e.attrs["oper.state"] == "up" {
+					e.attrs["oper.state"] = "down"
 				} else {
-					e.attrs["oper_state"] = "up"
+					e.attrs["oper.state"] = "up"
 				}
 			}
 		case 1:
