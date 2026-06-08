@@ -171,3 +171,46 @@ track it. Disabled by default (`0` = full replay on start).
 > retention horizon** returns a *truncated* view: only the retained tail (the
 > latest state per live entity) plus events inside the window survive. Keep
 > `retention_max_age` longer than the deepest audit you need.
+
+## Multi-tenancy
+
+One Toise instance can serve multiple tenants with **fully isolated graphs** — a
+query scoped to tenant A never sees tenant B's entities or relations (ADR 0025).
+Each tenant gets its own store + projection + change engine under
+`<data_dir>/<tenant>/`.
+
+**Resolving the tenant** (generic and vendor-neutral, in order):
+
+1. The **`X-Scope-OrgID`** request metadata — the de-facto standard used by
+   Mimir/Loki/Tempo/VictoriaMetrics. It is an HTTP header on the query surfaces
+   (`/graphql`, `/mcp`, the debug UI) and gRPC metadata on OTLP ingest.
+2. A **`tenant.id`** resource attribute on the OTLP request. Set per `ResourceLogs`,
+   it overrides the request metadata — so a single OTLP stream (e.g. one Collector
+   exporter fanning in several clients) can carry several tenants at once.
+3. Otherwise the **`default`** tenant.
+
+The id is sanitized to a safe directory segment (alphanumerics, `-`, `_`, `.`;
+bounded length; no path separators or `..`); an un-sanitizable value is rejected
+(HTTP 400 / a gRPC error) rather than silently coerced.
+
+```bash
+# Query tenant "acme" over HTTP
+curl -H 'X-Scope-OrgID: acme' http://127.0.0.1:8080/graphql -d '{"query":"{ entities { totalCount } }"}'
+```
+
+**Single-tenant deployments need no configuration.** With no tenant id ever
+supplied, everything lives under `default` and behaves exactly as a single-graph
+build. A pre-existing data directory (a Pebble store written directly under
+`<data_dir>/` by an older build) is **migrated to `<data_dir>/default/`
+automatically on first start** — no manual step, but take a backup first as with any
+upgrade.
+
+The liveness sweep, heartbeat coalescing, retention pruning, and snapshotting all
+run **per tenant**. The `/metrics` endpoint reports the **sum across tenants**, so
+existing metric names and dashboards are unchanged.
+
+> **Authentication is not yet bound to a tenant.** A valid bearer token (see
+> [Authentication & TLS](#authentication--tls)) may set any `X-Scope-OrgID`.
+> Isolation therefore relies on the upstream OTel Collector authenticating each
+> client and stamping its tenant; do not expose the ingest/query ports directly to
+> untrusted multi-tenant clients. Per-token tenant binding is planned.

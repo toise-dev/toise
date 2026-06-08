@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Multi-tenancy: per-tenant isolated graphs.** One Toise instance can now serve
+  multiple tenants with fully isolated graphs. Each tenant gets its own
+  `{store, projection, change-engine}` stack under `<data-dir>/<tenant>/` (ADR 0025).
+  The tenant id is generic and vendor-neutral — read from the `X-Scope-OrgID`
+  request metadata (the Mimir/Loki/Tempo/VictoriaMetrics de-facto standard; HTTP
+  header on queries, gRPC metadata on ingest) or a `tenant.id` resource attribute,
+  falling back to `default`. Ingest routes per `ResourceLogs` (so one OTLP stream
+  can carry several tenants); the GraphQL, MCP, and debug-UI surfaces are scoped by
+  `X-Scope-OrgID`; the liveness sweep, compaction, and snapshotting run per tenant;
+  `/metrics` reports the sum across tenants. A pre-existing single-tenant data
+  directory is migrated to `<data-dir>/default/` automatically on first start, and a
+  deployment that never sets a tenant id behaves exactly as before. (#95)
+
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
 ## [0.2.0] - 2026-06-08
