@@ -73,10 +73,11 @@ allow-list its origin.
 
 ## Can't reach the server from another machine
 
-By design: all listeners bind to **loopback** (`127.0.0.1`) by default, and
-phase 1 has **no authentication**. Binding to `0.0.0.0` is an explicit choice and
-should only be done on a trusted, network-isolated segment. See
-[Security (phase 1)](configuration.md#security-phase-1).
+By design: all listeners bind to **loopback** (`127.0.0.1`) by default, and there
+is **no authentication** unless you enable it. Binding to `0.0.0.0` is an explicit
+choice — do it only on a trusted, network-isolated segment, or turn on
+bearer-token auth and TLS first. See
+[Authentication & TLS](configuration.md#authentication--tls).
 
 ## Still stuck?
 

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+<!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
+
+## [0.3.0] - 2026-06-08
+
+**The production-readiness and multi-tenancy release.** 0.3.0 turns the phase-1
+backend into something deployable in a real, multi-tenant production posture:
+native authentication and TLS, operational endpoints and structured logging,
+bounded on-disk growth, fast restart, packaged release artifacts, and — the
+headline — **per-tenant isolated graphs**. No wire-contract change to the OTLP
+producer payload; the only behavioral change for existing deployments is the
+on-disk layout (auto-migrated). See the
+[0.2 → 0.3 migration guide](docs/migration/0.2-to-0.3.md).
+
 ### Added
 
 - **Multi-tenancy: per-tenant isolated graphs.** One Toise instance can now serve
@@ -20,9 +33,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `X-Scope-OrgID`; the liveness sweep, compaction, and snapshotting run per tenant;
   `/metrics` reports the sum across tenants. A pre-existing single-tenant data
   directory is migrated to `<data-dir>/default/` automatically on first start, and a
-  deployment that never sets a tenant id behaves exactly as before. (#95)
+  deployment that never sets a tenant id behaves exactly as before. (#95, #100, #101)
+- **Native bearer-token authentication and TLS** on the data surfaces. Tokens are
+  supplied via the environment only (`TOISE_AUTH_TOKENS`); the gRPC ingest and the
+  HTTP query surfaces enforce them when set. TLS is enabled by pointing at a
+  cert/key pair. Both are off by default — the trusted-network posture (ADR 0014) is
+  preserved. The operational probes and the metrics scrape stay public. (ADR 0024;
+  #43)
+- **Operational endpoints and structured logging.** `/healthz` (liveness),
+  `/readyz` (readiness — checks every tenant store), and a Prometheus `/metrics`
+  endpoint sampled at scrape time (entities, relations, events, disk usage,
+  retention/pruning and snapshot counters, build info). Logs are structured; the
+  level is set with `--log-level`. (#44)
+- **Retention pruning** to bound on-disk growth. With `retention_max_age` set, a
+  compaction goroutine prunes events older than the horizon while preserving the
+  current-state projection (the keep-set is the latest event per live entity).
+  Heartbeat coalescing runs alongside it. (ADR 0013; #45)
+- **Projection snapshots for fast restart, plus backup/restore.** With
+  `snapshot_interval` set, the server periodically writes a projection snapshot into
+  the store; on the next start it loads the snapshot and replays only the tail —
+  restart time is bounded by snapshot age, not by total history. `Store.Checkpoint`
+  produces a consistent, lock-free backup copy. (#49)
+- **Packaged release artifacts.** Tag-triggered CI builds static binaries for
+  linux/darwin/windows and a distroless OCI image (GHCR); a `Dockerfile` and a
+  `deploy/` directory with systemd and docker-compose examples ship in-tree. (#47)
+- **Versioned documentation site** at [toise.dev/docs](https://toise.dev/docs)
+  (MkDocs Material, deployed per release with mike): user guide, configuration,
+  operations, data model, querying, and migration guides. (#91)
 
-<!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
+### Changed
+
+- **Production HTTP hardening.** A single `--production` flag (or
+  `TOISE_PRODUCTION`) locks down the development surfaces at once — GraphQL
+  introspection, the `/playground`, and the debug UI — and an `allowed_origins`
+  allowlist gates browser WebSocket origins. Each lever is also individually
+  configurable. (#48)
+- **On-disk layout is now per tenant** (`<data-dir>/<tenant>/`). A pre-existing
+  single-tenant data directory is migrated under `<data-dir>/default/`
+  automatically on first start. Take a backup before upgrading, as with any
+  store-format change. (#95)
+- **`toise-probe` emits topology as first-class entities and `connected_to`
+  relations** instead of the legacy fabric `adjacent_to`, aligning the bundled
+  probe with the current topology model. (#90)
+
+### Security
+
+- Authentication (bearer tokens) and TLS are now available for the ingest and query
+  surfaces, and `--production` removes the development affordances from a public
+  deployment. Multi-tenant isolation is by `X-Scope-OrgID`; note that a valid token
+  may still set any tenant id, so isolation relies on the upstream OTel Collector
+  authenticating each client and stamping its tenant (per-token tenant binding is
+  future work — see ADR 0025).
 
 ## [0.2.0] - 2026-06-08
 

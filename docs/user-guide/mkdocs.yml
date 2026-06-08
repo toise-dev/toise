@@ -99,4 +99,5 @@ nav:
   - Troubleshooting: troubleshooting.md
   - What's new:
       - Overview: whats-new/index.md
+      - 0.3.0: whats-new/0.3.0.md
       - 0.2.0: whats-new/0.2.0.md

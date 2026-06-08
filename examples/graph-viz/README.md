@@ -54,8 +54,9 @@ an OpenTelemetry producer (such as `toise-probe`) at the server.
 
 ## Notes
 
-- Phase 1 `toise-server` has no authentication; put auth on the fronting proxy
-  if you expose this beyond a trusted network.
+- `toise-server` has no authentication by default; enable its native bearer-token
+  auth and TLS (or put auth on a fronting proxy) if you expose this beyond a
+  trusted network.
 - Real-time updates rely on GraphQL subscriptions over WebSocket.
 
 [vis-network]: https://visjs.github.io/vis-network/

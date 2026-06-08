@@ -9,7 +9,8 @@
 # error, so a typo fails loudly instead of being ignored.
 
 # --- Network -----------------------------------------------------------------
-# Phase 1 has no authentication: keep these on loopback / a trusted network.
+# No authentication by default: keep these on loopback / a trusted network, or
+# enable auth + TLS below (and --production) before exposing them.
 listen: 127.0.0.1:8080        # GraphQL/HTTP + MCP + debug UI    (env: TOISE_LISTEN)
 otlp_listen: 127.0.0.1:4317   # OTLP/gRPC ingestion             (env: TOISE_OTLP_LISTEN)
 

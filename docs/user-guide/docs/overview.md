@@ -76,11 +76,14 @@ always report the same world.
 
 ## Status
 
-Toise is in early development. **Phase 1 is feature-complete**: it ingests OTLP
+Toise is pre-1.0 (alpha) but **production-capable as of 0.3.0**: it ingests OTLP
 entity events, maintains a bi-temporal event log and an in-memory graph with
-change classification, and serves that one read model through GraphQL, MCP, and a
-debug UI — all from a single Apache-2.0 Go binary with no external runtime
-dependencies. It is **not yet production-ready**, and there is **no
-authentication yet**. Expect breaking changes.
+change classification — scoped **per tenant** — and serves that one read model
+through GraphQL, MCP, and a debug UI, all from a single Apache-2.0 Go binary with
+no external runtime dependencies. 0.3.0 adds the operational surface for real
+deployments: native bearer-token auth and TLS, a `--production` lockdown,
+`/healthz`·`/readyz`·Prometheus `/metrics`, retention, snapshots, and multi-tenant
+isolation. Expect breaking changes between minor releases (each with a migration
+guide).
 
 Next: [install and run toise-server](installation.md).

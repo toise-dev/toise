@@ -27,6 +27,17 @@ for the rationale.
 | `liveness_sweep_interval` | `TOISE_LIVENESS_SWEEP_INTERVAL` | `--liveness-sweep-interval` | `30s` | how often to expire entities past their heartbeat interval (`0` = disabled) |
 | `retention_max_age` | `TOISE_RETENTION_MAX_AGE` | `--retention-max-age` | `0` | max age of retained events (`0` = unlimited) |
 | `retention_compaction_interval` | `TOISE_RETENTION_COMPACTION_INTERVAL` | `--retention-compaction-interval` | `1h` | heartbeat-coalescing compaction cadence |
+| `snapshot_interval` | `TOISE_SNAPSHOT_INTERVAL` | `--snapshot-interval` | `0` | projection snapshot cadence for fast restart (`0` = disabled) |
+| `log_format` | `TOISE_LOG_FORMAT` | `--log-format` | `text` | log output format: `text` or `json` |
+| `log_level` | `TOISE_LOG_LEVEL` | `--log-level` | `info` | `debug`, `info`, `warn`, or `error` |
+| `production` | `TOISE_PRODUCTION` | `--production` | `false` | hardening profile — forces the three below off |
+| `graphql_introspection` | `TOISE_GRAPHQL_INTROSPECTION` | `--graphql-introspection` | `true` | expose GraphQL introspection |
+| `playground` | `TOISE_PLAYGROUND` | `--playground` | `true` | serve the GraphQL playground at `/playground` |
+| `debug_ui` | `TOISE_DEBUG_UI` | `--debug-ui` | `true` | serve the debug UI at `/` |
+| `allowed_origins` | `TOISE_ALLOWED_ORIGINS` | `--allowed-origins` | (empty) | comma-separated browser Origin allowlist (WebSocket/CORS); empty = same-origin only |
+| `auth_tokens` | `TOISE_AUTH_TOKENS` | *(none — secret)* | (empty) | comma-separated bearer tokens; empty = auth disabled |
+| `tls_cert_file` | `TOISE_TLS_CERT_FILE` | `--tls-cert-file` | (empty) | PEM certificate; with the key, serves HTTP + OTLP over TLS |
+| `tls_key_file` | `TOISE_TLS_KEY_FILE` | `--tls-key-file` | (empty) | PEM private key (pairs with the cert) |
 
 Durations are Go-duration strings (`"30s"`, `"5m"`, `"1h30m"`). **Unknown YAML
 keys are rejected** — a typo fails at startup rather than being silently ignored.
@@ -65,18 +76,80 @@ TOISE_DATA_DIR=/tmp/scratch toise-server --config /etc/toise/toise-server.yaml
 toise-server --config /etc/toise/toise-server.yaml --listen 127.0.0.1:9999
 ```
 
-## Security (phase 1)
+## Authentication & TLS
 
-Phase 1 has **no authentication**
-([ADR 0014](https://github.com/toise-dev/toise/blob/main/docs/architecture/adr/0014-no-auth-phase-1.md)).
-Toise is intended to run only on trusted networks (private datacenter segments,
-VPN-protected networks); operators are responsible for network-level isolation.
+Both are **off by default** — the server binds to `127.0.0.1` and trusts the
+network (private datacenter segment or VPN; ADR 0014). Exposing it to other hosts
+(`0.0.0.0:...`) is an explicit choice; when you make it, turn these on.
 
-- Keep `listen` and `otlp_listen` on **loopback** or a trusted network.
-- The server binds to `127.0.0.1` by default — exposing it to other hosts
-  (`0.0.0.0:...`) is an explicit choice.
-- When authentication and TLS land, their secrets will be sourced from the
-  **environment**, never from flags.
+- **Bearer tokens.** Set `auth_tokens` via the environment only — they are secrets
+  and must never appear on the command line or in a committed file:
+
+  ```sh
+  TOISE_AUTH_TOKENS="tok-a,tok-b" toise-server --config /etc/toise/toise-server.yaml
+  ```
+
+  Clients then send `Authorization: Bearer <token>` on both HTTP and gRPC. The
+  operational probes (`/healthz`, `/readyz`) and the metrics scrape (`/metrics`)
+  stay public so a load balancer and Prometheus can reach them without a token.
+- **TLS.** Point `tls_cert_file` and `tls_key_file` at a PEM cert/key pair to serve
+  the HTTP surfaces and OTLP ingestion over TLS.
+
+See [ADR 0024](https://github.com/toise-dev/toise/blob/main/docs/architecture/adr/0024-native-auth-and-tls.md).
+
+## Hardening for production
+
+The development surfaces — GraphQL introspection, the `/playground`, and the debug
+UI — are on by default for a friendly local experience. For an exposed deployment,
+turn them off with a single switch:
+
+```sh
+toise-server --production        # or production: true / TOISE_PRODUCTION=true
+```
+
+`production: true` forces `graphql_introspection`, `playground`, and `debug_ui`
+off, winning over any individual setting. Set `allowed_origins` to the browser
+Origins permitted for WebSocket subscriptions and CORS (empty = same-origin only).
+
+## Multi-tenancy
+
+One Toise instance can serve multiple tenants with **fully isolated** graphs — a
+query scoped to tenant A never sees tenant B (ADR 0025). Each tenant gets its own
+store + projection + change engine under `<data_dir>/<tenant>/`.
+
+The tenant id is generic and vendor-neutral, resolved (in order) from:
+
+1. the **`X-Scope-OrgID`** request metadata — the de-facto standard used by
+   Mimir/Loki/Tempo/VictoriaMetrics (an HTTP header on the query surfaces, gRPC
+   metadata on OTLP ingest);
+2. a **`tenant.id`** resource attribute on the OTLP request (set per
+   `ResourceLogs`, it overrides the request metadata — so one OTLP stream can carry
+   several tenants);
+3. otherwise the **`default`** tenant.
+
+```sh
+# Query tenant "acme" over HTTP
+curl -H 'X-Scope-OrgID: acme' http://127.0.0.1:8080/graphql \
+  -d '{"query":"{ entities { totalCount } }"}'
+```
+
+**Single-tenant deployments need no configuration:** with no tenant id ever set,
+everything lives under `default` and behaves as a single-graph build. A
+pre-existing data directory is migrated to `<data_dir>/default/` automatically on
+first start (take a backup first, as with any upgrade). `/metrics` reports the sum
+across tenants, so existing dashboards are unchanged.
+
+!!! warning "Authentication is not yet bound to a tenant"
+    A valid bearer token may set any `X-Scope-OrgID`. Isolation therefore relies on
+    the upstream OTel Collector authenticating each client and stamping its tenant;
+    do not expose the ports directly to untrusted multi-tenant clients. Per-token
+    tenant binding is planned.
+
+## Operational endpoints
+
+Always on, on the `listen` address: `/healthz` (liveness), `/readyz` (readiness —
+green only when every tenant store is healthy), and Prometheus `/metrics` (sampled
+at scrape time). Wire these into your orchestrator and scrape config.
 
 See also [Storage sizing](operations/storage-sizing.md) for choosing
 `retention_max_age`, and [Performance](operations/performance.md) for the
