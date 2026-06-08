@@ -137,6 +137,36 @@ func run(listen, otlpListen, dataDir string, mcpStdio bool, relationBufferTTL, l
 		}()
 	}
 
+	// Compaction: coalesce heartbeat runs, and — when a retention max-age is set —
+	// prune events older than it to bound on-disk growth (the current-state
+	// projection is preserved). See ADR 0013, #45.
+	if cfg.CompactionInterval > 0 {
+		go func() {
+			ticker := time.NewTicker(cfg.CompactionInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if n, err := st.CoalesceHeartbeats(); err != nil {
+						logger.Error("heartbeat coalescing failed", "err", err)
+					} else if n > 0 {
+						logger.Info("coalesced heartbeat records", "removed", n)
+					}
+					if cfg.RetentionMaxAge > 0 {
+						cutoff := time.Now().Add(-cfg.RetentionMaxAge)
+						if ev, by, err := st.PruneOlderThan(cutoff); err != nil {
+							logger.Error("retention pruning failed", "err", err)
+						} else if ev > 0 {
+							logger.Info("pruned events past retention", "events", ev, "bytes", by, "older_than", cfg.RetentionMaxAge.String())
+						}
+					}
+				}
+			}
+		}()
+	}
+
 	fmt.Printf("Toise %s — the living map of your infrastructure\n", version.String())
 	logger.Info("toise-server ready",
 		"debug_ui", "http://"+listen+"/",
