@@ -2,9 +2,10 @@
 // the event log, rebuilds the in-memory projection, starts the OTLP/gRPC
 // ingestion receiver and an HTTP server, and runs until interrupted. The HTTP
 // server exposes the GraphQL API at /graphql (with a playground at /playground),
-// the MCP server at /mcp (Streamable HTTP), a minimal debug UI at /, and the
-// /healthz (liveness) and /readyz (readiness) probes. The MCP server can
-// alternatively be run over stdio with --mcp-stdio (for Claude Desktop).
+// the MCP server at /mcp (Streamable HTTP), a minimal debug UI at /, the
+// /healthz (liveness) and /readyz (readiness) probes, and Prometheus /metrics.
+// The MCP server can alternatively be run over stdio with --mcp-stdio (for Claude
+// Desktop).
 //
 // Phase 1 has no authentication: the servers default to loopback addresses and
 // are intended for trusted networks only (see the README security note and ADR
@@ -32,6 +33,7 @@ import (
 	"github.com/toise-dev/toise/internal/graphql/resolvers"
 	"github.com/toise-dev/toise/internal/ingest"
 	"github.com/toise-dev/toise/internal/mcp"
+	"github.com/toise-dev/toise/internal/metrics"
 	"github.com/toise-dev/toise/internal/ops"
 	"github.com/toise-dev/toise/internal/projection"
 	"github.com/toise-dev/toise/internal/store"
@@ -111,6 +113,7 @@ func run(listen, otlpListen, dataDir string, mcpStdio bool, relationBufferTTL, l
 	mux.Handle("/playground", playground.Handler("Toise", "/graphql"))
 	mux.Handle("/healthz", ops.Healthz())
 	mux.Handle("/readyz", ops.Readyz(func() error { return st.Healthy() }))
+	mux.Handle("/metrics", metrics.Handler(metrics.NewCollector(graph, st, version.Version, version.Commit)))
 	mux.Handle("/", ui)
 	httpSrv := &http.Server{Addr: listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 

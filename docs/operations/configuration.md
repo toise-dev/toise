@@ -76,6 +76,12 @@ uptime monitors:
 | --- | --- |
 | `/healthz` | **Liveness** — `200 ok` while the HTTP server is serving. |
 | `/readyz` | **Readiness** — `200 ready` when the event store is reachable; `503` with the reason otherwise. |
+| `/metrics` | **Prometheus** — Toise internals plus the standard Go runtime/process metrics. |
 
-Wire them directly instead of probing a UI page. For structured logs into a log
-backend, set `log_format: json` (and `log_level` as needed).
+Wire the probes directly instead of probing a UI page. For structured logs into a
+log backend, set `log_format: json` (and `log_level` as needed).
+
+`/metrics` exposes (Toise-specific, sampled at scrape time): `toise_build_info`,
+`toise_entities` (+ `toise_entities_by_type{type}`), `toise_relations`,
+`toise_events_total` (events appended to the log), and `toise_store_disk_bytes` —
+enough to build a Grafana dashboard of the graph's size and the store's growth.
