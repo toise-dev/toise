@@ -1,0 +1,102 @@
+site_name: Toise
+site_url: https://toise.dev/docs/
+site_description: >-
+  Toise — the living map of your infrastructure. Documentation: install and run
+  toise-server, ingest OTLP entity events, and query the graph via GraphQL, MCP,
+  and the debug UI.
+copyright: © 2026 Toise contributors · Apache 2.0 · Built by Sensor Factory
+repo_url: https://github.com/toise-dev/toise
+repo_name: toise-dev/toise
+edit_uri: edit/main/docs/user-guide/docs/
+
+theme:
+  name: material
+  logo: assets/logo.svg
+  favicon: assets/favicon.svg
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - toc.follow
+    - content.code.copy
+    - content.code.annotate
+    - content.action.edit
+    - search.suggest
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+extra:
+  version:
+    provider: mike
+    default: latest
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/toise-dev/toise
+    - icon: material/web
+      link: https://toise.dev
+  homepage: https://toise.dev/
+
+extra_css:
+  - stylesheets/extra.css
+
+extra_javascript:
+  - javascripts/dev-banner.js
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - def_list
+  - tables
+  - footnotes
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+nav:
+  - Home: index.md
+  - Overview: overview.md
+  - Installation: installation.md
+  - Configuration: configuration.md
+  - Ingesting data (OTLP): ingestion.md
+  - Querying the graph:
+      - Overview: querying/index.md
+      - GraphQL API: querying/graphql.md
+      - MCP for AI assistants: querying/mcp.md
+      - Debug UI: querying/debug-ui.md
+  - Data model: data-model.md
+  - Operations:
+      - Performance: operations/performance.md
+      - Storage sizing: operations/storage-sizing.md
+  - Troubleshooting: troubleshooting.md
+  - What's new:
+      - Overview: whats-new/index.md
+      - 0.2.0: whats-new/0.2.0.md
