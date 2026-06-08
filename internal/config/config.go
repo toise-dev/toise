@@ -10,6 +10,8 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -60,6 +62,8 @@ type Config struct {
 	LivenessSweepInterval Duration `yaml:"liveness_sweep_interval"`
 	RetentionMaxAge       Duration `yaml:"retention_max_age"`
 	CompactionInterval    Duration `yaml:"retention_compaction_interval"`
+	LogFormat             string   `yaml:"log_format"` // "text" or "json"
+	LogLevel              string   `yaml:"log_level"`  // debug | info | warn | error
 }
 
 // Default returns the built-in configuration (the lowest-precedence layer). These
@@ -74,6 +78,8 @@ func Default() Config {
 		LivenessSweepInterval: Duration(30 * time.Second),
 		RetentionMaxAge:       0,
 		CompactionInterval:    Duration(time.Hour),
+		LogFormat:             "text",
+		LogLevel:              "info",
 	}
 }
 
@@ -104,6 +110,12 @@ func (c *Config) applyEnv(getenv func(string) string) error {
 	}
 	if v := getenv("TOISE_DATA_DIR"); v != "" {
 		c.DataDir = v
+	}
+	if v := getenv("TOISE_LOG_FORMAT"); v != "" {
+		c.LogFormat = v
+	}
+	if v := getenv("TOISE_LOG_LEVEL"); v != "" {
+		c.LogLevel = v
 	}
 	if v := getenv("TOISE_MCP_STDIO"); v != "" {
 		b, err := strconv.ParseBool(v)
@@ -170,6 +182,8 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 		"maximum age of retained events (0 = unlimited)")
 	compactionInterval := fs.Duration("retention-compaction-interval", cfg.CompactionInterval.D(),
 		"interval between heartbeat-coalescing compactions")
+	logFormat := fs.String("log-format", cfg.LogFormat, "log output format: text or json")
+	logLevel := fs.String("log-level", cfg.LogLevel, "log level: debug, info, warn, or error")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -183,7 +197,34 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	cfg.LivenessSweepInterval = Duration(*livenessSweepInterval)
 	cfg.RetentionMaxAge = Duration(*retentionMaxAge)
 	cfg.CompactionInterval = Duration(*compactionInterval)
+	cfg.LogFormat = *logFormat
+	cfg.LogLevel = *logLevel
 	return cfg, nil
+}
+
+// SlogLevel maps the configured log level to a slog.Level. Unknown values fall
+// back to Info.
+func (c Config) SlogLevel() slog.Level {
+	switch strings.ToLower(c.LogLevel) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
+}
+
+// NewLogHandler builds the slog handler for the configured format and level,
+// writing to w. An unknown format falls back to text.
+func (c Config) NewLogHandler(w io.Writer) slog.Handler {
+	opts := &slog.HandlerOptions{Level: c.SlogLevel()}
+	if strings.EqualFold(c.LogFormat, "json") {
+		return slog.NewJSONHandler(w, opts)
+	}
+	return slog.NewTextHandler(w, opts)
 }
 
 // configPathFromArgs pre-scans args for the --config flag, so the file can be

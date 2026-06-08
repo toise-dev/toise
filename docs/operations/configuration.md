@@ -25,6 +25,8 @@ override one value with an env var or a flag for a one-off run. See
 | `liveness_sweep_interval` | `TOISE_LIVENESS_SWEEP_INTERVAL` | `--liveness-sweep-interval` | `30s` | how often to expire entities past their heartbeat interval (`0` = disabled) |
 | `retention_max_age` | `TOISE_RETENTION_MAX_AGE` | `--retention-max-age` | `0` | max age of retained events (`0` = unlimited) |
 | `retention_compaction_interval` | `TOISE_RETENTION_COMPACTION_INTERVAL` | `--retention-compaction-interval` | `1h` | heartbeat-coalescing compaction cadence |
+| `log_format` | `TOISE_LOG_FORMAT` | `--log-format` | `text` | log output format: `text` or `json` |
+| `log_level` | `TOISE_LOG_LEVEL` | `--log-level` | `info` | `debug`, `info`, `warn`, or `error` |
 
 Durations are Go-duration strings (`"30s"`, `"5m"`, `"1h30m"`). **Unknown YAML keys
 are rejected** — a typo fails at startup rather than being silently ignored.
@@ -64,3 +66,16 @@ toise-server --config /etc/toise/toise-server.yaml --listen 127.0.0.1:9999
 > **Security (phase 1).** There is no authentication yet (ADR 0014): keep `listen` /
 > `otlp_listen` on loopback or a trusted network. When auth and TLS land (#43),
 > their secrets will be sourced from the environment, never from flags.
+
+## Operational endpoints
+
+On the HTTP `listen` address, the server exposes probes for orchestrators and
+uptime monitors:
+
+| Path | Meaning |
+| --- | --- |
+| `/healthz` | **Liveness** — `200 ok` while the HTTP server is serving. |
+| `/readyz` | **Readiness** — `200 ready` when the event store is reachable; `503` with the reason otherwise. |
+
+Wire them directly instead of probing a UI page. For structured logs into a log
+backend, set `log_format: json` (and `log_level` as needed).

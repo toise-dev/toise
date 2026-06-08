@@ -28,5 +28,10 @@ retention_max_age: 0                  # max age of retained events; 0 = unlimite
 retention_compaction_interval: 1h     # heartbeat-coalescing compaction cadence
                                       #   env: TOISE_RETENTION_COMPACTION_INTERVAL
 
+# --- Logging -----------------------------------------------------------------
+log_format: text                      # "text" or "json"   (env: TOISE_LOG_FORMAT)
+log_level: info                       # debug|info|warn|error (env: TOISE_LOG_LEVEL)
+
 # Note: --mcp-stdio (serve only MCP over stdio, for Claude Desktop) is a run mode,
 # not a steady-state config; pass it as a flag when you need it.
+# The server also exposes /healthz (liveness) and /readyz (readiness) on `listen`.
