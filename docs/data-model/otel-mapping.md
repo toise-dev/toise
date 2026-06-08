@@ -294,17 +294,44 @@ edges re-pointed and the stale node expiring by cascade + interval).
 
 **Topology as entities (ADR 0022).** Because the embedded relationship model carries
 **no edge attributes**, anything an edge would have described is promoted to an
-entity so edges stay bare. A **port is a `network.interface` entity** (identity
-`{network.device.id, interface.name}`, with `speed`/`oper_state` as its attributes),
-linked by `has_interface` (device→interface); physical adjacency is a **bare
-`connected_to`** (interface↔interface). Likewise a route's `metric` rides on the
-`network.route` entity, an address's `preferred` flag on the `network.address`
-entity, and **provenance** (how an edge was observed) on the **instrumentation
-scope**, never on the edge. Device-level adjacency (the former `adjacent_to` with
-`local_port`/`remote_port`) becomes a **derived** read-side view (a surcouche) over
-the port `connected_to` edges, not a stored fact. `connected_to` is **registered**
-and the **conformance fixture demonstrates this model** (port entities + bare
+entity so edges stay bare. The network topology vocabulary (entirely Toise's — OTel
+standardizes no network entities, only `network.*` span/metric attributes) is:
+
+| Entity | Identity | Descriptive attributes | Attached by |
+| --- | --- | --- | --- |
+| `network.device` | `{network.device.id}` (precedence ladder below) | `sys.name`, `mgmt.ip`, `device.role`, … | — (the discovered asset) |
+| `network.interface` (a port) | `{network.device.id, interface.name}` | `oper.state`, `speed`, … | `has_interface` (device→interface) |
+| `network.route` | `{network.device.id, route.destination}` (CIDR) | `metric`, `route.protocol`, `next_hop.ip` | `has_route` (device→route) |
+
+Physical adjacency is a **bare `connected_to`** (interface↔interface). Device-level
+adjacency (the former `adjacent_to` with `local_port`/`remote_port`) becomes a
+**derived** read-side view (a surcouche) over the port `connected_to` edges, not a
+stored fact. Likewise `routes_via` (device→device) is superseded by the
+`network.route` + `has_route` model, and `forwards_to` (FDB) by `connected_to` to
+the learned port. **Provenance** (which collection method observed a fact) rides on
+the **instrumentation scope** (one scope per source, e.g. `senhub-agent/snmp-lldp`,
+`.../snmp-route`), never on the entity or edge.
+
+`network.address` (and `bound_to` interface↔address, `next_hop_via` route→address) is
+**deferred**: until it lands, a route's next hop rides as the scalar `next_hop.ip`
+attribute and interface addresses stay descriptive. The **conformance fixture
+demonstrates the model** (port + route entities, `has_interface`/`has_route`/bare
 `connected_to`).
+
+**Descriptive-attribute key casing.** Identity keys are fixed by the registry; for
+**descriptive** attributes the convention is **dotted, lowercase** (`sys.name`,
+`mgmt.ip`, `oper.state` — not `sys_name`). Toise does **not** validate descriptive
+keys (only entity/relation *types* are registered), so this is a cross-producer
+convention, not a rejection — but producers should follow it for consistency.
+
+**Remote endpoints known only by MAC.** `connected_to` requires **two
+`network.interface` entities with exact identity** `{network.device.id,
+interface.name}`. When a neighbor is known only by a MAC (FDB/ARP, some LLDP
+remotes) and cannot be resolved to a `(device, interface.name)`, **do not fabricate
+a phantom port** — that would violate exact identity. Resolve the MAC→device via the
+producer's inventory before emitting the edge (as the identity ladder already
+requires); otherwise omit it. A future `network.address` of MAC subtype may carry
+such unresolved endpoints.
 
 **Cadence:** poll topology **slower than metrics** (≈5–15 min); set
 `entity.report.interval` to ≈**3× the topology cadence** (not the metric cadence) or
@@ -328,23 +355,24 @@ the boundary. The registry is:
 - **entities:** `host`, `process`, `network.interface`, `network.address`,
   `network.route`, `service.listener`, and the producer vocabulary
   `service.instance`, `db`, `network.device`;
-- **relations:** `runs_on`, `has_interface`, `bound_to`, `next_hop_via`,
-  `listens_on`, `connected_to`, and the producer vocabulary `monitors`,
-  `routes_via`, `forwards_to`, `adjacent_to` (each with declared endpoint types and
-  a structural flag).
+- **relations:** `runs_on`, `has_interface`, `has_route`, `bound_to`,
+  `next_hop_via`, `listens_on`, `connected_to`, and the producer vocabulary
+  `monitors` (each with declared endpoint types and a structural flag);
+- **legacy relations** `routes_via`, `forwards_to`, `adjacent_to` remain registered
+  (so the boundary still accepts them) but are **superseded and not to be emitted** —
+  use `network.route` + `has_route` + `next_hop_via`, and port-to-port
+  `connected_to`, respectively.
 
 `runs_on` is the foundational producer edge — `service.instance --runs_on--> host`
 as well as the existing `process --runs_on--> host`. Endpoint-type pairings are
 **advisory** (not runtime-enforced), so `monitors` may target a host, db, or
-network.device, and **`routes_via` / `adjacent_to` may be sourced from a `host`**
-(Lot 4: a host's own routing/ARP tables link it to discovered `network.device`s —
-`host --routes_via--> <gateway device>`, `host --adjacent_to--> <neighbor>`).
-Resolve each device endpoint to its canonical id where known (else provisional
-`mac:`/`mgmt:`); the host↔network.device *identity* twin (§6b) stays deferred — a
-host-sourced edge needs no merge, the `host` endpoint is the existing `host.id`
-entity. Further monitored-system types (e.g. those discovered by later
-collection lots) are added to the registry when introduced — the vocabulary is the
-explicit coordination point with a producer (see `senhub-agent-contract.md`).
+network.device. A host's own routing table is modeled the same way as a device's:
+a `network.route` keyed `{host's network.device.id-equivalent…}` — in practice
+host-sourced routing stays deferred with the host↔network.device *identity* twin
+(§6b). Resolve each device endpoint to its canonical id where known (else
+provisional `mac:`/`mgmt:`). Further monitored-system types (e.g. those discovered
+by later collection lots) are added to the registry when introduced — the vocabulary
+is the explicit coordination point with a producer (see `senhub-agent-contract.md`).
 
 ### Robustness backstops (the "no silent loss" principle)
 

@@ -109,20 +109,27 @@ func buildConformanceLogs() plog.Logs {
 		embRel{model.RelRunsOn, model.TypeHost, hostID})
 	// 7: the db goes away (its monitors edge is already gone, so the delete is clean).
 	entity(evEntityDelete, model.TypeDatabase, dbID, nil)
-	// 8-11: discovered network assets as the topology-as-entities model (ADR 0022):
-	// switches, their **ports as `network.interface` entities**, `has_interface`
-	// (device->port) and a **bare `connected_to`** (port-to-port) adjacency, all
-	// embedded. No edge attributes — the ports carry their own facts (oper_state,
-	// speed); device-level adjacency is *derived* at read, not stored. Device identity
-	// stays anchored on observer-independent SNMP facts; the mutable mgmt IP and
-	// sysName are descriptive only. Each edge's endpoints exist first: portb and porta
-	// precede the switches that embed has_interface, and porta embeds connected_to ->
-	// the already-present portb.
-	entity(evEntityState, model.TypeNetworkInterface, portb, map[string]any{"oper_state": "up", "speed": int64(1_000_000_000)})
-	entity(evEntityState, model.TypeNetworkInterface, porta, map[string]any{"oper_state": "up", "speed": int64(1_000_000_000)},
+	// 8-12: discovered network assets as the topology-as-entities model (ADR 0022):
+	// switches, their **ports as `network.interface` entities**, a routing-table entry
+	// as a **`network.route` entity**, with `has_interface` (device->port), `has_route`
+	// (device->route) and a **bare `connected_to`** (port-to-port) adjacency, all
+	// embedded. No edge attributes — the ports carry their own facts (oper.state,
+	// speed) and the route carries its metric/protocol; device-level adjacency is
+	// *derived* at read, not stored. Device identity stays anchored on
+	// observer-independent SNMP facts; the mutable mgmt IP and sysName are descriptive
+	// only. Descriptive keys are dotted lowercase (`sys.name`, `oper.state`). Each
+	// edge's endpoints exist first: portb/porta and the route precede the switch that
+	// embeds has_interface/has_route, and porta embeds connected_to -> portb. The route
+	// identity is {network.device.id, route.destination}; its next hop rides as the
+	// scalar `next_hop.ip` (network.address is deferred).
+	route1 := map[string]any{"network.device.id": "serial:9:FOC2150X0AB", "route.destination": "10.20.0.0/16"}
+	entity(evEntityState, model.TypeNetworkInterface, portb, map[string]any{"oper.state": "up", "speed": int64(1_000_000_000)})
+	entity(evEntityState, model.TypeNetworkInterface, porta, map[string]any{"oper.state": "up", "speed": int64(1_000_000_000)},
 		embRel{model.RelConnectedTo, model.TypeNetworkInterface, portb})
+	entity(evEntityState, model.TypeNetworkRoute, route1, map[string]any{"metric": int64(10), "route.protocol": "ospf", "next_hop.ip": "10.0.0.254"})
 	entity(evEntityState, model.TypeNetworkDevice, sw1, map[string]any{"device.role": "switch", "sys.name": "core-sw-01", "mgmt.ip": "10.0.0.1"},
-		embRel{model.RelHasInterface, model.TypeNetworkInterface, porta})
+		embRel{model.RelHasInterface, model.TypeNetworkInterface, porta},
+		embRel{model.RelHasRoute, model.TypeNetworkRoute, route1})
 	entity(evEntityState, model.TypeNetworkDevice, sw2, map[string]any{"device.role": "switch", "sys.name": "core-sw-02", "mgmt.ip": "10.0.0.2"},
 		embRel{model.RelHasInterface, model.TypeNetworkInterface, portb})
 
@@ -200,13 +207,15 @@ func TestConformanceFixture(t *testing.T) {
 	}
 
 	// Final live graph: host, service.instance, the two network.devices (serial:… and
-	// mac:…) and their two network.interface ports; the db was deleted.
-	if got := graph.EntityCount(); got != 6 {
-		t.Errorf("EntityCount = %d, want 6", got)
+	// mac:…), their two network.interface ports, and one network.route; the db was
+	// deleted.
+	if got := graph.EntityCount(); got != 7 {
+		t.Errorf("EntityCount = %d, want 7", got)
 	}
 	counts := graph.CountByType()
 	for typ, want := range map[string]int{
-		model.TypeHost: 1, model.TypeServiceInstance: 1, model.TypeNetworkDevice: 2, model.TypeNetworkInterface: 2,
+		model.TypeHost: 1, model.TypeServiceInstance: 1, model.TypeNetworkDevice: 2,
+		model.TypeNetworkInterface: 2, model.TypeNetworkRoute: 1,
 	} {
 		if counts[typ] != want {
 			t.Errorf("live %s = %d, want %d", typ, counts[typ], want)
@@ -215,9 +224,9 @@ func TestConformanceFixture(t *testing.T) {
 	if counts[model.TypeDatabase] != 0 {
 		t.Errorf("db should be deleted, but %d live", counts[model.TypeDatabase])
 	}
-	// runs_on (embedded) + 2× has_interface + connected_to; monitors was removed.
-	if got := graph.RelationCount(); got != 4 {
-		t.Errorf("RelationCount = %d, want 4", got)
+	// runs_on (embedded) + 2× has_interface + connected_to + has_route; monitors was removed.
+	if got := graph.RelationCount(); got != 5 {
+		t.Errorf("RelationCount = %d, want 5", got)
 	}
 	if n := len(graph.ListRelations(model.RelRunsOn, "", "")); n != 1 {
 		t.Errorf("runs_on relations = %d, want 1 (agent runs on the host)", n)
@@ -230,6 +239,9 @@ func TestConformanceFixture(t *testing.T) {
 	}
 	if n := len(graph.ListRelations(model.RelConnectedTo, "", "")); n != 1 {
 		t.Errorf("connected_to relations = %d, want 1 (port-to-port adjacency)", n)
+	}
+	if n := len(graph.ListRelations(model.RelHasRoute, "", "")); n != 1 {
+		t.Errorf("has_route relations = %d, want 1 (sw1 holds the route)", n)
 	}
 
 	// The contract's classification outcomes are all exercised.

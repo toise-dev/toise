@@ -130,31 +130,32 @@ never an entity attribute (which would flap last-writer-wins).
 
 ### Vocabulary & rollout lots
 
-The registry already holds the agreed vocabulary (Toise PR #16): entities
-`service.instance`, `db`, `network.device`; relations `monitors`, `routes_via`,
-`forwards_to`, `adjacent_to`. **`runs_on`** (already registered) is the foundational
-edge: `service.instance --runs_on--> host`. `monitors` source is the
-`service.instance` (the agent); targets are the monitored entity — `host`, `db`,
-and later `netscaler`, `veeam`, `redfish`, `citrix`, `ibmi`, `network.device`
-(those further types are registered when their collection lot lands). Rollout:
+The registry holds the agreed vocabulary: entities `service.instance`, `db`,
+`network.device`, `network.interface`, `network.route`; relations `monitors`,
+`has_interface`, `has_route`, `connected_to`. **`runs_on`** is the foundational edge:
+`service.instance --runs_on--> host`. `monitors` source is the `service.instance`
+(the agent); targets are the monitored entity — `host`, `db`, and later `netscaler`,
+`veeam`, `redfish`, `citrix`, `ibmi`, `network.device` (registered when their lot
+lands).
+
+**Do not emit `adjacent_to` / `routes_via` / `forwards_to`.** They remain registered
+(legacy) but are superseded by the topology-as-entities model below — emit
+`connected_to` (port↔port), `network.route` + `has_route`, and `connected_to` to the
+learned port, respectively. Rollout:
 
 - **Lot 1:** entities `host` + `service.instance`; relation `runs_on`.
 - **Lot 2:** monitored systems (`db` first); relation `monitors`.
-- **Lot 4 (host routing/ARP):** **host-sourced** topology edges from the host's own
-  tables — `host --routes_via--> <gateway network.device>` and
-  `host --adjacent_to--> <neighbor>`. Reuses the frozen relation types with a `host`
-  source (endpoints advisory, not enforced); **no new relation type, no host↔device
-  identity merge** (§6b deferred). Device endpoints resolve to the canonical id where
-  known, else provisional `mac:`/`mgmt:`. ARP is high-cardinality — filter to
-  infrastructure/known devices, do not emit `adjacent_to` for every ARP peer.
-- **Lot 5 (SNMP):** `network.device` and `routes_via`/`forwards_to`/`adjacent_to`.
-  `network.device.id` and the relation shapes are **frozen** (precedence ladder +
-  canonicalization above); rollout 5a LLDP → 5b routing → 5c FDB → 5d ARP, with
-  identity anchored on SNMP (serial/engine) so it does not depend on LLDP. The serial
-  tier is vendor-namespaced `serial:<PEN>:<n>` (PEN from `sysObjectID`) and fires only
-  with a single chassis + PEN; cross-vendor collisions and stacks (>1
-  `entPhysicalClass=3`) both fall back to the globally-unique `engine:<engineID>`
-  (see `otel-mapping.md`).
+- **Lot 4 (host routing/ARP):** **host-sourced** topology from the host's own tables,
+  modeled as entities (host routes as `network.route`, neighbors as port-to-port
+  `connected_to` once ports are known). The host↔network.device identity twin (§6b)
+  stays deferred. ARP is high-cardinality — filter to infrastructure/known devices.
+- **Lot 5 (SNMP):** `network.device`, `network.interface`, `network.route` with
+  `has_interface` / `has_route` / `connected_to`. `network.device.id` is **frozen**
+  (precedence ladder + canonicalization above); rollout 5a LLDP → 5b routing → 5c FDB
+  → 5d ARP, identity anchored on SNMP (serial/engine) so it does not depend on LLDP.
+  The serial tier is vendor-namespaced `serial:<PEN>:<n>` (PEN from `sysObjectID`) and
+  fires only with a single chassis + PEN; cross-vendor collisions and stacks (>1
+  `entPhysicalClass=3`) both fall back to the globally-unique `engine:<engineID>`.
 
 ### Topology as entities — edges stay bare (ADR 0022)
 
@@ -164,22 +165,33 @@ attributes**. So anything a producer would have hung on an edge becomes an
 **entity** instead:
 
 - **Ports are entities.** A port is a `network.interface` entity
-  (`{network.device.id, interface.name}`, with `speed`/`oper_state` as attributes),
+  (`{network.device.id, interface.name}`, with `oper.state`/`speed` as attributes),
   linked by `has_interface` (device→port); physical adjacency is a **bare
   `connected_to`** (port↔port) — never `adjacent_to` carrying `{local_port,
   remote_port}`.
-- **Attribute-bearing facts move onto their entity.** A route's `metric` rides on the
-  `network.route` entity, an address's `preferred` on `network.address`, and
-  **provenance** (`source`/how an edge was observed) on the **instrumentation
-  scope** — never on the edge.
+- **Routes are entities.** A routing-table entry is a `network.route`, identity
+  **`{network.device.id, route.destination}`** (the destination as a canonical CIDR,
+  e.g. `10.20.0.0/16`), linked by **`has_route`** (device→route). Its `metric`,
+  `route.protocol`, and **`next_hop.ip`** ride as descriptive attributes. The next
+  hop stays a scalar attribute because **`network.address` is deferred**; when it
+  lands, `next_hop_via` (route→address) and `bound_to` (interface→address) follow.
+- **Provenance → instrumentation scope.** Which collection method observed a fact
+  rides on the **instrumentation scope** — **one scope per source**
+  (`senhub-agent/snmp-lldp`, `senhub-agent/snmp-route`, `senhub-agent/snmp-fdb`, …),
+  not a `source` attribute on the entity or edge.
+- **`device.role`** (e.g. `switch`, `router`) is an **optional descriptive**
+  attribute (never identity); infer best-effort from `sysServices` (L3 bit → router,
+  L2 → switch) and omit when ambiguous.
+- **Descriptive key casing is dotted lowercase** (`sys.name`, `mgmt.ip`, `oper.state`
+  — not `sys_name`). Toise does not validate descriptive keys, but follow this for
+  cross-producer consistency.
 - **Identity is unchanged** (`network.device.id` precedence `serial:<PEN>`/…, exact
   matching, per-producer liveness) — those are facts and stay.
 
-The **conformance fixture demonstrates this model** (port entities + embedded
-`has_interface`/`connected_to`). The producer-side resync is tracked at
-[senhub-agent #222](https://github.com/senhub-io/senhub-agent/issues/222); the
-Toise-side contract is tracked at #73. See ADR 0022 and
-`docs/architecture/migration-embedded-relationships.md`.
+The **conformance fixture demonstrates this model** (device + port + route entities,
+embedded `has_interface`/`has_route`/`connected_to`). The producer-side resync is
+tracked at [senhub-agent #222](https://github.com/senhub-io/senhub-agent/issues/222).
+See ADR 0022 and `docs/architecture/migration-embedded-relationships.md`.
 
 ### Planning & status
 
