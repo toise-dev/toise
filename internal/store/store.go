@@ -54,6 +54,20 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+// Healthy reports whether the store is operational by issuing a light read.
+// pebble.ErrNotFound is healthy (a never-written store); any other error — a
+// closed or broken DB — is not. Used by the /readyz probe.
+func (s *Store) Healthy() error {
+	_, closer, err := s.db.Get(metaSeqKey)
+	if err != nil {
+		if errors.Is(err, pebble.ErrNotFound) {
+			return nil
+		}
+		return fmt.Errorf("store health check: %w", err)
+	}
+	return closer.Close()
+}
+
 // recoverSeq loads the persisted sequence so appends continue monotonically
 // after a restart or crash.
 func (s *Store) recoverSeq() error {

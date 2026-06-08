@@ -1,11 +1,36 @@
 package config
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestLogConfig(t *testing.T) {
+	d := Default()
+	if d.LogFormat != "text" || d.LogLevel != "info" {
+		t.Errorf("log defaults = %q / %q, want text / info", d.LogFormat, d.LogLevel)
+	}
+	if (Config{LogLevel: "debug"}).SlogLevel() != slog.LevelDebug {
+		t.Error("debug should map to slog.LevelDebug")
+	}
+	if (Config{LogLevel: "nonsense"}).SlogLevel() != slog.LevelInfo {
+		t.Error("unknown level should fall back to info")
+	}
+	var buf bytes.Buffer
+	slog.New((Config{LogFormat: "json", LogLevel: "info"}).NewLogHandler(&buf)).Info("hi", "k", "v")
+	if !strings.Contains(buf.String(), `"msg":"hi"`) {
+		t.Errorf("json handler output = %q, want JSON", buf.String())
+	}
+	cfg, err := Load(nil, env(map[string]string{"TOISE_LOG_FORMAT": "json", "TOISE_LOG_LEVEL": "warn"}))
+	if err != nil || cfg.LogFormat != "json" || cfg.LogLevel != "warn" {
+		t.Errorf("env log config = %q/%q err=%v", cfg.LogFormat, cfg.LogLevel, err)
+	}
+}
 
 // env builds a getenv function backed by a map, so tests resolve config without
 // touching the real process environment.
