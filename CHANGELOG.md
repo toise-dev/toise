@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
-## [0.2.0] - unreleased
+## [0.2.0] - 2026-06-08
 
 **A breaking wire-contract release.** 0.2.0 realigns Toise onto the **merged**
 OpenTelemetry entity-events specification (`specification/entities/entity-events.md`,
@@ -160,5 +160,7 @@ contract converged with the senhub-agent reference producer.
   default and are intended for trusted networks only; the WebSocket subscription
   endpoint enforces an origin check.
 
-[Unreleased]: https://github.com/toise-dev/toise/compare/0.1.0...HEAD
+[Unreleased]: https://github.com/toise-dev/toise/compare/0.2.0...HEAD
+[0.2.0]: https://github.com/toise-dev/toise/compare/0.1.1...0.2.0
+[0.1.1]: https://github.com/toise-dev/toise/compare/0.1.0...0.1.1
 [0.1.0]: https://github.com/toise-dev/toise/releases/tag/0.1.0
