@@ -96,6 +96,10 @@ The query surfaces are documented in
 bi-temporal queries, guardrails) and the MCP tools
 ([ADR 0011](./docs/architecture/adr/0011-mcp-server-design.md)).
 
+To deploy, see [Deploying toise-server](./docs/operations/deployment.md) — prebuilt
+binaries, the GHCR container image, and the [`deploy/`](./deploy) examples (systemd,
+Docker Compose).
+
 ## Contributing
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) and
