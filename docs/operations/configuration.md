@@ -27,6 +27,11 @@ override one value with an env var or a flag for a one-off run. See
 | `retention_compaction_interval` | `TOISE_RETENTION_COMPACTION_INTERVAL` | `--retention-compaction-interval` | `1h` | heartbeat-coalescing compaction cadence |
 | `log_format` | `TOISE_LOG_FORMAT` | `--log-format` | `text` | log output format: `text` or `json` |
 | `log_level` | `TOISE_LOG_LEVEL` | `--log-level` | `info` | `debug`, `info`, `warn`, or `error` |
+| `production` | `TOISE_PRODUCTION` | `--production` | `false` | hardening profile — forces the three below off |
+| `graphql_introspection` | `TOISE_GRAPHQL_INTROSPECTION` | `--graphql-introspection` | `true` | expose GraphQL introspection |
+| `playground` | `TOISE_PLAYGROUND` | `--playground` | `true` | serve the GraphQL playground at `/playground` |
+| `debug_ui` | `TOISE_DEBUG_UI` | `--debug-ui` | `true` | serve the debug UI at `/` |
+| `allowed_origins` | `TOISE_ALLOWED_ORIGINS` | `--allowed-origins` | (empty) | comma-separated browser Origin allowlist (WebSocket/CORS); empty = same-origin only |
 
 Durations are Go-duration strings (`"30s"`, `"5m"`, `"1h30m"`). **Unknown YAML keys
 are rejected** — a typo fails at startup rather than being silently ignored.
@@ -66,6 +71,30 @@ toise-server --config /etc/toise/toise-server.yaml --listen 127.0.0.1:9999
 > **Security (phase 1).** There is no authentication yet (ADR 0014): keep `listen` /
 > `otlp_listen` on loopback or a trusted network. When auth and TLS land (#43),
 > their secrets will be sourced from the environment, never from flags.
+
+## Hardening for production
+
+Three developer conveniences are on by default and should be locked down when the
+server is reachable beyond a trusted proxy: **GraphQL introspection**, the
+**playground** (`/playground`), and the **debug UI** (`/`). Turn them off
+individually (`--graphql-introspection=false`, `--playground=false`,
+`--debug-ui=false`) or all at once:
+
+```sh
+toise-server --production
+```
+
+`--production` is a **lockdown**: it forces all three off and **wins over the
+individual toggles** (so "be safe" can't be silently re-opened). For fine-grained
+control — say, keep the debug UI but drop introspection — set the toggles **without**
+`--production`.
+
+Cross-origin browser access (WebSocket subscriptions and CORS) is **same-origin
+only** unless you allowlist origins explicitly:
+
+```sh
+toise-server --production --allowed-origins "https://graph.example.com"
+```
 
 ## Operational endpoints
 

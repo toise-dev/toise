@@ -1,11 +1,12 @@
 // Command toise-server is the main entry point for the Toise server. It opens
 // the event log, rebuilds the in-memory projection, starts the OTLP/gRPC
 // ingestion receiver and an HTTP server, and runs until interrupted. The HTTP
-// server exposes the GraphQL API at /graphql (with a playground at /playground),
-// the MCP server at /mcp (Streamable HTTP), a minimal debug UI at /, the
-// /healthz (liveness) and /readyz (readiness) probes, and Prometheus /metrics.
-// The MCP server can alternatively be run over stdio with --mcp-stdio (for Claude
-// Desktop).
+// server exposes the GraphQL API at /graphql, the MCP server at /mcp (Streamable
+// HTTP), the /healthz (liveness) and /readyz (readiness) probes, and Prometheus
+// /metrics. The GraphQL playground (/playground), the debug UI (/), and GraphQL
+// introspection are on by default but can be gated off individually or all at once
+// with --production. The MCP server can alternatively be run over stdio with
+// --mcp-stdio (for Claude Desktop).
 //
 // Phase 1 has no authentication: the servers default to loopback addresses and
 // are intended for trusted networks only (see the README security note and ADR
@@ -55,15 +56,14 @@ func main() {
 	storeCfg.CompactionInterval = cfg.CompactionInterval.D()
 
 	logger := slog.New(cfg.NewLogHandler(os.Stderr))
-	if err := run(cfg.Listen, cfg.OTLPListen, cfg.DataDir, cfg.MCPStdio,
-		cfg.RelationBufferTTL.D(), cfg.LivenessSweepInterval.D(), storeCfg, logger); err != nil {
+	if err := run(cfg, storeCfg, logger); err != nil {
 		logger.Error("server failed", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(listen, otlpListen, dataDir string, mcpStdio bool, relationBufferTTL, livenessSweepInterval time.Duration, cfg store.Config, logger *slog.Logger) error {
-	st, err := store.Open(dataDir, cfg)
+func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
+	st, err := store.Open(cfg.DataDir, storeCfg)
 	if err != nil {
 		return fmt.Errorf("opening event log: %w", err)
 	}
@@ -75,10 +75,10 @@ func run(listen, otlpListen, dataDir string, mcpStdio bool, relationBufferTTL, l
 	}
 	logger.Info("projection rebuilt", "entities", graph.EntityCount(), "relations", graph.RelationCount())
 
-	if mcpStdio {
+	if cfg.MCPStdio {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		logger.Info("serving MCP over stdio", "data_dir", dataDir)
+		logger.Info("serving MCP over stdio", "data_dir", cfg.DataDir)
 		if serveErr := mcp.New(graph, st).ServeStdio(ctx); serveErr != nil && !errors.Is(serveErr, context.Canceled) {
 			return fmt.Errorf("mcp stdio: %w", serveErr)
 		}
@@ -87,12 +87,12 @@ func run(listen, otlpListen, dataDir string, mcpStdio bool, relationBufferTTL, l
 
 	engine := change.New(graph, st,
 		change.WithLogger(logger),
-		change.WithRelationBuffer(relationBufferTTL))
+		change.WithRelationBuffer(cfg.RelationBufferTTL.D()))
 
 	receiver := ingest.NewReceiver(engine, logger)
-	lis, err := net.Listen("tcp", otlpListen)
+	lis, err := net.Listen("tcp", cfg.OTLPListen)
 	if err != nil {
-		return fmt.Errorf("otlp listen on %s: %w", otlpListen, err)
+		return fmt.Errorf("otlp listen on %s: %w", cfg.OTLPListen, err)
 	}
 	go func() {
 		if serveErr := receiver.Serve(lis); serveErr != nil {
@@ -101,28 +101,34 @@ func run(listen, otlpListen, dataDir string, mcpStdio bool, relationBufferTTL, l
 	}()
 	defer receiver.Stop()
 
-	ui, err := debugui.New(graph, st)
-	if err != nil {
-		return fmt.Errorf("building debug UI: %w", err)
-	}
-
 	res := &resolvers.Resolver{Graph: graph, Store: st, Engine: engine}
 	mux := http.NewServeMux()
-	mux.Handle("/graphql", graphql.NewHandler(res, graphql.Config{}))
+	mux.Handle("/graphql", graphql.NewHandler(res, graphql.Config{
+		AllowedOrigins:       cfg.AllowedOrigins,
+		DisableIntrospection: !cfg.GraphQLIntrospection,
+	}))
 	mux.Handle("/mcp", mcp.New(graph, st).HTTPHandler())
-	mux.Handle("/playground", playground.Handler("Toise", "/graphql"))
 	mux.Handle("/healthz", ops.Healthz())
 	mux.Handle("/readyz", ops.Readyz(func() error { return st.Healthy() }))
 	mux.Handle("/metrics", metrics.Handler(metrics.NewCollector(graph, st, version.Version, version.Commit)))
-	mux.Handle("/", ui)
-	httpSrv := &http.Server{Addr: listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	if cfg.Playground {
+		mux.Handle("/playground", playground.Handler("Toise", "/graphql"))
+	}
+	if cfg.DebugUI {
+		ui, uierr := debugui.New(graph, st)
+		if uierr != nil {
+			return fmt.Errorf("building debug UI: %w", uierr)
+		}
+		mux.Handle("/", ui)
+	}
+	httpSrv := &http.Server{Addr: cfg.Listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if livenessSweepInterval > 0 {
+	if sweep := cfg.LivenessSweepInterval.D(); sweep > 0 {
 		go func() {
-			ticker := time.NewTicker(livenessSweepInterval)
+			ticker := time.NewTicker(sweep)
 			defer ticker.Stop()
 			for {
 				select {
@@ -140,9 +146,9 @@ func run(listen, otlpListen, dataDir string, mcpStdio bool, relationBufferTTL, l
 	// Compaction: coalesce heartbeat runs, and — when a retention max-age is set —
 	// prune events older than it to bound on-disk growth (the current-state
 	// projection is preserved). See ADR 0013, #45.
-	if cfg.CompactionInterval > 0 {
+	if storeCfg.CompactionInterval > 0 {
 		go func() {
-			ticker := time.NewTicker(cfg.CompactionInterval)
+			ticker := time.NewTicker(storeCfg.CompactionInterval)
 			defer ticker.Stop()
 			for {
 				select {
@@ -154,12 +160,12 @@ func run(listen, otlpListen, dataDir string, mcpStdio bool, relationBufferTTL, l
 					} else if n > 0 {
 						logger.Info("coalesced heartbeat records", "removed", n)
 					}
-					if cfg.RetentionMaxAge > 0 {
-						cutoff := time.Now().Add(-cfg.RetentionMaxAge)
+					if storeCfg.RetentionMaxAge > 0 {
+						cutoff := time.Now().Add(-storeCfg.RetentionMaxAge)
 						if ev, by, err := st.PruneOlderThan(cutoff); err != nil {
 							logger.Error("retention pruning failed", "err", err)
 						} else if ev > 0 {
-							logger.Info("pruned events past retention", "events", ev, "bytes", by, "older_than", cfg.RetentionMaxAge.String())
+							logger.Info("pruned events past retention", "events", ev, "bytes", by, "older_than", storeCfg.RetentionMaxAge.String())
 						}
 					}
 				}
@@ -169,11 +175,12 @@ func run(listen, otlpListen, dataDir string, mcpStdio bool, relationBufferTTL, l
 
 	fmt.Printf("Toise %s — the living map of your infrastructure\n", version.String())
 	logger.Info("toise-server ready",
-		"debug_ui", "http://"+listen+"/",
-		"graphql", "http://"+listen+"/graphql",
-		"mcp", "http://"+listen+"/mcp",
-		"otlp_grpc", otlpListen,
-		"data_dir", dataDir)
+		"graphql", "http://"+cfg.Listen+"/graphql",
+		"mcp", "http://"+cfg.Listen+"/mcp",
+		"metrics", "http://"+cfg.Listen+"/metrics",
+		"otlp_grpc", cfg.OTLPListen,
+		"data_dir", cfg.DataDir,
+		"production", cfg.Production)
 
 	errc := make(chan error, 1)
 	go func() { errc <- httpSrv.ListenAndServe() }()

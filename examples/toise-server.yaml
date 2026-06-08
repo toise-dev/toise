@@ -32,6 +32,15 @@ retention_compaction_interval: 1h     # heartbeat-coalescing compaction cadence
 log_format: text                      # "text" or "json"   (env: TOISE_LOG_FORMAT)
 log_level: info                       # debug|info|warn|error (env: TOISE_LOG_LEVEL)
 
+# --- Hardening ---------------------------------------------------------------
+# production: true forces the three toggles below off (lockdown), winning over them.
+production: false                     # env: TOISE_PRODUCTION
+graphql_introspection: true           # env: TOISE_GRAPHQL_INTROSPECTION
+playground: true                      # serve /playground   (env: TOISE_PLAYGROUND)
+debug_ui: true                        # serve the debug UI at /  (env: TOISE_DEBUG_UI)
+allowed_origins: []                   # browser Origin allowlist (WS/CORS); [] = same-origin
+                                      #   env: TOISE_ALLOWED_ORIGINS (comma-separated)
+
 # Note: --mcp-stdio (serve only MCP over stdio, for Claude Desktop) is a run mode,
 # not a steady-state config; pass it as a flag when you need it.
 # The server also exposes /healthz (liveness) and /readyz (readiness) on `listen`.

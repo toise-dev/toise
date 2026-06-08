@@ -59,6 +59,26 @@ func (s *stack) client(t *testing.T) *client.Client {
 	return client.New(graphql.NewHandler(s.res, graphql.Config{}))
 }
 
+func TestIntrospectionToggle(t *testing.T) {
+	s := newStack(t)
+	const q = `{ __schema { queryType { name } } }`
+	var resp struct {
+		Schema struct {
+			QueryType struct{ Name string }
+		} `json:"__schema"`
+	}
+
+	on := client.New(graphql.NewHandler(s.res, graphql.Config{}))
+	if err := on.Post(q, &resp); err != nil {
+		t.Errorf("introspection should work by default: %v", err)
+	}
+
+	off := client.New(graphql.NewHandler(s.res, graphql.Config{DisableIntrospection: true}))
+	if err := off.Post(q, &resp); err == nil {
+		t.Error("introspection query should be rejected when DisableIntrospection is set")
+	}
+}
+
 func TestEntityQuery(t *testing.T) {
 	s := newStack(t)
 	c := s.client(t)

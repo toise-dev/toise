@@ -30,6 +30,9 @@ type Config struct {
 	// browser Origin must appear here. Empty means same-origin only — this
 	// prevents cross-site WebSocket hijacking.
 	AllowedOrigins []string
+	// DisableIntrospection turns the GraphQL introspection extension off (a
+	// production hardening lever). The zero value keeps introspection on.
+	DisableIntrospection bool
 }
 
 // originChecker enforces same-origin WebSocket connections plus an optional
@@ -79,7 +82,9 @@ func NewHandler(r *resolvers.Resolver, cfg Config) http.Handler {
 		},
 	})
 	srv.SetQueryCache(lru.New[*ast.QueryDocument](100))
-	srv.Use(extension.Introspection{})
+	if !cfg.DisableIntrospection {
+		srv.Use(extension.Introspection{})
+	}
 	srv.Use(extension.FixedComplexityLimit(cfg.ComplexityLimit))
 
 	// The per-request timeout uses http.TimeoutHandler, whose ResponseWriter
