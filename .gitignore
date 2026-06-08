@@ -23,6 +23,8 @@ vendor/
 # Build artifacts
 bin/
 dist/
+# MkDocs build output (docs site is built/published by mike, never committed)
+/docs/user-guide/site/
 # Binaries produced by `go build ./cmd/...` at the module root
 /toise
 /toise-demo

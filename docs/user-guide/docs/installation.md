@@ -94,7 +94,7 @@ an explicit choice — see [Configuration](configuration.md).
     Out of the box Toise has no authentication — keep it on loopback or a trusted,
     network-isolated segment. For an exposed deployment, enable bearer-token auth
     and TLS and run with `--production`. See
-    [Authentication & TLS](configuration.md#authentication--tls).
+    [Authentication & TLS](configuration.md#authentication-tls).
 
 ## Next steps
 

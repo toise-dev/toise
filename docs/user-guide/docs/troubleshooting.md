@@ -77,7 +77,7 @@ By design: all listeners bind to **loopback** (`127.0.0.1`) by default, and ther
 is **no authentication** unless you enable it. Binding to `0.0.0.0` is an explicit
 choice — do it only on a trusted, network-isolated segment, or turn on
 bearer-token auth and TLS first. See
-[Authentication & TLS](configuration.md#authentication--tls).
+[Authentication & TLS](configuration.md#authentication-tls).
 
 ## Still stuck?
 
