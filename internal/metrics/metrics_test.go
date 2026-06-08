@@ -15,10 +15,12 @@ func (fakeGraph) CountByType() map[string]int { return map[string]int{"host": 2,
 
 type fakeStore struct{}
 
-func (fakeStore) Sequence() uint64     { return 10 }
-func (fakeStore) DiskUsage() uint64    { return 4096 }
-func (fakeStore) PrunedEvents() uint64 { return 0 }
-func (fakeStore) PrunedBytes() uint64  { return 0 }
+func (fakeStore) Sequence() uint64         { return 10 }
+func (fakeStore) DiskUsage() uint64        { return 4096 }
+func (fakeStore) PrunedEvents() uint64     { return 0 }
+func (fakeStore) PrunedBytes() uint64      { return 0 }
+func (fakeStore) SnapshotSeq() uint64      { return 0 }
+func (fakeStore) SnapshotsWritten() uint64 { return 0 }
 
 func TestCollector(t *testing.T) {
 	c := NewCollector(fakeGraph{}, fakeStore{}, "1.2.3", "abc123")

@@ -38,6 +38,7 @@ import (
 	"github.com/toise-dev/toise/internal/ingest"
 	"github.com/toise-dev/toise/internal/mcp"
 	"github.com/toise-dev/toise/internal/metrics"
+	"github.com/toise-dev/toise/internal/model"
 	"github.com/toise-dev/toise/internal/ops"
 	"github.com/toise-dev/toise/internal/projection"
 	"github.com/toise-dev/toise/internal/store"
@@ -73,10 +74,23 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	defer func() { _ = st.Close() }()
 
 	graph := projection.New()
-	if err = graph.Replay(st); err != nil {
-		return fmt.Errorf("rebuilding projection: %w", err)
+	restoredFrom := uint64(0)
+	if seq, snapEvents, ok, rerr := st.ReadSnapshot(); rerr != nil {
+		return fmt.Errorf("reading snapshot: %w", rerr)
+	} else if ok {
+		for i := range snapEvents {
+			graph.Apply(snapEvents[i])
+		}
+		restoredFrom = seq
+		logger.Info("restored projection from snapshot", "snapshot_seq", seq, "snapshot_events", len(snapEvents))
 	}
-	logger.Info("projection rebuilt", "entities", graph.EntityCount(), "relations", graph.RelationCount())
+	if err = st.ScanFrom(restoredFrom, func(_ uint64, ev model.Event) error {
+		graph.Apply(ev)
+		return nil
+	}); err != nil {
+		return fmt.Errorf("replaying event tail: %w", err)
+	}
+	logger.Info("projection rebuilt", "entities", graph.EntityCount(), "relations", graph.RelationCount(), "from_snapshot_seq", restoredFrom)
 
 	if cfg.MCPStdio {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -203,6 +217,30 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	if cfg.TLSEnabled() {
 		scheme = "https"
 	}
+	// Periodic projection snapshot for fast restart: replay only the tail since the
+	// snapshot on the next start. The reference sequence is read before sampling the
+	// graph, so the replayed tail overlaps idempotently rather than skips (#49).
+	if snap := cfg.SnapshotInterval.D(); snap > 0 {
+		go func() {
+			ticker := time.NewTicker(snap)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					seq := st.Sequence()
+					events := graph.SnapshotEvents(time.Now())
+					if werr := st.WriteSnapshot(seq, events); werr != nil {
+						logger.Error("snapshot write failed", "err", werr)
+					} else {
+						logger.Info("wrote projection snapshot", "snapshot_seq", seq, "events", len(events))
+					}
+				}
+			}
+		}()
+	}
+
 	fmt.Printf("Toise %s — the living map of your infrastructure\n", version.String())
 	logger.Info("toise-server ready",
 		"graphql", scheme+"://"+cfg.Listen+"/graphql",
