@@ -30,11 +30,16 @@ query — the stores never share a keyspace.
    `-`, `_`, `.`, bounded length; no path separators or `..`) so it can name a
    store directory without traversal risk. An un-sanitizable id is rejected.
 
-2. **A registry of lazy stacks.** The server holds `tenant -> stack`; a tenant's
-   stack (store + projection + engine) is opened on first use and reused. Ingest
-   routes each request to its tenant's engine; queries (GraphQL, MCP, debug UI)
-   read the caller's tenant graph, resolved from the request context. The
-   liveness sweep, compaction, and snapshotting iterate the open stacks.
+2. **A registry of lazy stacks** (`internal/registry`). The server holds
+   `tenant -> stack`; a tenant's stack (store + projection + engine) is opened on
+   first use and reused. Ingest resolves the tenant per `ResourceLogs` (gRPC
+   metadata, overridable by the `tenant.id` resource attribute) and routes to that
+   tenant's engine. The query surfaces (GraphQL, MCP, debug UI) are routed at the
+   HTTP boundary: a per-tenant router builds one handler per tenant, bound to that
+   tenant's stack, dispatched by the `X-Scope-OrgID` header — so those handlers stay
+   tenant-agnostic and unchanged. The liveness sweep, compaction, and snapshotting
+   iterate the open stacks; `/metrics` reports the sum across them (preserving the
+   single-tenant metric shapes).
 
 3. **Single-tenant by default.** No tenant supplied ⇒ everything lives under
    `default`. A self-hosted/OSS deployment that never sets a tenant id behaves
@@ -48,11 +53,17 @@ query — the stores never share a keyspace.
 - **Cost**: one Pebble instance (LSM, WAL) per active tenant. Fine for a bounded set
   of tenants; a key-prefixed single store would scale to very many tenants but is
   deferred (it would need careful, leak-proof prefixing).
-- The store/projection/engine packages are **unchanged** — multi-tenancy is a
-  composition concern handled at the server boundary (a small `internal/tenant`
-  package plus a registry in `cmd/toise-server`).
+- The store/projection/engine packages and the GraphQL/MCP/debug-UI handlers are
+  **unchanged** — multi-tenancy is a composition concern handled at the server
+  boundary: the `internal/tenant` package (resolution + sanitization), the
+  `internal/registry` package (the stack registry + migration), and a per-tenant
+  HTTP router plus the routed ingest receiver in `cmd/toise-server`.
 - The on-disk layout changes: state moves from `<data-dir>/` to
-  `<data-dir>/<tenant>/`. A pre-existing single-tenant data-dir is migrated by
-  moving it under `<data-dir>/default/` (documented).
+  `<data-dir>/<tenant>/`. A pre-existing single-tenant data-dir (a Pebble store
+  written directly under `<data-dir>/`) is **migrated automatically on first start**
+  by relocating it under `<data-dir>/default/`.
+- **Auth is not yet bound to a tenant.** A valid bearer token (ADR 0024) may set any
+  `X-Scope-OrgID`; isolation relies on the upstream OTel Collector authenticating
+  each client and stamping the tenant. Per-token tenant binding is future work.
 - Implemented incrementally: (1) the `internal/tenant` package (resolution +
-  sanitization), then (2) the server registry and the ingest/query wiring.
+  sanitization, #100), then (2) the registry and the ingest/query wiring (this PR).

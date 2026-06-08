@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"sync"
 
 	"go.opentelemetry.io/collector/pdata/plog/plogotlp"
 	"google.golang.org/grpc"
@@ -17,6 +18,7 @@ import (
 	_ "google.golang.org/grpc/encoding/gzip"
 
 	"github.com/toise-dev/toise/internal/change"
+	"github.com/toise-dev/toise/internal/tenant"
 )
 
 // Receiver is an OTLP/gRPC logs server that routes entity events to the change
@@ -27,13 +29,23 @@ type Receiver struct {
 	logger *slog.Logger
 }
 
-// NewReceiver builds a receiver routing to e. A nil logger uses slog.Default.
+// NewReceiver builds a receiver routing every record to e (single tenant). A nil
+// logger uses slog.Default. It is shorthand for NewRoutedReceiver with a constant
+// engine.
 func NewReceiver(e *change.Engine, logger *slog.Logger, opts ...grpc.ServerOption) *Receiver {
+	return NewRoutedReceiver(func(string) (*change.Engine, error) { return e, nil }, logger, opts...)
+}
+
+// NewRoutedReceiver builds a receiver that resolves the change engine per tenant.
+// engineFor maps a (sanitized) tenant id to its engine; the tenant is read from
+// the X-Scope-OrgID gRPC metadata and may be overridden per ResourceLogs by a
+// tenant.id resource attribute (ADR 0025, #95). A nil logger uses slog.Default.
+func NewRoutedReceiver(engineFor func(tenantID string) (*change.Engine, error), logger *slog.Logger, opts ...grpc.ServerOption) *Receiver {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	srv := grpc.NewServer(opts...)
-	ls := &logsServer{engine: e, logger: logger, embedded: newEmbeddedReconciler()}
+	ls := &logsServer{engineFor: engineFor, logger: logger, reconcilers: make(map[string]*embeddedReconciler)}
 	plogotlp.RegisterGRPCServer(srv, ls)
 	return &Receiver{srv: srv, logs: ls, logger: logger}
 }
@@ -53,26 +65,65 @@ func (r *Receiver) Stop() { r.srv.GracefulStop() }
 // logsServer implements the OTLP logs service.
 type logsServer struct {
 	plogotlp.UnimplementedGRPCServer
-	engine   *change.Engine
-	logger   *slog.Logger
-	embedded *embeddedReconciler
+	engineFor func(tenantID string) (*change.Engine, error)
+	logger    *slog.Logger
+
+	// reconcilers holds the embedded-relationship state per tenant. It must be
+	// per-tenant: two tenants may assert the same source entity key, and a shared
+	// reconciler would let one tenant's re-emit remove the other's relations.
+	mu          sync.Mutex
+	reconcilers map[string]*embeddedReconciler
+}
+
+func (s *logsServer) reconcilerFor(tenantID string) *embeddedReconciler {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.reconcilers[tenantID]
+	if !ok {
+		r = newEmbeddedReconciler()
+		s.reconcilers[tenantID] = r
+	}
+	return r
 }
 
 // Export ingests a batch of OTLP logs, routing entity-event LogRecords to the
-// change engine and ignoring the rest.
-func (s *logsServer) Export(_ context.Context, req plogotlp.ExportRequest) (plogotlp.ExportResponse, error) {
+// per-tenant change engine and ignoring the rest. The tenant comes from the
+// request's X-Scope-OrgID metadata and may be overridden per ResourceLogs by a
+// tenant.id resource attribute (so one OTLP stream can carry several tenants).
+func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (plogotlp.ExportResponse, error) {
 	ld := req.Logs()
 	var handled, skipped int
 	var dropped []string
+
+	// An invalid X-Scope-OrgID is rejected rather than silently folded into the
+	// default tenant — a tenant id that cannot be honored is a caller error.
+	baseTenant, ok := tenant.FromGRPC(ctx)
+	if !ok {
+		return plogotlp.NewExportResponse(), fmt.Errorf("invalid %s metadata", tenant.HeaderOrgID)
+	}
 
 	// Each ResourceLogs (one producer) is ingested as a single batch so its events
 	// commit with one durable append (one fsync) instead of one per record.
 	rls := ld.ResourceLogs()
 	for i := 0; i < rls.Len(); i++ {
-		producer, _ := strAttr(rls.At(i).Resource().Attributes(), resAttrProducer)
+		res := rls.At(i).Resource()
+		producer, _ := strAttr(res.Attributes(), resAttrProducer)
+		tenantID := baseTenant
+		if rt, ok := strAttr(res.Attributes(), tenant.ResourceAttr); ok {
+			san, ok := tenant.Sanitize(rt)
+			if !ok {
+				return plogotlp.NewExportResponse(), fmt.Errorf("invalid %s resource attribute %q", tenant.ResourceAttr, rt)
+			}
+			tenantID = san
+		}
+		engine, err := s.engineFor(tenantID)
+		if err != nil {
+			return plogotlp.NewExportResponse(), fmt.Errorf("resolving tenant %q: %w", tenantID, err)
+		}
+		reconciler := s.reconcilerFor(tenantID)
 		sls := rls.At(i).ScopeLogs()
 		var routeErr error
-		batchErr := s.engine.Batch(func(b *change.Batch) {
+		batchErr := engine.Batch(func(b *change.Batch) {
 			for j := 0; j < sls.Len() && routeErr == nil; j++ {
 				recs := sls.At(j).LogRecords()
 				for k := 0; k < recs.Len(); k++ {
@@ -85,7 +136,7 @@ func (s *logsServer) Export(_ context.Context, req plogotlp.ExportRequest) (plog
 					}
 					// Embedded relationships ride on entity-state events (spec PR
 					// #4836); reconcile them additively alongside routeRecord.
-					edrop, eerr := s.embedded.handle(b, lr)
+					edrop, eerr := reconciler.handle(b, lr)
 					dropped = append(dropped, edrop...)
 					if eerr != nil {
 						routeErr = eerr

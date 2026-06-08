@@ -38,10 +38,10 @@ import (
 	"github.com/toise-dev/toise/internal/ingest"
 	"github.com/toise-dev/toise/internal/mcp"
 	"github.com/toise-dev/toise/internal/metrics"
-	"github.com/toise-dev/toise/internal/model"
 	"github.com/toise-dev/toise/internal/ops"
-	"github.com/toise-dev/toise/internal/projection"
+	"github.com/toise-dev/toise/internal/registry"
 	"github.com/toise-dev/toise/internal/store"
+	"github.com/toise-dev/toise/internal/tenant"
 	"github.com/toise-dev/toise/internal/version"
 )
 
@@ -67,44 +67,38 @@ func main() {
 }
 
 func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
-	st, err := store.Open(cfg.DataDir, storeCfg)
+	// One {store, projection, engine} stack per tenant under <data-dir>/<tenant>/
+	// (ADR 0025). A legacy single-tenant data dir is migrated to the default tenant
+	// on open; existing tenants and the default are opened up front.
+	reg, err := registry.Open(cfg.DataDir, storeCfg, cfg.RelationBufferTTL.D(), logger)
 	if err != nil {
-		return fmt.Errorf("opening event log: %w", err)
+		return fmt.Errorf("opening tenant registry: %w", err)
 	}
-	defer func() { _ = st.Close() }()
-
-	graph := projection.New()
-	restoredFrom := uint64(0)
-	if seq, snapEvents, ok, rerr := st.ReadSnapshot(); rerr != nil {
-		return fmt.Errorf("reading snapshot: %w", rerr)
-	} else if ok {
-		for i := range snapEvents {
-			graph.Apply(snapEvents[i])
-		}
-		restoredFrom = seq
-		logger.Info("restored projection from snapshot", "snapshot_seq", seq, "snapshot_events", len(snapEvents))
-	}
-	if err = st.ScanFrom(restoredFrom, func(_ uint64, ev model.Event) error {
-		graph.Apply(ev)
-		return nil
-	}); err != nil {
-		return fmt.Errorf("replaying event tail: %w", err)
-	}
-	logger.Info("projection rebuilt", "entities", graph.EntityCount(), "relations", graph.RelationCount(), "from_snapshot_seq", restoredFrom)
+	defer func() { _ = reg.Close() }()
 
 	if cfg.MCPStdio {
+		// stdio carries no per-request tenant metadata, so it serves the default
+		// tenant only (ADR 0025).
+		st, ferr := reg.For(tenant.Default)
+		if ferr != nil {
+			return fmt.Errorf("opening default tenant: %w", ferr)
+		}
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		logger.Info("serving MCP over stdio", "data_dir", cfg.DataDir)
-		if serveErr := mcp.New(graph, st).ServeStdio(ctx); serveErr != nil && !errors.Is(serveErr, context.Canceled) {
+		logger.Info("serving MCP over stdio", "data_dir", cfg.DataDir, "tenant", tenant.Default)
+		if serveErr := mcp.New(st.Graph, st.Store).ServeStdio(ctx); serveErr != nil && !errors.Is(serveErr, context.Canceled) {
 			return fmt.Errorf("mcp stdio: %w", serveErr)
 		}
 		return nil
 	}
 
-	engine := change.New(graph, st,
-		change.WithLogger(logger),
-		change.WithRelationBuffer(cfg.RelationBufferTTL.D()))
+	engineFor := func(t string) (*change.Engine, error) {
+		st, ferr := reg.For(t)
+		if ferr != nil {
+			return nil, ferr
+		}
+		return st.Engine, nil
+	}
 
 	// Optional bearer-token auth and TLS on the data surfaces (ADR 0024). Both
 	// off by default — the trusted-network posture (ADR 0014) is unchanged.
@@ -123,7 +117,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		grpcOpts = append(grpcOpts, grpc.Creds(creds))
 	}
 
-	receiver := ingest.NewReceiver(engine, logger, grpcOpts...)
+	receiver := ingest.NewRoutedReceiver(engineFor, logger, grpcOpts...)
 	lis, err := net.Listen("tcp", cfg.OTLPListen)
 	if err != nil {
 		return fmt.Errorf("otlp listen on %s: %w", cfg.OTLPListen, err)
@@ -135,25 +129,42 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	}()
 	defer receiver.Stop()
 
-	res := &resolvers.Resolver{Graph: graph, Store: st, Engine: engine}
+	// The GraphQL, MCP and debug-UI surfaces are scoped per tenant: a router builds
+	// one handler per tenant on first use, bound to that tenant's stack, and
+	// dispatches by the X-Scope-OrgID header (ADR 0025).
+	graphqlRouter := newTenantRouter(reg, func(st *registry.Stack) (http.Handler, error) {
+		res := &resolvers.Resolver{Graph: st.Graph, Store: st.Store, Engine: st.Engine}
+		return graphql.NewHandler(res, graphql.Config{
+			AllowedOrigins:       cfg.AllowedOrigins,
+			DisableIntrospection: !cfg.GraphQLIntrospection,
+		}), nil
+	})
+	mcpRouter := newTenantRouter(reg, func(st *registry.Stack) (http.Handler, error) {
+		return mcp.New(st.Graph, st.Store).HTTPHandler(), nil
+	})
+
 	mux := http.NewServeMux()
-	mux.Handle("/graphql", graphql.NewHandler(res, graphql.Config{
-		AllowedOrigins:       cfg.AllowedOrigins,
-		DisableIntrospection: !cfg.GraphQLIntrospection,
-	}))
-	mux.Handle("/mcp", mcp.New(graph, st).HTTPHandler())
+	mux.Handle("/graphql", graphqlRouter)
+	mux.Handle("/mcp", mcpRouter)
 	mux.Handle("/healthz", ops.Healthz())
-	mux.Handle("/readyz", ops.Readyz(func() error { return st.Healthy() }))
-	mux.Handle("/metrics", metrics.Handler(metrics.NewCollector(graph, st, version.Version, version.Commit)))
+	mux.Handle("/readyz", ops.Readyz(func() error {
+		for _, st := range reg.Stacks() {
+			if herr := st.Store.Healthy(); herr != nil {
+				return herr
+			}
+		}
+		return nil
+	}))
+	mux.Handle("/metrics", metrics.Handler(metrics.NewCollector(
+		aggregateGraph{reg}, aggregateStore{reg}, version.Version, version.Commit)))
 	if cfg.Playground {
 		mux.Handle("/playground", playground.Handler("Toise", "/graphql"))
 	}
 	if cfg.DebugUI {
-		ui, uierr := debugui.New(graph, st)
-		if uierr != nil {
-			return fmt.Errorf("building debug UI: %w", uierr)
-		}
-		mux.Handle("/", ui)
+		debugRouter := newTenantRouter(reg, func(st *registry.Stack) (http.Handler, error) {
+			return debugui.New(st.Graph, st.Store)
+		})
+		mux.Handle("/", debugRouter)
 	}
 	// Auth wraps the data surfaces; the operational probes/scrape stay public.
 	public := map[string]bool{"/healthz": true, "/readyz": true, "/metrics": true}
@@ -175,8 +186,10 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
-					if n := engine.Sweep(); n > 0 {
-						logger.Info("liveness sweep expired stale entities", "count", n)
+					for _, st := range reg.Stacks() {
+						if n := st.Engine.Sweep(); n > 0 {
+							logger.Info("liveness sweep expired stale entities", "tenant", st.Tenant, "count", n)
+						}
 					}
 				}
 			}
@@ -185,7 +198,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 
 	// Compaction: coalesce heartbeat runs, and — when a retention max-age is set —
 	// prune events older than it to bound on-disk growth (the current-state
-	// projection is preserved). See ADR 0013, #45.
+	// projection is preserved). Runs per tenant. See ADR 0013, #45.
 	if storeCfg.CompactionInterval > 0 {
 		go func() {
 			ticker := time.NewTicker(storeCfg.CompactionInterval)
@@ -195,17 +208,19 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
-					if n, err := st.CoalesceHeartbeats(); err != nil {
-						logger.Error("heartbeat coalescing failed", "err", err)
-					} else if n > 0 {
-						logger.Info("coalesced heartbeat records", "removed", n)
-					}
-					if storeCfg.RetentionMaxAge > 0 {
-						cutoff := time.Now().Add(-storeCfg.RetentionMaxAge)
-						if ev, by, err := st.PruneOlderThan(cutoff); err != nil {
-							logger.Error("retention pruning failed", "err", err)
-						} else if ev > 0 {
-							logger.Info("pruned events past retention", "events", ev, "bytes", by, "older_than", storeCfg.RetentionMaxAge.String())
+					for _, st := range reg.Stacks() {
+						if n, err := st.Store.CoalesceHeartbeats(); err != nil {
+							logger.Error("heartbeat coalescing failed", "tenant", st.Tenant, "err", err)
+						} else if n > 0 {
+							logger.Info("coalesced heartbeat records", "tenant", st.Tenant, "removed", n)
+						}
+						if storeCfg.RetentionMaxAge > 0 {
+							cutoff := time.Now().Add(-storeCfg.RetentionMaxAge)
+							if ev, by, err := st.Store.PruneOlderThan(cutoff); err != nil {
+								logger.Error("retention pruning failed", "tenant", st.Tenant, "err", err)
+							} else if ev > 0 {
+								logger.Info("pruned events past retention", "tenant", st.Tenant, "events", ev, "bytes", by, "older_than", storeCfg.RetentionMaxAge.String())
+							}
 						}
 					}
 				}
@@ -229,12 +244,14 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
-					seq := st.Sequence()
-					events := graph.SnapshotEvents(time.Now())
-					if werr := st.WriteSnapshot(seq, events); werr != nil {
-						logger.Error("snapshot write failed", "err", werr)
-					} else {
-						logger.Info("wrote projection snapshot", "snapshot_seq", seq, "events", len(events))
+					for _, st := range reg.Stacks() {
+						seq := st.Store.Sequence()
+						events := st.Graph.SnapshotEvents(time.Now())
+						if werr := st.Store.WriteSnapshot(seq, events); werr != nil {
+							logger.Error("snapshot write failed", "tenant", st.Tenant, "err", werr)
+						} else {
+							logger.Info("wrote projection snapshot", "tenant", st.Tenant, "snapshot_seq", seq, "events", len(events))
+						}
 					}
 				}
 			}
@@ -248,6 +265,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		"metrics", scheme+"://"+cfg.Listen+"/metrics",
 		"otlp_grpc", cfg.OTLPListen,
 		"data_dir", cfg.DataDir,
+		"tenants", len(reg.Stacks()),
 		"tls", cfg.TLSEnabled(),
 		"auth", authn.Enabled(),
 		"production", cfg.Production)
