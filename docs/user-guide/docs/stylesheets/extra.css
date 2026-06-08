@@ -1,0 +1,86 @@
+/* ===== Toise brand palette on Material ("old map" theme) ===== */
+:root {
+  --ts-accent: #b8593d;       /* terracotta */
+  --ts-accent-dark: #9c4631;
+  --ts-paper: #faf7f2;        /* warm paper */
+  --ts-ink: #1a1a1a;
+  --ts-line: #e6ddd0;
+  --ts-muted: #6b6259;
+}
+
+/* Warm-paper header in light mode (matches the toise.dev landing) */
+[data-md-color-scheme="default"][data-md-color-primary="custom"] {
+  --md-primary-fg-color: var(--ts-paper);
+  --md-primary-fg-color--light: var(--ts-paper);
+  --md-primary-fg-color--dark: #f1ece3;
+  --md-primary-bg-color: var(--ts-ink);     /* dark text/icons on the bar */
+  --md-primary-bg-color--light: var(--ts-muted);
+}
+/* Dark header in dark mode */
+[data-md-color-scheme="slate"][data-md-color-primary="custom"] {
+  --md-primary-fg-color: #211e1a;
+  --md-primary-fg-color--light: #2b2722;
+  --md-primary-fg-color--dark: #181613;
+  --md-primary-bg-color: #efe9e0;
+  --md-primary-bg-color--light: #b8b0a5;
+}
+[data-md-color-accent="custom"] {
+  --md-accent-fg-color: var(--ts-accent-dark);
+}
+
+/* warm paper page background in light mode */
+[data-md-color-scheme="default"] {
+  --md-default-bg-color: var(--ts-paper);
+}
+
+/* clean hairline under the header instead of a heavy shadow */
+[data-md-color-scheme="default"] .md-header {
+  border-bottom: 1px solid var(--ts-line);
+  box-shadow: none;
+}
+/* keep the search field legible on the paper header */
+[data-md-color-scheme="default"] .md-search__input { background-color: #fff; }
+[data-md-color-scheme="default"] .md-search__input::placeholder { color: #9b9388; }
+
+/* links — terracotta, both schemes */
+[data-md-color-scheme="default"] { --md-typeset-a-color: var(--ts-accent); }
+[data-md-color-scheme="slate"]   { --md-typeset-a-color: #d4795f; }
+
+/* terracotta active marker in the left nav + active TOC */
+.md-nav__link--active,
+.md-nav__item .md-nav__link--active { color: var(--ts-accent); }
+
+/* header logo a touch bigger */
+.md-header__button.md-logo img { height: 1.7rem; }
+
+/* primary call-to-action buttons (.md-button.cta) */
+.md-typeset .md-button.cta {
+  background: var(--ts-accent);
+  border-color: var(--ts-accent);
+  color: #fff;
+}
+.md-typeset .md-button.cta:hover {
+  background: var(--ts-accent-dark);
+  border-color: var(--ts-accent-dark);
+  color: #fff;
+}
+
+/* "dev / unreleased" banner */
+.md-banner.dev-banner {
+  background: var(--ts-accent);
+  color: #fff;
+}
+.md-banner.dev-banner .md-banner__inner {
+  font-size: .72rem;
+  font-weight: 600;
+  margin: .55rem auto;
+}
+.md-banner.dev-banner a {
+  color: #fff;
+  font-weight: 800;
+  text-decoration: underline;
+  white-space: nowrap;
+}
+
+/* version selector a bit more prominent */
+.md-version__current { font-weight: 700; }

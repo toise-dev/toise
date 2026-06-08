@@ -1,0 +1,66 @@
+name: Deploy Documentation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/user-guide/**'
+      - '.github/workflows/deploy-docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout docs source (toise)
+        uses: actions/checkout@v4
+        with:
+          path: src
+          fetch-depth: 0
+
+      # The versioned docs are published into the landing repo under /docs via
+      # mike, which operates on a checkout of that repo. DOCS_DEPLOY_TOKEN must
+      # have Contents:write on toise-dev/toise-dev.github.io.
+      - name: Checkout deploy target (toise-dev.github.io)
+        uses: actions/checkout@v4
+        with:
+          repository: toise-dev/toise-dev.github.io
+          token: ${{ secrets.DOCS_DEPLOY_TOKEN }}
+          path: site
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install MkDocs Material + mike (pinned)
+        run: pip install "mkdocs-material==9.7.*" "mike==2.2.*"
+
+      - name: Configure git identity
+        working-directory: site
+        run: |
+          git config user.name "toise-dev"
+          git config user.email "toise-dev@users.noreply.github.com"
+
+      # Builds from the source repo's mkdocs.yml and publishes the rolling
+      # "latest" version into the landing repo's main branch under /docs. mike
+      # manages /docs/<version> + /docs/versions.json and leaves the landing
+      # root (the hand-edited index.html) alone.
+      #
+      # One-time setup, run manually after the first deploy so /docs/ redirects
+      # to the latest version:
+      #   mike set-default --config-file docs/user-guide/mkdocs.yml \
+      #     --deploy-prefix docs --branch main --push latest
+      - name: Deploy with mike
+        working-directory: site
+        run: |
+          mike deploy \
+            --config-file ../src/docs/user-guide/mkdocs.yml \
+            --deploy-prefix docs \
+            --branch main \
+            --push \
+            latest
