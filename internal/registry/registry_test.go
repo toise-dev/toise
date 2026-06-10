@@ -1,9 +1,11 @@
 package registry
 
 import (
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -188,4 +190,107 @@ func contains(ss []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// TestLimitsBoundTenantMinting pins #115: runtime creation respects
+// auto-create, the allowlist, and the cap, while pre-existing tenants and the
+// default always open.
+func TestLimitsBoundTenantMinting(t *testing.T) {
+	dir := t.TempDir()
+	// Seed a persisted tenant, then reopen with restrictive limits.
+	seed, err := Open(dir, store.DefaultConfig(), 0, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ferr := seed.For("persisted"); ferr != nil {
+		t.Fatal(ferr)
+	}
+	if cerr := seed.Close(); cerr != nil {
+		t.Fatal(cerr)
+	}
+
+	reg, err := OpenWithLimits(dir, store.DefaultConfig(), 0, Limits{AutoCreate: false}, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reg.Close() })
+	if _, ferr := reg.For("persisted"); ferr != nil {
+		t.Errorf("pre-existing tenant must open under auto-create=false: %v", ferr)
+	}
+	if _, ferr := reg.For(tenant.Default); ferr != nil {
+		t.Errorf("default must always open: %v", ferr)
+	}
+	if _, ferr := reg.For("fresh"); !errors.Is(ferr, tenant.ErrNotAllowed) {
+		t.Errorf("minting with auto-create=false = %v, want ErrNotAllowed", ferr)
+	}
+
+	// Allowlist: only listed ids may be minted.
+	dir2 := t.TempDir()
+	reg2, err := OpenWithLimits(dir2, store.DefaultConfig(), 0,
+		Limits{AutoCreate: true, Allowlist: []string{"acme"}}, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reg2.Close() })
+	if _, ferr := reg2.For("acme"); ferr != nil {
+		t.Errorf("allowlisted tenant refused: %v", ferr)
+	}
+	if _, ferr := reg2.For("globex"); !errors.Is(ferr, tenant.ErrNotAllowed) {
+		t.Errorf("non-allowlisted mint = %v, want ErrNotAllowed", ferr)
+	}
+
+	// Cap: creation beyond max is refused.
+	dir3 := t.TempDir()
+	reg3, err := OpenWithLimits(dir3, store.DefaultConfig(), 0,
+		Limits{AutoCreate: true, MaxTenants: 2}, slog.New(slog.DiscardHandler)) // default counts for 1
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reg3.Close() })
+	if _, ferr := reg3.For("one"); ferr != nil {
+		t.Fatal(ferr)
+	}
+	if _, ferr := reg3.For("two"); !errors.Is(ferr, tenant.ErrNotAllowed) {
+		t.Errorf("mint over the cap = %v, want ErrNotAllowed", ferr)
+	}
+
+	// Peek never creates.
+	if _, ok := reg3.Peek("ghost"); ok {
+		t.Error("Peek returned a stack for an unknown tenant")
+	}
+	if _, serr := os.Stat(filepath.Join(dir3, "ghost")); !os.IsNotExist(serr) {
+		t.Error("Peek created a tenant directory")
+	}
+}
+
+// TestConcurrentForOpensOnce pins the singleflight: concurrent first requests
+// for one tenant open its stack exactly once, off the registry mutex.
+func TestConcurrentForOpensOnce(t *testing.T) {
+	reg, err := Open(t.TempDir(), store.DefaultConfig(), 0, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reg.Close() })
+
+	const callers = 16
+	stacks := make([]*Stack, callers)
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			s, ferr := reg.For("racy")
+			if ferr != nil {
+				t.Error(ferr)
+				return
+			}
+			stacks[i] = s
+		}(i)
+	}
+	wg.Wait()
+	for i := 1; i < callers; i++ {
+		if stacks[i] != stacks[0] {
+			t.Fatalf("caller %d got a different stack instance", i)
+		}
+	}
 }

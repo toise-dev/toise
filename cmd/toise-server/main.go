@@ -83,7 +83,11 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	// One {store, projection, engine} stack per tenant under <data-dir>/<tenant>/
 	// (ADR 0025). A legacy single-tenant data dir is migrated to the default tenant
 	// on open; existing tenants and the default are opened up front.
-	reg, err := registry.Open(cfg.DataDir, storeCfg, cfg.RelationBufferTTL.D(), logger)
+	reg, err := registry.OpenWithLimits(cfg.DataDir, storeCfg, cfg.RelationBufferTTL.D(), registry.Limits{
+		AutoCreate: cfg.TenantAutoCreate,
+		Allowlist:  cfg.TenantAllowlist,
+		MaxTenants: cfg.MaxTenants,
+	}, logger)
 	if err != nil {
 		return fmt.Errorf("opening tenant registry: %w", err)
 	}
@@ -133,6 +137,18 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	ingestMetrics := ingest.NewMetrics()
 	authFailures := metrics.NewAuthFailures()
 	authn.OnFailure(authFailures.Inc)
+
+	// An exposed listener without auth or TLS deserves a loud line at startup:
+	// the trusted-network defaults are loopback, and leaving them is a choice
+	// that should look like one (#115).
+	if !authn.Enabled() || !cfg.TLSEnabled() {
+		for _, addr := range []string{cfg.Listen, cfg.OTLPListen} {
+			if !loopbackAddr(addr) {
+				logger.Warn("listener is not loopback but auth and/or TLS are off — exposed deployments should set TOISE_AUTH_TOKENS and TLS (ADR 0024)",
+					"addr", addr, "auth", authn.Enabled(), "tls", cfg.TLSEnabled())
+			}
+		}
+	}
 
 	// errc carries a fatal serve error from either server. A receiver that dies
 	// after startup MUST reach it: otherwise the process keeps serving HTTP,
@@ -364,4 +380,17 @@ func runCheckpoint(args []string, getenv func(string) string) error {
 		fmt.Printf("checkpointed tenant %s -> %s\n", st.Tenant, out)
 	}
 	return nil
+}
+
+// loopbackAddr reports whether addr binds a loopback interface.
+func loopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

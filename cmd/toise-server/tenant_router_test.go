@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -48,6 +50,11 @@ func TestTenantRouterDispatchesByHeader(t *testing.T) {
 
 	if rec := get(t, tr, ""); rec.Body.String() != tenant.Default {
 		t.Errorf("no header: served %q, want %q", rec.Body.String(), tenant.Default)
+	}
+	// acme exists because ingest (here: the registry directly) created it; the
+	// router itself never creates tenants.
+	if _, err := reg.For("acme"); err != nil {
+		t.Fatal(err)
 	}
 	if rec := get(t, tr, "acme"); rec.Body.String() != "acme" {
 		t.Errorf("acme header: served %q, want acme", rec.Body.String())
@@ -93,5 +100,28 @@ func TestTenantRouterErrorIsGeneric(t *testing.T) {
 	}
 	if body := rec.Body.String(); strings.Contains(body, "secret internal detail") {
 		t.Errorf("internal error detail leaked to the client: %q", body)
+	}
+}
+
+// TestTenantRouterDoesNotMintTenants pins #115: reading an unknown tenant is a
+// 404 and must NOT create its store directory — before this, any GET with a
+// ghost X-Scope-OrgID lazily minted a tenant on disk.
+func TestTenantRouterDoesNotMintTenants(t *testing.T) {
+	dir := t.TempDir()
+	reg, err := registry.Open(dir, store.DefaultConfig(), 0, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reg.Close() })
+	tr := newTenantRouter(reg, nil, func(*registry.Stack) (http.Handler, error) {
+		return http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), nil
+	})
+
+	rec := get(t, tr, "ghost")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown tenant status = %d, want 404", rec.Code)
+	}
+	if _, serr := os.Stat(filepath.Join(dir, "ghost")); !os.IsNotExist(serr) {
+		t.Errorf("reading tenant ghost created its directory (stat err = %v)", serr)
 	}
 }

@@ -129,8 +129,13 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (re
 		}
 		engine, err := s.engineFor(tenantID)
 		if err != nil {
-			// Transient (store open/resolution): Unavailable is retryable under
-			// the OTLP spec, matching the at-least-once design (#111).
+			// A policy refusal (auto-create off, allowlist, tenant cap) is
+			// permanent: InvalidArgument, do not retry. Anything else is a
+			// transient store/resolution failure: Unavailable, retry (#111).
+			if errors.Is(err, tenant.ErrNotAllowed) {
+				s.metrics.tenantRejected()
+				return plogotlp.NewExportResponse(), status.Errorf(codes.InvalidArgument, "resolving tenant %q: %v", tenantID, err)
+			}
 			return plogotlp.NewExportResponse(), status.Errorf(codes.Unavailable, "resolving tenant %q: %v", tenantID, err)
 		}
 		reconciler := s.reconcilerFor(tenantID)
