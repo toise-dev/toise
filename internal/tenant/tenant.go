@@ -7,6 +7,7 @@ package tenant
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -80,3 +81,9 @@ func FromGRPC(ctx context.Context) (string, bool) {
 	}
 	return Sanitize(vals[0])
 }
+
+// ErrNotAllowed marks a tenant refused by creation policy (auto-create off,
+// not on the allowlist, or over the tenant cap). It is permanent for the
+// caller — a retry cannot mint the tenant — so transports map it to their
+// invalid-argument class rather than a retryable failure.
+var ErrNotAllowed = errors.New("tenant not allowed")

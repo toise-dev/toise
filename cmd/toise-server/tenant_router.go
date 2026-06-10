@@ -36,7 +36,7 @@ func (tr *tenantRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid "+tenant.HeaderOrgID+" header", http.StatusBadRequest)
 		return
 	}
-	h, err := tr.handlerFor(id)
+	h, ok, err := tr.handlerFor(id)
 	if err != nil {
 		// Log the cause server-side; the client gets a generic message — the
 		// error detail (paths, store internals) is ours, not theirs (#115).
@@ -44,23 +44,31 @@ func (tr *tenantRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error resolving tenant", http.StatusInternalServerError)
 		return
 	}
+	if !ok {
+		// Reading must never mint a tenant (#115): an id with no open stack is
+		// a 404, exactly like an unknown resource.
+		http.Error(w, "unknown tenant", http.StatusNotFound)
+		return
+	}
 	h.ServeHTTP(w, r)
 }
 
-func (tr *tenantRouter) handlerFor(id string) (http.Handler, error) {
+func (tr *tenantRouter) handlerFor(id string) (http.Handler, bool, error) {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 	if h, ok := tr.handlers[id]; ok {
-		return h, nil
+		return h, true, nil
 	}
-	st, err := tr.reg.For(id)
-	if err != nil {
-		return nil, err
+	// Peek, never For: the query surfaces read tenants, they do not create
+	// them — ingest (or boot) is what brings a tenant into existence.
+	st, ok := tr.reg.Peek(id)
+	if !ok {
+		return nil, false, nil
 	}
 	h, err := tr.build(st)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	tr.handlers[id] = h
-	return h, nil
+	return h, true, nil
 }

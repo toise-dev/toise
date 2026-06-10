@@ -32,16 +32,65 @@ type Stack struct {
 	Engine *change.Engine
 }
 
+// Limits bounds runtime tenant creation (#115). Tenants whose directory
+// already exists always open; the limits apply only to minting new ones.
+type Limits struct {
+	// AutoCreate allows a first write to a new tenant id to create its stack.
+	// Off, only pre-existing tenants (and the default) are served.
+	AutoCreate bool
+	// Allowlist, when non-empty, is the only set of new tenant ids that may be
+	// created (the default tenant is always allowed).
+	Allowlist []string
+	// MaxTenants, when > 0, caps the number of open stacks; creation beyond it
+	// is refused until tenants are removed.
+	MaxTenants int
+}
+
+func (l Limits) allows(id string, open int) error {
+	if id == tenant.Default {
+		return nil
+	}
+	if !l.AutoCreate {
+		return fmt.Errorf("%w: %q does not exist and tenant auto-creation is disabled", tenant.ErrNotAllowed, id)
+	}
+	if len(l.Allowlist) > 0 {
+		found := false
+		for _, a := range l.Allowlist {
+			if a == id {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("%w: %q is not on the tenant allowlist", tenant.ErrNotAllowed, id)
+		}
+	}
+	if l.MaxTenants > 0 && open >= l.MaxTenants {
+		return fmt.Errorf("%w: tenant cap (%d) reached", tenant.ErrNotAllowed, l.MaxTenants)
+	}
+	return nil
+}
+
 // Registry lazily opens and caches one Stack per tenant under a shared data dir.
 // It is safe for concurrent use.
 type Registry struct {
 	dataDir  string
 	storeCfg store.Config
 	relBuf   time.Duration
+	limits   Limits
 	logger   *slog.Logger
 
-	mu     sync.Mutex
-	stacks map[string]*Stack
+	mu      sync.Mutex
+	stacks  map[string]*Stack
+	opening map[string]*inflight
+}
+
+// inflight is a singleflight slot: the first caller opens the stack outside the
+// registry mutex, later callers wait on done.
+type inflight struct {
+	done chan struct{}
+	s    *Stack
+	err  error
 }
 
 // Open creates a registry over dataDir. It first migrates a legacy single-tenant
@@ -50,6 +99,11 @@ type Registry struct {
 // plus the default tenant — so the liveness sweep, compaction and metrics cover
 // persisted tenants from boot rather than only after a tenant's first request.
 func Open(dataDir string, storeCfg store.Config, relBuf time.Duration, logger *slog.Logger) (*Registry, error) {
+	return OpenWithLimits(dataDir, storeCfg, relBuf, Limits{AutoCreate: true}, logger)
+}
+
+// OpenWithLimits is Open with runtime tenant-creation bounds (#115).
+func OpenWithLimits(dataDir string, storeCfg store.Config, relBuf time.Duration, limits Limits, logger *slog.Logger) (*Registry, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -59,21 +113,24 @@ func Open(dataDir string, storeCfg store.Config, relBuf time.Duration, logger *s
 	if err := migrateLegacy(dataDir, logger); err != nil {
 		return nil, err
 	}
-	r := &Registry{dataDir: dataDir, storeCfg: storeCfg, relBuf: relBuf, logger: logger, stacks: make(map[string]*Stack)}
+	r := &Registry{dataDir: dataDir, storeCfg: storeCfg, relBuf: relBuf, limits: limits, logger: logger,
+		stacks: make(map[string]*Stack), opening: make(map[string]*inflight)}
 
+	// Boot opens what already exists (plus the default) regardless of limits:
+	// the limits bound runtime minting, never previously persisted tenants.
 	existing, err := tenantDirs(dataDir)
 	if err != nil {
 		return nil, err
 	}
 	for _, id := range existing {
-		if _, err := r.For(id); err != nil {
+		if _, err := r.ensure(id); err != nil {
 			_ = r.Close()
 			return nil, err
 		}
 	}
 	// A default stack always exists, so a single-tenant deployment that never sets
 	// X-Scope-OrgID behaves exactly as a single-graph build did.
-	if _, err := r.For(tenant.Default); err != nil {
+	if _, err := r.ensure(tenant.Default); err != nil {
 		_ = r.Close()
 		return nil, err
 	}
@@ -82,23 +139,74 @@ func Open(dataDir string, storeCfg store.Config, relBuf time.Duration, logger *s
 
 // For returns the stack for a (raw) tenant id, opening and caching it on first
 // use. The id is sanitized to a safe single path segment; an id that cannot be
-// sanitized is rejected rather than silently coerced.
+// sanitized is rejected rather than silently coerced. Creating a NEW tenant is
+// subject to the registry's Limits; a tenant whose directory already exists
+// (e.g. restored from a backup after boot) always opens.
 func (r *Registry) For(rawTenant string) (*Stack, error) {
 	id, ok := tenant.Sanitize(rawTenant)
 	if !ok {
 		return nil, fmt.Errorf("invalid tenant id %q", rawTenant)
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if s, ok := r.stacks[id]; ok {
+		r.mu.Unlock()
 		return s, nil
 	}
-	s, err := r.openStack(id)
-	if err != nil {
-		return nil, err
+	if _, derr := os.Stat(filepath.Join(r.dataDir, id)); derr != nil {
+		// The directory does not exist: this call would mint a tenant.
+		if lerr := r.limits.allows(id, len(r.stacks)+len(r.opening)); lerr != nil {
+			r.mu.Unlock()
+			return nil, lerr
+		}
 	}
-	r.stacks[id] = s
-	return s, nil
+	r.mu.Unlock()
+	return r.ensure(id)
+}
+
+// Peek returns the stack only if it is already open. Query surfaces use it so
+// reading an unknown tenant can never mint one (#115): before this, a GET with
+// a ghost X-Scope-OrgID lazily created a store directory.
+func (r *Registry) Peek(rawTenant string) (*Stack, bool) {
+	id, ok := tenant.Sanitize(rawTenant)
+	if !ok {
+		return nil, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s, ok := r.stacks[id]
+	return s, ok
+}
+
+// ensure opens and caches id's stack without applying Limits (the boot and
+// already-exists paths). The pebble open runs OUTSIDE the registry mutex —
+// opening one tenant must not block every other tenant's requests (#115) —
+// with a singleflight slot so concurrent callers open it once.
+func (r *Registry) ensure(id string) (*Stack, error) {
+	r.mu.Lock()
+	if s, ok := r.stacks[id]; ok {
+		r.mu.Unlock()
+		return s, nil
+	}
+	if fl, ok := r.opening[id]; ok {
+		r.mu.Unlock()
+		<-fl.done
+		return fl.s, fl.err
+	}
+	fl := &inflight{done: make(chan struct{})}
+	r.opening[id] = fl
+	r.mu.Unlock()
+
+	s, err := r.openStack(id)
+
+	r.mu.Lock()
+	if err == nil {
+		r.stacks[id] = s
+	}
+	delete(r.opening, id)
+	r.mu.Unlock()
+	fl.s, fl.err = s, err
+	close(fl.done)
+	return s, err
 }
 
 // Stacks returns the currently-open stacks, sorted by tenant id, for the

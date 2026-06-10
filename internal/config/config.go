@@ -76,6 +76,15 @@ type Config struct {
 	// (and CORS). Empty means same-origin only.
 	AllowedOrigins []string `yaml:"allowed_origins"`
 
+	// TenantAutoCreate allows a first write to a new tenant id to create its
+	// isolated stack (the open multi-tenant posture). Off, only pre-existing
+	// tenants and the default are served. TenantAllowlist, when non-empty,
+	// restricts which NEW tenant ids may be created; MaxTenants (>0) caps the
+	// number of open tenants. See #115.
+	TenantAutoCreate bool     `yaml:"tenant_auto_create"`
+	TenantAllowlist  []string `yaml:"tenant_allowlist"`
+	MaxTenants       int      `yaml:"max_tenants"`
+
 	// AuthTokens are accepted bearer tokens for the data surfaces (GraphQL, MCP,
 	// debug UI, OTLP ingest). Empty disables auth (trusted-network default). These
 	// are secrets: source them from TOISE_AUTH_TOKENS (env), never a flag.
@@ -130,6 +139,7 @@ func Default() Config {
 		GraphQLIntrospection:  true,
 		Playground:            true,
 		DebugUI:               true,
+		TenantAutoCreate:      true,
 	}
 }
 
@@ -166,6 +176,23 @@ func (c *Config) applyEnv(getenv func(string) string) error {
 	}
 	if v := getenv("TOISE_LOG_LEVEL"); v != "" {
 		c.LogLevel = v
+	}
+	if v := getenv("TOISE_TENANT_AUTO_CREATE"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("invalid TOISE_TENANT_AUTO_CREATE %q: %w", v, err)
+		}
+		c.TenantAutoCreate = b
+	}
+	if v := getenv("TOISE_TENANT_ALLOWLIST"); v != "" {
+		c.TenantAllowlist = splitOrigins(v)
+	}
+	if v := getenv("TOISE_MAX_TENANTS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("invalid TOISE_MAX_TENANTS %q: %w", v, err)
+		}
+		c.MaxTenants = n
 	}
 	if v := getenv("TOISE_MCP_STDIO"); v != "" {
 		b, err := strconv.ParseBool(v)
@@ -288,6 +315,9 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	debugUI := fs.Bool("debug-ui", cfg.DebugUI, "serve the debug UI at / (off under --production)")
 	allowedOrigins := fs.String("allowed-origins", strings.Join(cfg.AllowedOrigins, ","),
 		"comma-separated browser Origin allowlist for WebSocket/CORS (empty = same-origin only)")
+	tenantAutoCreate := fs.Bool("tenant-auto-create", cfg.TenantAutoCreate, "allow a first write to a new tenant id to create its stack")
+	tenantAllowlist := fs.String("tenant-allowlist", strings.Join(cfg.TenantAllowlist, ","), "comma-separated tenant ids allowed to be created (empty: any)")
+	maxTenants := fs.Int("max-tenants", cfg.MaxTenants, "cap on open tenants, 0 = unbounded")
 	tlsCertFile := fs.String("tls-cert-file", cfg.TLSCertFile, "PEM certificate file; with --tls-key-file, serves HTTP and OTLP over TLS")
 	tlsKeyFile := fs.String("tls-key-file", cfg.TLSKeyFile, "PEM private key file (pairs with --tls-cert-file)")
 	if err := fs.Parse(args); err != nil {
@@ -309,6 +339,9 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	cfg.Playground = *playground
 	cfg.DebugUI = *debugUI
 	cfg.AllowedOrigins = splitOrigins(*allowedOrigins)
+	cfg.TenantAutoCreate = *tenantAutoCreate
+	cfg.TenantAllowlist = splitOrigins(*tenantAllowlist)
+	cfg.MaxTenants = *maxTenants
 	cfg.TLSCertFile = *tlsCertFile
 	cfg.TLSKeyFile = *tlsKeyFile
 	cfg.LogFormat = *logFormat
