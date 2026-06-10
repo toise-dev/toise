@@ -10,6 +10,8 @@ import (
 
 	"go.opentelemetry.io/collector/pdata/plog/plogotlp"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	// Register the gzip decompressor so the server can accept gzip-encoded
 	// OTLP exports. gRPC-Go does not install it by default, yet gzip is the
@@ -32,21 +34,22 @@ type Receiver struct {
 
 // NewReceiver builds a receiver routing every record to e (single tenant). A nil
 // logger uses slog.Default. It is shorthand for NewRoutedReceiver with a constant
-// engine.
+// engine and no metrics.
 func NewReceiver(e *change.Engine, logger *slog.Logger, opts ...grpc.ServerOption) *Receiver {
-	return NewRoutedReceiver(func(string) (*change.Engine, error) { return e, nil }, logger, opts...)
+	return NewRoutedReceiver(func(string) (*change.Engine, error) { return e, nil }, nil, logger, opts...)
 }
 
 // NewRoutedReceiver builds a receiver that resolves the change engine per tenant.
 // engineFor maps a (sanitized) tenant id to its engine; the tenant is read from
 // the X-Scope-OrgID gRPC metadata and may be overridden per ResourceLogs by a
-// tenant.id resource attribute (ADR 0025, #95). A nil logger uses slog.Default.
-func NewRoutedReceiver(engineFor func(tenantID string) (*change.Engine, error), logger *slog.Logger, opts ...grpc.ServerOption) *Receiver {
+// tenant.id resource attribute (ADR 0025, #95). m carries the hot-path ingest
+// counters (nil counts nothing). A nil logger uses slog.Default.
+func NewRoutedReceiver(engineFor func(tenantID string) (*change.Engine, error), m *Metrics, logger *slog.Logger, opts ...grpc.ServerOption) *Receiver {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	srv := grpc.NewServer(opts...)
-	ls := &logsServer{engineFor: engineFor, logger: logger, reconcilers: make(map[string]*embeddedReconciler)}
+	ls := &logsServer{engineFor: engineFor, metrics: m, logger: logger, reconcilers: make(map[string]*embeddedReconciler)}
 	plogotlp.RegisterGRPCServer(srv, ls)
 	return &Receiver{srv: srv, logs: ls, logger: logger}
 }
@@ -67,6 +70,7 @@ func (r *Receiver) Stop() { r.srv.GracefulStop() }
 type logsServer struct {
 	plogotlp.UnimplementedGRPCServer
 	engineFor func(tenantID string) (*change.Engine, error)
+	metrics   *Metrics
 	logger    *slog.Logger
 
 	// reconcilers holds the embedded-relationship state per tenant. It must be
@@ -91,7 +95,8 @@ func (s *logsServer) reconcilerFor(tenantID string) *embeddedReconciler {
 // per-tenant change engine and ignoring the rest. The tenant comes from the
 // request's X-Scope-OrgID metadata and may be overridden per ResourceLogs by a
 // tenant.id resource attribute (so one OTLP stream can carry several tenants).
-func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (plogotlp.ExportResponse, error) {
+func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (resp plogotlp.ExportResponse, err error) {
+	defer func() { s.metrics.export(err == nil) }()
 	ld := req.Logs()
 	var handled, skipped, rejected int
 	var rejectMsg string
@@ -101,7 +106,10 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (pl
 	// default tenant — a tenant id that cannot be honored is a caller error.
 	baseTenant, ok := tenant.FromGRPC(ctx)
 	if !ok {
-		return plogotlp.NewExportResponse(), fmt.Errorf("invalid %s metadata", tenant.HeaderOrgID)
+		// Permanent caller error: InvalidArgument tells a spec-compliant
+		// exporter not to retry (#111).
+		s.metrics.tenantRejected()
+		return plogotlp.NewExportResponse(), status.Errorf(codes.InvalidArgument, "invalid %s metadata", tenant.HeaderOrgID)
 	}
 
 	// Each ResourceLogs (one producer) is ingested as a single batch so its events
@@ -114,13 +122,16 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (pl
 		if rt, ok := strAttr(res.Attributes(), tenant.ResourceAttr); ok {
 			san, ok := tenant.Sanitize(rt)
 			if !ok {
-				return plogotlp.NewExportResponse(), fmt.Errorf("invalid %s resource attribute %q", tenant.ResourceAttr, rt)
+				s.metrics.tenantRejected()
+				return plogotlp.NewExportResponse(), status.Errorf(codes.InvalidArgument, "invalid %s resource attribute %q", tenant.ResourceAttr, rt)
 			}
 			tenantID = san
 		}
 		engine, err := s.engineFor(tenantID)
 		if err != nil {
-			return plogotlp.NewExportResponse(), fmt.Errorf("resolving tenant %q: %w", tenantID, err)
+			// Transient (store open/resolution): Unavailable is retryable under
+			// the OTLP spec, matching the at-least-once design (#111).
+			return plogotlp.NewExportResponse(), status.Errorf(codes.Unavailable, "resolving tenant %q: %v", tenantID, err)
 		}
 		reconciler := s.reconcilerFor(tenantID)
 		sls := rls.At(i).ScopeLogs()
@@ -170,10 +181,12 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (pl
 		// nothing was broadcast — the producer's retry re-classifies every
 		// observation against durable state and regenerates the lost events.
 		if routeErr != nil {
-			return plogotlp.NewExportResponse(), fmt.Errorf("routing log record: %w", routeErr)
+			// Contract violations were already split off as per-record partial
+			// success; what reaches here is engine-internal, hence retriable.
+			return plogotlp.NewExportResponse(), status.Errorf(codes.Unavailable, "routing log record: %v", routeErr)
 		}
 		if batchErr != nil {
-			return plogotlp.NewExportResponse(), fmt.Errorf("ingest batch: %w", batchErr)
+			return plogotlp.NewExportResponse(), status.Errorf(codes.Unavailable, "ingest batch: %v", batchErr)
 		}
 	}
 	if len(dropped) > 0 {
@@ -184,7 +197,11 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (pl
 	if skipped > 0 {
 		s.logger.Debug("otlp export processed", "entity_events", handled, "ignored", skipped)
 	}
-	resp := plogotlp.NewExportResponse()
+	s.metrics.addRecords("handled", handled)
+	s.metrics.addRecords("ignored", skipped)
+	s.metrics.addRecords("rejected", rejected)
+	s.metrics.addDroppedValues(len(dropped))
+	resp = plogotlp.NewExportResponse()
 	if rejected > 0 {
 		// OTLP partial success: the export as a whole is accepted (no retry),
 		// the rejected records are reported back to the producer.

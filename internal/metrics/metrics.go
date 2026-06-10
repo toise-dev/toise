@@ -113,9 +113,20 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 }
 
 // Handler returns the /metrics HTTP handler: a private registry holding the Toise
-// collector plus the standard Go runtime and process collectors.
-func Handler(c *Collector) http.Handler {
+// collector, the standard Go runtime and process collectors, and any extra
+// collectors (the hot-path ingest and auth counters, #113).
+func Handler(c *Collector, extra ...prometheus.Collector) http.Handler {
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(c, collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	reg.MustRegister(extra...)
 	return promhttp.HandlerFor(reg, promhttp.HandlerOpts{})
+}
+
+// NewAuthFailures returns the counter for rejected authentications, wired to
+// auth.Authenticator.OnFailure and registered via Handler's extra collectors.
+func NewAuthFailures() prometheus.Counter {
+	return prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "toise_auth_failures_total",
+		Help: "Rejected authentications on the HTTP and gRPC surfaces.",
+	})
 }

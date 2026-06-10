@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -119,14 +120,24 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		grpcOpts = append(grpcOpts, grpc.Creds(creds))
 	}
 
-	receiver := ingest.NewRoutedReceiver(engineFor, logger, grpcOpts...)
+	ingestMetrics := ingest.NewMetrics()
+	authFailures := metrics.NewAuthFailures()
+	authn.OnFailure(authFailures.Inc)
+
+	// errc carries a fatal serve error from either server. A receiver that dies
+	// after startup MUST reach it: otherwise the process keeps serving HTTP,
+	// /readyz stays green, and ingestion is silently dead while the liveness
+	// sweep starts expiring entities (#112). Exiting lets the supervisor restart.
+	errc := make(chan error, 2)
+
+	receiver := ingest.NewRoutedReceiver(engineFor, ingestMetrics, logger, grpcOpts...)
 	lis, err := net.Listen("tcp", cfg.OTLPListen)
 	if err != nil {
 		return fmt.Errorf("otlp listen on %s: %w", cfg.OTLPListen, err)
 	}
 	go func() {
 		if serveErr := receiver.Serve(lis); serveErr != nil {
-			logger.Error("otlp receiver stopped", "err", serveErr)
+			errc <- fmt.Errorf("otlp receiver: %w", serveErr)
 		}
 	}()
 	defer receiver.Stop()
@@ -157,8 +168,9 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		}
 		return nil
 	}))
+	metricsExtra := append(ingestMetrics.Collectors(), authFailures)
 	mux.Handle("/metrics", metrics.Handler(metrics.NewCollector(
-		aggregateGraph{reg}, aggregateStore{reg}, version.Version, version.Commit)))
+		aggregateGraph{reg}, aggregateStore{reg}, version.Version, version.Commit), metricsExtra...))
 	if cfg.Playground {
 		mux.Handle("/playground", playground.Handler("Toise", "/graphql"))
 	}
@@ -177,10 +189,21 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	// The maintenance loops below append, prune, and snapshot against the tenant
+	// stores; they must be joined before the deferred reg.Close() closes pebble
+	// under them (DB.Close is unsafe concurrently with any other method —
+	// "panic: pebble: closed" at SIGTERM otherwise, #112). LIFO defers: cancel,
+	// join the loops, then receiver.Stop and reg.Close run.
+	var wg sync.WaitGroup
+	defer func() {
+		stop()
+		wg.Wait()
+	}()
 
 	if sweep := cfg.LivenessSweepInterval.D(); sweep > 0 {
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			ticker := time.NewTicker(sweep)
 			defer ticker.Stop()
 			for {
@@ -202,7 +225,9 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	// prune events older than it to bound on-disk growth (the current-state
 	// projection is preserved). Runs per tenant. See ADR 0013, #45.
 	if storeCfg.CompactionInterval > 0 {
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			ticker := time.NewTicker(storeCfg.CompactionInterval)
 			defer ticker.Stop()
 			for {
@@ -238,7 +263,9 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	// snapshot on the next start. The reference sequence is read before sampling the
 	// graph, so the replayed tail overlaps idempotently rather than skips (#49).
 	if snap := cfg.SnapshotInterval.D(); snap > 0 {
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			ticker := time.NewTicker(snap)
 			defer ticker.Stop()
 			for {
@@ -272,7 +299,6 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		"auth", authn.Enabled(),
 		"production", cfg.Production)
 
-	errc := make(chan error, 1)
 	go func() {
 		if cfg.TLSEnabled() {
 			errc <- httpSrv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
@@ -284,7 +310,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	select {
 	case err := <-errc:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return fmt.Errorf("http server: %w", err)
+			return fmt.Errorf("serve: %w", err)
 		}
 		return nil
 	case <-ctx.Done():

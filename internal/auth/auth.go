@@ -20,7 +20,19 @@ import (
 // Authenticator validates bearer tokens. The zero/empty value is disabled
 // (everything passes), so callers can wire it unconditionally.
 type Authenticator struct {
-	tokens [][]byte // accepted tokens; nil/empty means auth disabled
+	tokens    [][]byte // accepted tokens; nil/empty means auth disabled
+	onFailure func()   // optional, observed on every rejected authentication
+}
+
+// OnFailure registers fn to run on every rejected authentication, HTTP or
+// gRPC — the hook a metrics counter hangs off (#113). Set it before serving;
+// it is not synchronized against concurrent use.
+func (a *Authenticator) OnFailure(fn func()) { a.onFailure = fn }
+
+func (a *Authenticator) failed() {
+	if a.onFailure != nil {
+		a.onFailure()
+	}
 }
 
 // New builds an Authenticator accepting the given tokens. Empty/blank tokens are
@@ -72,6 +84,7 @@ func (a *Authenticator) HTTPMiddleware(public map[string]bool) func(http.Handler
 				return
 			}
 			if !a.validHeader(r.Header.Get("Authorization")) {
+				a.failed()
 				w.Header().Set("WWW-Authenticate", "Bearer")
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
@@ -109,6 +122,7 @@ func (a *Authenticator) checkContext(ctx context.Context) error {
 	md, _ := metadata.FromIncomingContext(ctx)
 	vals := md.Get("authorization")
 	if len(vals) == 0 || !a.validHeader(vals[0]) {
+		a.failed()
 		return status.Error(codes.Unauthenticated, "missing or invalid bearer token")
 	}
 	return nil

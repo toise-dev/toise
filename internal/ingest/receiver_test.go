@@ -3,14 +3,21 @@ package ingest
 import (
 	"context"
 	"net"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/plog/plogotlp"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 
 	"github.com/toise-dev/toise/internal/change"
 	"github.com/toise-dev/toise/internal/model"
@@ -304,5 +311,144 @@ func TestReceiverRejectsInvalidRecordPerRecord(t *testing.T) {
 	export(t, client, ld2)
 	if g.EntityCount() != 3 {
 		t.Errorf("EntityCount = %d after follow-up export, want 3", g.EntityCount())
+	}
+}
+
+// TestExportStatusCodes pins the OTLP retryability contract (#111): transient
+// append failures must surface as codes.Unavailable (retryable) and permanent
+// caller errors as codes.InvalidArgument (not retried), never codes.Unknown.
+func TestExportStatusCodes(t *testing.T) {
+	g := projection.New()
+	ap := &failingAppender{fail: true}
+	eng := change.New(g, ap, change.WithClock(func() time.Time { return t0 }))
+	rec := NewReceiver(eng, nil)
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() { _ = rec.Serve(lis) }()
+	t.Cleanup(rec.Stop)
+	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	client := plogotlp.NewGRPCClient(conn)
+
+	ld := plog.NewLogs()
+	sl := ld.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty()
+	entityRecord(sl, evEntityState, model.TypeHost, map[string]string{"host.id": "h1"}, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err = client.Export(ctx, plogotlp.NewExportRequestFromLogs(ld))
+	if status.Code(err) != codes.Unavailable {
+		t.Errorf("append failure -> %v, want codes.Unavailable (retryable)", status.Code(err))
+	}
+
+	// Invalid tenant metadata is a permanent caller error.
+	badCtx := metadata.AppendToOutgoingContext(ctx, "x-scope-orgid", "../escape")
+	_, err = client.Export(badCtx, plogotlp.NewExportRequestFromLogs(ld))
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("invalid X-Scope-OrgID -> %v, want codes.InvalidArgument", status.Code(err))
+	}
+
+	// The retry after a healed store succeeds and reconverges.
+	ap.fail = false
+	if _, err := client.Export(ctx, plogotlp.NewExportRequestFromLogs(ld)); err != nil {
+		t.Fatalf("retry after heal: %v", err)
+	}
+	if g.EntityCount() != 1 {
+		t.Errorf("EntityCount = %d after retry, want 1", g.EntityCount())
+	}
+}
+
+// TestIngestCounters pins #113: the hot-path counters answer "is ingest
+// healthy?" — exports by outcome, records by result, tenant rejections.
+func TestIngestCounters(t *testing.T) {
+	st, err := store.Open(t.TempDir(), store.DefaultConfig())
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	eng := change.New(projection.New(), st, change.WithClock(func() time.Time { return t0 }))
+	m := NewMetrics()
+	rec := NewRoutedReceiver(func(string) (*change.Engine, error) { return eng, nil }, m, nil)
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() { _ = rec.Serve(lis) }()
+	t.Cleanup(rec.Stop)
+	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	client := plogotlp.NewGRPCClient(conn)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// One export: a handled entity, an ignored non-entity record, a rejected
+	// unknown-type record.
+	ld := plog.NewLogs()
+	sl := ld.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty()
+	entityRecord(sl, evEntityState, model.TypeHost, map[string]string{"host.id": "h1"}, nil)
+	sl.LogRecords().AppendEmpty().Body().SetStr("just a log line")
+	entityRecord(sl, evEntityState, "not.a.type", map[string]string{"x": "1"}, nil)
+	if _, err := client.Export(ctx, plogotlp.NewExportRequestFromLogs(ld)); err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	// And one rejected export: invalid tenant metadata.
+	badCtx := metadata.AppendToOutgoingContext(ctx, "x-scope-orgid", "../nope")
+	if _, err := client.Export(badCtx, plogotlp.NewExportRequestFromLogs(ld)); err == nil {
+		t.Fatal("invalid tenant must error")
+	}
+
+	counts := map[string]float64{}
+	for _, c := range m.Collectors() {
+		ch := make(chan prometheus.Metric, 16)
+		c.Collect(ch)
+		close(ch)
+		for pm := range ch {
+			var d dto.Metric
+			if err := pm.Write(&d); err != nil {
+				t.Fatal(err)
+			}
+			key := pm.Desc().String()
+			for _, l := range d.GetLabel() {
+				key += "|" + l.GetValue()
+			}
+			counts[key] = d.GetCounter().GetValue()
+		}
+	}
+	get := func(substr, label string) float64 {
+		for k, v := range counts {
+			if strings.Contains(k, substr) && (label == "" || strings.HasSuffix(k, "|"+label)) {
+				return v
+			}
+		}
+		t.Fatalf("metric %s{%s} not found in %v", substr, label, counts)
+		return 0
+	}
+	if v := get("toise_ingest_exports_total", "ok"); v != 1 {
+		t.Errorf("exports{ok} = %v, want 1", v)
+	}
+	if v := get("toise_ingest_exports_total", "error"); v != 1 {
+		t.Errorf("exports{error} = %v, want 1", v)
+	}
+	if v := get("toise_ingest_records_total", "handled"); v != 1 {
+		t.Errorf("records{handled} = %v, want 1", v)
+	}
+	if v := get("toise_ingest_records_total", "ignored"); v != 1 {
+		t.Errorf("records{ignored} = %v, want 1", v)
+	}
+	if v := get("toise_ingest_records_total", "rejected"); v != 1 {
+		t.Errorf("records{rejected} = %v, want 1", v)
+	}
+	if v := get("toise_ingest_tenant_rejections_total", ""); v != 1 {
+		t.Errorf("tenant_rejections = %v, want 1", v)
 	}
 }
