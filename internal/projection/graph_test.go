@@ -135,3 +135,39 @@ func TestReplay(t *testing.T) {
 		t.Errorf("after replay: %d entities, %d relations", g.EntityCount(), g.RelationCount())
 	}
 }
+
+// TestApplyIndexesWhenUpdateIsFirstEvent pins the #107 invariant at the
+// projection: after retention pruning, an entity's (or relation's) first
+// surviving event on replay can be an attribute update, and the identity, type,
+// and adjacency indexes must be built from it all the same.
+func TestApplyIndexesWhenUpdateIsFirstEvent(t *testing.T) {
+	g := New()
+	ident := []model.KeyValue{{Key: "host.id", Value: model.StringValue("h1")}}
+	ent := model.Entity{ID: "e1", Type: model.TypeHost, Identity: ident}
+
+	g.Apply(model.Event{Entity: &model.EntityEvent{
+		EventID: model.NewEventID(), ChangeType: model.EntityAttributeUpdated,
+		Entity: ent, SchemaVersion: model.SchemaVersion,
+	}})
+	if _, ok := g.MatchIdentity(model.TypeHost, ident); !ok {
+		t.Error("MatchIdentity missed an entity whose first event is attribute_updated")
+	}
+	if n := g.CountByType()[model.TypeHost]; n != 1 {
+		t.Errorf("CountByType[host] = %d, want 1", n)
+	}
+
+	g.Apply(model.Event{Entity: &model.EntityEvent{
+		EventID: model.NewEventID(), ChangeType: model.EntityCreated,
+		Entity: model.Entity{ID: "e2", Type: model.TypeProcess,
+			Identity: []model.KeyValue{{Key: "pid", Value: model.StringValue("1")}}},
+		SchemaVersion: model.SchemaVersion,
+	}})
+	rel := model.NewRelation(model.RelRunsOn, "e2", "e1")
+	g.Apply(model.Event{Relation: &model.RelationEvent{
+		EventID: model.NewEventID(), ChangeType: model.RelationAttributeChanged,
+		Relation: rel, SchemaVersion: model.SchemaVersion,
+	}})
+	if n := len(g.Neighbors("e1", "", 1)); n != 1 {
+		t.Errorf("Neighbors = %d via a relation whose first event is attribute_changed, want 1 (adjacency lost)", n)
+	}
+}

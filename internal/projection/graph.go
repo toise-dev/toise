@@ -73,8 +73,12 @@ func (g *Graph) applyEntity(ee *model.EntityEvent) {
 		}
 		g.putEntity(ee.Entity)
 	case model.EntityAttributeUpdated, model.EntityStateChanged:
-		// Identity is unchanged; replace the stored entity with new attributes.
-		g.entities[id] = ee.Entity
+		// Identity is unchanged, but route through putEntity anyway (it is
+		// idempotent): after retention pruning this can be the entity's first
+		// surviving event on replay, and skipping the byHash/byType indexes
+		// here would leave the entity unmatchable — the next observation would
+		// mint a permanent duplicate (#107).
+		g.putEntity(ee.Entity)
 	case model.EntityDeleted:
 		if e, ok := g.entities[id]; ok {
 			delete(g.byHash, e.IdentityHash())
@@ -110,7 +114,11 @@ func (g *Graph) applyRelation(re *model.RelationEvent) {
 		g.relations[r.ID] = r
 		g.addAdjacency(r)
 	case model.RelationAttributeChanged:
+		// Same replay-after-pruning shape as for entities: this can be the
+		// relation's first surviving event, so (re-)index the adjacency too;
+		// addAdjacency is idempotent (#107).
 		g.relations[r.ID] = r
+		g.addAdjacency(r)
 	case model.RelationRemoved:
 		delete(g.relations, r.ID)
 		if s := g.out[r.From]; s != nil {
@@ -289,7 +297,13 @@ func (g *Graph) SnapshotEvents(when time.Time) []model.Event {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	out := make([]model.Event, 0, len(g.entities)+len(g.relations))
-	for _, e := range g.entities {
+	for id, e := range g.entities {
+		if g.deleted[id] {
+			// A soft-deleted entity must not be written to the snapshot: its
+			// EntityDeleted predates the snapshot sequence and is never
+			// replayed, so emitting it here resurrects it on restore (#106).
+			continue
+		}
 		out = append(out, model.Event{Entity: &model.EntityEvent{
 			EventID:       model.NewEventID(),
 			ChangeType:    model.EntityCreated,

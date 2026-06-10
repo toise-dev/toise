@@ -30,11 +30,13 @@ func TestSnapshotThenTailEqualsFullReplay(t *testing.T) {
 		}
 	}
 
-	a, b := model.EntityID("a"), model.EntityID("b")
+	a, b, d := model.EntityID("a"), model.EntityID("b"), model.EntityID("d")
 	add(entEvt(a, model.EntityCreated, tsx(0)))
 	add(entEvt(a, model.EntityAttributeUpdated, tsx(10)))
 	add(entEvt(b, model.EntityCreated, tsx(20)))
 	add(relEvt(a, b, tsx(30)))
+	add(entEvt(d, model.EntityCreated, tsx(31)))
+	add(entEvt(d, model.EntityDeleted, tsx(32)))
 
 	atSnapshot := projection.New()
 	if e := atSnapshot.Replay(s); e != nil {
@@ -80,6 +82,14 @@ func TestSnapshotThenTailEqualsFullReplay(t *testing.T) {
 	if full.EntityCount() != 3 || full.RelationCount() != 1 {
 		t.Errorf("graph = %d/%d, want 3 entities / 1 relation", full.EntityCount(), full.RelationCount())
 	}
+	if _, ok := restored.MatchIdentity(model.TypeHost,
+		[]model.KeyValue{{Key: "host.id", Value: model.StringValue("a")}}); !ok {
+		t.Error("MatchIdentity(a) missed after snapshot+tail restore")
+	}
+	if _, ok := restored.MatchIdentity(model.TypeHost,
+		[]model.KeyValue{{Key: "host.id", Value: model.StringValue("d")}}); ok {
+		t.Error("soft-deleted entity d is matchable after restore: resurrected by the snapshot (#106)")
+	}
 	if s.SnapshotSeq() != seq || s.SnapshotsWritten() != 1 {
 		t.Errorf("snapshot counters: seq=%d written=%d, want %d/1", s.SnapshotSeq(), s.SnapshotsWritten(), seq)
 	}
@@ -120,5 +130,54 @@ func TestCheckpointRestore(t *testing.T) {
 	if g.EntityCount() != orig.EntityCount() || g.RelationCount() != orig.RelationCount() {
 		t.Errorf("restored %d/%d != original %d/%d",
 			g.EntityCount(), g.RelationCount(), orig.EntityCount(), orig.RelationCount())
+	}
+}
+
+// TestSnapshotRestoreDoesNotResurrectDeleted is the #106 repro: an entity
+// deleted before the snapshot must stay deleted after a restore. Its
+// EntityDeleted predates the snapshot sequence and is never replayed, so a
+// snapshot that emits soft-deleted entities resurrects them — permanently,
+// since the restarted engine holds no liveness reference to reap them.
+func TestSnapshotRestoreDoesNotResurrectDeleted(t *testing.T) {
+	s := mustOpenStore(t, t.TempDir())
+	t.Cleanup(func() { _ = s.Close() })
+	add := func(ev model.Event) {
+		t.Helper()
+		if e := s.Append(ev); e != nil {
+			t.Fatalf("append: %v", e)
+		}
+	}
+
+	a, b := model.EntityID("a"), model.EntityID("b")
+	add(entEvt(a, model.EntityCreated, tsx(0)))
+	add(entEvt(b, model.EntityCreated, tsx(10)))
+	add(entEvt(b, model.EntityDeleted, tsx(20)))
+
+	g := projection.New()
+	if e := g.Replay(s); e != nil {
+		t.Fatalf("replay: %v", e)
+	}
+	if e := s.WriteSnapshot(s.Sequence(), g.SnapshotEvents(tsx(30))); e != nil {
+		t.Fatalf("write snapshot: %v", e)
+	}
+
+	restored := projection.New()
+	_, evs, ok, rerr := s.ReadSnapshot()
+	if rerr != nil || !ok {
+		t.Fatalf("ReadSnapshot ok=%v err=%v", ok, rerr)
+	}
+	for i := range evs {
+		restored.Apply(evs[i])
+	}
+
+	if restored.EntityCount() != 1 {
+		t.Errorf("EntityCount = %d after restore, want 1 (b stays deleted)", restored.EntityCount())
+	}
+	if _, ok := restored.MatchIdentity(model.TypeHost,
+		[]model.KeyValue{{Key: "host.id", Value: model.StringValue("b")}}); ok {
+		t.Error("deleted entity b is matchable after restore: resurrected")
+	}
+	if _, found, _ := restored.GetEntity(b); found {
+		t.Error("deleted entity b present after restore: the snapshot must omit it")
 	}
 }
