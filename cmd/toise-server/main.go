@@ -119,7 +119,11 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 
 	// Optional bearer-token auth and TLS on the data surfaces (ADR 0024). Both
 	// off by default — the trusted-network posture (ADR 0014) is unchanged.
-	authn := auth.New(cfg.AuthTokens)
+	scopedTokens, err := cfg.TenantTokensMap()
+	if err != nil {
+		return err
+	}
+	authn := auth.NewWithTenantTokens(cfg.AuthTokens, scopedTokens)
 	var grpcOpts []grpc.ServerOption
 	if authn.Enabled() {
 		grpcOpts = append(grpcOpts,
@@ -156,7 +160,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	// sweep starts expiring entities (#112). Exiting lets the supervisor restart.
 	errc := make(chan error, 2)
 
-	receiver := ingest.NewRoutedReceiver(engineFor, ingestMetrics, logger, grpcOpts...)
+	receiver := ingest.NewRoutedReceiver(engineFor, authn.AllowedForTenantGRPC, ingestMetrics, logger, grpcOpts...)
 	lis, err := net.Listen("tcp", cfg.OTLPListen)
 	if err != nil {
 		return fmt.Errorf("otlp listen on %s: %w", cfg.OTLPListen, err)

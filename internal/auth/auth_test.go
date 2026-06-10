@@ -71,3 +71,59 @@ func TestUnaryInterceptor(t *testing.T) {
 		t.Errorf("valid token rejected: %v", err)
 	}
 }
+
+// TestTenantScopedTokens pins #104: a scoped token authenticates but is
+// authorized only for its tenant — 403 elsewhere — while global tokens stay
+// valid for every tenant.
+func TestTenantScopedTokens(t *testing.T) {
+	a := NewWithTenantTokens([]string{"global-tok"}, map[string][]string{"acme": {"acme-tok"}})
+	if !a.Enabled() {
+		t.Fatal("scoped tokens must enable auth")
+	}
+
+	do := func(token, tenantID string) int {
+		req := httptest.NewRequest(http.MethodPost, "/graphql", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		if tenantID != "" {
+			req.Header.Set("X-Scope-OrgID", tenantID)
+		}
+		rec := httptest.NewRecorder()
+		a.HTTPMiddleware(nil)(okHandler()).ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	if code := do("acme-tok", "acme"); code != http.StatusOK {
+		t.Errorf("scoped token on its tenant = %d, want 200", code)
+	}
+	if code := do("acme-tok", "globex"); code != http.StatusForbidden {
+		t.Errorf("scoped token on another tenant = %d, want 403", code)
+	}
+	if code := do("acme-tok", ""); code != http.StatusForbidden {
+		t.Errorf("scoped token on the default tenant = %d, want 403", code)
+	}
+	if code := do("global-tok", "acme"); code != http.StatusOK {
+		t.Errorf("global token on acme = %d, want 200", code)
+	}
+	if code := do("global-tok", "globex"); code != http.StatusOK {
+		t.Errorf("global token on globex = %d, want 200", code)
+	}
+	if code := do("wrong", "acme"); code != http.StatusUnauthorized {
+		t.Errorf("unknown token = %d, want 401 (authn, not authz)", code)
+	}
+
+	// gRPC-side check, including the no-metadata case.
+	ctx := metadata.NewIncomingContext(context.Background(),
+		metadata.Pairs("authorization", "Bearer acme-tok"))
+	if !a.AllowedForTenantGRPC(ctx, "acme") {
+		t.Error("scoped token must be allowed for its tenant over gRPC")
+	}
+	if a.AllowedForTenantGRPC(ctx, "globex") {
+		t.Error("scoped token must be refused for another tenant over gRPC")
+	}
+	if a.AllowedForTenantGRPC(context.Background(), "acme") {
+		t.Error("no metadata must be refused when auth is on")
+	}
+	if !New(nil).AllowedForTenantGRPC(context.Background(), "any") {
+		t.Error("disabled auth must allow")
+	}
+}

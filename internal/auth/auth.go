@@ -15,13 +15,19 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+
+	"github.com/toise-dev/toise/internal/tenant"
 )
 
-// Authenticator validates bearer tokens. The zero/empty value is disabled
-// (everything passes), so callers can wire it unconditionally.
+// Authenticator validates bearer tokens and authorizes them per tenant.
+// Global tokens are valid for every tenant; a tenant-scoped token
+// authenticates like any other but is authorized only for its own tenant
+// (#104). The zero/empty value is disabled (everything passes), so callers
+// can wire it unconditionally.
 type Authenticator struct {
-	tokens    [][]byte // accepted tokens; nil/empty means auth disabled
-	onFailure func()   // optional, observed on every rejected authentication
+	tokens    [][]byte            // global tokens; valid for every tenant
+	scoped    map[string][][]byte // tenant id -> tokens valid only for that tenant
+	onFailure func()              // optional, observed on every rejected authentication
 }
 
 // OnFailure registers fn to run on every rejected authentication, HTTP or
@@ -35,22 +41,43 @@ func (a *Authenticator) failed() {
 	}
 }
 
-// New builds an Authenticator accepting the given tokens. Empty/blank tokens are
-// ignored; with none left, the Authenticator is disabled.
+// New builds an Authenticator accepting the given global tokens. Empty/blank
+// tokens are ignored; with none left, the Authenticator is disabled.
 func New(tokens []string) *Authenticator {
+	return NewWithTenantTokens(tokens, nil)
+}
+
+// NewWithTenantTokens builds an Authenticator with global tokens plus
+// tenant-scoped tokens. A scoped token authenticates, but is authorized only
+// for its tenant: authentication establishes who, this establishes which
+// tenants they may touch (#104).
+func NewWithTenantTokens(global []string, scoped map[string][]string) *Authenticator {
 	a := &Authenticator{}
-	for _, t := range tokens {
+	for _, t := range global {
 		if t = strings.TrimSpace(t); t != "" {
 			a.tokens = append(a.tokens, []byte(t))
+		}
+	}
+	for tenantID, toks := range scoped {
+		for _, t := range toks {
+			if t = strings.TrimSpace(t); t == "" {
+				continue
+			}
+			if a.scoped == nil {
+				a.scoped = make(map[string][][]byte)
+			}
+			a.scoped[tenantID] = append(a.scoped[tenantID], []byte(t))
 		}
 	}
 	return a
 }
 
 // Enabled reports whether any token is configured (i.e. auth is enforced).
-func (a *Authenticator) Enabled() bool { return len(a.tokens) > 0 }
+func (a *Authenticator) Enabled() bool { return len(a.tokens) > 0 || len(a.scoped) > 0 }
 
-// valid reports whether token matches an accepted one, in constant time.
+// valid reports whether token matches any accepted token — global or scoped —
+// in constant time. This is authentication only; per-tenant authorization is
+// allowedForTenant.
 func (a *Authenticator) valid(token string) bool {
 	got := []byte(token)
 	ok := false
@@ -59,7 +86,58 @@ func (a *Authenticator) valid(token string) bool {
 			ok = true
 		}
 	}
+	for _, toks := range a.scoped {
+		for _, want := range toks {
+			if subtle.ConstantTimeCompare(got, want) == 1 {
+				ok = true
+			}
+		}
+	}
 	return ok
+}
+
+// allowedForTenant reports whether token may touch tenantID: global tokens may
+// touch every tenant, a scoped token only its own.
+func (a *Authenticator) allowedForTenant(token, tenantID string) bool {
+	got := []byte(token)
+	ok := false
+	for _, want := range a.tokens {
+		if subtle.ConstantTimeCompare(got, want) == 1 {
+			ok = true
+		}
+	}
+	for _, want := range a.scoped[tenantID] {
+		if subtle.ConstantTimeCompare(got, want) == 1 {
+			ok = true
+		}
+	}
+	return ok
+}
+
+// headerAllowedForTenant applies allowedForTenant to an
+// "Authorization: Bearer <token>" header value.
+func (a *Authenticator) headerAllowedForTenant(h, tenantID string) bool {
+	const prefix = "Bearer "
+	if len(h) <= len(prefix) || !strings.EqualFold(h[:len(prefix)], prefix) {
+		return false
+	}
+	return a.allowedForTenant(strings.TrimSpace(h[len(prefix):]), tenantID)
+}
+
+// AllowedForTenantGRPC reports whether the bearer carried in ctx's gRPC
+// metadata may touch tenantID. With auth disabled it always allows. The ingest
+// receiver calls it per resolved tenant — including the per-ResourceLogs
+// tenant.id override an interceptor cannot see (#104).
+func (a *Authenticator) AllowedForTenantGRPC(ctx context.Context, tenantID string) bool {
+	if !a.Enabled() {
+		return true
+	}
+	md, _ := metadata.FromIncomingContext(ctx)
+	vals := md.Get("authorization")
+	if len(vals) == 0 {
+		return false
+	}
+	return a.headerAllowedForTenant(vals[0], tenantID)
 }
 
 // validHeader checks an "Authorization: Bearer <token>" header value.
@@ -83,10 +161,19 @@ func (a *Authenticator) HTTPMiddleware(public map[string]bool) func(http.Handler
 				next.ServeHTTP(w, r)
 				return
 			}
-			if !a.validHeader(r.Header.Get("Authorization")) {
+			h := r.Header.Get("Authorization")
+			if !a.validHeader(h) {
 				a.failed()
 				w.Header().Set("WWW-Authenticate", "Bearer")
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			// Authenticated; now authorize the token for the request's tenant.
+			// An invalid tenant header passes through — the tenant router
+			// rejects it with a 400 and better context.
+			if id, ok := tenant.FromHTTP(r); ok && !a.headerAllowedForTenant(h, id) {
+				a.failed()
+				http.Error(w, "token not authorized for this tenant", http.StatusForbidden)
 				return
 			}
 			next.ServeHTTP(w, r)
