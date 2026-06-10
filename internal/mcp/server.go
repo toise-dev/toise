@@ -106,6 +106,8 @@ func (s *Server) register(srv *mcpsdk.Server) {
 		Description: "Return the timeline of changes for one entity, oldest first. Optionally " +
 			"bound it with since/until (RFC 3339, in event-time — when changes became true). " +
 			"Set as_known_at for an audit view: only what Toise had recorded by that instant. " +
+			"Heartbeats (entity.unchanged) are excluded and the result is bounded by limit " +
+			"(newest kept) unless asked otherwise; the digest reports totals per change type. " +
 			"Use this to explain how an entity reached its current state.",
 	}, s.entityHistory)
 
@@ -114,7 +116,9 @@ func (s *Server) register(srv *mcpsdk.Server) {
 		Description: "List recent changes across the whole graph within a time window (a Go " +
 			"duration such as 15m, 2h, or 24h), newest first. Optionally filter to entity " +
 			"changes, relation changes, or only structural changes (alert-worthy topology " +
-			"appearances/disappearances). Use this to answer 'what changed recently?'.",
+			"appearances/disappearances), or to one change_type. Heartbeats (entity.unchanged) " +
+			"are excluded and the result is bounded by limit unless asked otherwise; the " +
+			"digest reports totals per change type. Use this to answer 'what changed recently?'.",
 	}, s.recentChanges)
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
