@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -386,5 +387,95 @@ func TestMCPRoundTrip(t *testing.T) {
 	}
 	if !bad.IsError {
 		t.Fatal("want IsError for depth exceeding the cap")
+	}
+}
+
+// TestChangeBudgets pins the #115 result budget on the timeline tools:
+// heartbeats excluded by default (opt-in), change_type filter, limit with
+// total/truncated, and the per-type digest.
+func TestChangeBudgets(t *testing.T) {
+	g, st := newFixture()
+	web := g.entities["01HOST_WEB"]
+	t0 := time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC)
+	// Flood the window with heartbeats, the dominant noise on a live instance.
+	for i := 0; i < 60; i++ {
+		hb := model.Event{Entity: &model.EntityEvent{
+			EventID: fmt.Sprintf("hb%d", i), ChangeType: model.EntityUnchanged,
+			Entity: web, EventTime: t0.Add(time.Duration(i) * time.Minute),
+			RecordedAt: t0.Add(time.Duration(i) * time.Minute), SchemaVersion: "1.0",
+		}}
+		st.byTime = append(st.byTime, hb)
+		st.byEntity[web.ID] = append(st.byEntity[web.ID], hb)
+	}
+	s := New(g, st)
+	s.now = func() time.Time { return time.Date(2026, 5, 29, 20, 0, 0, 0, time.UTC) }
+	ctx := context.Background()
+
+	// Default: heartbeats out, real changes in, digest reports the exclusion.
+	_, out, err := s.recentChanges(ctx, nil, RecentChangesInput{Window: "24h"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Count != 4 || out.Total != 4 || out.Truncated {
+		t.Fatalf("default: count=%d total=%d truncated=%v, want 4/4/false", out.Count, out.Total, out.Truncated)
+	}
+	if out.HeartbeatsExcluded != 60 {
+		t.Errorf("HeartbeatsExcluded = %d, want 60", out.HeartbeatsExcluded)
+	}
+	for _, c := range out.Changes {
+		if c.ChangeType == "entity.unchanged" {
+			t.Fatal("heartbeat leaked into the default result")
+		}
+	}
+	if len(out.ByChangeType) == 0 || out.ByChangeType[0].Count == 0 {
+		t.Errorf("digest missing: %+v", out.ByChangeType)
+	}
+
+	// Opt-in heartbeats + limit: bounded with the budget reported.
+	_, out, err = s.recentChanges(ctx, nil, RecentChangesInput{Window: "24h", IncludeHeartbeats: true, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Count != 10 || out.Total != 64 || !out.Truncated {
+		t.Fatalf("heartbeats+limit: count=%d total=%d truncated=%v, want 10/64/true", out.Count, out.Total, out.Truncated)
+	}
+
+	// change_type filter; asking for entity.unchanged explicitly includes them.
+	_, out, err = s.recentChanges(ctx, nil, RecentChangesInput{Window: "24h", ChangeType: "entity.unchanged", Limit: 200})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Total != 60 || out.HeartbeatsExcluded != 0 {
+		t.Fatalf("change_type=entity.unchanged: total=%d excluded=%d, want 60/0", out.Total, out.HeartbeatsExcluded)
+	}
+	if _, _, err := s.recentChanges(ctx, nil, RecentChangesInput{Window: "24h", ChangeType: "bogus.type"}); err == nil {
+		t.Fatal("expected error for invalid change_type")
+	}
+
+	// entity_history: same budget; truncation keeps the newest, oldest-first.
+	_, hist, err := s.entityHistory(ctx, nil, EntityHistoryInput{EntityID: "01HOST_WEB"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hist.Count != 3 || hist.HeartbeatsExcluded != 60 {
+		t.Fatalf("history default: count=%d excluded=%d, want 3/60", hist.Count, hist.HeartbeatsExcluded)
+	}
+	_, hist, err = s.entityHistory(ctx, nil, EntityHistoryInput{EntityID: "01HOST_WEB", IncludeHeartbeats: true, Limit: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hist.Count != 5 || hist.Total != 63 || !hist.Truncated {
+		t.Fatalf("history limit: count=%d total=%d truncated=%v, want 5/63/true", hist.Count, hist.Total, hist.Truncated)
+	}
+	if hist.Changes[0].EventTime > hist.Changes[len(hist.Changes)-1].EventTime {
+		t.Fatal("history must stay oldest-first after truncation")
+	}
+	// the newest events are the ones kept: the tail holds ev2/ev3 (13:00/14:00),
+	// the dropped head was the oldest heartbeats.
+	if last := hist.Changes[len(hist.Changes)-1]; last.ChangeType != "entity.attribute_updated" {
+		t.Fatalf("truncation must keep the newest changes, last = %s", last.ChangeType)
+	}
+	if first := hist.Changes[0]; first.ChangeType != "entity.unchanged" {
+		t.Fatalf("kept slice should start at the newest heartbeats, first = %s", first.ChangeType)
 	}
 }

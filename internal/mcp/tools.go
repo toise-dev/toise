@@ -29,13 +29,7 @@ type FindEntitiesOutput struct {
 }
 
 func (s *Server) findEntities(_ context.Context, _ *mcpsdk.CallToolRequest, in FindEntitiesInput) (*mcpsdk.CallToolResult, FindEntitiesOutput, error) {
-	limit := in.Limit
-	switch {
-	case limit <= 0:
-		limit = defaultLimit
-	case limit > maxLimit:
-		limit = maxLimit
-	}
+	limit := clampLimit(in.Limit)
 	all := s.graph.ListEntities(in.Type)
 	matched := make([]model.Entity, 0, len(all))
 	for _, e := range all {
@@ -122,12 +116,18 @@ type EntityHistoryInput struct {
 	Since     string `json:"since,omitempty" jsonschema:"RFC 3339 lower bound on event-time (inclusive)"`
 	Until     string `json:"until,omitempty" jsonschema:"RFC 3339 upper bound on event-time (inclusive)"`
 	AsKnownAt string `json:"as_known_at,omitempty" jsonschema:"RFC 3339 audit cut-off: include only changes Toise had recorded by this instant"`
+	// Budget controls (#115): the timeline is heartbeat-dominated on a live
+	// instance, so heartbeats are excluded and the result is bounded by default.
+	ChangeType        string `json:"change_type,omitempty" jsonschema:"only changes of this type, e.g. entity.state_changed or relation.removed (omit for all)"`
+	IncludeHeartbeats bool   `json:"include_heartbeats,omitempty" jsonschema:"include entity.unchanged heartbeats (excluded by default; they dominate raw timelines)"`
+	Limit             int    `json:"limit,omitempty" jsonschema:"maximum changes to return (default 50, max 200); when truncated the newest are kept"`
 }
 
 // EntityHistoryOutput carries the timeline, oldest first.
 type EntityHistoryOutput struct {
 	Changes []Change `json:"changes"`
-	Count   int      `json:"count"`
+	Count   int      `json:"count" jsonschema:"number of changes returned"`
+	ChangeDigest
 }
 
 func (s *Server) entityHistory(_ context.Context, _ *mcpsdk.CallToolRequest, in EntityHistoryInput) (*mcpsdk.CallToolResult, EntityHistoryOutput, error) {
@@ -146,10 +146,16 @@ func (s *Server) entityHistory(_ context.Context, _ *mcpsdk.CallToolRequest, in 
 	if err != nil {
 		return nil, EntityHistoryOutput{}, err
 	}
+	filter, err := newChangeFilter(in.ChangeType, in.IncludeHeartbeats)
+	if err != nil {
+		return nil, EntityHistoryOutput{}, err
+	}
+	limit := clampLimit(in.Limit)
 	evs, err := s.store.ReadByEntity(model.EntityID(in.EntityID))
 	if err != nil {
 		return nil, EntityHistoryOutput{}, fmt.Errorf("reading history: %w", err)
 	}
+	out := EntityHistoryOutput{}
 	filtered := evs[:0:0]
 	for _, ev := range evs {
 		et, rt := eventTimes(ev)
@@ -162,6 +168,14 @@ func (s *Server) entityHistory(_ context.Context, _ *mcpsdk.CallToolRequest, in 
 		if !known.IsZero() && rt.After(known) {
 			continue
 		}
+		kept, heartbeat := filter.keep(ev)
+		if heartbeat {
+			out.HeartbeatsExcluded++
+		}
+		if !kept {
+			continue
+		}
+		out.tally(ev)
 		filtered = append(filtered, ev)
 	}
 	sort.SliceStable(filtered, func(i, j int) bool {
@@ -169,10 +183,18 @@ func (s *Server) entityHistory(_ context.Context, _ *mcpsdk.CallToolRequest, in 
 		ej, _ := eventTimes(filtered[j])
 		return ei.Before(ej)
 	})
-	out := EntityHistoryOutput{Count: len(filtered), Changes: make([]Change, len(filtered))}
+	out.Total = len(filtered)
+	if len(filtered) > limit {
+		// keep the newest changes; the slice stays sorted oldest first.
+		filtered = filtered[len(filtered)-limit:]
+		out.Truncated = true
+	}
+	out.Count = len(filtered)
+	out.Changes = make([]Change, len(filtered))
 	for i, ev := range filtered {
 		out.Changes[i] = changeOut(ev)
 	}
+	out.finishDigest()
 	return nil, out, nil
 }
 
@@ -182,12 +204,18 @@ func (s *Server) entityHistory(_ context.Context, _ *mcpsdk.CallToolRequest, in 
 type RecentChangesInput struct {
 	Window string `json:"window" jsonschema:"a positive Go duration looking back from now, e.g. 15m, 2h, 24h"`
 	Kind   string `json:"kind,omitempty" jsonschema:"filter: entity, relation, structural, or all (default all)"`
+	// Budget controls (#115): a live window is heartbeat-dominated, so
+	// heartbeats are excluded and the result is bounded by default.
+	ChangeType        string `json:"change_type,omitempty" jsonschema:"only changes of this type, e.g. entity.created or relation.removed (omit for all)"`
+	IncludeHeartbeats bool   `json:"include_heartbeats,omitempty" jsonschema:"include entity.unchanged heartbeats (excluded by default; they dominate raw windows)"`
+	Limit             int    `json:"limit,omitempty" jsonschema:"maximum changes to return (default 50, max 200); the newest are kept"`
 }
 
 // RecentChangesOutput carries the changes, newest first.
 type RecentChangesOutput struct {
 	Changes []Change `json:"changes"`
-	Count   int      `json:"count"`
+	Count   int      `json:"count" jsonschema:"number of changes returned"`
+	ChangeDigest
 }
 
 func (s *Server) recentChanges(_ context.Context, _ *mcpsdk.CallToolRequest, in RecentChangesInput) (*mcpsdk.CallToolResult, RecentChangesOutput, error) {
@@ -201,6 +229,11 @@ func (s *Server) recentChanges(_ context.Context, _ *mcpsdk.CallToolRequest, in 
 	default:
 		return nil, RecentChangesOutput{}, fmt.Errorf("invalid kind %q: use entity, relation, structural, or all", in.Kind)
 	}
+	filter, err := newChangeFilter(in.ChangeType, in.IncludeHeartbeats)
+	if err != nil {
+		return nil, RecentChangesOutput{}, err
+	}
+	limit := clampLimit(in.Limit)
 	now := s.now()
 	evs, err := s.store.ReadByTimeRange(now.Add(-d), now.Add(time.Nanosecond))
 	if err != nil {
@@ -212,9 +245,22 @@ func (s *Server) recentChanges(_ context.Context, _ *mcpsdk.CallToolRequest, in 
 		if !keepKind(ev, kind) {
 			continue
 		}
-		out.Changes = append(out.Changes, changeOut(ev))
+		kept, heartbeat := filter.keep(ev)
+		if heartbeat {
+			out.HeartbeatsExcluded++
+		}
+		if !kept {
+			continue
+		}
+		out.Total++
+		out.tally(ev)
+		if len(out.Changes) < limit {
+			out.Changes = append(out.Changes, changeOut(ev))
+		}
 	}
+	out.Truncated = out.Total > limit
 	out.Count = len(out.Changes)
+	out.finishDigest()
 	return nil, out, nil
 }
 
@@ -229,6 +275,99 @@ func keepKind(ev model.Event, kind string) bool {
 	default:
 		return true
 	}
+}
+
+// ChangeDigest summarizes the full match set of a timeline tool so the model
+// can budget follow-ups without paging through everything: how many changes
+// matched in total, whether the returned slice was truncated, how many
+// heartbeats were excluded, and the matching changes by type (#115).
+type ChangeDigest struct {
+	Total              int         `json:"total" jsonschema:"changes matching the filters before the limit was applied"`
+	Truncated          bool        `json:"truncated" jsonschema:"true if more changes matched than were returned; narrow the window or filters, or raise the limit"`
+	HeartbeatsExcluded int         `json:"heartbeats_excluded,omitempty" jsonschema:"entity.unchanged heartbeats excluded (set include_heartbeats to see them)"`
+	ByChangeType       []TypeCount `json:"by_change_type,omitempty" jsonschema:"matching changes per change type, before the limit"`
+}
+
+func (d *ChangeDigest) tally(ev model.Event) {
+	ct := eventChangeType(ev).String()
+	for i := range d.ByChangeType {
+		if d.ByChangeType[i].Type == ct {
+			d.ByChangeType[i].Count++
+			return
+		}
+	}
+	d.ByChangeType = append(d.ByChangeType, TypeCount{Type: ct, Count: 1})
+}
+
+func (d *ChangeDigest) finishDigest() {
+	sort.Slice(d.ByChangeType, func(i, j int) bool {
+		if d.ByChangeType[i].Count != d.ByChangeType[j].Count {
+			return d.ByChangeType[i].Count > d.ByChangeType[j].Count
+		}
+		return d.ByChangeType[i].Type < d.ByChangeType[j].Type
+	})
+}
+
+// changeFilter is the shared per-change budget filter: an explicit change_type
+// wins (asking for entity.unchanged explicitly includes heartbeats); otherwise
+// heartbeats are excluded unless opted in.
+type changeFilter struct {
+	changeType        model.ChangeType
+	includeHeartbeats bool
+}
+
+func newChangeFilter(changeType string, includeHeartbeats bool) (changeFilter, error) {
+	ct, err := parseChangeType(changeType)
+	if err != nil {
+		return changeFilter{}, err
+	}
+	return changeFilter{changeType: ct, includeHeartbeats: includeHeartbeats}, nil
+}
+
+func (f changeFilter) keep(ev model.Event) (kept, heartbeat bool) {
+	ct := eventChangeType(ev)
+	if f.changeType != model.ChangeUnspecified {
+		return ct == f.changeType, false
+	}
+	if ct == model.EntityUnchanged && !f.includeHeartbeats {
+		return false, true
+	}
+	return true, false
+}
+
+func parseChangeType(s string) (model.ChangeType, error) {
+	if s == "" {
+		return model.ChangeUnspecified, nil
+	}
+	for c := model.EntityCreated; c <= model.RelationAttributeChanged; c++ {
+		if c.String() == s {
+			return c, nil
+		}
+	}
+	return 0, fmt.Errorf("invalid change_type %q: use one of entity.created, entity.deleted, "+
+		"entity.attribute_updated, entity.state_changed, entity.unchanged, relation.added, "+
+		"relation.removed, or relation.attribute_changed", s)
+}
+
+func eventChangeType(ev model.Event) model.ChangeType {
+	switch {
+	case ev.Entity != nil:
+		return ev.Entity.ChangeType
+	case ev.Relation != nil:
+		return ev.Relation.ChangeType
+	default:
+		return model.ChangeUnspecified
+	}
+}
+
+func clampLimit(limit int) int {
+	switch {
+	case limit <= 0:
+		return defaultLimit
+	case limit > maxLimit:
+		return maxLimit
+	}
+	return limit
 }
 
 // --- describe_schema ---
