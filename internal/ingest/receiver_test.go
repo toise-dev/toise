@@ -24,7 +24,7 @@ var t0 = time.Unix(1_700_000_000, 0).UTC()
 // receiver on a loopback port and returns an OTLP logs client plus the graph.
 // Extra dial options (e.g. a default call compressor) let a test exercise the
 // wire path real producers use.
-func startReceiver(t *testing.T, dialOpts ...grpc.DialOption) (plogotlp.GRPCClient, *projection.Graph) {
+func startReceiver(t *testing.T, dialOpts ...grpc.DialOption) (plogotlp.GRPCClient, *projection.Graph, *store.Store) {
 	t.Helper()
 	st, err := store.Open(t.TempDir(), store.DefaultConfig())
 	if err != nil {
@@ -49,7 +49,7 @@ func startReceiver(t *testing.T, dialOpts ...grpc.DialOption) (plogotlp.GRPCClie
 		t.Fatalf("dial: %v", err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	return plogotlp.NewGRPCClient(conn), g
+	return plogotlp.NewGRPCClient(conn), g, st
 }
 
 func export(t *testing.T, c plogotlp.GRPCClient, ld plog.Logs) {
@@ -80,7 +80,7 @@ func entityRecord(sl plog.ScopeLogs, eventName, entType string, ident, attrs map
 }
 
 func TestReceiverEntityAndRelation(t *testing.T) {
-	client, g := startReceiver(t)
+	client, g, _ := startReceiver(t)
 
 	ld := plog.NewLogs()
 	sl := ld.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty()
@@ -122,7 +122,7 @@ func TestReceiverEntityAndRelation(t *testing.T) {
 // production blank import in receiver.go. Drop that import and this test
 // fails to even compress the request — exactly the regression we guard.
 func TestReceiverAcceptsGzip(t *testing.T) {
-	client, g := startReceiver(t, grpc.WithDefaultCallOptions(grpc.UseCompressor("gzip")))
+	client, g, _ := startReceiver(t, grpc.WithDefaultCallOptions(grpc.UseCompressor("gzip")))
 
 	ld := plog.NewLogs()
 	sl := ld.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty()
@@ -136,7 +136,7 @@ func TestReceiverAcceptsGzip(t *testing.T) {
 }
 
 func TestReceiverEntityDelete(t *testing.T) {
-	client, g := startReceiver(t)
+	client, g, _ := startReceiver(t)
 
 	ld := plog.NewLogs()
 	sl := ld.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty()
@@ -185,7 +185,7 @@ func embeddedEntity(sl plog.ScopeLogs, when time.Time, typ string, id map[string
 // model end-to-end: a relation embedded on an entity-state event is ingested, and
 // re-emitting the source without it removes the relation.
 func TestReceiverEmbeddedRelationships(t *testing.T) {
-	client, g := startReceiver(t)
+	client, g, _ := startReceiver(t)
 
 	ld := plog.NewLogs()
 	sl := ld.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty()
@@ -218,7 +218,7 @@ func TestReceiverEmbeddedRelationships(t *testing.T) {
 // export. Per the contract that removal-by-absence is a no-op — the export must
 // succeed and the reconciler state must not replay the failure forever.
 func TestReceiverRemovalByAbsenceAfterTargetDeleted(t *testing.T) {
-	client, g := startReceiver(t)
+	client, g, _ := startReceiver(t)
 
 	// 1. host h1 + service s1 with embedded runs_on -> h1.
 	ld := plog.NewLogs()
@@ -252,5 +252,57 @@ func TestReceiverRemovalByAbsenceAfterTargetDeleted(t *testing.T) {
 	}
 	if g.EntityCount() != 1 {
 		t.Errorf("EntityCount = %d, want 1 (s1 alive, h1 deleted)", g.EntityCount())
+	}
+}
+
+// TestReceiverRejectsInvalidRecordPerRecord pins the #109 boundary contract: a
+// batch mixing valid records with an unknown-type record persists the valid
+// ones, rejects the bad one alone via OTLP partial success (no transport
+// error, so the producer does not retry), and leaves the projection equal to a
+// replay of the durable log.
+func TestReceiverRejectsInvalidRecordPerRecord(t *testing.T) {
+	client, g, st := startReceiver(t)
+
+	ld := plog.NewLogs()
+	sl := ld.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty()
+	entityRecord(sl, evEntityState, model.TypeHost, map[string]string{"host.id": "h1"}, nil)
+	entityRecord(sl, evEntityState, "not.a.registered.type", map[string]string{"x": "1"}, nil)
+	entityRecord(sl, evEntityState, model.TypeHost, map[string]string{"host.id": "h2"}, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := client.Export(ctx, plogotlp.NewExportRequestFromLogs(ld))
+	if err != nil {
+		t.Fatalf("export errored (must be partial success, not failure): %v", err)
+	}
+	ps := resp.PartialSuccess()
+	if ps.RejectedLogRecords() != 1 {
+		t.Errorf("RejectedLogRecords = %d, want 1", ps.RejectedLogRecords())
+	}
+	if ps.ErrorMessage() == "" {
+		t.Error("partial success must carry the validation error message")
+	}
+
+	if g.EntityCount() != 2 {
+		t.Fatalf("EntityCount = %d, want 2 (valid siblings persisted)", g.EntityCount())
+	}
+	// The projection must equal a replay of the durable log: nothing applied or
+	// broadcast that was not appended.
+	g2 := projection.New()
+	if err := g2.Replay(st); err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if g2.EntityCount() != g.EntityCount() || g2.RelationCount() != g.RelationCount() {
+		t.Errorf("projection diverged from replay(log): entities %d/%d relations %d/%d",
+			g.EntityCount(), g2.EntityCount(), g.RelationCount(), g2.RelationCount())
+	}
+
+	// A later valid export from the same producer keeps working.
+	ld2 := plog.NewLogs()
+	sl2 := ld2.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty()
+	entityRecord(sl2, evEntityState, model.TypeHost, map[string]string{"host.id": "h3"}, nil)
+	export(t, client, ld2)
+	if g.EntityCount() != 3 {
+		t.Errorf("EntityCount = %d after follow-up export, want 3", g.EntityCount())
 	}
 }

@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -92,7 +93,8 @@ func (s *logsServer) reconcilerFor(tenantID string) *embeddedReconciler {
 // tenant.id resource attribute (so one OTLP stream can carry several tenants).
 func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (plogotlp.ExportResponse, error) {
 	ld := req.Logs()
-	var handled, skipped int
+	var handled, skipped, rejected int
+	var rejectMsg string
 	var dropped []string
 
 	// An invalid X-Scope-OrgID is rejected rather than silently folded into the
@@ -131,6 +133,19 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (pl
 					ok, drop, err := routeRecord(b, lr, producer)
 					dropped = append(dropped, drop...)
 					if err != nil {
+						// A contract violation is permanent and per-record:
+						// reject this record (reported via partial success,
+						// below) and keep its valid siblings — a retry could
+						// never make it valid, and failing the export would
+						// poison the whole producer stream (#109). Its embedded
+						// relationships are skipped with it.
+						if errors.Is(err, errInvalidRecord) {
+							rejected++
+							if rejectMsg == "" {
+								rejectMsg = err.Error()
+							}
+							continue
+						}
 						routeErr = err
 						break
 					}
@@ -167,5 +182,15 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (pl
 	if skipped > 0 {
 		s.logger.Debug("otlp export processed", "entity_events", handled, "ignored", skipped)
 	}
-	return plogotlp.NewExportResponse(), nil
+	resp := plogotlp.NewExportResponse()
+	if rejected > 0 {
+		// OTLP partial success: the export as a whole is accepted (no retry),
+		// the rejected records are reported back to the producer.
+		ps := resp.PartialSuccess()
+		ps.SetRejectedLogRecords(int64(rejected))
+		ps.SetErrorMessage(rejectMsg)
+		s.logger.Warn("rejected entity records violating the wire contract",
+			"rejected", rejected, "first_error", rejectMsg)
+	}
+	return resp, nil
 }
