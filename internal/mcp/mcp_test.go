@@ -355,8 +355,8 @@ func TestMCPRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	if len(tools.Tools) != 8 {
-		t.Fatalf("want 8 tools, got %d", len(tools.Tools))
+	if len(tools.Tools) != 9 {
+		t.Fatalf("want 9 tools, got %d", len(tools.Tools))
 	}
 
 	res, err := cs.CallTool(ctx, &mcpsdk.CallToolParams{
@@ -678,5 +678,70 @@ func TestFindPathAndNeighborEdges(t *testing.T) {
 		default:
 			t.Errorf("unexpected neighbor %s", n.ID)
 		}
+	}
+}
+
+// TestTelemetryKeys pins the graph-to-telemetry pivot (#115): join keys from
+// the entity's own attributes plus those inherited from direct neighbors, with
+// the metric-label spelling and the usage caveats — the host.id lesson from
+// the recette, encoded as a tool.
+func TestTelemetryKeys(t *testing.T) {
+	s := newTestServer()
+	ctx := context.Background()
+
+	// The process inherits its host's join key through runs_on.
+	_, out, err := s.telemetryKeys(ctx, nil, TelemetryKeysInput{EntityID: "01PROC_NGINX"})
+	if err != nil {
+		t.Fatalf("telemetryKeys: %v", err)
+	}
+	byKey := map[string]TelemetryKey{}
+	for _, k := range out.Keys {
+		byKey[k.Key] = k
+	}
+	pid, ok := byKey["process.pid"]
+	if !ok {
+		t.Fatalf("process.pid missing from keys: %+v", out.Keys)
+	}
+	if pid.Source != "identity" || pid.Value != "4242" || pid.MetricLabel != "process_pid" {
+		t.Errorf("process.pid = %+v, want identity/4242/process_pid", pid)
+	}
+	if pid.Note == "" {
+		t.Error("process.pid must carry the ephemeral caveat")
+	}
+	hostName, ok := byKey["host.name"]
+	if !ok {
+		t.Fatalf("inherited host.name missing: %+v", out.Keys)
+	}
+	if !strings.Contains(hostName.Source, "via runs_on") {
+		t.Errorf("host.name source = %q, want inherited via runs_on", hostName.Source)
+	}
+	if hostName.Note == "" {
+		t.Error("host.name must carry the name-vs-identity caveat")
+	}
+	if out.Guidance == "" || !strings.Contains(out.Guidance, "underscores") {
+		t.Errorf("guidance must explain the metric-label flattening, got %q", out.Guidance)
+	}
+
+	// The host's own key is reported once, from its identity, even though a
+	// neighbor carries the same attribute key.
+	_, out, err = s.telemetryKeys(ctx, nil, TelemetryKeysInput{EntityID: "01HOST_WEB"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hostKeys []TelemetryKey
+	for _, k := range out.Keys {
+		if k.Key == "host.name" {
+			hostKeys = append(hostKeys, k)
+		}
+	}
+	if len(hostKeys) != 1 || hostKeys[0].Source != "identity" || hostKeys[0].Value != "web-server-1" {
+		t.Errorf("host.name keys = %+v, want exactly one from identity", hostKeys)
+	}
+
+	if _, _, kerr := s.telemetryKeys(ctx, nil, TelemetryKeysInput{}); kerr == nil {
+		t.Error("missing entity_id must error")
+	}
+	if _, _, kerr := s.telemetryKeys(ctx, nil, TelemetryKeysInput{EntityID: "ghost"}); kerr == nil {
+		t.Error("unknown entity must error")
 	}
 }
