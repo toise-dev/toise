@@ -10,7 +10,10 @@ import (
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/plog/plogotlp"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 
 	"github.com/toise-dev/toise/internal/change"
 	"github.com/toise-dev/toise/internal/model"
@@ -304,5 +307,55 @@ func TestReceiverRejectsInvalidRecordPerRecord(t *testing.T) {
 	export(t, client, ld2)
 	if g.EntityCount() != 3 {
 		t.Errorf("EntityCount = %d after follow-up export, want 3", g.EntityCount())
+	}
+}
+
+// TestExportStatusCodes pins the OTLP retryability contract (#111): transient
+// append failures must surface as codes.Unavailable (retryable) and permanent
+// caller errors as codes.InvalidArgument (not retried), never codes.Unknown.
+func TestExportStatusCodes(t *testing.T) {
+	g := projection.New()
+	ap := &failingAppender{fail: true}
+	eng := change.New(g, ap, change.WithClock(func() time.Time { return t0 }))
+	rec := NewReceiver(eng, nil)
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() { _ = rec.Serve(lis) }()
+	t.Cleanup(rec.Stop)
+	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	client := plogotlp.NewGRPCClient(conn)
+
+	ld := plog.NewLogs()
+	sl := ld.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty()
+	entityRecord(sl, evEntityState, model.TypeHost, map[string]string{"host.id": "h1"}, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err = client.Export(ctx, plogotlp.NewExportRequestFromLogs(ld))
+	if status.Code(err) != codes.Unavailable {
+		t.Errorf("append failure -> %v, want codes.Unavailable (retryable)", status.Code(err))
+	}
+
+	// Invalid tenant metadata is a permanent caller error.
+	badCtx := metadata.AppendToOutgoingContext(ctx, "x-scope-orgid", "../escape")
+	_, err = client.Export(badCtx, plogotlp.NewExportRequestFromLogs(ld))
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("invalid X-Scope-OrgID -> %v, want codes.InvalidArgument", status.Code(err))
+	}
+
+	// The retry after a healed store succeeds and reconverges.
+	ap.fail = false
+	if _, err := client.Export(ctx, plogotlp.NewExportRequestFromLogs(ld)); err != nil {
+		t.Fatalf("retry after heal: %v", err)
+	}
+	if g.EntityCount() != 1 {
+		t.Errorf("EntityCount = %d after retry, want 1", g.EntityCount())
 	}
 }

@@ -10,6 +10,8 @@ import (
 
 	"go.opentelemetry.io/collector/pdata/plog/plogotlp"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	// Register the gzip decompressor so the server can accept gzip-encoded
 	// OTLP exports. gRPC-Go does not install it by default, yet gzip is the
@@ -101,7 +103,9 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (pl
 	// default tenant — a tenant id that cannot be honored is a caller error.
 	baseTenant, ok := tenant.FromGRPC(ctx)
 	if !ok {
-		return plogotlp.NewExportResponse(), fmt.Errorf("invalid %s metadata", tenant.HeaderOrgID)
+		// Permanent caller error: InvalidArgument tells a spec-compliant
+		// exporter not to retry (#111).
+		return plogotlp.NewExportResponse(), status.Errorf(codes.InvalidArgument, "invalid %s metadata", tenant.HeaderOrgID)
 	}
 
 	// Each ResourceLogs (one producer) is ingested as a single batch so its events
@@ -114,13 +118,15 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (pl
 		if rt, ok := strAttr(res.Attributes(), tenant.ResourceAttr); ok {
 			san, ok := tenant.Sanitize(rt)
 			if !ok {
-				return plogotlp.NewExportResponse(), fmt.Errorf("invalid %s resource attribute %q", tenant.ResourceAttr, rt)
+				return plogotlp.NewExportResponse(), status.Errorf(codes.InvalidArgument, "invalid %s resource attribute %q", tenant.ResourceAttr, rt)
 			}
 			tenantID = san
 		}
 		engine, err := s.engineFor(tenantID)
 		if err != nil {
-			return plogotlp.NewExportResponse(), fmt.Errorf("resolving tenant %q: %w", tenantID, err)
+			// Transient (store open/resolution): Unavailable is retryable under
+			// the OTLP spec, matching the at-least-once design (#111).
+			return plogotlp.NewExportResponse(), status.Errorf(codes.Unavailable, "resolving tenant %q: %v", tenantID, err)
 		}
 		reconciler := s.reconcilerFor(tenantID)
 		sls := rls.At(i).ScopeLogs()
@@ -170,10 +176,12 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (pl
 		// nothing was broadcast — the producer's retry re-classifies every
 		// observation against durable state and regenerates the lost events.
 		if routeErr != nil {
-			return plogotlp.NewExportResponse(), fmt.Errorf("routing log record: %w", routeErr)
+			// Contract violations were already split off as per-record partial
+			// success; what reaches here is engine-internal, hence retriable.
+			return plogotlp.NewExportResponse(), status.Errorf(codes.Unavailable, "routing log record: %v", routeErr)
 		}
 		if batchErr != nil {
-			return plogotlp.NewExportResponse(), fmt.Errorf("ingest batch: %w", batchErr)
+			return plogotlp.NewExportResponse(), status.Errorf(codes.Unavailable, "ingest batch: %v", batchErr)
 		}
 	}
 	if len(dropped) > 0 {
