@@ -2,6 +2,7 @@ package change
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"testing"
 	"time"
@@ -684,5 +685,41 @@ func TestBatchClassificationSeesStagedState(t *testing.T) {
 	}
 	if relRemoved != 1 {
 		t.Errorf("relation.removed notifications = %d, want 1", relRemoved)
+	}
+}
+
+// TestPendingBufferCapAndSweepExpiry pins #115: the out-of-order buffer is
+// bounded (oldest dropped at the cap) and Sweep expires parked edges on a
+// quiet instance where no entity observation triggers flushPending.
+func TestPendingBufferCapAndSweepExpiry(t *testing.T) {
+	g := projection.New()
+	now := t0
+	e := New(g, &fakeAppender{},
+		WithClock(func() time.Time { return now }),
+		WithRelationBuffer(30*time.Second),
+		WithLogger(slog.New(slog.DiscardHandler)))
+
+	park := func(n int) {
+		for i := 0; i < n; i++ {
+			obs := RelationObservation{Type: model.RelRunsOn,
+				From:      EndpointRef{Type: model.TypeProcess, Identity: []model.KeyValue{kv("pid", fmt.Sprintf("p%d", len(e.pending)+i))}},
+				To:        EndpointRef{Type: model.TypeHost, Identity: []model.KeyValue{kv("host.id", "missing")}},
+				EventTime: t0}
+			if _, _, err := e.ObserveRelation(obs); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	park(maxPendingRelations + 5)
+	if len(e.pending) != maxPendingRelations {
+		t.Fatalf("pending = %d, want capped at %d", len(e.pending), maxPendingRelations)
+	}
+
+	// Sweep drops every parked edge once its TTL lapses, with no observation
+	// needed to trigger the flush.
+	now = now.Add(time.Minute)
+	e.Sweep()
+	if len(e.pending) != 0 {
+		t.Errorf("pending = %d after sweep past TTL, want 0", len(e.pending))
 	}
 }

@@ -195,3 +195,29 @@ func TestLoadMissingFileIsError(t *testing.T) {
 		t.Error("want an error for a missing --config file, got nil")
 	}
 }
+
+// TestValidateRejectsSilentMisconfigurations pins #115: configurations that
+// would start but not do what they say must fail at load.
+func TestValidateRejectsSilentMisconfigurations(t *testing.T) {
+	base := Default()
+	cases := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{"half-set TLS (cert only)", func(c *Config) { c.TLSCertFile = "/x/cert.pem" }},
+		{"half-set TLS (key only)", func(c *Config) { c.TLSKeyFile = "/x/key.pem" }},
+		{"retention without compaction", func(c *Config) { c.RetentionMaxAge = Duration(time.Hour); c.CompactionInterval = 0 }},
+		{"unknown log level", func(c *Config) { c.LogLevel = "verbose" }},
+		{"unknown log format", func(c *Config) { c.LogFormat = "logfmt" }},
+	}
+	for _, tc := range cases {
+		cfg := base
+		tc.mutate(&cfg)
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("%s: Validate accepted it", tc.name)
+		}
+	}
+	if err := base.Validate(); err != nil {
+		t.Errorf("default config must validate: %v", err)
+	}
+}

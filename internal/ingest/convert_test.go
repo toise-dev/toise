@@ -175,3 +175,31 @@ func TestRouteEntityDelete(t *testing.T) {
 		t.Errorf("delete: handled=%v err=%v deletes=%d", handled, err, f.deletes)
 	}
 }
+
+// TestEntityObsMistypedIntervalSurfaces pins #115: a mis-typed
+// entity.report.interval used to be silently ignored, disarming the liveness
+// backstop; it must surface on the dropped-keys path.
+func TestEntityObsMistypedIntervalSurfaces(t *testing.T) {
+	lr := newRecord(evEntityState)
+	a := lr.Attributes()
+	a.PutStr(attrEntityType, model.TypeHost)
+	a.PutEmptyMap(attrEntityID).PutStr("host.id", "h1")
+	a.PutStr(attrEntityInterval, "300") // wrong type: string, not int
+
+	obs, dropped, err := entityObs(a, time.Unix(1_700_000_000, 0))
+	if err != nil {
+		t.Fatalf("entityObs: %v", err)
+	}
+	if obs.Interval != 0 {
+		t.Errorf("interval = %v, want 0 (unparseable)", obs.Interval)
+	}
+	found := false
+	for _, k := range dropped {
+		if k == attrEntityInterval {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("mis-typed interval not surfaced in dropped keys: %v", dropped)
+	}
+}

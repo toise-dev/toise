@@ -89,6 +89,29 @@ type Config struct {
 // TLSEnabled reports whether both a certificate and key are configured.
 func (c Config) TLSEnabled() bool { return c.TLSCertFile != "" && c.TLSKeyFile != "" }
 
+// Validate rejects configurations that would start but silently not do what
+// they say (#115): half-set TLS serving plaintext, a retention age nothing
+// ever prunes, a log level that falls back to info unnoticed.
+func (c Config) Validate() error {
+	if (c.TLSCertFile == "") != (c.TLSKeyFile == "") {
+		return fmt.Errorf("tls_cert_file and tls_key_file must be set together: half-set TLS would silently serve plaintext")
+	}
+	if c.RetentionMaxAge.D() > 0 && c.CompactionInterval.D() <= 0 {
+		return fmt.Errorf("retention_max_age is set but retention_compaction_interval is 0: nothing would ever prune")
+	}
+	switch strings.ToLower(c.LogLevel) {
+	case "debug", "info", "warn", "error":
+	default:
+		return fmt.Errorf("unknown log_level %q: use debug, info, warn, or error", c.LogLevel)
+	}
+	switch strings.ToLower(c.LogFormat) {
+	case "text", "json":
+	default:
+		return fmt.Errorf("unknown log_format %q: use text or json", c.LogFormat)
+	}
+	return nil
+}
+
 // Default returns the built-in configuration (the lowest-precedence layer). These
 // mirror the historical flag defaults: loopback listeners, no retention cap.
 func Default() Config {
@@ -298,6 +321,9 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 		cfg.GraphQLIntrospection = false
 		cfg.Playground = false
 		cfg.DebugUI = false
+	}
+	if err := cfg.Validate(); err != nil {
+		return Config{}, err
 	}
 	return cfg, nil
 }

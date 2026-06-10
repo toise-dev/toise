@@ -1,10 +1,12 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/toise-dev/toise/internal/registry"
@@ -36,7 +38,7 @@ func get(t *testing.T, h http.Handler, orgID string) *httptest.ResponseRecorder 
 func TestTenantRouterDispatchesByHeader(t *testing.T) {
 	reg := newTestRegistry(t)
 	var built int
-	tr := newTenantRouter(reg, func(st *registry.Stack) (http.Handler, error) {
+	tr := newTenantRouter(reg, nil, func(st *registry.Stack) (http.Handler, error) {
 		built++
 		name := st.Tenant
 		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -63,11 +65,33 @@ func TestTenantRouterDispatchesByHeader(t *testing.T) {
 
 func TestTenantRouterRejectsInvalidHeader(t *testing.T) {
 	reg := newTestRegistry(t)
-	tr := newTenantRouter(reg, func(*registry.Stack) (http.Handler, error) {
+	tr := newTenantRouter(reg, nil, func(*registry.Stack) (http.Handler, error) {
 		return http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), nil
 	})
 
 	if rec := get(t, tr, "../escape"); rec.Code != http.StatusBadRequest {
 		t.Errorf("invalid header: status = %d, want 400", rec.Code)
+	}
+}
+
+// TestTenantRouterErrorIsGeneric pins #115: a handler-build failure logs
+// server-side and returns a generic message — internal detail (paths, store
+// errors) must not leak to the client.
+func TestTenantRouterErrorIsGeneric(t *testing.T) {
+	reg, err := registry.Open(t.TempDir(), store.DefaultConfig(), 0, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reg.Close() })
+	tr := newTenantRouter(reg, slog.New(slog.DiscardHandler), func(*registry.Stack) (http.Handler, error) {
+		return nil, fmt.Errorf("secret internal detail: /var/lib/toise/data is on fire")
+	})
+	rec := httptest.NewRecorder()
+	tr.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/graphql", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+	if body := rec.Body.String(); strings.Contains(body, "secret internal detail") {
+		t.Errorf("internal error detail leaked to the client: %q", body)
 	}
 }
