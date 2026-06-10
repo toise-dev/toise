@@ -49,7 +49,7 @@ func startRoutedReceiver(t *testing.T) (plogotlp.GRPCClient, func(tenant string)
 		return engines[tenant], nil
 	}
 
-	rec := NewRoutedReceiver(engineFor, nil)
+	rec := NewRoutedReceiver(engineFor, nil, nil)
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)

@@ -119,7 +119,11 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		grpcOpts = append(grpcOpts, grpc.Creds(creds))
 	}
 
-	receiver := ingest.NewRoutedReceiver(engineFor, logger, grpcOpts...)
+	ingestMetrics := ingest.NewMetrics()
+	authFailures := metrics.NewAuthFailures()
+	authn.OnFailure(authFailures.Inc)
+
+	receiver := ingest.NewRoutedReceiver(engineFor, ingestMetrics, logger, grpcOpts...)
 	lis, err := net.Listen("tcp", cfg.OTLPListen)
 	if err != nil {
 		return fmt.Errorf("otlp listen on %s: %w", cfg.OTLPListen, err)
@@ -157,8 +161,9 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		}
 		return nil
 	}))
+	metricsExtra := append(ingestMetrics.Collectors(), authFailures)
 	mux.Handle("/metrics", metrics.Handler(metrics.NewCollector(
-		aggregateGraph{reg}, aggregateStore{reg}, version.Version, version.Commit)))
+		aggregateGraph{reg}, aggregateStore{reg}, version.Version, version.Commit), metricsExtra...))
 	if cfg.Playground {
 		mux.Handle("/playground", playground.Handler("Toise", "/graphql"))
 	}
