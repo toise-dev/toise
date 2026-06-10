@@ -1,10 +1,13 @@
 package metrics
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 )
 
 type fakeGraph struct{}
@@ -52,5 +55,39 @@ toise_build_info{commit="abc123",version="1.2.3"} 1
 
 	if n := testutil.CollectAndCount(c, "toise_entities_by_type"); n != 2 {
 		t.Errorf("entities_by_type series = %d, want 2 (host, db)", n)
+	}
+}
+
+// TestByTypeCardinalityCap pins #115: producers control entity types, so the
+// by-type label is capped — top types reported individually, the tail folded
+// into "other".
+func TestByTypeCardinalityCap(t *testing.T) {
+	counts := make(map[string]int, maxTypeSeries+10)
+	for i := 0; i < maxTypeSeries+10; i++ {
+		counts[fmt.Sprintf("type%03d", i)] = i + 1
+	}
+	desc := prometheus.NewDesc("test_by_type", "", []string{"type"}, nil)
+	ch := make(chan prometheus.Metric, maxTypeSeries+2)
+	emitByType(ch, desc, counts)
+	close(ch)
+
+	var series int
+	var other float64
+	for m := range ch {
+		var d dto.Metric
+		if err := m.Write(&d); err != nil {
+			t.Fatal(err)
+		}
+		series++
+		if len(d.GetLabel()) == 1 && d.GetLabel()[0].GetValue() == "other" {
+			other = d.GetGauge().GetValue()
+		}
+	}
+	if series != maxTypeSeries+1 {
+		t.Errorf("series = %d, want %d (top-N plus other)", series, maxTypeSeries+1)
+	}
+	// the 10 smallest counts (1..10) fold into other
+	if other != 55 {
+		t.Errorf("other = %v, want 55 (sum of the folded tail)", other)
 	}
 }

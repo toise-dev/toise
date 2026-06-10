@@ -141,6 +141,11 @@ func (st *staged) apply(ev model.Event) {
 // distinguishing a reconcilable out-of-order edge from a real failure.
 var errEndpointMissing = errors.New("relation endpoint not found")
 
+// maxPendingRelations caps the out-of-order reconciliation buffer: every parked
+// edge is rescanned on each entity observation, so an unbounded buffer turns a
+// chatty producer with broken references into a quadratic ingest cost (#115).
+const maxPendingRelations = 4096
+
 // Option configures an Engine.
 type Option func(*Engine)
 
@@ -501,6 +506,22 @@ func (e *Engine) Sweep() int {
 		n += e.removeIncidentRelations(id, now) // edges die with their node
 	}
 
+	// Expire parked out-of-order edges past their TTL: flushPending only runs on
+	// entity observations, so without this a quiet instance never drops them.
+	if len(e.pending) > 0 {
+		kept := e.pending[:0]
+		for i := range e.pending {
+			if now.After(e.pending[i].deadline) {
+				obs := e.pending[i].obs
+				e.logger.Warn("dropping relation: endpoints did not arrive within the reconciliation TTL",
+					"relation_type", obs.Type, "from_type", obs.From.Type, "to_type", obs.To.Type)
+				continue
+			}
+			kept = append(kept, e.pending[i])
+		}
+		e.pending = kept
+	}
+
 	var expiredRelations []model.RelationID
 	for id, deadline := range e.relDeadlines {
 		if now.After(deadline) {
@@ -543,6 +564,13 @@ func (e *Engine) observeRelationBuffered(obs RelationObservation) (model.Event, 
 	if err != nil && e.bufferTTL > 0 && errors.Is(err, errEndpointMissing) {
 		// Out-of-order edge: park it and retry as later entities arrive, instead
 		// of failing. Not an error to the caller.
+		if len(e.pending) >= maxPendingRelations {
+			oldest := e.pending[0].obs
+			e.pending = e.pending[1:]
+			e.logger.Warn("pending-relation buffer full: dropping the oldest parked edge",
+				"relation_type", oldest.Type, "from_type", oldest.From.Type, "to_type", oldest.To.Type,
+				"cap", maxPendingRelations)
+		}
 		e.pending = append(e.pending, pendingRelation{obs: obs, deadline: e.now().Add(e.bufferTTL)})
 		return model.Event{}, false, nil
 	}

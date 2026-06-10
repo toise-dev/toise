@@ -118,8 +118,17 @@ func entityObs(attrs pcommon.Map, when time.Time) (change.EntityObservation, []s
 		return change.EntityObservation{}, dropped, fmt.Errorf("%w: %w", errInvalidRecord, err)
 	}
 	var interval time.Duration
-	if s, ok := intAttr(attrs, attrEntityInterval); ok && s > 0 {
-		interval = time.Duration(s) * time.Second
+	if v, present := attrs.Get(attrEntityInterval); present {
+		if v.Type() == pcommon.ValueTypeInt {
+			if secs := v.Int(); secs > 0 {
+				interval = time.Duration(secs) * time.Second
+			}
+		} else {
+			// A mis-typed interval (e.g. the string "300") silently disarmed
+			// the liveness backstop; surface it on the dropped-keys path so
+			// the producer bug is visible (#115).
+			dropped = append(dropped, attrEntityInterval)
+		}
 	}
 	return change.EntityObservation{
 		Type:       typ,
@@ -138,14 +147,6 @@ func eventTimeOf(lr plog.LogRecord) time.Time {
 		return ts.AsTime()
 	}
 	return time.Now()
-}
-
-func intAttr(attrs pcommon.Map, key string) (int64, bool) {
-	v, ok := attrs.Get(key)
-	if !ok || v.Type() != pcommon.ValueTypeInt {
-		return 0, false
-	}
-	return v.Int(), true
 }
 
 func strAttr(attrs pcommon.Map, key string) (string, bool) {

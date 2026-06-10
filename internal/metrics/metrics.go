@@ -9,6 +9,7 @@ package metrics
 
 import (
 	"net/http"
+	"sort"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
@@ -107,8 +108,39 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	ch <- prometheus.MustNewConstMetric(c.prunedBytes, prometheus.CounterValue, float64(c.store.PrunedBytes()))
 	ch <- prometheus.MustNewConstMetric(c.snapshotSeq, prometheus.GaugeValue, float64(c.store.SnapshotSeq()))
 	ch <- prometheus.MustNewConstMetric(c.snapshots, prometheus.CounterValue, float64(c.store.SnapshotsWritten()))
-	for typ, n := range c.graph.CountByType() {
-		ch <- prometheus.MustNewConstMetric(c.entitiesByType, prometheus.GaugeValue, float64(n), typ)
+	emitByType(ch, c.entitiesByType, c.graph.CountByType())
+}
+
+// maxTypeSeries caps the by-type label cardinality: producers control entity
+// types, and an unbounded label is an invitation to blow up the TSDB. The
+// largest types are reported individually, the tail is folded into "other".
+const maxTypeSeries = 50
+
+func emitByType(ch chan<- prometheus.Metric, desc *prometheus.Desc, counts map[string]int) {
+	type tc struct {
+		typ string
+		n   int
+	}
+	all := make([]tc, 0, len(counts))
+	for typ, n := range counts {
+		all = append(all, tc{typ, n})
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].n != all[j].n {
+			return all[i].n > all[j].n
+		}
+		return all[i].typ < all[j].typ
+	})
+	other := 0
+	for i, e := range all {
+		if i < maxTypeSeries {
+			ch <- prometheus.MustNewConstMetric(desc, prometheus.GaugeValue, float64(e.n), e.typ)
+			continue
+		}
+		other += e.n
+	}
+	if other > 0 {
+		ch <- prometheus.MustNewConstMetric(desc, prometheus.GaugeValue, float64(other), "other")
 	}
 }
 
