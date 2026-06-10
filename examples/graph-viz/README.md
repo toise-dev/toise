@@ -15,6 +15,7 @@ real time.
 - A force-directed node-link graph (via [vis-network], loaded from a CDN with
   Subresource Integrity).
 - Nodes coloured by entity `type`, with a clickable legend to filter types.
+- A header **`labels: names / ids`** toggle (see [Readable labels](#readable-labels)).
 - Edges labelled by relation `type`, arrowed from source to target.
 - A side panel with the selected entity's identity and attributes.
 - A live feed of recent changes; nodes pulse as they update.
@@ -51,6 +52,36 @@ extra configuration.)
 
 Seed some data first if your instance is empty — e.g. run `toise-demo`, or point
 an OpenTelemetry producer (such as `toise-probe`) at the server.
+
+## Readable labels
+
+Entity identities are precise but not friendly — a host is a UUID, a listener is
+`<host-uuid>:port`. The header **`labels`** button toggles node labels between:
+
+- **names** (default) — the human-readable name each type carries: `host.name`,
+  `service.name`, `interface.name`, `route.destination`, a listener's
+  `process.executable.name`, the address itself, …
+- **ids** — the raw technical identity.
+
+The tooltip always shows the full identity and the internal id, so names never hide
+precision. The choice is remembered in `localStorage`.
+
+## Multi-tenancy
+
+A single Toise instance can serve [multiple tenants with isolated graphs][adr25].
+Pick one with `?tenant=<id>` (or the `tenant` box in the header):
+
+```
+index.html?tenant=acme
+```
+
+It is sent as the `X-Scope-OrgID` header on queries. A browser can't set a header
+on a WebSocket, so for the live subscription it is also appended as `?tenant=`,
+which a translating proxy maps to the header (the
+[Mimir/Loki](https://grafana.com/docs/mimir/latest/) de-facto convention). Absent,
+you read the server's `default` tenant.
+
+[adr25]: ../../docs/architecture/adr/0025-multi-tenancy.md
 
 ## Notes
 

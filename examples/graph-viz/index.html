@@ -12,6 +12,15 @@
 
   Endpoint: defaults to a same-origin /graphql (serve this file behind the same
   proxy as toise-server). Override with ?api=https://host:port/graphql.
+
+  Labels: a header toggle switches node labels between human-readable names
+  (host.name, service.name, interface.name, the listener's process, …) and the raw
+  technical identities. The choice is remembered (localStorage).
+
+  Multi-tenancy (ADR 0025): pick a tenant with ?tenant=<id>. It is sent as the
+  X-Scope-OrgID header on queries; for the live subscription (a browser can't set a
+  header on a WebSocket) it is appended as ?tenant=, which a translating proxy maps
+  to the header. Absent => the server's "default" tenant.
 -->
 <script src="https://cdn.jsdelivr.net/npm/vis-network@9.1.9/standalone/umd/vis-network.min.js" integrity="sha384-yxKDWWf0wwdUj/gPeuL11czrnKFQROnLgY8ll7En9NYoXibgg3C6NK/UDHNtUgWJ" crossorigin="anonymous"></script>
 <style>
@@ -64,6 +73,8 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
     <span id="status"><i></i><span id="statusTxt">connecting…</span></span>
     <span><b id="nNodes">0</b> entities</span>
     <span><b id="nEdges">0</b> relations</span>
+    <label class="muted" for="tn">tenant<input id="tn" spellcheck="false" autocomplete="off" placeholder="default" title="X-Scope-OrgID — sent as a header on queries and as ?tenant= on the subscription" style="background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;padding:.1rem .35rem;width:8rem;margin-left:.3rem;"></label>
+    <button id="labels" title="Toggle node labels: human-readable names vs technical ids">labels: names</button>
     <button id="resync">resync</button>
     <button id="fit">fit</button>
   </div>
@@ -79,9 +90,14 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
 </main>
 <script>
 // GraphQL endpoint: same-origin /graphql by default; override with ?api=...
-const API=new URLSearchParams(location.search).get('api')||'/graphql';
+const params=new URLSearchParams(location.search);
+const API=params.get('api')||'/graphql';
+// Multi-tenancy: ?tenant=<id> -> X-Scope-OrgID header on queries, ?tenant= on the WS.
+const TENANT=(params.get('tenant')||'').trim();
+function withTenant(u){ if(!TENANT) return u; return u+(u.includes('?')?'&':'?')+'tenant='+encodeURIComponent(TENANT); }
+function gqlHeaders(){ const h={'Content-Type':'application/json'}; if(TENANT) h['X-Scope-OrgID']=TENANT; return h; }
 function wsURL(){ let u; try{ u=new URL(API,location.href); }catch{ u=new URL('/graphql',location.href); }
-  u.protocol=(u.protocol==='https:'?'wss:':'ws:'); return u.toString(); }
+  u.protocol=(u.protocol==='https:'?'wss:':'ws:'); if(TENANT) u.searchParams.set('tenant',TENANT); return u.toString(); }
 
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const PALETTE=["#58a6ff","#3fb950","#d29922","#bc8cff","#f778ba","#39c5cf","#ff7b72","#a5d6ff","#7ee787","#ffa657","#d2a8ff","#79c0ff"];
@@ -100,19 +116,49 @@ const net=new vis.Network(document.getElementById('net'),{nodes,edges},{
   interaction:{hover:true,tooltipDelay:120,multiselect:true}
 });
 
-function labelOf(n){
+// Node labels: a toggle between human-readable names and raw technical ids.
+// Identities are opaque (host.id is a UUID, a listener is <host-uuid>:port); name
+// mode resolves the readable name each entity type actually carries. The tooltip
+// always shows the full identity, so names never hide the precise id.
+let labelMode=localStorage.getItem('toise_viz_labels')||'name';   // 'name' | 'id'
+const attrsOf=n=>Object.fromEntries((n.attributes||[]).map(a=>[a.key,a.value]));
+const identOf=n=>Object.fromEntries((n.identity||[]).map(a=>[a.key,a.value]));
+function hostNameById(hid){ for(const e of Object.values(ENT)){ if(e.type==='host' && identOf(e)['host.id']===hid) return attrsOf(e)['host.name']; } return null; }
+
+function idLabel(n){
   const id=(n.identity||[]);
   if(id.length){ const named=id.find(a=>/(^|\.)(name|id|endpoint|address)$/i.test(a.key));
     return (named?named.value:id.map(a=>a.value).join('·')).toString(); }
   return n.type+' '+n.id.slice(0,6);
 }
+function nameLabel(n){
+  const A=attrsOf(n), I=identOf(n);
+  switch(n.type){
+    case 'host':              return A['host.name']||I['host.id'];
+    case 'service.instance':  return A['service.name']||I['service.instance.id'];
+    case 'network.interface': return I['interface.name']||idLabel(n);
+    case 'network.address':   return I['network.address']||idLabel(n);
+    case 'network.route':     return I['route.destination']||idLabel(n);
+    case 'network.device':    return (I['network.device.id']||'').replace(/^(serial|engine|mac|name|mgmt):/i,'')||idLabel(n);
+    case 'service.listener':{
+      const ep=I['service.endpoint']||''; const m=ep.match(/^([0-9a-f-]{36}):(.+)$/i);
+      const proc=A['process.executable.name'];
+      if(proc) return proc+(m?' '+m[2]:'');
+      return m?((hostNameById(m[1])||'')+':'+m[2]):ep;
+    }
+  }
+  const nk=Object.keys(A).find(k=>/(^|\.)name$/i.test(k))||Object.keys(I).find(k=>/(^|\.)name$/i.test(k));
+  return (nk&&(A[nk]||I[nk]))||idLabel(n);
+}
+function labelOf(n){ return (labelMode==='name'?nameLabel(n):idLabel(n))||n.id.slice(0,6); }
+function titleOf(n){ const I=(n.identity||[]).map(a=>a.key+'='+a.value).join(', '); return n.type+(I?' · '+I:'')+' · '+n.id; }
 
 let rebuildTimer=null;
 function scheduleRebuild(){ if(rebuildTimer) return; rebuildTimer=setTimeout(()=>{rebuildTimer=null;rebuild();},250); }
 function rebuild(){
   const allTypes=new Set(), nodeIds=new Set(), nUp=[];
   Object.values(ENT).forEach(n=>{ allTypes.add(n.type); if(hidden.has(n.type)) return; nodeIds.add(n.id);
-    nUp.push({id:n.id,label:labelOf(n),title:n.type,opacity:n.deleted?0.45:1,
+    nUp.push({id:n.id,label:labelOf(n),title:titleOf(n),opacity:n.deleted?0.45:1,
               color:{background:colorFor(n.type),border:n.deleted?'#d29922':'#0d1117'}}); });
   nodes.update(nUp);
   nodes.getIds().forEach(id=>{ if(!nodeIds.has(id)) nodes.remove(id); });
@@ -135,7 +181,7 @@ const FULL=`{ entities(first:2000){ edges{ node{ id type deleted identity{key va
 async function loadFull(){
   const err=document.getElementById('err'); err.textContent='';
   try{
-    const r=await fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({query:FULL})});
+    const r=await fetch(withTenant(API),{method:'POST',headers:gqlHeaders(),credentials:'same-origin',body:JSON.stringify({query:FULL})});
     const j=await r.json(); if(j.errors) throw new Error(j.errors[0].message);
     for(const k in ENT) delete ENT[k]; for(const k in REL) delete REL[k];
     j.data.entities.edges.forEach(e=>ENT[e.node.id]=e.node);
@@ -199,6 +245,13 @@ function connect(){
 function fallback(){ setStatus('poll','polling (ws off)'); startPolling(); }
 function scheduleReconnect(){ const wait=Math.min(2000*Math.pow(1.6,retry++),15000); if(!acked) startPolling(); setTimeout(connect,wait); }
 
+const labelsBtn=document.getElementById('labels');
+function syncLabelsBtn(){ labelsBtn.textContent='labels: '+(labelMode==='name'?'names':'ids'); }
+syncLabelsBtn();
+labelsBtn.onclick=()=>{ labelMode=(labelMode==='name'?'id':'name'); localStorage.setItem('toise_viz_labels',labelMode); syncLabelsBtn(); rebuild(); };
+const tnInput=document.getElementById('tn'); tnInput.value=TENANT;
+tnInput.addEventListener('change',()=>{ const v=tnInput.value.trim(); const p=new URLSearchParams(location.search);
+  if(v) p.set('tenant',v); else p.delete('tenant'); location.search=p.toString(); });
 document.getElementById('resync').onclick=loadFull;
 document.getElementById('fit').onclick=()=>net.fit({animation:true});
 loadFull().then(connect);
