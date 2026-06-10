@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -64,8 +65,16 @@ func (r *embeddedReconciler) handle(e engine, lr plog.LogRecord) (dropped []stri
 		// the entity is gone; the engine cascades its incident relations. Drop our
 		// bookkeeping for it so a later re-creation starts clean.
 		r.mu.Lock()
+		prev, had := r.state[sk]
 		delete(r.state, sk)
 		r.mu.Unlock()
+		if had {
+			e.OnRollback(func() {
+				r.mu.Lock()
+				r.state[sk] = prev
+				r.mu.Unlock()
+			})
+		}
 		return idDropped, nil
 	case evEntityState:
 		when := eventTimeOf(lr)
@@ -88,29 +97,47 @@ func (r *embeddedReconciler) reconcile(e engine, sourceKey string, desired []cha
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	prevState, hadPrev := r.state[sourceKey]
 	want := make(map[string]change.RelationObservation, len(desired))
+	var errs []error
 	for i := range desired {
 		want[relationKey(desired[i])] = desired[i]
 		if _, _, err := e.ObserveRelation(desired[i]); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
-	for k := range r.state[sourceKey] {
+	for k := range prevState {
 		if _, keep := want[k]; keep {
 			continue
 		}
-		prev := r.state[sourceKey][k]
+		prev := prevState[k]
 		prev.EventTime = when // the removal happens now, not when it was first seen
 		if _, _, err := e.RemoveRelation(prev); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
+	// The state always advances to what the source just asserted, even when an
+	// observe/remove failed: keeping a stale entry would replay the same failure
+	// on every subsequent export from that producer (#110).
 	if len(want) == 0 {
 		delete(r.state, sourceKey)
 	} else {
 		r.state[sourceKey] = want
 	}
-	return nil
+	// A failed batch flush discards the events this diff produced; restore the
+	// pre-diff assertion set so the producer's retry re-derives the same
+	// removals. Embedded edges carry no liveness interval, so a removal lost
+	// here would otherwise never be retried (#108).
+	e.OnRollback(func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if hadPrev {
+			r.state[sourceKey] = prevState
+		} else {
+			delete(r.state, sourceKey)
+		}
+	})
+	return errors.Join(errs...)
 }
 
 // embeddedRelations parses an entity-state record's `entity.relationships` array

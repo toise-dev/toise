@@ -1,6 +1,7 @@
 package change
 
 import (
+	"errors"
 	"log/slog"
 	"testing"
 	"time"
@@ -471,6 +472,38 @@ func mustObs(t *testing.T, e *Engine, obs EntityObservation) {
 	}
 }
 
+func TestRemoveRelationMissingEndpointIsNoOp(t *testing.T) {
+	e, _, recs := newEngine(t)
+	hostRef := EndpointRef{Type: model.TypeHost, Identity: []model.KeyValue{kv("host.id", "h1")}}
+	procRef := EndpointRef{Type: model.TypeProcess, Identity: []model.KeyValue{kv("pid", "100")}}
+
+	// Removing a relation whose endpoints never existed is nothing-to-remove,
+	// not an error: removal-by-absence reconciliation hits this whenever the
+	// target was already deleted and the cascade took the edge with it (#110).
+	ev, emitted, err := e.RemoveRelation(RelationObservation{Type: model.RelRunsOn, From: procRef, To: hostRef, EventTime: t0})
+	if err != nil {
+		t.Fatalf("remove with missing endpoints: %v, want nil", err)
+	}
+	if emitted || ev.Relation != nil {
+		t.Errorf("remove with missing endpoints emitted an event: %+v", ev)
+	}
+
+	// Same when only the target is missing: the source resolves, the target is gone.
+	mustObserve(t, e, model.TypeProcess, procRef.Identity)
+	ev, emitted, err = e.RemoveRelation(RelationObservation{Type: model.RelRunsOn, From: procRef, To: hostRef, EventTime: t0})
+	if err != nil {
+		t.Fatalf("remove with missing target: %v, want nil", err)
+	}
+	if emitted || ev.Relation != nil {
+		t.Errorf("remove with missing target emitted an event: %+v", ev)
+	}
+	for _, r := range *recs {
+		if r.ev.Relation != nil {
+			t.Errorf("no relation event should reach subscribers, got %+v", r.ev)
+		}
+	}
+}
+
 func TestDiffAttributes(t *testing.T) {
 	changed, state := diffAttributes([]model.KeyValue{kv("status", "up"), kv("os", "linux")}, []model.KeyValue{kv("status", "down"), kv("os", "linux")})
 	if len(changed) != 1 || changed[0] != "status" || !state {
@@ -482,5 +515,174 @@ func TestDiffAttributes(t *testing.T) {
 	}
 	if changed, _ := diffAttributes(nil, nil); len(changed) != 0 {
 		t.Errorf("empty diff = %v", changed)
+	}
+}
+
+type failingAppender struct {
+	fail   bool
+	events int
+}
+
+func (f *failingAppender) Append(evs ...model.Event) error {
+	if f.fail {
+		return errors.New("append failed (injected)")
+	}
+	f.events += len(evs)
+	return nil
+}
+
+// TestBatchFlushFailureKeepsProjectionAndSubscribersClean pins the staged-commit
+// contract (#108): when the durable append fails, the projection must not have
+// moved, no subscriber must have been notified, and the producer's retry must
+// re-classify against durable state — regenerating the relation that the
+// pre-fix ordering lost forever.
+func TestBatchFlushFailureKeepsProjectionAndSubscribersClean(t *testing.T) {
+	g := projection.New()
+	ap := &failingAppender{fail: true}
+	e := New(g, ap, WithClock(fixedNow))
+	var recs []record
+	e.Subscribe(func(ev model.Event, hp bool) { recs = append(recs, record{ev, hp}) })
+
+	procRef := EndpointRef{Type: model.TypeProcess, Identity: []model.KeyValue{kv("pid", "100")}}
+	hostRef := EndpointRef{Type: model.TypeHost, Identity: []model.KeyValue{kv("host.id", "h1")}}
+	observeAll := func(b *Batch) (entityTypes []model.ChangeType, relAdded bool) {
+		ev, err := b.ObserveEntity(EntityObservation{Type: model.TypeProcess, Identity: procRef.Identity, EventTime: t0})
+		if err != nil {
+			t.Fatal(err)
+		}
+		entityTypes = append(entityTypes, ev.Entity.ChangeType)
+		ev, err = b.ObserveEntity(EntityObservation{Type: model.TypeHost, Identity: hostRef.Identity, EventTime: t0})
+		if err != nil {
+			t.Fatal(err)
+		}
+		entityTypes = append(entityTypes, ev.Entity.ChangeType)
+		rev, emitted, err := b.ObserveRelation(RelationObservation{Type: model.RelRunsOn, From: procRef, To: hostRef, EventTime: t0})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return entityTypes, emitted && rev.Relation.ChangeType == model.RelationAdded
+	}
+
+	if err := e.Batch(func(b *Batch) { observeAll(b) }); err == nil {
+		t.Fatal("batch must surface the flush failure")
+	}
+	if g.EntityCount() != 0 || g.RelationCount() != 0 {
+		t.Fatalf("projection ran ahead of the durable log: %d entities, %d relations", g.EntityCount(), g.RelationCount())
+	}
+	if len(recs) != 0 {
+		t.Fatalf("subscribers saw %d events that were never persisted", len(recs))
+	}
+
+	// Retry against a healed appender: everything re-classifies as new.
+	ap.fail = false
+	err := e.Batch(func(b *Batch) {
+		types, relAdded := observeAll(b)
+		for _, ct := range types {
+			if ct != model.EntityCreated {
+				t.Errorf("retried entity classified as %s, want entity.created", ct)
+			}
+		}
+		if !relAdded {
+			t.Error("retried relation not regenerated as relation.added")
+		}
+	})
+	if err != nil {
+		t.Fatalf("retry batch: %v", err)
+	}
+	if g.EntityCount() != 2 || g.RelationCount() != 1 {
+		t.Errorf("after retry: %d entities, %d relations, want 2 and 1", g.EntityCount(), g.RelationCount())
+	}
+	if ap.events != 3 {
+		t.Errorf("durably appended %d events, want 3", ap.events)
+	}
+	if len(recs) != 3 {
+		t.Errorf("subscribers saw %d events, want 3", len(recs))
+	}
+}
+
+type orderAppender struct{ log *[]string }
+
+func (o orderAppender) Append(evs ...model.Event) error {
+	*o.log = append(*o.log, "append")
+	return nil
+}
+
+// TestBatchNotifiesOnlyAfterDurableAppend pins the flush ordering: one durable
+// append, then the notifications.
+func TestBatchNotifiesOnlyAfterDurableAppend(t *testing.T) {
+	g := projection.New()
+	var order []string
+	e := New(g, orderAppender{&order}, WithClock(fixedNow))
+	e.Subscribe(func(ev model.Event, hp bool) { order = append(order, "notify") })
+
+	err := e.Batch(func(b *Batch) {
+		mustBatchObserve(t, b, model.TypeHost, []model.KeyValue{kv("host.id", "h1")})
+		mustBatchObserve(t, b, model.TypeProcess, []model.KeyValue{kv("pid", "100")})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"append", "notify", "notify"}
+	if len(order) != len(want) {
+		t.Fatalf("order = %v, want %v", order, want)
+	}
+	for i := range want {
+		if order[i] != want[i] {
+			t.Fatalf("order = %v, want %v (notify must follow the durable append)", order, want)
+		}
+	}
+}
+
+func mustBatchObserve(t *testing.T, b *Batch, typ string, ident []model.KeyValue) {
+	t.Helper()
+	if _, err := b.ObserveEntity(EntityObservation{Type: typ, Identity: ident, EventTime: t0}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestBatchClassificationSeesStagedState pins in-batch read consistency on the
+// staging overlay: a repeat observation classifies as unchanged, and an
+// in-batch delete cascades a relation that was itself staged in the same batch.
+func TestBatchClassificationSeesStagedState(t *testing.T) {
+	g := projection.New()
+	e := New(g, &fakeAppender{}, WithClock(fixedNow))
+	var relRemoved int
+	e.Subscribe(func(ev model.Event, hp bool) {
+		if ev.Relation != nil && ev.Relation.ChangeType == model.RelationRemoved {
+			relRemoved++
+		}
+	})
+
+	procRef := EndpointRef{Type: model.TypeProcess, Identity: []model.KeyValue{kv("pid", "100")}}
+	hostRef := EndpointRef{Type: model.TypeHost, Identity: []model.KeyValue{kv("host.id", "h1")}}
+	err := e.Batch(func(b *Batch) {
+		mustBatchObserve(t, b, model.TypeHost, hostRef.Identity)
+		ev, err := b.ObserveEntity(EntityObservation{Type: model.TypeHost, Identity: hostRef.Identity, EventTime: t0})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ev.Entity.ChangeType != model.EntityUnchanged {
+			t.Errorf("repeat in-batch observation = %s, want entity.unchanged", ev.Entity.ChangeType)
+		}
+		mustBatchObserve(t, b, model.TypeProcess, procRef.Identity)
+		if _, _, err := b.ObserveRelation(RelationObservation{Type: model.RelRunsOn, From: procRef, To: hostRef, EventTime: t0}); err != nil {
+			t.Fatal(err)
+		}
+		// Deleting the host inside the same batch must cascade the staged edge.
+		if _, _, err := b.DeleteEntity(EntityObservation{Type: model.TypeHost, Identity: hostRef.Identity, EventTime: t0}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.EntityCount() != 1 {
+		t.Errorf("EntityCount = %d, want 1 (proc; host deleted in-batch)", g.EntityCount())
+	}
+	if g.RelationCount() != 0 {
+		t.Errorf("RelationCount = %d, want 0 (staged edge cascaded in-batch)", g.RelationCount())
+	}
+	if relRemoved != 1 {
+		t.Errorf("relation.removed notifications = %d, want 1", relRemoved)
 	}
 }

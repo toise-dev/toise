@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -10,6 +11,13 @@ import (
 	"github.com/toise-dev/toise/internal/change"
 	"github.com/toise-dev/toise/internal/model"
 )
+
+// errInvalidRecord marks an entity record that violates the wire contract
+// (unknown entity.type, missing identity, malformed key-values). The violation
+// is permanent — a retry can never make the record valid — so the receiver
+// rejects it per record via OTLP partial success instead of failing the export:
+// one bad record must not block its valid siblings (#109).
+var errInvalidRecord = errors.New("invalid entity record")
 
 // LogRecord attribute keys for the merged OTel entity-events convention
 // (specification/entities/entity-events.md, merged 2026-06-04). See ADR 0009,
@@ -52,6 +60,9 @@ type engine interface {
 	DeleteEntity(change.EntityObservation) (model.Event, bool, error)
 	ObserveRelation(change.RelationObservation) (model.Event, bool, error)
 	RemoveRelation(change.RelationObservation) (model.Event, bool, error)
+	// OnRollback registers an undo to run if the surrounding batch fails to
+	// flush durably; outside a batch it is a no-op (commits are already durable).
+	OnRollback(func())
 }
 
 // routeRecord converts an entity-event LogRecord and routes it to the engine.
@@ -89,16 +100,23 @@ func routeRecord(e engine, lr plog.LogRecord, producer string) (handled bool, dr
 func entityObs(attrs pcommon.Map, when time.Time) (change.EntityObservation, []string, error) {
 	typ, ok := strAttr(attrs, attrEntityType)
 	if !ok {
-		return change.EntityObservation{}, nil, fmt.Errorf("missing %s", attrEntityType)
+		return change.EntityObservation{}, nil, fmt.Errorf("%w: missing %s", errInvalidRecord, attrEntityType)
 	}
 	ident, identDropped, ok := mapAttr(attrs, attrEntityID)
 	if !ok || len(ident) == 0 {
-		return change.EntityObservation{}, identDropped, fmt.Errorf("missing or empty %s", attrEntityID)
+		return change.EntityObservation{}, identDropped, fmt.Errorf("%w: missing or empty %s", errInvalidRecord, attrEntityID)
 	}
 	descriptive, descDropped, _ := mapAttr(attrs, attrEntityDesc)
 	dropped := make([]string, 0, len(identDropped)+len(descDropped))
 	dropped = append(dropped, identDropped...)
 	dropped = append(dropped, descDropped...)
+	// The wire contract requires a registered entity.type and well-formed
+	// key-values. Validating per record here, before classification, bounds the
+	// blast radius: the store would otherwise reject the whole batch for one
+	// bad record, after it was already applied and broadcast (#109).
+	if err := (model.Entity{Type: typ, Identity: ident, Attributes: descriptive}).Validate(); err != nil {
+		return change.EntityObservation{}, dropped, fmt.Errorf("%w: %w", errInvalidRecord, err)
+	}
 	var interval time.Duration
 	if s, ok := intAttr(attrs, attrEntityInterval); ok && s > 0 {
 		interval = time.Duration(s) * time.Second
