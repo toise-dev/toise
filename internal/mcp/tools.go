@@ -80,10 +80,19 @@ type GetNeighborsInput struct {
 	Depth        int    `json:"depth,omitempty" jsonschema:"how many relation hops to traverse, 1 to 5 (default 1)"`
 }
 
-// GetNeighborsOutput carries the reachable entities.
+// Neighbor is a reachable entity plus the edge facts that reached it: the
+// relation type, its direction, and the hop distance from the start (#115).
+type Neighbor struct {
+	Entity
+	ViaRelation string `json:"via_relation" jsonschema:"relation type of the edge that first reached this entity"`
+	Direction   string `json:"direction" jsonschema:"outgoing if that edge points from the previous hop to this entity, incoming otherwise"`
+	Depth       int    `json:"depth" jsonschema:"hop distance from the start entity"`
+}
+
+// GetNeighborsOutput carries the reachable entities with their edges.
 type GetNeighborsOutput struct {
-	Neighbors []Entity `json:"neighbors"`
-	Count     int      `json:"count"`
+	Neighbors []Neighbor `json:"neighbors"`
+	Count     int        `json:"count"`
 }
 
 func (s *Server) getNeighbors(_ context.Context, _ *mcpsdk.CallToolRequest, in GetNeighborsInput) (*mcpsdk.CallToolResult, GetNeighborsOutput, error) {
@@ -97,14 +106,36 @@ func (s *Server) getNeighbors(_ context.Context, _ *mcpsdk.CallToolRequest, in G
 	if depth > maxDepth {
 		return nil, GetNeighborsOutput{}, fmt.Errorf("depth %d exceeds the maximum of %d; try a smaller depth", in.Depth, maxDepth)
 	}
-	if _, ok, _ := s.graph.GetEntity(model.EntityID(in.EntityID)); !ok {
+	start := model.EntityID(in.EntityID)
+	if _, ok, _ := s.graph.GetEntity(start); !ok {
 		return nil, GetNeighborsOutput{}, fmt.Errorf("no entity found with id %q; use find_entities to discover ids", in.EntityID)
 	}
-	ns := s.graph.Neighbors(model.EntityID(in.EntityID), in.RelationType, depth)
-	out := GetNeighborsOutput{Count: len(ns), Neighbors: make([]Entity, len(ns))}
-	for i, e := range ns {
-		out.Neighbors[i] = entityOut(e, false)
+	// BFS through the edge view so each neighbor carries how it was reached;
+	// the first (shallowest) edge to reach an entity wins, like a shortest path.
+	visited := map[model.EntityID]struct{}{start: {}}
+	frontier := []model.EntityID{start}
+	out := GetNeighborsOutput{Neighbors: []Neighbor{}}
+	for d := 1; d <= depth && len(frontier) > 0; d++ {
+		var next []model.EntityID
+		for _, cur := range frontier {
+			for _, e := range s.edgesOf(cur, in.RelationType) {
+				if _, seen := visited[e.other]; seen {
+					continue
+				}
+				visited[e.other] = struct{}{}
+				next = append(next, e.other)
+				ent, _, _ := s.graph.GetEntity(e.other)
+				out.Neighbors = append(out.Neighbors, Neighbor{
+					Entity:      entityOut(ent, false),
+					ViaRelation: e.rel.Type,
+					Direction:   e.direction,
+					Depth:       d,
+				})
+			}
+		}
+		frontier = next
 	}
+	out.Count = len(out.Neighbors)
 	return nil, out, nil
 }
 
