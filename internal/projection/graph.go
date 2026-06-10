@@ -297,7 +297,13 @@ func (g *Graph) SnapshotEvents(when time.Time) []model.Event {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	out := make([]model.Event, 0, len(g.entities)+len(g.relations))
-	for _, e := range g.entities {
+	for id, e := range g.entities {
+		if g.deleted[id] {
+			// A soft-deleted entity must not be written to the snapshot: its
+			// EntityDeleted predates the snapshot sequence and is never
+			// replayed, so emitting it here resurrects it on restore (#106).
+			continue
+		}
 		out = append(out, model.Event{Entity: &model.EntityEvent{
 			EventID:       model.NewEventID(),
 			ChangeType:    model.EntityCreated,
