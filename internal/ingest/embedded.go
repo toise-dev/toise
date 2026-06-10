@@ -65,8 +65,16 @@ func (r *embeddedReconciler) handle(e engine, lr plog.LogRecord) (dropped []stri
 		// the entity is gone; the engine cascades its incident relations. Drop our
 		// bookkeeping for it so a later re-creation starts clean.
 		r.mu.Lock()
+		prev, had := r.state[sk]
 		delete(r.state, sk)
 		r.mu.Unlock()
+		if had {
+			e.OnRollback(func() {
+				r.mu.Lock()
+				r.state[sk] = prev
+				r.mu.Unlock()
+			})
+		}
 		return idDropped, nil
 	case evEntityState:
 		when := eventTimeOf(lr)
@@ -89,6 +97,7 @@ func (r *embeddedReconciler) reconcile(e engine, sourceKey string, desired []cha
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	prevState, hadPrev := r.state[sourceKey]
 	want := make(map[string]change.RelationObservation, len(desired))
 	var errs []error
 	for i := range desired {
@@ -97,7 +106,7 @@ func (r *embeddedReconciler) reconcile(e engine, sourceKey string, desired []cha
 			errs = append(errs, err)
 		}
 	}
-	for k, prev := range r.state[sourceKey] {
+	for k, prev := range prevState {
 		if _, keep := want[k]; keep {
 			continue
 		}
@@ -114,6 +123,19 @@ func (r *embeddedReconciler) reconcile(e engine, sourceKey string, desired []cha
 	} else {
 		r.state[sourceKey] = want
 	}
+	// A failed batch flush discards the events this diff produced; restore the
+	// pre-diff assertion set so the producer's retry re-derives the same
+	// removals. Embedded edges carry no liveness interval, so a removal lost
+	// here would otherwise never be retried (#108).
+	e.OnRollback(func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if hadPrev {
+			r.state[sourceKey] = prevState
+		} else {
+			delete(r.state, sourceKey)
+		}
+	})
 	return errors.Join(errs...)
 }
 

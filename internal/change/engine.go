@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
@@ -54,11 +55,12 @@ type Engine struct {
 	refs         map[model.EntityID]map[string]time.Time
 	relDeadlines map[model.RelationID]time.Time
 
-	// batch append: while a Batch runs, commit defers the durable store append into
-	// appendBuf and flushes it in one Sync'd batch at the end, instead of one Sync
-	// per event. Guarded by obsMu.
-	buffering bool
-	appendBuf []model.Event
+	// batch staging: while a Batch runs, commit stages each event and its
+	// projection effects here instead of applying them; the durable append, the
+	// projection apply, and the subscriber notifications all happen at flush
+	// time, in that order, so neither the graph nor subscribers ever see an
+	// event the log did not durably record (#108). Guarded by obsMu.
+	staged *staged
 
 	subMu sync.RWMutex
 	subs  map[int]Subscriber
@@ -68,6 +70,71 @@ type Engine struct {
 type pendingRelation struct {
 	obs      RelationObservation
 	deadline time.Time
+}
+
+// staged is a batch's uncommitted unit of work: the events to flush plus an
+// overlay of their projection effects. Classification reads consult the overlay
+// first (through the engine's matchIdentity/getEntity/getRelation helpers) so
+// in-batch observations classify consistently, while the projection itself
+// stays untouched until the durable append succeeds.
+type staged struct {
+	events []stagedEvent
+
+	entities   map[model.EntityID]model.Entity
+	deleted    map[model.EntityID]bool
+	byHash     map[string]model.EntityID
+	relations  map[model.RelationID]model.Relation
+	relRemoved map[model.RelationID]bool
+
+	rollbacks []func()
+}
+
+type stagedEvent struct {
+	ev model.Event
+	hp bool
+}
+
+func newStaged() *staged {
+	return &staged{
+		entities:   make(map[model.EntityID]model.Entity),
+		deleted:    make(map[model.EntityID]bool),
+		byHash:     make(map[string]model.EntityID),
+		relations:  make(map[model.RelationID]model.Relation),
+		relRemoved: make(map[model.RelationID]bool),
+	}
+}
+
+// apply records ev's projection effect on the overlay, mirroring what
+// projection.Graph.Apply will do at flush time for the event kinds the engine
+// emits.
+func (st *staged) apply(ev model.Event) {
+	switch {
+	case ev.Entity != nil:
+		ee := ev.Entity
+		switch ee.ChangeType {
+		case model.EntityCreated:
+			st.entities[ee.Entity.ID] = ee.Entity
+			delete(st.deleted, ee.Entity.ID)
+			st.byHash[ee.Entity.IdentityHash()] = ee.Entity.ID
+		case model.EntityAttributeUpdated, model.EntityStateChanged:
+			st.entities[ee.Entity.ID] = ee.Entity
+		case model.EntityDeleted:
+			st.deleted[ee.Entity.ID] = true
+		case model.EntityUnchanged:
+			// presence was established by the identity match that classified
+			// the observation as unchanged; nothing to overlay.
+		}
+	case ev.Relation != nil:
+		re := ev.Relation
+		switch re.ChangeType {
+		case model.RelationAdded, model.RelationAttributeChanged:
+			st.relations[re.Relation.ID] = re.Relation
+			delete(st.relRemoved, re.Relation.ID)
+		case model.RelationRemoved:
+			delete(st.relations, re.Relation.ID)
+			st.relRemoved[re.Relation.ID] = true
+		}
+	}
 }
 
 // errEndpointMissing marks a relation whose endpoint entity is not (yet) present,
@@ -139,6 +206,82 @@ func (e *Engine) notify(ev model.Event, highPriority bool) {
 	}
 }
 
+// matchIdentity, getEntity, getRelation, and listRelationsTouching are the
+// classification reads: they see the batch's staged effects layered over the
+// projection, so in-batch observations classify as if earlier staged events
+// were already applied, without the projection running ahead of the log.
+
+func (e *Engine) matchIdentity(typ string, identity []model.KeyValue) (model.EntityID, bool) {
+	st := e.staged
+	if st == nil {
+		return e.graph.MatchIdentity(typ, identity)
+	}
+	hash := (model.Entity{Type: typ, Identity: identity}).IdentityHash()
+	if id, ok := st.byHash[hash]; ok {
+		if st.deleted[id] {
+			return "", false
+		}
+		return id, true
+	}
+	if id, ok := e.graph.MatchIdentity(typ, identity); ok && !st.deleted[id] {
+		return id, true
+	}
+	return "", false
+}
+
+func (e *Engine) getEntity(id model.EntityID) (model.Entity, bool, bool) {
+	st := e.staged
+	if st == nil {
+		return e.graph.GetEntity(id)
+	}
+	if ent, ok := st.entities[id]; ok {
+		return ent, true, st.deleted[id]
+	}
+	ent, ok, deleted := e.graph.GetEntity(id)
+	return ent, ok, deleted || st.deleted[id]
+}
+
+func (e *Engine) getRelation(id model.RelationID) (model.Relation, bool) {
+	st := e.staged
+	if st != nil {
+		if st.relRemoved[id] {
+			return model.Relation{}, false
+		}
+		if r, ok := st.relations[id]; ok {
+			return r, true
+		}
+	}
+	return e.graph.GetRelation(id)
+}
+
+// listRelationsTouching returns the deduplicated edges incident to id, staged
+// versions taking precedence over the projection's, staged removals excluded.
+func (e *Engine) listRelationsTouching(id model.EntityID) []model.Relation {
+	st := e.staged
+	var out []model.Relation
+	seen := make(map[model.RelationID]struct{})
+	if st != nil {
+		for _, r := range st.relations {
+			if r.From == id || r.To == id {
+				out = append(out, r)
+				seen[r.ID] = struct{}{}
+			}
+		}
+	}
+	for _, r := range append(e.graph.ListRelations("", id, ""), e.graph.ListRelations("", "", id)...) {
+		if _, dup := seen[r.ID]; dup {
+			continue
+		}
+		seen[r.ID] = struct{}{}
+		if st != nil && st.relRemoved[r.ID] {
+			continue
+		}
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
 // EntityObservation is an entity's observed state at a point in time.
 type EntityObservation struct {
 	Type       string
@@ -185,7 +328,7 @@ func (e *Engine) ObserveEntity(obs EntityObservation) (model.Event, error) {
 }
 
 func (e *Engine) observeEntityLocked(obs EntityObservation) (model.Event, error) {
-	id, found := e.graph.MatchIdentity(obs.Type, obs.Identity)
+	id, found := e.matchIdentity(obs.Type, obs.Identity)
 
 	var (
 		ct          model.ChangeType
@@ -197,7 +340,7 @@ func (e *Engine) observeEntityLocked(obs EntityObservation) (model.Event, error)
 		ct, entityID = model.EntityCreated, model.NewEntityID()
 	default:
 		entityID = id
-		existing, _, _ := e.graph.GetEntity(id)
+		existing, _, _ := e.getEntity(id)
 		changed, stateChanged := diffAttributes(existing.Attributes, obs.Attributes)
 		switch {
 		case len(changed) == 0:
@@ -257,7 +400,7 @@ func (e *Engine) DeleteEntity(obs EntityObservation) (ev model.Event, emitted bo
 }
 
 func (e *Engine) deleteEntityLocked(obs EntityObservation) (ev model.Event, emitted bool, err error) {
-	id, found := e.graph.MatchIdentity(obs.Type, obs.Identity)
+	id, found := e.matchIdentity(obs.Type, obs.Identity)
 	if !found {
 		return model.Event{}, false, nil
 	}
@@ -295,14 +438,8 @@ func (e *Engine) deleteEntityLocked(obs EntityObservation) (ev model.Event, emit
 // edge to a deleted entity is meaningless, so edge liveness is derived from its
 // endpoints (a deleted node takes its edges with it). The caller must hold obsMu.
 func (e *Engine) removeIncidentRelations(id model.EntityID, when time.Time) int {
-	edges := append(e.graph.ListRelations("", id, ""), e.graph.ListRelations("", "", id)...)
-	seen := make(map[model.RelationID]struct{}, len(edges))
 	n := 0
-	for _, rel := range edges {
-		if _, dup := seen[rel.ID]; dup {
-			continue
-		}
-		seen[rel.ID] = struct{}{}
+	for _, rel := range e.listRelationsTouching(id) {
 		ev := e.relationEvent(model.RelationRemoved, rel, when)
 		if err := e.commit(ev, rel.Structural); err != nil {
 			e.logger.Error("failed to remove edge of deleted entity", "relation_id", rel.ID, "err", err)
@@ -430,7 +567,7 @@ func (e *Engine) observeRelationLocked(obs RelationObservation) (model.Event, bo
 	}
 
 	var ct model.ChangeType
-	if existing, ok := e.graph.GetRelation(rel.ID); ok {
+	if existing, ok := e.getRelation(rel.ID); ok {
 		changed, _ := diffAttributes(existing.Attributes, obs.Attributes)
 		if len(changed) == 0 {
 			return model.Event{}, false, nil
@@ -495,7 +632,7 @@ func (e *Engine) removeRelationLocked(obs RelationObservation) (ev model.Event, 
 	}
 	id := model.ComputeRelationID(obs.Type, from, to)
 	delete(e.relDeadlines, id) // explicit remove clears any liveness backstop
-	existing, ok := e.graph.GetRelation(id)
+	existing, ok := e.getRelation(id)
 	if !ok {
 		return model.Event{}, false, nil
 	}
@@ -520,11 +657,11 @@ func (e *Engine) relationEvent(ct model.ChangeType, rel model.Relation, eventTim
 
 func (e *Engine) resolveEndpoints(from, to EndpointRef) (fromID, toID model.EntityID, err error) {
 	var ok bool
-	fromID, ok = e.graph.MatchIdentity(from.Type, from.Identity)
+	fromID, ok = e.matchIdentity(from.Type, from.Identity)
 	if !ok {
 		return "", "", fmt.Errorf("relation from-endpoint not found: type %q: %w", from.Type, errEndpointMissing)
 	}
-	toID, ok = e.graph.MatchIdentity(to.Type, to.Identity)
+	toID, ok = e.matchIdentity(to.Type, to.Identity)
 	if !ok {
 		return "", "", fmt.Errorf("relation to-endpoint not found: type %q: %w", to.Type, errEndpointMissing)
 	}
@@ -532,14 +669,17 @@ func (e *Engine) resolveEndpoints(from, to EndpointRef) (fromID, toID model.Enti
 }
 
 func (e *Engine) commit(ev model.Event, highPriority bool) error {
-	if e.buffering {
-		// Defer the durable append to the batch flush; apply to the projection and
-		// notify now so in-batch classification stays consistent.
-		e.appendBuf = append(e.appendBuf, ev)
-		e.graph.Apply(ev)
-		e.notify(ev, highPriority)
+	if st := e.staged; st != nil {
+		// Stage the event and its overlay effect; the durable append, the
+		// projection apply, and the notify all happen at the batch flush, in
+		// that order. In-batch classification sees the staged effects through
+		// the overlay-aware read helpers, never through the projection (#108).
+		st.events = append(st.events, stagedEvent{ev: ev, hp: highPriority})
+		st.apply(ev)
 		return nil
 	}
+	// Unbatched: same contract, degenerate form — durable append first, then
+	// apply and notify.
 	if err := e.appender.Append(ev); err != nil {
 		return fmt.Errorf("appending qualified event: %w", err)
 	}
@@ -553,28 +693,59 @@ func (e *Engine) commit(ev model.Event, highPriority bool) error {
 // of one per event. The OTLP receiver uses it per export to lift the
 // fsync-bound ingestion ceiling. fn receives a Batch whose Observe/Delete methods
 // mirror the engine's but run lock-free; do not retain it past the call.
+//
+// The batch is a staged unit of work: events reach the projection and the
+// subscribers only after the durable append succeeds. On a failed flush the
+// projection still matches the log and nothing was broadcast, so the producer's
+// retry re-classifies every observation against durable state and regenerates
+// the lost events (#108). Liveness bookkeeping (refs, relation deadlines, the
+// out-of-order buffer) touched by a failed batch is intentionally not rolled
+// back: re-observation overwrites it, and Sweep self-heals entries pointing at
+// entities or relations that never materialized.
 func (e *Engine) Batch(fn func(*Batch)) error {
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()
 
-	e.buffering = true
-	e.appendBuf = e.appendBuf[:0]
+	st := newStaged()
+	e.staged = st
 	fn(&Batch{e})
-	e.buffering = false
+	e.staged = nil
 
-	if len(e.appendBuf) == 0 {
-		return nil
-	}
-	err := e.appender.Append(e.appendBuf...)
-	e.appendBuf = e.appendBuf[:0]
-	if err != nil {
-		return fmt.Errorf("flushing batch append: %w", err)
+	if len(st.events) > 0 {
+		evs := make([]model.Event, len(st.events))
+		for i := range st.events {
+			evs[i] = st.events[i].ev
+		}
+		if err := e.appender.Append(evs...); err != nil {
+			// Undo side state advanced during the batch, most recent first.
+			for i := len(st.rollbacks) - 1; i >= 0; i-- {
+				st.rollbacks[i]()
+			}
+			return fmt.Errorf("flushing batch append: %w", err)
+		}
+		for i := range st.events {
+			e.graph.Apply(st.events[i].ev)
+			e.notify(st.events[i].ev, st.events[i].hp)
+		}
 	}
 	return nil
 }
 
 // Batch routes observations to the engine with the obsMu already held by Batch.
 type Batch struct{ e *Engine }
+
+// OnRollback registers fn to run — in reverse registration order — if the
+// batch's durable flush fails. Callers that advance side state during the batch
+// (the ingest reconciler's assertion sets) register its undo here, so a failed
+// flush restores it and the producer's retry re-derives the same events.
+// Dropped on success.
+func (b *Batch) OnRollback(fn func()) {
+	b.e.staged.rollbacks = append(b.e.staged.rollbacks, fn)
+}
+
+// OnRollback on the engine itself is a no-op: outside a batch every commit is
+// durable before the observation returns, so there is no flush to roll back.
+func (e *Engine) OnRollback(func()) {}
 
 // ObserveEntity mirrors Engine.ObserveEntity within a batch.
 func (b *Batch) ObserveEntity(obs EntityObservation) (model.Event, error) {

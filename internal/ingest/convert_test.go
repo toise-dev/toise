@@ -41,6 +41,8 @@ func (f *fakeEngine) RemoveRelation(o change.RelationObservation) (model.Event, 
 	return model.Event{}, true, nil
 }
 
+func (f *fakeEngine) OnRollback(func()) {}
+
 func newRecord(eventName string) plog.LogRecord {
 	lr := plog.NewLogRecord()
 	lr.SetTimestamp(pcommon.NewTimestampFromTime(time.Unix(1_700_000_000, 0)))

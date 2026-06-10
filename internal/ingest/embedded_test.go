@@ -1,11 +1,16 @@
 package ingest
 
 import (
+	"errors"
 	"testing"
 	"time"
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
+
+	"github.com/toise-dev/toise/internal/change"
+	"github.com/toise-dev/toise/internal/model"
+	"github.com/toise-dev/toise/internal/projection"
 )
 
 type relDesc struct {
@@ -130,5 +135,71 @@ func TestEmbeddedReconcilerDropsMalformedDescriptor(t *testing.T) {
 	}
 	if f.relAdds != 0 {
 		t.Errorf("malformed descriptor produced %d adds, want 0", f.relAdds)
+	}
+}
+
+type failingAppender struct{ fail bool }
+
+func (f *failingAppender) Append(...model.Event) error {
+	if f.fail {
+		return errors.New("append failed (injected)")
+	}
+	return nil
+}
+
+// TestReconcilerStateRollsBackOnFlushFailure pins the #108 retry contract for
+// removal-by-absence: when the batch flush fails, the reconciler's assertion
+// set must roll back with it, so the producer's retried export re-derives the
+// removal. Embedded edges carry no liveness interval — a removal lost here
+// would never be retried otherwise.
+func TestReconcilerStateRollsBackOnFlushFailure(t *testing.T) {
+	g := projection.New()
+	ap := &failingAppender{}
+	eng := change.New(g, ap)
+	r := newEmbeddedReconciler()
+
+	svc := map[string]string{"service.instance.id": "s1"}
+	hostID := map[string]string{"host.id": "h1"}
+	runsOn := []relDesc{{relType: model.RelRunsOn, toType: model.TypeHost, toID: hostID}}
+
+	route := func(records ...plog.LogRecord) error {
+		return eng.Batch(func(b *change.Batch) {
+			for _, lr := range records {
+				if _, _, err := routeRecord(b, lr, "p1"); err != nil {
+					t.Fatalf("route: %v", err)
+				}
+				if _, err := r.handle(b, lr); err != nil {
+					t.Fatalf("reconcile: %v", err)
+				}
+			}
+		})
+	}
+
+	host := embeddedRecord(model.TypeHost, hostID, nil)
+	if err := route(host, embeddedRecord(model.TypeServiceInstance, svc, runsOn)); err != nil {
+		t.Fatalf("initial export: %v", err)
+	}
+	if g.RelationCount() != 1 {
+		t.Fatalf("RelationCount = %d, want 1", g.RelationCount())
+	}
+
+	// s1 drops the descriptor, but the flush fails: the graph keeps the edge
+	// and the reconciler state must roll back to keep asserting it.
+	ap.fail = true
+	if err := route(embeddedRecord(model.TypeServiceInstance, svc, nil)); err == nil {
+		t.Fatal("flush failure must surface")
+	}
+	if g.RelationCount() != 1 {
+		t.Fatalf("RelationCount = %d after failed flush, want 1 (projection must not run ahead)", g.RelationCount())
+	}
+
+	// The producer retries the same export: the removal must be re-derived
+	// from the restored state and now reach the log and the graph.
+	ap.fail = false
+	if err := route(embeddedRecord(model.TypeServiceInstance, svc, nil)); err != nil {
+		t.Fatalf("retried export: %v", err)
+	}
+	if g.RelationCount() != 0 {
+		t.Errorf("RelationCount = %d after retry, want 0 (removal re-derived)", g.RelationCount())
 	}
 }

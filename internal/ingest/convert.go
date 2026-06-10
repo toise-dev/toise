@@ -60,6 +60,9 @@ type engine interface {
 	DeleteEntity(change.EntityObservation) (model.Event, bool, error)
 	ObserveRelation(change.RelationObservation) (model.Event, bool, error)
 	RemoveRelation(change.RelationObservation) (model.Event, bool, error)
+	// OnRollback registers an undo to run if the surrounding batch fails to
+	// flush durably; outside a batch it is a no-op (commits are already durable).
+	OnRollback(func())
 }
 
 // routeRecord converts an entity-event LogRecord and routes it to the engine.

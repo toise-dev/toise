@@ -165,8 +165,10 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (pl
 				}
 			}
 		})
-		// A routing or append failure is retriable (at-least-once + idempotent
-		// classification make a retry safe): surface it.
+		// Routing and flush failures are retriable: the batch is a staged unit
+		// of work, so a failed flush leaves no trace in the projection and
+		// nothing was broadcast — the producer's retry re-classifies every
+		// observation against durable state and regenerates the lost events.
 		if routeErr != nil {
 			return plogotlp.NewExportResponse(), fmt.Errorf("routing log record: %w", routeErr)
 		}
