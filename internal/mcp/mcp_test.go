@@ -448,7 +448,7 @@ func TestChangeBudgets(t *testing.T) {
 	if out.Total != 60 || out.HeartbeatsExcluded != 0 {
 		t.Fatalf("change_type=entity.unchanged: total=%d excluded=%d, want 60/0", out.Total, out.HeartbeatsExcluded)
 	}
-	if _, _, err := s.recentChanges(ctx, nil, RecentChangesInput{Window: "24h", ChangeType: "bogus.type"}); err == nil {
+	if _, _, cerr := s.recentChanges(ctx, nil, RecentChangesInput{Window: "24h", ChangeType: "bogus.type"}); cerr == nil {
 		t.Fatal("expected error for invalid change_type")
 	}
 
