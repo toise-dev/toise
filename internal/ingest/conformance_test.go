@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"os"
@@ -249,7 +250,7 @@ func TestConformanceFixture(t *testing.T) {
 		model.EntityCreated, model.EntityAttributeUpdated, model.EntityDeleted,
 		model.RelationAdded, model.RelationRemoved,
 	} {
-		evs, rerr := st.ReadByType(ct)
+		evs, rerr := st.ReadByType(context.Background(), ct)
 		if rerr != nil {
 			t.Fatalf("ReadByType(%s): %v", ct, rerr)
 		}

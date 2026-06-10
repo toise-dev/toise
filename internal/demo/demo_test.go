@@ -1,6 +1,7 @@
 package demo
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -67,7 +68,7 @@ func TestScenarioFinalGraph(t *testing.T) {
 
 func TestScenarioCoversEveryChangeType(t *testing.T) {
 	_, st, start := runScenario(t)
-	events, err := st.ReadByTimeRange(start.Add(-time.Hour), start.Add(25*time.Hour))
+	events, err := st.ReadByTimeRange(context.Background(), start.Add(-time.Hour), start.Add(25*time.Hour))
 	if err != nil {
 		t.Fatalf("read events: %v", err)
 	}
@@ -102,7 +103,7 @@ func TestScenarioLateRecordedFact(t *testing.T) {
 	if len(ifaces) != 1 {
 		t.Fatalf("want one interface, got %d", len(ifaces))
 	}
-	events, err := st.ReadByEntity(ifaces[0].ID)
+	events, err := st.ReadByEntity(context.Background(), ifaces[0].ID)
 	if err != nil {
 		t.Fatalf("read eth0 history: %v", err)
 	}

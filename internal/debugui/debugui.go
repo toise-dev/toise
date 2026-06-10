@@ -1,6 +1,7 @@
 package debugui
 
 import (
+	"context"
 	"embed"
 	"fmt"
 	"html/template"
@@ -43,8 +44,8 @@ type Graph interface {
 // EventReader is the subset of the event log the debug UI reads history from
 // (ADR 0007).
 type EventReader interface {
-	ReadByEntity(id model.EntityID) ([]model.Event, error)
-	ReadByTimeRange(start, end time.Time) ([]model.Event, error)
+	ReadByEntity(ctx context.Context, id model.EntityID) ([]model.Event, error)
+	ReadByTimeRange(ctx context.Context, start, end time.Time) ([]model.Event, error)
 }
 
 // Handler serves the debug UI over HTTP.
@@ -132,7 +133,7 @@ func (h *Handler) dashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := h.now()
-	evs, err := h.store.ReadByTimeRange(now.Add(-defaultWindow), now.Add(time.Nanosecond))
+	evs, err := h.store.ReadByTimeRange(r.Context(), now.Add(-defaultWindow), now.Add(time.Nanosecond))
 	if err != nil {
 		h.fail(w, "reading recent changes", err)
 		return
@@ -203,7 +204,7 @@ func (h *Handler) entity(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no entity with id "+string(id), http.StatusNotFound)
 		return
 	}
-	evs, err := h.store.ReadByEntity(id)
+	evs, err := h.store.ReadByEntity(r.Context(), id)
 	if err != nil {
 		h.fail(w, "reading entity history", err)
 		return
@@ -247,7 +248,7 @@ func (h *Handler) changes(w http.ResponseWriter, r *http.Request) {
 		kind = ""
 	}
 	now := h.now()
-	evs, rerr := h.store.ReadByTimeRange(now.Add(-d), now.Add(time.Nanosecond))
+	evs, rerr := h.store.ReadByTimeRange(r.Context(), now.Add(-d), now.Add(time.Nanosecond))
 	if rerr != nil {
 		h.fail(w, "reading changes", rerr)
 		return

@@ -1,6 +1,7 @@
 package debugui
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -81,11 +82,11 @@ type fakeStore struct {
 	byTime   []model.Event
 }
 
-func (s *fakeStore) ReadByEntity(id model.EntityID) ([]model.Event, error) {
+func (s *fakeStore) ReadByEntity(_ context.Context, id model.EntityID) ([]model.Event, error) {
 	return s.byEntity[id], nil
 }
 
-func (s *fakeStore) ReadByTimeRange(start, end time.Time) ([]model.Event, error) {
+func (s *fakeStore) ReadByTimeRange(_ context.Context, start, end time.Time) ([]model.Event, error) {
 	var out []model.Event
 	for _, ev := range s.byTime {
 		et := eventTime(ev)

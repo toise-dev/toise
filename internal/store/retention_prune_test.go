@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"testing"
 
 	"github.com/toise-dev/toise/internal/model"
@@ -62,7 +63,7 @@ func TestPruneOlderThanKeepsLiveTail(t *testing.T) {
 		t.Errorf("surviving relations = %d, want 1 (the live a->c)", rels)
 	}
 	// b is fully gone, including its index.
-	if evs, _ := s.ReadByEntity(b); len(evs) != 0 {
+	if evs, _ := s.ReadByEntity(context.Background(), b); len(evs) != 0 {
 		t.Errorf("ReadByEntity(b) = %d events, want 0 (pruned)", len(evs))
 	}
 	if s.PrunedEvents() != 4 || s.PrunedBytes() != uint64(by) {

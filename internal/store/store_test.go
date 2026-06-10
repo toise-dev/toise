@@ -1,6 +1,8 @@
 package store
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -102,7 +104,7 @@ func TestReadByEntity(t *testing.T) {
 		t.Fatalf("append: %v", err)
 	}
 	// a: two entity events + the relation (indexed under both endpoints) = 3.
-	got, err := s.ReadByEntity(a)
+	got, err := s.ReadByEntity(context.Background(), a)
 	if err != nil {
 		t.Fatalf("read by entity: %v", err)
 	}
@@ -110,7 +112,7 @@ func TestReadByEntity(t *testing.T) {
 		t.Fatalf("entity a: got %d events, want 3", len(got))
 	}
 	// b: one entity event + the relation = 2.
-	gotB, _ := s.ReadByEntity(b)
+	gotB, _ := s.ReadByEntity(context.Background(), b)
 	if len(gotB) != 2 {
 		t.Errorf("entity b: got %d events, want 2", len(gotB))
 	}
@@ -126,11 +128,11 @@ func TestReadByType(t *testing.T) {
 	); err != nil {
 		t.Fatalf("append: %v", err)
 	}
-	created, _ := s.ReadByType(model.EntityCreated)
+	created, _ := s.ReadByType(context.Background(), model.EntityCreated)
 	if len(created) != 1 {
 		t.Errorf("created: got %d, want 1", len(created))
 	}
-	state, _ := s.ReadByType(model.EntityStateChanged)
+	state, _ := s.ReadByType(context.Background(), model.EntityStateChanged)
 	if len(state) != 2 {
 		t.Errorf("state_changed: got %d, want 2", len(state))
 	}
@@ -145,7 +147,7 @@ func TestReadByTimeRange(t *testing.T) {
 		}
 	}
 	// [ts(1), ts(4)) -> ts(1), ts(2), ts(3) = 3 events.
-	got, err := s.ReadByTimeRange(ts(1), ts(4))
+	got, err := s.ReadByTimeRange(context.Background(), ts(1), ts(4))
 	if err != nil {
 		t.Fatalf("range: %v", err)
 	}
@@ -214,14 +216,14 @@ func TestCoalesceHeartbeats(t *testing.T) {
 		t.Fatalf("after coalesce: %d events, want 4", len(got))
 	}
 	// Meaningful events survive.
-	hb, _ := s.ReadByType(model.EntityUnchanged)
+	hb, _ := s.ReadByType(context.Background(), model.EntityUnchanged)
 	if len(hb) != 2 {
 		t.Errorf("kept %d heartbeats, want 2", len(hb))
 	}
-	if c, _ := s.ReadByType(model.EntityCreated); len(c) != 1 {
+	if c, _ := s.ReadByType(context.Background(), model.EntityCreated); len(c) != 1 {
 		t.Error("created event lost")
 	}
-	if sc, _ := s.ReadByType(model.EntityStateChanged); len(sc) != 1 {
+	if sc, _ := s.ReadByType(context.Background(), model.EntityStateChanged); len(sc) != 1 {
 		t.Error("state_changed event lost")
 	}
 
@@ -248,5 +250,37 @@ func TestPrefixUpperBound(t *testing.T) {
 	}
 	if prefixUpperBound([]byte{0xff, 0xff}) != nil {
 		t.Error("all-0xff prefix should have no upper bound")
+	}
+}
+
+// TestReadsHonorContextCancellation pins the read-path contract: a canceled
+// context stops a scan instead of reading the whole range (#115).
+func TestReadsHonorContextCancellation(t *testing.T) {
+	s, err := Open(t.TempDir(), DefaultConfig())
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	when := time.Unix(1_700_000_000, 0).UTC()
+	ev := model.Event{Entity: &model.EntityEvent{
+		EventID: model.NewEventID(), ChangeType: model.EntityCreated,
+		Entity: model.Entity{ID: "e1", Type: model.TypeHost,
+			Identity: []model.KeyValue{{Key: "host.id", Value: model.StringValue("h1")}}},
+		EventTime: when, RecordedAt: when, SchemaVersion: model.SchemaVersion,
+	}}
+	if err := s.Append(ev); err != nil {
+		t.Fatal(err)
+	}
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := s.ReadByTimeRange(canceled, when.Add(-time.Hour), when.Add(time.Hour)); !errors.Is(err, context.Canceled) {
+		t.Errorf("ReadByTimeRange with canceled ctx = %v, want context.Canceled", err)
+	}
+	if _, err := s.ReadByEntity(canceled, "e1"); !errors.Is(err, context.Canceled) {
+		t.Errorf("ReadByEntity with canceled ctx = %v, want context.Canceled", err)
+	}
+	if _, err := s.ReadByTimeRange(context.Background(), when.Add(-time.Hour), when.Add(time.Hour)); err != nil {
+		t.Errorf("live ctx read: %v", err)
 	}
 }

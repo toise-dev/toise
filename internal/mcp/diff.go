@@ -82,13 +82,13 @@ type relationFold struct {
 	seq           int
 }
 
-func (s *Server) graphDiff(_ context.Context, _ *mcpsdk.CallToolRequest, in GraphDiffInput) (*mcpsdk.CallToolResult, GraphDiffOutput, error) {
+func (s *Server) graphDiff(ctx context.Context, _ *mcpsdk.CallToolRequest, in GraphDiffInput) (*mcpsdk.CallToolResult, GraphDiffOutput, error) {
 	from, to, err := s.diffBounds(in)
 	if err != nil {
 		return nil, GraphDiffOutput{}, err
 	}
 	limit := clampLimit(in.Limit)
-	evs, err := s.store.ReadByTimeRange(from, to)
+	evs, err := s.store.ReadByTimeRange(ctx, from, to)
 	if err != nil {
 		return nil, GraphDiffOutput{}, fmt.Errorf("reading changes: %w", err)
 	}

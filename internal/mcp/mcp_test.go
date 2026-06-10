@@ -89,11 +89,11 @@ type fakeStore struct {
 	byTime   []model.Event
 }
 
-func (s *fakeStore) ReadByEntity(id model.EntityID) ([]model.Event, error) {
+func (s *fakeStore) ReadByEntity(_ context.Context, id model.EntityID) ([]model.Event, error) {
 	return s.byEntity[id], nil
 }
 
-func (s *fakeStore) ReadByTimeRange(start, end time.Time) ([]model.Event, error) {
+func (s *fakeStore) ReadByTimeRange(_ context.Context, start, end time.Time) ([]model.Event, error) {
 	var out []model.Event
 	for _, ev := range s.byTime {
 		et, _ := eventTimes(ev)
@@ -743,5 +743,41 @@ func TestTelemetryKeys(t *testing.T) {
 	}
 	if _, _, kerr := s.telemetryKeys(ctx, nil, TelemetryKeysInput{EntityID: "ghost"}); kerr == nil {
 		t.Error("unknown entity must error")
+	}
+}
+
+// blockingStore blocks reads until the caller's context dies, simulating a
+// scan over a huge log.
+type blockingStore struct{}
+
+func (blockingStore) ReadByEntity(ctx context.Context, _ model.EntityID) ([]model.Event, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (blockingStore) ReadByTimeRange(ctx context.Context, _, _ time.Time) ([]model.Event, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// TestToolCallTimeout pins the per-call budget: a tool whose read outlives the
+// deadline returns a deadline error instead of hanging the transport (#115).
+func TestToolCallTimeout(t *testing.T) {
+	g, _ := newFixture()
+	s := New(g, blockingStore{})
+	s.timeout = 50 * time.Millisecond
+
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := withTimeout(s.budget, s.recentChanges)(context.Background(), nil, RecentChangesInput{Window: "1h"})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "deadline") {
+			t.Errorf("timed-out tool returned %v, want a deadline error", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("tool call did not respect its timeout")
 	}
 }
