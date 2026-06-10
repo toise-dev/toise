@@ -141,6 +141,16 @@ func (s *Server) register(srv *mcpsdk.Server) {
 	}, s.graphDiff)
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
+		Name: "telemetry_keys",
+		Description: "Derive the join keys that locate an entity's metrics and logs in telemetry " +
+			"backends: the OTel resource attributes on the entity itself plus those inherited " +
+			"from its direct neighbors (a listener gains its host's host.id via runs_on). Each " +
+			"key comes with its Prometheus-style flattened label form and usage caveats " +
+			"(ephemeral pids, name-vs-identity). Use this to pivot from the graph to " +
+			"observability data.",
+	}, s.telemetryKeys)
+
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name: "describe_schema",
 		Description: "Describe the entity and relation types currently present in the graph, " +
 			"with counts, in natural language. Call this first to bootstrap your understanding " +
