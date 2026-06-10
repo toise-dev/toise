@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log/slog"
 	"net/http"
 	"sync"
 
@@ -14,15 +15,19 @@ import (
 // 400. Routing at the transport boundary keeps each tenant's GraphQL/MCP/debug-UI
 // bound to its own isolated stack (ADR 0025, #95) without touching those handlers.
 type tenantRouter struct {
-	reg   *registry.Registry
-	build func(*registry.Stack) (http.Handler, error)
+	reg    *registry.Registry
+	build  func(*registry.Stack) (http.Handler, error)
+	logger *slog.Logger
 
 	mu       sync.Mutex
 	handlers map[string]http.Handler
 }
 
-func newTenantRouter(reg *registry.Registry, build func(*registry.Stack) (http.Handler, error)) *tenantRouter {
-	return &tenantRouter{reg: reg, build: build, handlers: make(map[string]http.Handler)}
+func newTenantRouter(reg *registry.Registry, logger *slog.Logger, build func(*registry.Stack) (http.Handler, error)) *tenantRouter {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &tenantRouter{reg: reg, build: build, logger: logger, handlers: make(map[string]http.Handler)}
 }
 
 func (tr *tenantRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -33,7 +38,10 @@ func (tr *tenantRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	h, err := tr.handlerFor(id)
 	if err != nil {
-		http.Error(w, "resolving tenant: "+err.Error(), http.StatusInternalServerError)
+		// Log the cause server-side; the client gets a generic message — the
+		// error detail (paths, store internals) is ours, not theirs (#115).
+		tr.logger.Error("resolving tenant handler", "tenant", id, "err", err)
+		http.Error(w, "internal error resolving tenant", http.StatusInternalServerError)
 		return
 	}
 	h.ServeHTTP(w, r)

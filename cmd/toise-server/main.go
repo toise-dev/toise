@@ -18,12 +18,14 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -49,6 +51,14 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "checkpoint" {
+		if err := runCheckpoint(os.Args[2:], os.Getenv); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	cfg, err := config.Load(os.Args[1:], os.Getenv)
 	if errors.Is(err, config.ErrHelp) {
 		os.Exit(0)
@@ -145,14 +155,14 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	// The GraphQL, MCP and debug-UI surfaces are scoped per tenant: a router builds
 	// one handler per tenant on first use, bound to that tenant's stack, and
 	// dispatches by the X-Scope-OrgID header (ADR 0025).
-	graphqlRouter := newTenantRouter(reg, func(st *registry.Stack) (http.Handler, error) {
+	graphqlRouter := newTenantRouter(reg, logger, func(st *registry.Stack) (http.Handler, error) {
 		res := &resolvers.Resolver{Graph: st.Graph, Store: st.Store, Engine: st.Engine}
 		return graphql.NewHandler(res, graphql.Config{
 			AllowedOrigins:       cfg.AllowedOrigins,
 			DisableIntrospection: !cfg.GraphQLIntrospection,
 		}), nil
 	})
-	mcpRouter := newTenantRouter(reg, func(st *registry.Stack) (http.Handler, error) {
+	mcpRouter := newTenantRouter(reg, logger, func(st *registry.Stack) (http.Handler, error) {
 		return mcp.New(st.Graph, st.Store).HTTPHandler(), nil
 	})
 
@@ -163,7 +173,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	mux.Handle("/readyz", ops.Readyz(func() error {
 		for _, st := range reg.Stacks() {
 			if herr := st.Store.Healthy(); herr != nil {
-				return herr
+				return fmt.Errorf("tenant %s: %w", st.Tenant, herr)
 			}
 		}
 		return nil
@@ -175,7 +185,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		mux.Handle("/playground", playground.Handler("Toise", "/graphql"))
 	}
 	if cfg.DebugUI {
-		debugRouter := newTenantRouter(reg, func(st *registry.Stack) (http.Handler, error) {
+		debugRouter := newTenantRouter(reg, logger, func(st *registry.Stack) (http.Handler, error) {
 			return debugui.New(st.Graph, st.Store)
 		})
 		mux.Handle("/", debugRouter)
@@ -319,4 +329,39 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		defer cancel()
 		return httpSrv.Shutdown(shutdownCtx)
 	}
+}
+
+// runCheckpoint takes a consistent Pebble checkpoint of every tenant store
+// into <dst>/<tenant> — the operator-facing trigger for Store.Checkpoint the
+// docs promise (#115). It opens the data dir directly, so it is a cold-backup
+// tool: run it while toise-server is stopped (a running server holds the
+// pebble lock, and the open fails cleanly).
+func runCheckpoint(args []string, getenv func(string) string) error {
+	defaultDir := "toise-data"
+	if v := getenv("TOISE_DATA_DIR"); v != "" {
+		defaultDir = v
+	}
+	fs := flag.NewFlagSet("toise-server checkpoint", flag.ContinueOnError)
+	dataDir := fs.String("data-dir", defaultDir, "directory of the tenant event logs (env: TOISE_DATA_DIR)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return fmt.Errorf("usage: toise-server checkpoint [--data-dir dir] <destination-dir>")
+	}
+	dst := fs.Arg(0)
+
+	reg, err := registry.Open(*dataDir, store.DefaultConfig(), 0, slog.Default())
+	if err != nil {
+		return fmt.Errorf("opening tenant registry (is toise-server still running?): %w", err)
+	}
+	defer func() { _ = reg.Close() }()
+	for _, st := range reg.Stacks() {
+		out := filepath.Join(dst, st.Tenant)
+		if err := st.Store.Checkpoint(out); err != nil {
+			return fmt.Errorf("tenant %s: %w", st.Tenant, err)
+		}
+		fmt.Printf("checkpointed tenant %s -> %s\n", st.Tenant, out)
+	}
+	return nil
 }

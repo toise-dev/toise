@@ -94,6 +94,7 @@ nav:
       - Debug UI: querying/debug-ui.md
   - Data model: data-model.md
   - Operations:
+      - Backups: operations/backups.md
       - Performance: operations/performance.md
       - Storage sizing: operations/storage-sizing.md
   - Troubleshooting: troubleshooting.md

@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -22,6 +23,9 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	"github.com/toise-dev/toise/internal/config"
+	"github.com/toise-dev/toise/internal/model"
+	"github.com/toise-dev/toise/internal/projection"
+	"github.com/toise-dev/toise/internal/registry"
 	"github.com/toise-dev/toise/internal/store"
 )
 
@@ -245,4 +249,54 @@ func httpBody(t *testing.T, url string) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// TestCheckpointSubcommand pins the operator backup path (#115): every tenant
+// is checkpointed into <dst>/<tenant>, and the copy is a complete, replayable
+// store.
+func TestCheckpointSubcommand(t *testing.T) {
+	dataDir := t.TempDir()
+	reg, err := registry.Open(dataDir, store.DefaultConfig(), 0, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+	st, err := reg.For("acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	when := time.Unix(1_700_000_000, 0).UTC()
+	ev := model.Event{Entity: &model.EntityEvent{
+		EventID: model.NewEventID(), ChangeType: model.EntityCreated,
+		Entity: model.Entity{ID: "e1", Type: model.TypeHost,
+			Identity: []model.KeyValue{{Key: "host.id", Value: model.StringValue("h1")}}},
+		EventTime: when, RecordedAt: when, SchemaVersion: model.SchemaVersion,
+	}}
+	if aerr := st.Store.Append(ev); aerr != nil {
+		t.Fatal(aerr)
+	}
+	if cerr := reg.Close(); cerr != nil {
+		t.Fatal(cerr)
+	}
+
+	dst := filepath.Join(t.TempDir(), "backup")
+	if rerr := runCheckpoint([]string{"--data-dir", dataDir, dst}, func(string) string { return "" }); rerr != nil {
+		t.Fatalf("runCheckpoint: %v", rerr)
+	}
+
+	restored, err := store.Open(filepath.Join(dst, "acme"), store.DefaultConfig())
+	if err != nil {
+		t.Fatalf("open checkpoint: %v", err)
+	}
+	t.Cleanup(func() { _ = restored.Close() })
+	g := projection.New()
+	if err := g.Replay(restored); err != nil {
+		t.Fatalf("replay checkpoint: %v", err)
+	}
+	if g.EntityCount() != 1 {
+		t.Errorf("restored EntityCount = %d, want 1", g.EntityCount())
+	}
+
+	if err := runCheckpoint([]string{"--data-dir", dataDir}, func(string) string { return "" }); err == nil {
+		t.Error("missing destination must error with usage")
+	}
 }
