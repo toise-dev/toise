@@ -118,7 +118,9 @@ func (s *Server) getNeighbors(_ context.Context, _ *mcpsdk.CallToolRequest, in G
 	for d := 1; d <= depth && len(frontier) > 0; d++ {
 		var next []model.EntityID
 		for _, cur := range frontier {
-			for _, e := range s.edgesOf(cur, in.RelationType) {
+			edges := s.edgesOf(cur, in.RelationType)
+			for i := range edges {
+				e := &edges[i]
 				if _, seen := visited[e.other]; seen {
 					continue
 				}

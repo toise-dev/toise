@@ -653,7 +653,7 @@ func TestFindPathAndNeighborEdges(t *testing.T) {
 	}
 
 	// Unknown endpoints are errors (unlike unreachable).
-	if _, _, err := s.findPath(ctx, nil, FindPathInput{FromID: "ghost", ToID: "01HOST_DB"}); err == nil {
+	if _, _, gerr := s.findPath(ctx, nil, FindPathInput{FromID: "ghost", ToID: "01HOST_DB"}); gerr == nil {
 		t.Error("unknown from_id must error")
 	}
 

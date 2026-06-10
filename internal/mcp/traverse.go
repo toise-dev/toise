@@ -26,19 +26,21 @@ type edge struct {
 // deleted endpoints already excluded.
 func (s *Server) edgesOf(id model.EntityID, relType string) []edge {
 	var out []edge
-	for _, r := range s.graph.ListRelations(relType, id, "") {
-		out = append(out, edge{rel: r, other: r.To, direction: "outgoing"})
+	outgoing := s.graph.ListRelations(relType, id, "")
+	for i := range outgoing {
+		out = append(out, edge{rel: outgoing[i], other: outgoing[i].To, direction: "outgoing"})
 	}
-	for _, r := range s.graph.ListRelations(relType, "", id) {
-		if r.From == r.To {
+	incoming := s.graph.ListRelations(relType, "", id)
+	for i := range incoming {
+		if incoming[i].From == incoming[i].To {
 			continue // self-loop already covered by the outgoing scan
 		}
-		out = append(out, edge{rel: r, other: r.From, direction: "incoming"})
+		out = append(out, edge{rel: incoming[i], other: incoming[i].From, direction: "incoming"})
 	}
 	kept := out[:0]
-	for _, e := range out {
-		if _, ok, deleted := s.graph.GetEntity(e.other); ok && !deleted {
-			kept = append(kept, e)
+	for i := range out {
+		if _, ok, deleted := s.graph.GetEntity(out[i].other); ok && !deleted {
+			kept = append(kept, out[i])
 		}
 	}
 	sort.Slice(kept, func(i, j int) bool { return kept[i].rel.ID < kept[j].rel.ID })
@@ -96,11 +98,13 @@ func (s *Server) findPath(_ context.Context, _ *mcpsdk.CallToolRequest, in FindP
 	for d := 0; d < depth && len(frontier) > 0 && !found; d++ {
 		var next []model.EntityID
 		for _, cur := range frontier {
-			for _, e := range s.edgesOf(cur, in.RelationType) {
+			edges := s.edgesOf(cur, in.RelationType)
+			for i := range edges {
+				e := &edges[i]
 				if _, seen := parents[e.other]; seen {
 					continue
 				}
-				parents[e.other] = cameFrom{prev: cur, via: e}
+				parents[e.other] = cameFrom{prev: cur, via: *e}
 				if e.other == to {
 					found = true
 					break
