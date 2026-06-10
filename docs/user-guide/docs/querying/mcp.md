@@ -20,7 +20,7 @@ and OTLP servers and just reads the given data directory.
 
 ## The tools
 
-The assistant sees six typed tools. Each carries a rich description and examples
+The assistant sees nine typed tools. Each carries a rich description and examples
 so the model picks the right one, and each returns **structured, name-bearing**
 results — ids carry human labels and types — so a single call answers the
 question without a second lookup.
@@ -28,11 +28,20 @@ question without a second lookup.
 | Tool | What it does |
 | --- | --- |
 | `describe_schema()` | a natural-language description of the entity and relation types currently in the graph, to bootstrap the model's understanding |
-| `find_entities(type, filter, limit)` | entities matching a type / attribute filter |
+| `find_entities(type, match, limit)` | entities matching a type / attribute filter, with `total`/`truncated` |
 | `get_entity(id)` | a full entity with its attributes |
-| `get_neighbors(entity_id, relation_type, depth)` | traverse relations up to `depth` (**capped at 5**; beyond that a friendly error invites a smaller query) |
-| `entity_history(entity_id, since, until)` | an entity's timeline from the event log (bi-temporal) |
-| `recent_changes(window, filter)` | recent qualified changes across the graph |
+| `get_neighbors(entity_id, relation_type, depth)` | traverse relations up to `depth` (**capped at 5**); each neighbor carries the relation type, direction, and hop distance that reached it |
+| `find_path(from_id, to_id, relation_type, max_depth)` | the shortest relation path between two entities; `reachable: false` is a first-class answer, never an error |
+| `entity_history(entity_id, since, until, ...)` | an entity's timeline from the event log (bi-temporal), heartbeats excluded by default, bounded by `limit`, with a per-type digest |
+| `recent_changes(window, kind, change_type, ...)` | recent qualified changes across the graph — same budget and digest contract |
+| `graph_diff(window | from/to, limit)` | the folded **net** difference between two instants: created / deleted / changed / **transient** (flapping) entities and relations, churn collapsed away |
+| `telemetry_keys(entity_id)` | the OTel resource attributes that locate this entity's metrics and logs in observability backends — own and 1-hop-inherited keys, each with its flattened metric-label spelling and usage caveats |
+
+**Budgets.** The timeline tools exclude `entity.unchanged` heartbeats unless
+asked (`include_heartbeats`), bound their output (`limit`, default 50, max 200),
+and report a digest — `total`, `truncated`, `heartbeats_excluded`, counts per
+change type — so the model can narrow instead of paging blind. Every tool call
+runs under a 30-second budget.
 
 Errors are plain, user-friendly messages (e.g. "depth 7 exceeds the maximum of
 5"), never stack traces.

@@ -9,6 +9,12 @@ called out below with a migration path.
 
 ## Releases
 
+- [**0.4.0**](0.4.0.md) — 2026-06-10 — **correctness and LLM querying**: the
+  audit-driven integrity lot (log-is-truth under failure, clean restarts),
+  three new MCP tools (`graph_diff`, `find_path`, `telemetry_keys`), result
+  budgets with digests, ingest observability, and tenant security (scoped
+  tokens, bounded creation). *(No wire-contract change, no data migration;
+  sharper defaults — see the migration guide.)*
 - [**0.3.0**](0.3.0.md) — 2026-06-08 — production-readiness and **multi-tenancy**:
   per-tenant isolated graphs, native auth + TLS, operational endpoints, retention,
   snapshots, and packaged release artifacts. *(No wire-contract change; on-disk
