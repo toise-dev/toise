@@ -32,6 +32,7 @@ type Store struct {
 	cfg Config
 
 	mu               sync.Mutex // guards seq/counters and serializes appends
+	maintMu          sync.Mutex // serializes maintenance (coalesce/prune) against itself, NOT against appends
 	seq              uint64     // last assigned sequence
 	prunedEvents     uint64     // cumulative events removed by retention pruning
 	prunedBytes      uint64     // cumulative approximate bytes removed by pruning

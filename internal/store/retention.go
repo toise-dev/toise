@@ -8,6 +8,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/toise-dev/toise/internal/model"
+	toisev1 "github.com/toise-dev/toise/proto/toise/v1"
 )
 
 // CoalesceHeartbeats compacts the log by collapsing maximal runs of consecutive
@@ -15,19 +16,28 @@ import (
 // record, deleting the redundant middle ones (primary record and index
 // entries). Meaningful events and relation events are never touched. It returns
 // the number of records removed. See ADR 0013.
+//
+// The scan runs on a pebble snapshot without s.mu, so ingestion never waits on
+// maintenance (#115): every staged delete is a seq that existed at snapshot
+// time and was a run middle then — a concurrent append can only extend a run
+// past its kept tail, which the next pass collapses.
 func (s *Store) CoalesceHeartbeats() (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.maintMu.Lock()
+	defer s.maintMu.Unlock()
+
+	snap := s.db.NewSnapshot()
+	defer func() { _ = snap.Close() }()
 
 	type rec struct {
-		seq uint64
-		ct  model.ChangeType
+		seq           uint64
+		ct            model.ChangeType
+		eventTimeNano int64
 	}
 	perEntity := make(map[model.EntityID][]rec)
-	err := s.Scan(func(seq uint64, ev model.Event) error {
+	err := snapshotScan(snap, func(seq uint64, _ []byte, ev model.Event) error {
 		if ev.Entity != nil {
-			id := ev.Entity.Entity.ID
-			perEntity[id] = append(perEntity[id], rec{seq: seq, ct: ev.Entity.ChangeType})
+			perEntity[ev.Entity.Entity.ID] = append(perEntity[ev.Entity.Entity.ID],
+				rec{seq: seq, ct: ev.Entity.ChangeType, eventTimeNano: ev.Entity.EventTime.UnixNano()})
 		}
 		return nil
 	})
@@ -35,8 +45,10 @@ func (s *Store) CoalesceHeartbeats() (int, error) {
 		return 0, fmt.Errorf("scanning for coalescing: %w", err)
 	}
 
-	var toDelete []uint64
-	for _, recs := range perEntity {
+	batch := s.db.NewBatch()
+	defer func() { _ = batch.Close() }()
+	deleted := 0
+	for id, recs := range perEntity {
 		i := 0
 		for i < len(recs) {
 			if recs[i].ct != model.EntityUnchanged {
@@ -47,40 +59,33 @@ func (s *Store) CoalesceHeartbeats() (int, error) {
 			for j+1 < len(recs) && recs[j+1].ct == model.EntityUnchanged {
 				j++
 			}
-			// Keep recs[i] (first) and recs[j] (last); drop the middle.
+			// Keep recs[i] (first) and recs[j] (last); drop the middle. The
+			// scan already carried everything the index keys need — no
+			// per-record re-read.
 			for k := i + 1; k < j; k++ {
-				toDelete = append(toDelete, recs[k].seq)
+				r := recs[k]
+				for _, key := range [][]byte{
+					primaryKey(r.seq),
+					entityKey(string(id), r.seq),
+					typeKey(r.ct, r.seq),
+					timeKey(r.eventTimeNano, r.seq),
+				} {
+					if err := batch.Delete(key, nil); err != nil {
+						return 0, fmt.Errorf("staging delete of seq %d: %w", r.seq, err)
+					}
+				}
+				deleted++
 			}
 			i = j + 1
 		}
 	}
-	if len(toDelete) == 0 {
+	if deleted == 0 {
 		return 0, nil
-	}
-
-	batch := s.db.NewBatch()
-	defer func() { _ = batch.Close() }()
-	for _, seq := range toDelete {
-		ev, err := s.getBySeq(seq)
-		if err != nil {
-			return 0, err
-		}
-		ee := ev.Entity
-		for _, key := range [][]byte{
-			primaryKey(seq),
-			entityKey(string(ee.Entity.ID), seq),
-			typeKey(ee.ChangeType, seq),
-			timeKey(ee.EventTime.UnixNano(), seq),
-		} {
-			if err := batch.Delete(key, nil); err != nil {
-				return 0, fmt.Errorf("staging delete of seq %d: %w", seq, err)
-			}
-		}
 	}
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return 0, fmt.Errorf("committing coalesce: %w", err)
 	}
-	return len(toDelete), nil
+	return deleted, nil
 }
 
 // PruneOlderThan drops events recorded before cutoff to bound on-disk growth,
@@ -95,8 +100,16 @@ func (s *Store) CoalesceHeartbeats() (int, error) {
 // retention horizon necessarily returns a truncated view — see
 // docs/operations/configuration.md.
 func (s *Store) PruneOlderThan(cutoff time.Time) (events int, bytes int64, err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.maintMu.Lock()
+	defer s.maintMu.Unlock()
+
+	// Both passes run on one pebble snapshot without s.mu, so the hourly prune
+	// never stalls ingestion (#115). Safety against concurrent appends: the
+	// keep set protects what was the latest at snapshot time; a newer append
+	// only supersedes it (keeping it is conservative), and events appended
+	// after the snapshot are invisible here, hence never staged for deletion.
+	snap := s.db.NewSnapshot()
+	defer func() { _ = snap.Close() }()
 
 	// Pass 1 — the keep set: the latest seq of every still-live entity and
 	// relation. A delete/remove as the last event means it is not live.
@@ -106,7 +119,7 @@ func (s *Store) PruneOlderThan(cutoff time.Time) (events int, bytes int64, err e
 	}
 	entLast := map[model.EntityID]last{}
 	relLast := map[model.RelationID]last{}
-	if serr := s.Scan(func(seq uint64, ev model.Event) error {
+	if serr := snapshotScan(snap, func(seq uint64, _ []byte, ev model.Event) error {
 		switch {
 		case ev.Entity != nil:
 			entLast[ev.Entity.Entity.ID] = last{seq, ev.Entity.ChangeType != model.EntityDeleted}
@@ -130,17 +143,19 @@ func (s *Store) PruneOlderThan(cutoff time.Time) (events int, bytes int64, err e
 	}
 
 	// Pass 2 — stage deletes for events recorded before cutoff that the keep set
-	// does not protect.
+	// does not protect. The stored value IS the marshaled event, so its length
+	// is the exact payload size — no re-marshal (and no per-event identity
+	// hash) just to count bytes.
 	batch := s.db.NewBatch()
 	defer func() { _ = batch.Close() }()
-	if serr := s.Scan(func(seq uint64, ev model.Event) error {
+	if serr := snapshotScan(snap, func(seq uint64, raw []byte, ev model.Event) error {
 		if _, kept := keep[seq]; kept {
 			return nil
 		}
 		if !recordedAtOf(ev).Before(cutoff) {
 			return nil
 		}
-		bytes += int64(proto.Size(ev.ToProto()))
+		bytes += int64(len(raw))
 		events++
 		for _, key := range eventKeys(ev, seq) {
 			if derr := batch.Delete(key, nil); derr != nil {
@@ -157,9 +172,35 @@ func (s *Store) PruneOlderThan(cutoff time.Time) (events int, bytes int64, err e
 	if cerr := batch.Commit(pebble.Sync); cerr != nil {
 		return 0, 0, fmt.Errorf("committing prune: %w", cerr)
 	}
+	s.mu.Lock()
 	s.prunedEvents += uint64(events)
 	s.prunedBytes += uint64(bytes)
+	s.mu.Unlock()
 	return events, bytes, nil
+}
+
+// snapshotScan visits every event in append order on a stable snapshot of the
+// log, passing the raw stored value alongside the decoded event. Maintenance
+// scans use it so they never hold s.mu while reading.
+func snapshotScan(snap *pebble.Snapshot, fn func(seq uint64, raw []byte, ev model.Event) error) error {
+	prefix := []byte(primaryPrefix)
+	iter, err := snap.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: prefixUpperBound(prefix)})
+	if err != nil {
+		return fmt.Errorf("opening snapshot iterator: %w", err)
+	}
+	defer func() { _ = iter.Close() }()
+
+	for iter.First(); iter.Valid(); iter.Next() {
+		seq := seqFromKeySuffix(iter.Key())
+		var pe toisev1.Event
+		if err := proto.Unmarshal(iter.Value(), &pe); err != nil {
+			return fmt.Errorf("decoding seq %d: %w", seq, err)
+		}
+		if err := fn(seq, iter.Value(), model.EventFromProto(&pe)); err != nil {
+			return err
+		}
+	}
+	return iter.Error()
 }
 
 // recordedAtOf returns the event's ingestion timestamp (the storage-age clock).
