@@ -471,6 +471,38 @@ func mustObs(t *testing.T, e *Engine, obs EntityObservation) {
 	}
 }
 
+func TestRemoveRelationMissingEndpointIsNoOp(t *testing.T) {
+	e, _, recs := newEngine(t)
+	hostRef := EndpointRef{Type: model.TypeHost, Identity: []model.KeyValue{kv("host.id", "h1")}}
+	procRef := EndpointRef{Type: model.TypeProcess, Identity: []model.KeyValue{kv("pid", "100")}}
+
+	// Removing a relation whose endpoints never existed is nothing-to-remove,
+	// not an error: removal-by-absence reconciliation hits this whenever the
+	// target was already deleted and the cascade took the edge with it (#110).
+	ev, emitted, err := e.RemoveRelation(RelationObservation{Type: model.RelRunsOn, From: procRef, To: hostRef, EventTime: t0})
+	if err != nil {
+		t.Fatalf("remove with missing endpoints: %v, want nil", err)
+	}
+	if emitted || ev.Relation != nil {
+		t.Errorf("remove with missing endpoints emitted an event: %+v", ev)
+	}
+
+	// Same when only the target is missing: the source resolves, the target is gone.
+	mustObserve(t, e, model.TypeProcess, procRef.Identity)
+	ev, emitted, err = e.RemoveRelation(RelationObservation{Type: model.RelRunsOn, From: procRef, To: hostRef, EventTime: t0})
+	if err != nil {
+		t.Fatalf("remove with missing target: %v, want nil", err)
+	}
+	if emitted || ev.Relation != nil {
+		t.Errorf("remove with missing target emitted an event: %+v", ev)
+	}
+	for _, r := range *recs {
+		if r.ev.Relation != nil {
+			t.Errorf("no relation event should reach subscribers, got %+v", r.ev)
+		}
+	}
+}
+
 func TestDiffAttributes(t *testing.T) {
 	changed, state := diffAttributes([]model.KeyValue{kv("status", "up"), kv("os", "linux")}, []model.KeyValue{kv("status", "down"), kv("os", "linux")})
 	if len(changed) != 1 || changed[0] != "status" || !state {

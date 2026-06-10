@@ -484,6 +484,13 @@ func (e *Engine) RemoveRelation(obs RelationObservation) (ev model.Event, emitte
 func (e *Engine) removeRelationLocked(obs RelationObservation) (ev model.Event, emitted bool, err error) {
 	from, to, err := e.resolveEndpoints(obs.From, obs.To)
 	if err != nil {
+		// A missing endpoint means there is nothing to remove: the endpoint's
+		// deletion already cascaded the edge away (or the edge never resolved).
+		// Removal must be a no-op then, not an error — surfacing it would fail
+		// the producer's entire export for an edge that is already gone (#110).
+		if errors.Is(err, errEndpointMissing) {
+			return model.Event{}, false, nil
+		}
 		return model.Event{}, false, err
 	}
 	id := model.ComputeRelationID(obs.Type, from, to)

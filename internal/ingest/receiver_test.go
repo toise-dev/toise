@@ -211,3 +211,46 @@ func TestReceiverEmbeddedRelationships(t *testing.T) {
 		t.Errorf("RelationCount = %d after dropping the embedded relationship, want 0", g.RelationCount())
 	}
 }
+
+// TestReceiverRemovalByAbsenceAfterTargetDeleted reproduces the #110 poison
+// pill: a source asserts an embedded relation, the target is deleted (the
+// cascade removes the edge), then the source drops the descriptor from its next
+// export. Per the contract that removal-by-absence is a no-op — the export must
+// succeed and the reconciler state must not replay the failure forever.
+func TestReceiverRemovalByAbsenceAfterTargetDeleted(t *testing.T) {
+	client, g := startReceiver(t)
+
+	// 1. host h1 + service s1 with embedded runs_on -> h1.
+	ld := plog.NewLogs()
+	sl := ld.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty()
+	entityRecord(sl, evEntityState, model.TypeHost, map[string]string{"host.id": "h1"}, nil)
+	embeddedEntity(sl, t0, model.TypeServiceInstance, map[string]string{"service.instance.id": "s1"},
+		[]relDesc{{relType: model.RelRunsOn, toType: model.TypeHost, toID: map[string]string{"host.id": "h1"}}})
+	export(t, client, ld)
+	if g.RelationCount() != 1 {
+		t.Fatalf("after assert: RelationCount = %d, want 1", g.RelationCount())
+	}
+
+	// 2. delete h1: the engine cascades the edge away.
+	del := plog.NewLogs()
+	dsl := del.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty()
+	entityRecord(dsl, evEntityDelete, model.TypeHost, map[string]string{"host.id": "h1"}, nil)
+	export(t, client, del)
+	if g.RelationCount() != 0 {
+		t.Fatalf("after target delete: RelationCount = %d, want 0 (cascade)", g.RelationCount())
+	}
+
+	// 3. s1 re-emits WITHOUT the descriptor: the removal diff targets an edge
+	// whose endpoint no longer resolves — this export and every following one
+	// must succeed (the bug failed them all until restart).
+	for i := 0; i < 2; i++ {
+		ld := plog.NewLogs()
+		sl := ld.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty()
+		embeddedEntity(sl, t0.Add(time.Duration(i+1)*time.Minute), model.TypeServiceInstance,
+			map[string]string{"service.instance.id": "s1"}, nil)
+		export(t, client, ld)
+	}
+	if g.EntityCount() != 1 {
+		t.Errorf("EntityCount = %d, want 1 (s1 alive, h1 deleted)", g.EntityCount())
+	}
+}
