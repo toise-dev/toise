@@ -374,7 +374,7 @@ func TestIngestCounters(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 	eng := change.New(projection.New(), st, change.WithClock(func() time.Time { return t0 }))
 	m := NewMetrics()
-	rec := NewRoutedReceiver(func(string) (*change.Engine, error) { return eng, nil }, m, nil)
+	rec := NewRoutedReceiver(func(string) (*change.Engine, error) { return eng, nil }, nil, m, nil)
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

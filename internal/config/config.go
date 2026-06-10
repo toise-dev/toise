@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/toise-dev/toise/internal/tenant"
 )
 
 // ErrHelp is returned by Load when -h/--help was requested (the flag set has
@@ -89,6 +91,10 @@ type Config struct {
 	// debug UI, OTLP ingest). Empty disables auth (trusted-network default). These
 	// are secrets: source them from TOISE_AUTH_TOKENS (env), never a flag.
 	AuthTokens []string `yaml:"auth_tokens"`
+	// TenantTokens are tenant-scoped bearer tokens as "tenant:token" pairs: the
+	// token authenticates like any other but is authorized only for its tenant
+	// (#104). Same secret rules: TOISE_TENANT_TOKENS (env), never a flag.
+	TenantTokens []string `yaml:"tenant_tokens"`
 	// TLSCertFile/TLSKeyFile enable native TLS on the HTTP and OTLP listeners when
 	// both are set.
 	TLSCertFile string `yaml:"tls_cert_file"`
@@ -118,7 +124,29 @@ func (c Config) Validate() error {
 	default:
 		return fmt.Errorf("unknown log_format %q: use text or json", c.LogFormat)
 	}
+	if _, err := c.TenantTokensMap(); err != nil {
+		return err
+	}
 	return nil
+}
+
+// TenantTokensMap parses the "tenant:token" pairs into tenant -> tokens. The
+// tenant part must be a canonical tenant id; a malformed pair is a hard error
+// (a typo here must not silently widen or narrow access).
+func (c Config) TenantTokensMap() (map[string][]string, error) {
+	if len(c.TenantTokens) == 0 {
+		return nil, nil
+	}
+	out := make(map[string][]string, len(c.TenantTokens))
+	for _, pair := range c.TenantTokens {
+		id, token, found := strings.Cut(pair, ":")
+		san, ok := tenant.Sanitize(id)
+		if !found || !ok || san != id || strings.TrimSpace(token) == "" {
+			return nil, fmt.Errorf("invalid tenant_tokens entry: want \"<tenant>:<token>\" with a canonical tenant id and a non-empty token")
+		}
+		out[id] = append(out[id], token)
+	}
+	return out, nil
 }
 
 // Default returns the built-in configuration (the lowest-precedence layer). These
@@ -176,6 +204,9 @@ func (c *Config) applyEnv(getenv func(string) string) error {
 	}
 	if v := getenv("TOISE_LOG_LEVEL"); v != "" {
 		c.LogLevel = v
+	}
+	if v := getenv("TOISE_TENANT_TOKENS"); v != "" {
+		c.TenantTokens = splitOrigins(v)
 	}
 	if v := getenv("TOISE_TENANT_AUTO_CREATE"); v != "" {
 		b, err := strconv.ParseBool(v)

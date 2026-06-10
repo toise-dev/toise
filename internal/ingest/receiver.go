@@ -36,20 +36,22 @@ type Receiver struct {
 // logger uses slog.Default. It is shorthand for NewRoutedReceiver with a constant
 // engine and no metrics.
 func NewReceiver(e *change.Engine, logger *slog.Logger, opts ...grpc.ServerOption) *Receiver {
-	return NewRoutedReceiver(func(string) (*change.Engine, error) { return e, nil }, nil, logger, opts...)
+	return NewRoutedReceiver(func(string) (*change.Engine, error) { return e, nil }, nil, nil, logger, opts...)
 }
 
 // NewRoutedReceiver builds a receiver that resolves the change engine per tenant.
 // engineFor maps a (sanitized) tenant id to its engine; the tenant is read from
 // the X-Scope-OrgID gRPC metadata and may be overridden per ResourceLogs by a
-// tenant.id resource attribute (ADR 0025, #95). m carries the hot-path ingest
-// counters (nil counts nothing). A nil logger uses slog.Default.
-func NewRoutedReceiver(engineFor func(tenantID string) (*change.Engine, error), m *Metrics, logger *slog.Logger, opts ...grpc.ServerOption) *Receiver {
+// tenant.id resource attribute (ADR 0025, #95). authorize, when non-nil, is
+// consulted for every RESOLVED tenant id — including the per-ResourceLogs
+// override, which a gRPC interceptor cannot see (#104). m carries the hot-path
+// ingest counters (nil counts nothing). A nil logger uses slog.Default.
+func NewRoutedReceiver(engineFor func(tenantID string) (*change.Engine, error), authorize func(ctx context.Context, tenantID string) bool, m *Metrics, logger *slog.Logger, opts ...grpc.ServerOption) *Receiver {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	srv := grpc.NewServer(opts...)
-	ls := &logsServer{engineFor: engineFor, metrics: m, logger: logger, reconcilers: make(map[string]*embeddedReconciler)}
+	ls := &logsServer{engineFor: engineFor, authorize: authorize, metrics: m, logger: logger, reconcilers: make(map[string]*embeddedReconciler)}
 	plogotlp.RegisterGRPCServer(srv, ls)
 	return &Receiver{srv: srv, logs: ls, logger: logger}
 }
@@ -70,6 +72,7 @@ func (r *Receiver) Stop() { r.srv.GracefulStop() }
 type logsServer struct {
 	plogotlp.UnimplementedGRPCServer
 	engineFor func(tenantID string) (*change.Engine, error)
+	authorize func(ctx context.Context, tenantID string) bool
 	metrics   *Metrics
 	logger    *slog.Logger
 
@@ -126,6 +129,12 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (re
 				return plogotlp.NewExportResponse(), status.Errorf(codes.InvalidArgument, "invalid %s resource attribute %q", tenant.ResourceAttr, rt)
 			}
 			tenantID = san
+		}
+		if s.authorize != nil && !s.authorize(ctx, tenantID) {
+			// The token authenticated (the interceptor passed) but is not
+			// bound to this tenant: permanent, do not retry (#104).
+			s.metrics.tenantRejected()
+			return plogotlp.NewExportResponse(), status.Errorf(codes.PermissionDenied, "token not authorized for tenant %q", tenantID)
 		}
 		engine, err := s.engineFor(tenantID)
 		if err != nil {

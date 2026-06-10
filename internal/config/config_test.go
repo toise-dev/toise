@@ -221,3 +221,26 @@ func TestValidateRejectsSilentMisconfigurations(t *testing.T) {
 		t.Errorf("default config must validate: %v", err)
 	}
 }
+
+// TestTenantTokensMap pins the "tenant:token" parsing: canonical tenant ids
+// only, non-empty tokens, malformed pairs are hard errors.
+func TestTenantTokensMap(t *testing.T) {
+	cfg := Default()
+	cfg.TenantTokens = []string{"acme:s3cret", "acme:other", "globex:tok"}
+	m, err := cfg.TenantTokensMap()
+	if err != nil {
+		t.Fatalf("valid pairs: %v", err)
+	}
+	if len(m["acme"]) != 2 || len(m["globex"]) != 1 {
+		t.Errorf("parsed map = %v", m)
+	}
+	for _, bad := range []string{"notoken", ":empty-tenant", "acme:", "../esc:tok", "a/b:tok"} {
+		cfg.TenantTokens = []string{bad}
+		if _, err := cfg.TenantTokensMap(); err == nil {
+			t.Errorf("pair %q accepted, want error", bad)
+		}
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("Validate accepted pair %q", bad)
+		}
+	}
+}

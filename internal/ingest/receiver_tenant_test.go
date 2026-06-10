@@ -8,6 +8,11 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	"github.com/toise-dev/toise/internal/auth"
+
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/plog/plogotlp"
 	"google.golang.org/grpc"
@@ -49,7 +54,7 @@ func startRoutedReceiver(t *testing.T) (plogotlp.GRPCClient, func(tenant string)
 		return engines[tenant], nil
 	}
 
-	rec := NewRoutedReceiver(engineFor, nil, nil)
+	rec := NewRoutedReceiver(engineFor, nil, nil, nil)
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -219,5 +224,69 @@ func TestReceiverReconcilerIsolation(t *testing.T) {
 	}
 	if n := graphFor("globex").RelationCount(); n != 1 {
 		t.Errorf("globex relations = %d, want 1 (must be unaffected by acme's drop)", n)
+	}
+}
+
+// TestExportTenantAuthorization pins #104 on the ingest path: a tenant-scoped
+// token may export only to its tenant, and the per-ResourceLogs tenant.id
+// override — invisible to any gRPC interceptor — cannot bypass the binding.
+func TestExportTenantAuthorization(t *testing.T) {
+	st, err := store.Open(t.TempDir(), store.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	eng := change.New(projection.New(), st)
+	authn := auth.NewWithTenantTokens(nil, map[string][]string{"acme": {"acme-tok"}})
+	rec := NewRoutedReceiver(func(string) (*change.Engine, error) { return eng, nil },
+		authn.AllowedForTenantGRPC, nil, nil,
+		grpc.UnaryInterceptor(authn.UnaryInterceptor()))
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = rec.Serve(lis) }()
+	t.Cleanup(rec.Stop)
+	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	client := plogotlp.NewGRPCClient(conn)
+
+	mkLogs := func(tenantAttr string) plog.Logs {
+		ld := plog.NewLogs()
+		rl := ld.ResourceLogs().AppendEmpty()
+		if tenantAttr != "" {
+			rl.Resource().Attributes().PutStr("tenant.id", tenantAttr)
+		}
+		sl := rl.ScopeLogs().AppendEmpty()
+		entityRecord(sl, evEntityState, model.TypeHost, map[string]string{"host.id": "h1"}, nil)
+		return ld
+	}
+	export := func(orgID, tenantAttr string) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer acme-tok")
+		if orgID != "" {
+			ctx = metadata.AppendToOutgoingContext(ctx, "x-scope-orgid", orgID)
+		}
+		_, err := client.Export(ctx, plogotlp.NewExportRequestFromLogs(mkLogs(tenantAttr)))
+		return err
+	}
+
+	if err := export("acme", ""); err != nil {
+		t.Errorf("scoped token to its tenant: %v, want nil", err)
+	}
+	if code := status.Code(export("globex", "")); code != codes.PermissionDenied {
+		t.Errorf("scoped token to another tenant = %v, want PermissionDenied", code)
+	}
+	// The sneaky path: correct header tenant, overridden per ResourceLogs.
+	if code := status.Code(export("acme", "globex")); code != codes.PermissionDenied {
+		t.Errorf("tenant.id override bypassed authorization: %v, want PermissionDenied", code)
+	}
+	if code := status.Code(export("", "")); code != codes.PermissionDenied {
+		t.Errorf("scoped token to the default tenant = %v, want PermissionDenied", code)
 	}
 }

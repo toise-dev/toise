@@ -47,9 +47,10 @@ query — the stores never share a keyspace.
 
 ## Consequences
 
-- **Hard isolation**: a query or token scoped to tenant A can never observe tenant
-  B — the stores are different Pebble instances. This is the strongest, simplest
-  guarantee.
+- **Hard isolation at the storage layer**: tenant stores are different Pebble
+  instances, so no query path can leak rows across tenants. Whether a CALLER may
+  reach a given tenant is a separate, auth-layer question (below) — storage
+  isolation alone is not an access-control boundary.
 - **Cost**: one Pebble instance (LSM, WAL) per active tenant. Fine for a bounded set
   of tenants; a key-prefixed single store would scale to very many tenants but is
   deferred (it would need careful, leak-proof prefixing).
@@ -62,8 +63,13 @@ query — the stores never share a keyspace.
   `<data-dir>/<tenant>/`. A pre-existing single-tenant data-dir (a Pebble store
   written directly under `<data-dir>/`) is **migrated automatically on first start**
   by relocating it under `<data-dir>/default/`.
-- **Auth is not yet bound to a tenant.** A valid bearer token (ADR 0024) may set any
-  `X-Scope-OrgID`; isolation relies on the upstream OTel Collector authenticating
-  each client and stamping the tenant. Per-token tenant binding is future work.
+- **Per-token tenant binding** (#104): `TOISE_TENANT_TOKENS` takes
+  `tenant:token` pairs — a scoped token authenticates like any other but is
+  authorized only for its tenant, on the HTTP surfaces (403) and on ingest
+  (gRPC `PermissionDenied`, checked per RESOLVED tenant so the per-ResourceLogs
+  `tenant.id` override cannot bypass it). Tokens from `TOISE_AUTH_TOKENS`
+  remain global (valid for every tenant), preserving the single-tenant and
+  collector-stamped deployments unchanged. Runtime tenant creation is bounded
+  separately (`tenant_auto_create` / `tenant_allowlist` / `max_tenants`, #115).
 - Implemented incrementally: (1) the `internal/tenant` package (resolution +
   sanitization, #100), then (2) the registry and the ingest/query wiring (this PR).
