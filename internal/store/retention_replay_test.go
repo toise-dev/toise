@@ -76,4 +76,17 @@ func TestPruneOlderThanPreservesProjection(t *testing.T) {
 		t.Errorf("after prune+replay: %d entities / %d relations, want 2 / 1 (a and c live, a->c)",
 			after.EntityCount(), after.RelationCount())
 	}
+	// Counts are not enough — they pass even when the replay loses the
+	// identity/type indexes (#107): a's only surviving event after the prune is
+	// an attribute_updated, and it must still be matchable and counted by type,
+	// or the next producer observation mints a permanent duplicate.
+	for _, id := range []model.EntityID{a, c} {
+		ident := []model.KeyValue{{Key: "host.id", Value: model.StringValue(string(id))}}
+		if _, ok := after.MatchIdentity(model.TypeHost, ident); !ok {
+			t.Errorf("MatchIdentity(%s) missed after prune+replay: identity index lost", id)
+		}
+	}
+	if n := after.CountByType()[model.TypeHost]; n != 2 {
+		t.Errorf("CountByType[host] = %d after prune+replay, want 2: type index lost", n)
+	}
 }
