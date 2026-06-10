@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -354,8 +355,8 @@ func TestMCPRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	if len(tools.Tools) != 6 {
-		t.Fatalf("want 6 tools, got %d", len(tools.Tools))
+	if len(tools.Tools) != 7 {
+		t.Fatalf("want 7 tools, got %d", len(tools.Tools))
 	}
 
 	res, err := cs.CallTool(ctx, &mcpsdk.CallToolParams{
@@ -448,7 +449,7 @@ func TestChangeBudgets(t *testing.T) {
 	if out.Total != 60 || out.HeartbeatsExcluded != 0 {
 		t.Fatalf("change_type=entity.unchanged: total=%d excluded=%d, want 60/0", out.Total, out.HeartbeatsExcluded)
 	}
-	if _, _, err := s.recentChanges(ctx, nil, RecentChangesInput{Window: "24h", ChangeType: "bogus.type"}); err == nil {
+	if _, _, cerr := s.recentChanges(ctx, nil, RecentChangesInput{Window: "24h", ChangeType: "bogus.type"}); cerr == nil {
 		t.Fatal("expected error for invalid change_type")
 	}
 
@@ -477,5 +478,120 @@ func TestChangeBudgets(t *testing.T) {
 	}
 	if first := hist.Changes[0]; first.ChangeType != "entity.unchanged" {
 		t.Fatalf("kept slice should start at the newest heartbeats, first = %s", first.ChangeType)
+	}
+}
+
+// TestGraphDiff pins the folded-diff semantics: net created/deleted/changed,
+// transient flapping surfaced, heartbeat-only churn dropped, totals complete
+// even when the lists are truncated.
+func TestGraphDiff(t *testing.T) {
+	g, _ := newFixture()
+	t0 := time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC)
+	ent := func(id, name string) model.Entity { return host(id, name) }
+	mkE := func(ct model.ChangeType, e model.Entity, at time.Time, keys ...string) model.Event {
+		return model.Event{Entity: &model.EntityEvent{
+			EventID: fmt.Sprintf("e-%s-%d", e.ID, at.Unix()), ChangeType: ct, Entity: e,
+			EventTime: at, RecordedAt: at, SchemaVersion: "1.0", ChangedKeys: keys,
+		}}
+	}
+	mkR := func(ct model.ChangeType, rel model.Relation, at time.Time) model.Event {
+		return model.Event{Relation: &model.RelationEvent{
+			EventID: fmt.Sprintf("r-%s-%d", rel.ID, at.Unix()), ChangeType: ct, Relation: rel,
+			EventTime: at, RecordedAt: at, SchemaVersion: "1.0",
+		}}
+	}
+	stable, flapper, goner, mutant := ent("E_STABLE", "stable"), ent("E_FLAP", "flap"), ent("E_GONE", "gone"), ent("E_MUT", "mutant")
+	relAdd := model.Relation{ID: "R_NEW", Type: "runs_on", From: stable.ID, To: mutant.ID, Structural: true}
+	relFlap := model.Relation{ID: "R_FLAP", Type: "connected_to", From: stable.ID, To: goner.ID}
+	st := &fakeStore{byTime: []model.Event{
+		// created and kept: net created (even with later updates)
+		mkE(model.EntityCreated, stable, t0),
+		mkE(model.EntityAttributeUpdated, stable, t0.Add(time.Minute), "os.type"),
+		// created then deleted: transient
+		mkE(model.EntityCreated, flapper, t0.Add(2*time.Minute)),
+		mkE(model.EntityDeleted, flapper, t0.Add(3*time.Minute)),
+		// pre-existing, deleted in window: net deleted
+		mkE(model.EntityDeleted, goner, t0.Add(4*time.Minute)),
+		// pre-existing, changed twice: net changed with the union of keys
+		mkE(model.EntityStateChanged, mutant, t0.Add(5*time.Minute), "status"),
+		mkE(model.EntityAttributeUpdated, mutant, t0.Add(6*time.Minute), "os.type"),
+		// heartbeat-only churn: dropped from the diff
+		mkE(model.EntityUnchanged, ent("E_HB", "hb"), t0.Add(7*time.Minute)),
+		// relations: one net added, one transient
+		mkR(model.RelationAdded, relAdd, t0.Add(8*time.Minute)),
+		mkR(model.RelationAdded, relFlap, t0.Add(9*time.Minute)),
+		mkR(model.RelationRemoved, relFlap, t0.Add(10*time.Minute)),
+	}}
+	s := New(g, st)
+	s.now = func() time.Time { return t0.Add(time.Hour) }
+	ctx := context.Background()
+
+	_, out, err := s.graphDiff(ctx, nil, GraphDiffInput{Window: "2h"})
+	if err != nil {
+		t.Fatalf("graphDiff: %v", err)
+	}
+	want := DiffTotals{
+		EntitiesCreated: 1, EntitiesDeleted: 1, EntitiesChanged: 1, EntitiesTransient: 1,
+		RelationsAdded: 1, RelationsRemoved: 0, RelationsChanged: 0, RelationsTransient: 1,
+	}
+	if out.Totals != want {
+		t.Fatalf("totals = %+v, want %+v", out.Totals, want)
+	}
+	if out.Truncated {
+		t.Error("nothing should be truncated at default limit")
+	}
+	if len(out.EntitiesCreated) != 1 || out.EntitiesCreated[0].ID != "E_STABLE" {
+		t.Errorf("created = %+v, want E_STABLE", out.EntitiesCreated)
+	}
+	if len(out.EntitiesTransient) != 1 || out.EntitiesTransient[0].ID != "E_FLAP" {
+		t.Errorf("transient = %+v, want E_FLAP", out.EntitiesTransient)
+	}
+	if len(out.EntitiesDeleted) != 1 || out.EntitiesDeleted[0].ID != "E_GONE" {
+		t.Errorf("deleted = %+v, want E_GONE", out.EntitiesDeleted)
+	}
+	if len(out.EntitiesChanged) != 1 {
+		t.Fatalf("changed = %+v, want one (E_MUT)", out.EntitiesChanged)
+	}
+	ch := out.EntitiesChanged[0]
+	if ch.ID != "E_MUT" || !ch.StateChanged || len(ch.ChangedKeys) != 2 {
+		t.Errorf("changed entity = id %s stateChanged=%v keys=%v, want E_MUT/true/[os.type status]", ch.ID, ch.StateChanged, ch.ChangedKeys)
+	}
+	if len(out.RelationsAdded) != 1 || out.RelationsAdded[0].ID != "R_NEW" {
+		t.Errorf("relations added = %+v, want R_NEW", out.RelationsAdded)
+	}
+	if len(out.RelationsTransient) != 1 || out.RelationsTransient[0].ID != "R_FLAP" {
+		t.Errorf("relations transient = %+v, want R_FLAP", out.RelationsTransient)
+	}
+	if out.Summary == "" || !strings.Contains(out.Summary, "1 entities created") {
+		t.Errorf("summary = %q", out.Summary)
+	}
+
+	// Truncation: limit 0 -> default; limit 1 keeps totals complete.
+	_, out, err = s.graphDiff(ctx, nil, GraphDiffInput{Window: "2h", Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Totals != want {
+		t.Errorf("totals must be unaffected by limit: %+v", out.Totals)
+	}
+
+	// Bounds validation.
+	if _, _, berr := s.graphDiff(ctx, nil, GraphDiffInput{}); berr == nil {
+		t.Error("expected error with neither window nor from")
+	}
+	if _, _, berr := s.graphDiff(ctx, nil, GraphDiffInput{Window: "1h", From: "2026-05-29T12:00:00Z"}); berr == nil {
+		t.Error("expected error with both window and from")
+	}
+	if _, _, berr := s.graphDiff(ctx, nil, GraphDiffInput{From: "2026-05-29T12:00:00Z", To: "2026-05-29T11:00:00Z"}); berr == nil {
+		t.Error("expected error with to before from")
+	}
+
+	// Empty diff reads cleanly.
+	_, out, err = s.graphDiff(ctx, nil, GraphDiffInput{From: "2020-01-01T00:00:00Z", To: "2020-01-02T00:00:00Z"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Summary != "No net change between the two instants." {
+		t.Errorf("empty summary = %q", out.Summary)
 	}
 }
