@@ -122,6 +122,17 @@ func (s *Server) register(srv *mcpsdk.Server) {
 	}, s.recentChanges)
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
+		Name: "graph_diff",
+		Description: "Fold the change log between two instants into the NET difference: entities " +
+			"and relations created, deleted, or changed, plus transient ones that appeared AND " +
+			"disappeared within the window (flapping). Intermediate churn and heartbeats are " +
+			"collapsed away; totals always cover everything even when the item lists are " +
+			"truncated by limit. Give a window (e.g. 24h) or from/to instants (RFC 3339). " +
+			"Use this instead of paging recent_changes when you want 'what is different now " +
+			"compared to then?'.",
+	}, s.graphDiff)
+
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name: "describe_schema",
 		Description: "Describe the entity and relation types currently present in the graph, " +
 			"with counts, in natural language. Call this first to bootstrap your understanding " +
