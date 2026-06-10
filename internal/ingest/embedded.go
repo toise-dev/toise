@@ -106,10 +106,11 @@ func (r *embeddedReconciler) reconcile(e engine, sourceKey string, desired []cha
 			errs = append(errs, err)
 		}
 	}
-	for k, prev := range prevState {
+	for k := range prevState {
 		if _, keep := want[k]; keep {
 			continue
 		}
+		prev := prevState[k]
 		prev.EventTime = when // the removal happens now, not when it was first seen
 		if _, _, err := e.RemoveRelation(prev); err != nil {
 			errs = append(errs, err)
