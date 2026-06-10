@@ -27,7 +27,6 @@ type Graph interface {
 	GetEntity(id model.EntityID) (model.Entity, bool, bool)
 	ListEntities(typ string) []model.Entity
 	ListRelations(typ string, from, to model.EntityID) []model.Relation
-	Neighbors(id model.EntityID, relType string, depth int) []model.Entity
 	CountByType() map[string]int
 	EntityCount() int
 	RelationCount() int
@@ -97,9 +96,18 @@ func (s *Server) register(srv *mcpsdk.Server) {
 		Name: "get_neighbors",
 		Description: "Traverse the topology outward from an entity, following relations in " +
 			"either direction up to a given depth (capped at 5). Optionally filter by relation " +
-			"type. Returns the reachable entities. Use this to answer questions about what an " +
+			"type. Returns the reachable entities, each with the relation type, direction, and " +
+			"hop distance that first reached it. Use this to answer questions about what an " +
 			"entity is connected to, runs on, or depends on.",
 	}, s.getNeighbors)
+
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
+		Name: "find_path",
+		Description: "Find the shortest relation path between two entities, traversing edges in " +
+			"either direction (optionally only one relation type), up to max_depth hops. " +
+			"reachable=false is a first-class answer meaning no path exists within the cap — " +
+			"use it to answer 'does A depend on B?' or 'how are these connected?'.",
+	}, s.findPath)
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name: "entity_history",

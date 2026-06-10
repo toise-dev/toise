@@ -355,8 +355,8 @@ func TestMCPRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	if len(tools.Tools) != 7 {
-		t.Fatalf("want 7 tools, got %d", len(tools.Tools))
+	if len(tools.Tools) != 8 {
+		t.Fatalf("want 8 tools, got %d", len(tools.Tools))
 	}
 
 	res, err := cs.CallTool(ctx, &mcpsdk.CallToolParams{
@@ -593,5 +593,90 @@ func TestGraphDiff(t *testing.T) {
 	}
 	if out.Summary != "No net change between the two instants." {
 		t.Errorf("empty summary = %q", out.Summary)
+	}
+}
+
+// TestFindPathAndNeighborEdges pins the traversal contract (#115): shortest
+// path with per-hop edge facts, reachable=false as a first-class answer, and
+// get_neighbors returning how each entity was reached.
+func TestFindPathAndNeighborEdges(t *testing.T) {
+	s := newTestServer()
+	ctx := context.Background()
+
+	// Fixture topology: proc -runs_on-> web -connected_to-> db.
+	_, out, err := s.findPath(ctx, nil, FindPathInput{FromID: "01PROC_NGINX", ToID: "01HOST_DB"})
+	if err != nil {
+		t.Fatalf("findPath: %v", err)
+	}
+	if !out.Reachable || out.Hops != 2 {
+		t.Fatalf("reachable=%v hops=%d, want true/2", out.Reachable, out.Hops)
+	}
+	if len(out.Path) != 3 || out.Path[0].Entity.ID != "01PROC_NGINX" || out.Path[2].Entity.ID != "01HOST_DB" {
+		t.Fatalf("path = %+v, want proc -> web -> db", out.Path)
+	}
+	if out.Path[0].ViaRelation != "" {
+		t.Error("the start hop must carry no via_relation")
+	}
+	if out.Path[1].ViaRelation != "runs_on" || out.Path[1].Direction != "outgoing" {
+		t.Errorf("hop1 = %s/%s, want runs_on/outgoing", out.Path[1].ViaRelation, out.Path[1].Direction)
+	}
+	if out.Path[2].ViaRelation != "connected_to" || out.Path[2].Direction != "outgoing" {
+		t.Errorf("hop2 = %s/%s, want connected_to/outgoing", out.Path[2].ViaRelation, out.Path[2].Direction)
+	}
+
+	// Direction flips when walking against the edges.
+	_, back, err := s.findPath(ctx, nil, FindPathInput{FromID: "01HOST_DB", ToID: "01PROC_NGINX"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !back.Reachable || back.Path[1].Direction != "incoming" {
+		t.Errorf("reverse path hop1 direction = %s, want incoming", back.Path[1].Direction)
+	}
+
+	// Constrained to one relation type, db is no longer reachable from proc:
+	// a first-class false, not an error.
+	_, out, err = s.findPath(ctx, nil, FindPathInput{FromID: "01PROC_NGINX", ToID: "01HOST_DB", RelationType: "runs_on"})
+	if err != nil {
+		t.Fatalf("constrained findPath must not error: %v", err)
+	}
+	if out.Reachable {
+		t.Error("runs_on-only path to db must be unreachable")
+	}
+	if out.MaxDepth == 0 {
+		t.Error("output must echo the applied max_depth so false is interpretable")
+	}
+
+	// Same entity: zero hops.
+	_, out, _ = s.findPath(ctx, nil, FindPathInput{FromID: "01HOST_WEB", ToID: "01HOST_WEB"})
+	if !out.Reachable || out.Hops != 0 || len(out.Path) != 1 {
+		t.Errorf("self path = reachable=%v hops=%d len=%d, want true/0/1", out.Reachable, out.Hops, len(out.Path))
+	}
+
+	// Unknown endpoints are errors (unlike unreachable).
+	if _, _, gerr := s.findPath(ctx, nil, FindPathInput{FromID: "ghost", ToID: "01HOST_DB"}); gerr == nil {
+		t.Error("unknown from_id must error")
+	}
+
+	// get_neighbors carries the edge facts.
+	_, ns, err := s.getNeighbors(ctx, nil, GetNeighborsInput{EntityID: "01HOST_WEB", Depth: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ns.Count != 2 {
+		t.Fatalf("neighbors = %d, want 2 (proc and db)", ns.Count)
+	}
+	for _, n := range ns.Neighbors {
+		switch n.ID {
+		case "01PROC_NGINX":
+			if n.ViaRelation != "runs_on" || n.Direction != "incoming" || n.Depth != 1 {
+				t.Errorf("proc neighbor = %s/%s/d%d, want runs_on/incoming/1", n.ViaRelation, n.Direction, n.Depth)
+			}
+		case "01HOST_DB":
+			if n.ViaRelation != "connected_to" || n.Direction != "outgoing" || n.Depth != 1 {
+				t.Errorf("db neighbor = %s/%s/d%d, want connected_to/outgoing/1", n.ViaRelation, n.Direction, n.Depth)
+			}
+		default:
+			t.Errorf("unexpected neighbor %s", n.ID)
+		}
 	}
 }
