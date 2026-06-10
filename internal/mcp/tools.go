@@ -163,7 +163,7 @@ type EntityHistoryOutput struct {
 	ChangeDigest
 }
 
-func (s *Server) entityHistory(_ context.Context, _ *mcpsdk.CallToolRequest, in EntityHistoryInput) (*mcpsdk.CallToolResult, EntityHistoryOutput, error) {
+func (s *Server) entityHistory(ctx context.Context, _ *mcpsdk.CallToolRequest, in EntityHistoryInput) (*mcpsdk.CallToolResult, EntityHistoryOutput, error) {
 	if in.EntityID == "" {
 		return nil, EntityHistoryOutput{}, fmt.Errorf("an entity_id is required")
 	}
@@ -184,7 +184,7 @@ func (s *Server) entityHistory(_ context.Context, _ *mcpsdk.CallToolRequest, in 
 		return nil, EntityHistoryOutput{}, err
 	}
 	limit := clampLimit(in.Limit)
-	evs, err := s.store.ReadByEntity(model.EntityID(in.EntityID))
+	evs, err := s.store.ReadByEntity(ctx, model.EntityID(in.EntityID))
 	if err != nil {
 		return nil, EntityHistoryOutput{}, fmt.Errorf("reading history: %w", err)
 	}
@@ -251,7 +251,7 @@ type RecentChangesOutput struct {
 	ChangeDigest
 }
 
-func (s *Server) recentChanges(_ context.Context, _ *mcpsdk.CallToolRequest, in RecentChangesInput) (*mcpsdk.CallToolResult, RecentChangesOutput, error) {
+func (s *Server) recentChanges(ctx context.Context, _ *mcpsdk.CallToolRequest, in RecentChangesInput) (*mcpsdk.CallToolResult, RecentChangesOutput, error) {
 	d, err := time.ParseDuration(in.Window)
 	if err != nil || d <= 0 {
 		return nil, RecentChangesOutput{}, fmt.Errorf("invalid window %q: use a positive Go duration like 15m, 2h, or 24h", in.Window)
@@ -268,7 +268,7 @@ func (s *Server) recentChanges(_ context.Context, _ *mcpsdk.CallToolRequest, in 
 	}
 	limit := clampLimit(in.Limit)
 	now := s.now()
-	evs, err := s.store.ReadByTimeRange(now.Add(-d), now.Add(time.Nanosecond))
+	evs, err := s.store.ReadByTimeRange(ctx, now.Add(-d), now.Add(time.Nanosecond))
 	if err != nil {
 		return nil, RecentChangesOutput{}, fmt.Errorf("reading changes: %w", err)
 	}

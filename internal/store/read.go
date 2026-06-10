@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -36,21 +37,22 @@ func (s *Store) Scan(fn func(seq uint64, ev model.Event) error) error {
 }
 
 // ReadByEntity returns, in append order, every event whose entity ID matches id
-// (for relation events, either endpoint).
-func (s *Store) ReadByEntity(id model.EntityID) ([]model.Event, error) {
+// (for relation events, either endpoint). The context cancels a long read — the
+// query surfaces bound their calls with per-request deadlines.
+func (s *Store) ReadByEntity(ctx context.Context, id model.EntityID) ([]model.Event, error) {
 	prefix := append([]byte(entityPrefix), append([]byte(id), '/')...)
-	return s.readBySeqIndex(prefix)
+	return s.readBySeqIndex(ctx, prefix)
 }
 
 // ReadByType returns, in append order, every event of the given change type.
-func (s *Store) ReadByType(ct model.ChangeType) ([]model.Event, error) {
+func (s *Store) ReadByType(ctx context.Context, ct model.ChangeType) ([]model.Event, error) {
 	prefix := append([]byte(typePrefix), byte(ct))
-	return s.readBySeqIndex(prefix)
+	return s.readBySeqIndex(ctx, prefix)
 }
 
 // ReadByTimeRange returns events whose event_time is in [start, end), ordered by
-// event_time then sequence.
-func (s *Store) ReadByTimeRange(start, end time.Time) ([]model.Event, error) {
+// event_time then sequence. The context cancels a long read.
+func (s *Store) ReadByTimeRange(ctx context.Context, start, end time.Time) ([]model.Event, error) {
 	lower := timeKeyBound(start.UnixNano())
 	upper := timeKeyBound(end.UnixNano())
 	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
@@ -60,7 +62,12 @@ func (s *Store) ReadByTimeRange(start, end time.Time) ([]model.Event, error) {
 	defer func() { _ = iter.Close() }()
 
 	var out []model.Event
+	n := 0
 	for iter.First(); iter.Valid(); iter.Next() {
+		if err := checkEvery(ctx, n); err != nil {
+			return nil, err
+		}
+		n++
 		ev, err := s.getBySeq(seqFromKeySuffix(iter.Key()))
 		if err != nil {
 			return nil, err
@@ -74,7 +81,7 @@ func (s *Store) ReadByTimeRange(start, end time.Time) ([]model.Event, error) {
 }
 
 // readBySeqIndex iterates an index prefix and resolves each entry to its event.
-func (s *Store) readBySeqIndex(prefix []byte) ([]model.Event, error) {
+func (s *Store) readBySeqIndex(ctx context.Context, prefix []byte) ([]model.Event, error) {
 	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: prefixUpperBound(prefix)})
 	if err != nil {
 		return nil, fmt.Errorf("opening index iterator: %w", err)
@@ -82,7 +89,12 @@ func (s *Store) readBySeqIndex(prefix []byte) ([]model.Event, error) {
 	defer func() { _ = iter.Close() }()
 
 	var out []model.Event
+	n := 0
 	for iter.First(); iter.Valid(); iter.Next() {
+		if err := checkEvery(ctx, n); err != nil {
+			return nil, err
+		}
+		n++
 		ev, err := s.getBySeq(seqFromKeySuffix(iter.Key()))
 		if err != nil {
 			return nil, err
@@ -93,6 +105,16 @@ func (s *Store) readBySeqIndex(prefix []byte) ([]model.Event, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+// checkEvery surfaces context cancellation once per batch of iterations: often
+// enough to stop a runaway read promptly, rare enough to stay off the hot cost.
+func checkEvery(ctx context.Context, n int) error {
+	const batch = 1024
+	if n%batch == 0 {
+		return ctx.Err()
+	}
+	return nil
 }
 
 // timeKeyBound builds a time-index bound key (prefix + event_time nanos) without

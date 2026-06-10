@@ -33,25 +33,41 @@ type Graph interface {
 }
 
 // EventReader is the subset of the event log the MCP tools read history from
-// (ADR 0007). The concrete *store.Store satisfies it.
+// (ADR 0007). The concrete *store.Store satisfies it. Reads honor context
+// cancellation, so the per-tool timeout actually stops a runaway scan.
 type EventReader interface {
-	ReadByEntity(id model.EntityID) ([]model.Event, error)
-	ReadByTimeRange(start, end time.Time) ([]model.Event, error)
+	ReadByEntity(ctx context.Context, id model.EntityID) ([]model.Event, error)
+	ReadByTimeRange(ctx context.Context, start, end time.Time) ([]model.Event, error)
+}
+
+// toolTimeout bounds every tool call. The Streamable HTTP GET listening stream
+// is NOT under this budget — only tool work is (the WS-upgrade lesson from #54:
+// never wrap a long-lived stream in a request timeout).
+const toolTimeout = 30 * time.Second
+
+// withTimeout wraps a tool handler with the per-call deadline.
+func withTimeout[I, O any](timeout func() time.Duration, fn func(context.Context, *mcpsdk.CallToolRequest, I) (*mcpsdk.CallToolResult, O, error)) func(context.Context, *mcpsdk.CallToolRequest, I) (*mcpsdk.CallToolResult, O, error) {
+	return func(ctx context.Context, req *mcpsdk.CallToolRequest, in I) (*mcpsdk.CallToolResult, O, error) {
+		ctx, cancel := context.WithTimeout(ctx, timeout())
+		defer cancel()
+		return fn(ctx, req, in)
+	}
 }
 
 // Server exposes Toise's read model as MCP tools over stdio and Streamable HTTP.
 type Server struct {
-	graph Graph
-	store EventReader
-	now   func() time.Time
-	srv   *mcpsdk.Server
+	graph   Graph
+	store   EventReader
+	now     func() time.Time
+	timeout time.Duration // per-tool-call budget
+	srv     *mcpsdk.Server
 }
 
 // New builds an MCP server reading from the given projection and event log. The
 // underlying SDK server is constructed once and reused across transports and
 // HTTP sessions; the tools are stateless reads.
 func New(graph Graph, store EventReader) *Server {
-	s := &Server{graph: graph, store: store, now: time.Now}
+	s := &Server{graph: graph, store: store, now: time.Now, timeout: toolTimeout}
 	impl := &mcpsdk.Implementation{
 		Name:    "toise",
 		Title:   "Toise — the living map of your infrastructure",
@@ -75,6 +91,9 @@ func (s *Server) ServeStdio(ctx context.Context) error {
 	return s.srv.Run(ctx, &mcpsdk.StdioTransport{})
 }
 
+// budget returns the per-call deadline (a method so tests can shrink it).
+func (s *Server) budget() time.Duration { return s.timeout }
+
 func (s *Server) register(srv *mcpsdk.Server) {
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name: "find_entities",
@@ -83,14 +102,14 @@ func (s *Server) register(srv *mcpsdk.Server) {
 			"identifying and descriptive attributes). Returns entity summaries with a " +
 			"human-readable label, ids, types, and attributes. Use describe_schema first " +
 			"if you are unsure which entity types or attribute keys exist.",
-	}, s.findEntities)
+	}, withTimeout(s.budget, s.findEntities))
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name: "get_entity",
 		Description: "Fetch a single entity by its logical id, with all of its identifying " +
 			"and descriptive attributes. Use the id returned by find_entities, get_neighbors, " +
 			"or recent_changes.",
-	}, s.getEntity)
+	}, withTimeout(s.budget, s.getEntity))
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name: "get_neighbors",
@@ -99,7 +118,7 @@ func (s *Server) register(srv *mcpsdk.Server) {
 			"type. Returns the reachable entities, each with the relation type, direction, and " +
 			"hop distance that first reached it. Use this to answer questions about what an " +
 			"entity is connected to, runs on, or depends on.",
-	}, s.getNeighbors)
+	}, withTimeout(s.budget, s.getNeighbors))
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name: "find_path",
@@ -107,7 +126,7 @@ func (s *Server) register(srv *mcpsdk.Server) {
 			"either direction (optionally only one relation type), up to max_depth hops. " +
 			"reachable=false is a first-class answer meaning no path exists within the cap — " +
 			"use it to answer 'does A depend on B?' or 'how are these connected?'.",
-	}, s.findPath)
+	}, withTimeout(s.budget, s.findPath))
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name: "entity_history",
@@ -117,7 +136,7 @@ func (s *Server) register(srv *mcpsdk.Server) {
 			"Heartbeats (entity.unchanged) are excluded and the result is bounded by limit " +
 			"(newest kept) unless asked otherwise; the digest reports totals per change type. " +
 			"Use this to explain how an entity reached its current state.",
-	}, s.entityHistory)
+	}, withTimeout(s.budget, s.entityHistory))
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name: "recent_changes",
@@ -127,7 +146,7 @@ func (s *Server) register(srv *mcpsdk.Server) {
 			"appearances/disappearances), or to one change_type. Heartbeats (entity.unchanged) " +
 			"are excluded and the result is bounded by limit unless asked otherwise; the " +
 			"digest reports totals per change type. Use this to answer 'what changed recently?'.",
-	}, s.recentChanges)
+	}, withTimeout(s.budget, s.recentChanges))
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name: "graph_diff",
@@ -138,7 +157,7 @@ func (s *Server) register(srv *mcpsdk.Server) {
 			"truncated by limit. Give a window (e.g. 24h) or from/to instants (RFC 3339). " +
 			"Use this instead of paging recent_changes when you want 'what is different now " +
 			"compared to then?'.",
-	}, s.graphDiff)
+	}, withTimeout(s.budget, s.graphDiff))
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name: "telemetry_keys",
@@ -148,12 +167,12 @@ func (s *Server) register(srv *mcpsdk.Server) {
 			"key comes with its Prometheus-style flattened label form and usage caveats " +
 			"(ephemeral pids, name-vs-identity). Use this to pivot from the graph to " +
 			"observability data.",
-	}, s.telemetryKeys)
+	}, withTimeout(s.budget, s.telemetryKeys))
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name: "describe_schema",
 		Description: "Describe the entity and relation types currently present in the graph, " +
 			"with counts, in natural language. Call this first to bootstrap your understanding " +
 			"of what this Toise instance knows about before issuing other tools.",
-	}, s.describeSchema)
+	}, withTimeout(s.budget, s.describeSchema))
 }

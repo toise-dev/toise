@@ -16,8 +16,8 @@ import (
 
 // EventReader is the subset of the store the resolvers read history from.
 type EventReader interface {
-	ReadByEntity(id model.EntityID) ([]model.Event, error)
-	ReadByTimeRange(start, end time.Time) ([]model.Event, error)
+	ReadByEntity(ctx context.Context, id model.EntityID) ([]model.Event, error)
+	ReadByTimeRange(ctx context.Context, start, end time.Time) ([]model.Event, error)
 }
 
 // Graph is the subset of the projection the resolvers read current state from.
@@ -110,8 +110,8 @@ func (r *queryResolver) Relations(_ context.Context, filter *generated.RelationF
 	}, nil
 }
 
-func (r *queryResolver) EntityHistory(_ context.Context, id string, since, until, asKnownAt *string, first *int, after *string) (*generated.ChangeConnection, error) {
-	evs, err := r.Store.ReadByEntity(model.EntityID(id))
+func (r *queryResolver) EntityHistory(ctx context.Context, id string, since, until, asKnownAt *string, first *int, after *string) (*generated.ChangeConnection, error) {
+	evs, err := r.Store.ReadByEntity(ctx, model.EntityID(id))
 	if err != nil {
 		return nil, err
 	}
@@ -149,13 +149,13 @@ func (r *queryResolver) EntityHistory(_ context.Context, id string, since, until
 	return r.changeConnection(filtered, first, after)
 }
 
-func (r *queryResolver) RecentChanges(_ context.Context, window string, first *int, after *string) (*generated.ChangeConnection, error) {
+func (r *queryResolver) RecentChanges(ctx context.Context, window string, first *int, after *string) (*generated.ChangeConnection, error) {
 	d, err := time.ParseDuration(window)
 	if err != nil || d <= 0 {
 		return nil, fmt.Errorf("invalid window %q: use a positive Go duration like 15m, 2h, or 24h", window)
 	}
 	now := r.now()
-	evs, err := r.Store.ReadByTimeRange(now.Add(-d), now.Add(time.Nanosecond)) // inclusive of now
+	evs, err := r.Store.ReadByTimeRange(ctx, now.Add(-d), now.Add(time.Nanosecond)) // inclusive of now
 	if err != nil {
 		return nil, err
 	}
