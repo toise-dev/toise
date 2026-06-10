@@ -300,3 +300,66 @@ func TestCheckpointSubcommand(t *testing.T) {
 		t.Error("missing destination must error with usage")
 	}
 }
+
+// TestShutdownWithOpenStream pins #130: a deploy with a connected streaming
+// client (the MCP SSE listening stream here) must still exit clean — before
+// the fix, Shutdown waited its full grace for streams that never drain and
+// run() returned "context deadline exceeded" (observed on every real deploy
+// with a connected MCP client).
+func TestShutdownWithOpenStream(t *testing.T) {
+	httpAddr, otlpAddr := freeAddr(t), freeAddr(t)
+	cfg, err := config.Load([]string{
+		"--listen", httpAddr,
+		"--otlp-listen", otlpAddr,
+		"--data-dir", t.TempDir(),
+	}, func(string) string { return "" })
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- run(cfg, store.DefaultConfig(), slog.New(slog.DiscardHandler)) }()
+	base := "http://" + httpAddr
+	waitReady(t, base+"/readyz")
+
+	// Open a real MCP session and its GET listening stream, and keep it open
+	// across the shutdown.
+	initBody := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}`
+	ireq, _ := http.NewRequest(http.MethodPost, base+"/mcp", strings.NewReader(initBody))
+	ireq.Header.Set("Content-Type", "application/json")
+	ireq.Header.Set("Accept", "application/json, text/event-stream")
+	iresp, err := http.DefaultClient.Do(ireq)
+	if err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+	_, _ = io.Copy(io.Discard, iresp.Body)
+	_ = iresp.Body.Close()
+	sid := iresp.Header.Get("Mcp-Session-Id")
+	if sid == "" {
+		t.Fatal("no session id")
+	}
+	streamCtx, streamCancel := context.WithCancel(context.Background())
+	defer streamCancel()
+	greq, _ := http.NewRequestWithContext(streamCtx, http.MethodGet, base+"/mcp", nil)
+	greq.Header.Set("Accept", "text/event-stream")
+	greq.Header.Set("Mcp-Session-Id", sid)
+	gresp, err := http.DefaultClient.Do(greq)
+	if err != nil {
+		t.Fatalf("open SSE stream: %v", err)
+	}
+	defer func() { _ = gresp.Body.Close() }()
+	if gresp.StatusCode != http.StatusOK {
+		t.Fatalf("SSE stream = %d, want 200", gresp.StatusCode)
+	}
+
+	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run() with an open stream returned %v after SIGTERM, want nil (#130)", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("run() did not return within 15s of SIGTERM")
+	}
+}

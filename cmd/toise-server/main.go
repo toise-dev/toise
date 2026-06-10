@@ -343,7 +343,22 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		logger.Info("shutting down")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		return httpSrv.Shutdown(shutdownCtx)
+		if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+			// Long-lived streams (the MCP SSE listening stream, GraphQL WS
+			// subscriptions) never drain on their own, so Shutdown's grace
+			// always elapses when a client is connected. Cutting them is the
+			// intended outcome of a deploy, not a failure: fall through to
+			// Close and exit clean (#130).
+			if errors.Is(err, context.DeadlineExceeded) {
+				logger.Info("shutdown grace elapsed with streams still open; closing them")
+				if cerr := httpSrv.Close(); cerr != nil {
+					return fmt.Errorf("closing http server: %w", cerr)
+				}
+				return nil
+			}
+			return fmt.Errorf("http shutdown: %w", err)
+		}
+		return nil
 	}
 }
 
