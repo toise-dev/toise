@@ -9,6 +9,114 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
+## [0.4.0] - 2026-06-10
+
+**The correctness and LLM-querying release.** A full multi-dimensional audit of
+the server (46 confirmed findings, every high/medium counter-verified against
+the code) drove this release end to end: first the correctness lot that makes
+"the log is the source of truth" actually hold under failure, then a product
+lane that turns the MCP surface into a precise, budget-aware query layer —
+three new tools, edge-aware traversal, and bounded results — plus tenant
+security, an ingestion that is finally observable, and maintenance that no
+longer stalls ingest. No wire-contract change for producers; a handful of
+sharper behaviors are listed in the
+[0.3 → 0.4 migration guide](docs/migration/0.3-to-0.4.md). Validated end to end
+on a live staging deployment fed by a real agent before tagging.
+
+### Fixed
+
+- **Ingest integrity: the projection can no longer run ahead of the durable
+  log.** Batched commits are a staged unit of work — events reach the in-memory
+  graph and the subscribers only after the durable append succeeds, so a failed
+  flush leaves no phantom state and a producer retry regenerates everything
+  (previously a relation lost in a failed flush was never written again).
+  Records violating the wire contract (unknown `entity.type`, malformed
+  identity) are rejected **per record** via OTLP partial success instead of
+  poisoning their whole batch, and removal of an already-cascaded relation is
+  the no-op the contract promises instead of a poison pill that failed every
+  subsequent export from that producer. (#108, #109, #110)
+- **Restarts no longer corrupt the graph.** Projection snapshots omit
+  soft-deleted entities (restoring no longer resurrects the dead), and replay
+  rebuilds the identity/type indexes from update events — after retention
+  pruning, an entity whose first surviving event was an update used to become
+  unmatchable, minting permanent duplicates on its next observation. (#106, #107)
+- **OTLP `Export` returns proper gRPC status codes**: `InvalidArgument` for
+  permanent caller errors (invalid tenant ids, refused tenants),
+  `Unavailable` for transient store failures — previously everything surfaced
+  as `Unknown`, which spec-compliant exporters treat as non-retryable, silently
+  dropping batches the design intends to be retried. (#111)
+- **Lifecycle**: the sweep/compaction/snapshot loops are joined before the
+  stores close (no more `panic: pebble: closed` when shutdown coincides with a
+  maintenance tick); a post-startup OTLP receiver failure now exits the process
+  instead of leaving a green `/readyz` over a dead ingest; and a deploy with
+  connected streaming clients (MCP SSE, GraphQL WebSocket) exits clean instead
+  of failing its shutdown grace. (#112, #130)
+- A mis-typed `entity.report.interval` (e.g. a string) is surfaced on the
+  dropped-keys path instead of silently disarming the liveness backstop; the
+  out-of-order relation buffer is capped and swept; configurations that would
+  silently not do what they say (half-set TLS, retention without a compaction
+  interval, unknown log level) are rejected at startup. (#115)
+
+### Added
+
+- **Three new MCP tools.** `graph_diff` folds the change log between two
+  instants into the net difference — created / deleted / changed, plus a
+  first-class *transient* bucket for flapping entities and relations.
+  `find_path` finds the shortest relation path between two entities
+  (`reachable: false` is an answer, not an error). `telemetry_keys` derives the
+  exact join keys that locate an entity's metrics and logs in observability
+  backends — own and 1-hop-inherited OTel resource attributes, each with its
+  Prometheus-style flattened label form and usage caveats. (#115)
+- **Result budgets across the MCP timeline tools.** `recent_changes` and
+  `entity_history` exclude heartbeats by default, accept `change_type` and
+  `include_heartbeats` filters, bound their output with `limit`, and report a
+  digest (`total`, `truncated`, `heartbeats_excluded`, per-type counts) so an
+  LLM can narrow without paging blind. `get_neighbors` now tells *how* each
+  entity was reached (`via_relation`, `direction`, `depth`). Every tool call
+  runs under a 30-second budget, and store reads honor caller cancellation.
+  (#115)
+- **Ingest is observable**: hot-path Prometheus counters for export outcomes,
+  per-record results (handled / ignored / rejected), dropped attribute values,
+  tenant rejections, and authentication failures — "is ingest healthy?" now has
+  an answer on `/metrics`. (#113)
+- **Tenant security.** Bearer tokens can be bound to tenants
+  (`TOISE_TENANT_TOKENS` takes `tenant:token` pairs): a scoped token is
+  authorized only for its tenant, enforced on the HTTP surfaces (403) and on
+  ingest per *resolved* tenant (`PermissionDenied`) — the per-`ResourceLogs`
+  `tenant.id` override cannot bypass it. Runtime tenant creation is bounded
+  (`tenant_auto_create`, `tenant_allowlist`, `max_tenants`), query surfaces can
+  no longer create a tenant by reading it (unknown tenants are a 404), and
+  startup warns loudly when a listener is exposed without auth or TLS.
+  (#104, #115)
+- **`toise-server checkpoint`** — a consistent, per-tenant cold-backup command
+  (the operator-facing trigger `Store.Checkpoint` was documented to have), with
+  a new Backups page in the user guide. (#115)
+- ADR 0026 fixes the reconciliation policy for Resource-borne entities (OTel
+  spec PR 5147) ahead of implementation: entity events stay authoritative for
+  lifecycle, resource refs associate and may opt-in bootstrap presence. (#105)
+
+### Changed
+
+- **Store maintenance no longer stalls ingestion.** Heartbeat coalescing and
+  retention pruning scan on a Pebble snapshot off the append mutex — each
+  maintenance tick used to block that tenant's ingest for the duration of a
+  full-log scan, growing with history. Pruning also stopped re-marshaling every
+  pruned event just to count bytes. (#115)
+- The `toise_entities_by_type` metric reports the 50 largest types and folds
+  the tail into `other` (the label was producer-controlled and unbounded).
+- Tenant stacks open outside the registry's global mutex (one tenant's Pebble
+  open no longer blocks every other tenant's requests), with single-flight
+  deduplication.
+- Internal error details no longer leak to HTTP clients on tenant-resolution
+  failures; `/readyz` names the failing tenant.
+
+### Security
+
+- Cross-tenant read/write/create via a client-chosen `X-Scope-OrgID` is closed
+  when tenant-scoped tokens are configured; tenant minting is bounded; reading
+  can never create. See *Added → Tenant security*. (#104)
+
+
 ## [0.3.0] - 2026-06-08
 
 **The production-readiness and multi-tenancy release.** 0.3.0 turns the phase-1
