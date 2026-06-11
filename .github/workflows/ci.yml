@@ -35,6 +35,16 @@ jobs:
       - name: Test
         run: go test -race -coverprofile=coverage.out ./...
 
+      # pkg/emit is a nested module (ADR 0027): ./... from the root does not
+      # reach it, so the SDK is built and tested in its own directory.
+      - name: Build (pkg/emit module)
+        working-directory: pkg/emit
+        run: go build ./...
+
+      - name: Test (pkg/emit module)
+        working-directory: pkg/emit
+        run: go test -race ./...
+
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v4
         with:
