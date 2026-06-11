@@ -52,10 +52,26 @@ type ChangeEvent struct {
 	SchemaVersion string `json:"schemaVersion"`
 	// For attribute/state changes, the keys that changed.
 	ChangedKeys []string `json:"changedKeys"`
+	// Events dropped just before this one because this subscriber could not keep
+	// up. Positive means you have a gap: re-query the current state and resume.
+	Dropped int `json:"dropped"`
 	// The entity this event is about, if it is an entity event.
 	Entity *Entity `json:"entity,omitempty"`
 	// The relation this event is about, if it is a relation event.
 	Relation *Relation `json:"relation,omitempty"`
+}
+
+// Server-side filter for a change subscription: only matching events are
+// delivered, so a consumer watching one type does not receive everything.
+type ChangeFilter struct {
+	// Only events about entities of this type (entityChanged).
+	EntityType *string `json:"entityType,omitempty"`
+	// Only events about relations of this type (relationChanged).
+	RelationType *string `json:"relationType,omitempty"`
+	// Only this change classification.
+	ChangeType *ChangeType `json:"changeType,omitempty"`
+	// Only structural relation changes — alert-worthy topology (relationChanged).
+	StructuralOnly *bool `json:"structuralOnly,omitempty"`
 }
 
 // An infrastructure entity (a host, process, network interface, address, route,

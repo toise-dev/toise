@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **GraphQL subscriptions: server-side filters and an in-band gap signal.**
+  `entityChanged` and `relationChanged` take a `ChangeFilter` (entity/relation
+  type, change classification, structural-only), so a consumer watching one
+  thing no longer receives everything. And a consumer that falls behind is
+  told: events dropped under backpressure are counted and the next delivered
+  event carries `dropped > 0` — re-query state and resume, never a silent gap.
+  (#138)
 - **`describe_type` MCP tool — the per-type zoom.** For an entity type: its
   registration, live count, the identifying and descriptive attribute keys
   actually observed (with usage counts and example values, bounded sampling),

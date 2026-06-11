@@ -228,23 +228,65 @@ func (r *queryResolver) changeConnection(evs []model.Event, first *int, after *s
 
 type subscriptionResolver struct{ *Resolver }
 
-func (r *subscriptionResolver) EntityChanged(ctx context.Context) (<-chan *generated.ChangeEvent, error) {
-	return r.stream(ctx, func(ev model.Event) bool { return ev.Entity != nil }), nil
+func (r *subscriptionResolver) EntityChanged(ctx context.Context, filter *generated.ChangeFilter) (<-chan *generated.ChangeEvent, error) {
+	return r.stream(ctx, func(ev model.Event) bool {
+		if ev.Entity == nil {
+			return false
+		}
+		if filter == nil {
+			return true
+		}
+		if filter.EntityType != nil && ev.Entity.Entity.Type != *filter.EntityType {
+			return false
+		}
+		if filter.ChangeType != nil && changeTypeGQL[ev.Entity.ChangeType] != *filter.ChangeType {
+			return false
+		}
+		return true
+	}), nil
 }
 
-func (r *subscriptionResolver) RelationChanged(ctx context.Context) (<-chan *generated.ChangeEvent, error) {
-	return r.stream(ctx, func(ev model.Event) bool { return ev.Relation != nil }), nil
+func (r *subscriptionResolver) RelationChanged(ctx context.Context, filter *generated.ChangeFilter) (<-chan *generated.ChangeEvent, error) {
+	return r.stream(ctx, func(ev model.Event) bool {
+		if ev.Relation == nil {
+			return false
+		}
+		if filter == nil {
+			return true
+		}
+		if filter.RelationType != nil && ev.Relation.Relation.Type != *filter.RelationType {
+			return false
+		}
+		if filter.ChangeType != nil && changeTypeGQL[ev.Relation.ChangeType] != *filter.ChangeType {
+			return false
+		}
+		if filter.StructuralOnly != nil && *filter.StructuralOnly && !ev.Relation.Relation.Structural {
+			return false
+		}
+		return true
+	}), nil
 }
 
+// stream fans engine events matching want into a bounded channel. A consumer
+// that cannot keep up loses events — but never silently (#138): the count of
+// drops is carried on the NEXT delivered event's dropped field, so the client
+// knows it has a gap and can re-query state before resuming. The engine
+// serializes subscriber callbacks (they run on the commit path), so the
+// counter needs no lock.
 func (r *subscriptionResolver) stream(ctx context.Context, want func(model.Event) bool) <-chan *generated.ChangeEvent {
 	ch := make(chan *generated.ChangeEvent, 16)
+	dropped := 0
 	unsub := r.Engine.Subscribe(func(ev model.Event, _ bool) {
 		if !want(ev) {
 			return
 		}
+		out := eventToChangeGQL(ev)
+		out.Dropped = dropped
 		select {
-		case ch <- eventToChangeGQL(ev):
-		default: // drop if the client cannot keep up
+		case ch <- out:
+			dropped = 0
+		default:
+			dropped++ // this event is lost; the next delivered one says so
 		}
 	})
 	go func() {
