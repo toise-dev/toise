@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -68,11 +69,13 @@ func (s *Store) ReadByTimeRange(ctx context.Context, start, end time.Time) ([]mo
 			return nil, err
 		}
 		n++
-		ev, err := s.getBySeq(seqFromKeySuffix(iter.Key()))
+		ev, ok, err := s.resolveSeq(seqFromKeySuffix(iter.Key()))
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, ev)
+		if ok {
+			out = append(out, ev)
+		}
 	}
 	if err := iter.Error(); err != nil {
 		return nil, err
@@ -95,16 +98,37 @@ func (s *Store) readBySeqIndex(ctx context.Context, prefix []byte) ([]model.Even
 			return nil, err
 		}
 		n++
-		ev, err := s.getBySeq(seqFromKeySuffix(iter.Key()))
+		ev, ok, err := s.resolveSeq(seqFromKeySuffix(iter.Key()))
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, ev)
+		if ok {
+			out = append(out, ev)
+		}
 	}
 	if err := iter.Error(); err != nil {
 		return nil, err
 	}
 	return out, nil
+}
+
+// resolveSeq fetches the event behind an index entry; ok=false means the entry
+// is dangling and must be skipped, not failed. The index iterator is pinned to
+// a point-in-time view, but getBySeq reads live, so a maintenance batch
+// (CoalesceHeartbeats/PruneOlderThan) committing in between leaves visible
+// index keys whose primary record is gone. Maintenance is the ONLY deleter of
+// primary records and always removes primary+index keys in one atomic batch, so
+// a missing primary deterministically means coalesced or pruned history — never
+// a live event.
+func (s *Store) resolveSeq(seq uint64) (model.Event, bool, error) {
+	ev, err := s.getBySeq(seq)
+	if errors.Is(err, pebble.ErrNotFound) {
+		return model.Event{}, false, nil
+	}
+	if err != nil {
+		return model.Event{}, false, err
+	}
+	return ev, true, nil
 }
 
 // checkEvery surfaces context cancellation once per batch of iterations: often
