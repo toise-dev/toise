@@ -15,6 +15,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Breaking for MCP clients that called `get_entity` with `id`.
 - MCP `recent_changes` no longer requires `window`: omitted, it defaults to
   the last hour.
+- **The `toise-emit` SDK is its own Go module with independent versioning**
+  (#160, ADR 0027). `github.com/toise-dev/toise/pkg/emit` now pulls only the
+  OTel pdata types and gRPC into a producer's module graph — none of the
+  server's storage or query stack — and is released on its own cadence with
+  `pkg/emit/vX.Y.Z` tags (first: `pkg/emit/v0.1.0`), at which point
+  `go get github.com/toise-dev/toise/pkg/emit@v0.1.0` resolves. The import
+  path is unchanged.
+- **Server release tags are v-prefixed from `v0.6.0`** (#160, ADR 0027): the
+  old no-`v` convention made every release uninstallable as a Go module
+  version. `0.1.0`–`0.5.0` are not retro-tagged (a tag push would re-trigger
+  the release workflow and duplicate releases). Release assets and the GHCR
+  image carry the v-prefixed tag verbatim; docs URLs keep the unprefixed
+  `/docs/0.6.0` style.
+- **The conformance kit's claim is rescoped and sharpened** (#159): passing
+  `Check` means never rejected per record **for shape reasons** — type-registry
+  membership is a separately enforced layer unless `accept_unknown_types` is
+  set. `Check` now also flags empty attribute keys (a rejection in every mode)
+  and returns a new *advisory* problem (`Problem.Advisory`) when a
+  ResourceLogs carrying entity events has no usable `service.instance.id`
+  (ADR 0019). Producer CI that fails on any returned problem will now fail on
+  a missing instance id: set a stable one, or skip `Advisory` problems.
+- **Snapshots are on by default** (`snapshot_interval: 5m`) and a final
+  snapshot is written per tenant at graceful shutdown, so the liveness memento
+  (#139/#150) actually protects default deployments. Restored liveness
+  deadlines are floored to `now + interval`, preventing a spurious
+  delete-storm-and-recreate after downtime longer than producers' heartbeat
+  intervals; a truncated liveness section in a snapshot degrades to a warning
+  instead of failing the tenant's boot. (#164)
+- **`toise-server checkpoint` is strictly read-only** (#162): it refuses a
+  missing data dir, an unmigrated legacy single-tenant layout, and a dir with
+  no tenant stores — previously it minted a fresh empty store, "backed it up",
+  and exited 0 — and it no longer mutates a valid source (no format-version
+  stamp, no default tenant minted alongside real ones). It now resolves its
+  data dir with the server's exact config precedence and gains
+  `--config`/`TOISE_CONFIG` support.
+
+### Added
+
+- **`pkg/emit/wire` — the single in-repo spelling of the entity-events wire
+  vocabulary** (#160): event names, attribute keys, relationship-descriptor
+  keys, and the producer-identity resource attribute, stdlib-only, imported by
+  the SDK, the conformance kit, and Toise's own ingest. The frozen fixture
+  still pins the contract against the world; the shared constants pin the
+  repo's two sides against each other, and the two previously untied
+  constants (`entity.report.interval`, `service.instance.id`) gain end-to-end
+  behavioral tests.
+
+### Fixed
+
+- **History reads no longer fail during maintenance** (#161): `entity_history`,
+  `recent_changes`, `graph_diff`, every as-of fold, and their GraphQL
+  equivalents could error with `pebble: not found` when a query overlapped
+  heartbeat coalescing or retention pruning; dangling secondary-index entries
+  (which deterministically mean coalesced/pruned history) are now skipped.
+- **Pre-1970 event-time inputs are rejected at the parse boundary** (#165):
+  the time index encodes unsigned nanoseconds, so an `as_of` of 1950 returned
+  the entire current graph dressed up as ancient history and a pre-1970
+  `graph_diff` `from` yielded a silently empty diff; both now return a clean
+  error on MCP and GraphQL alike.
+- **An unknown embedded `relationship.type` is rejected per record** (#163)
+  via OTLP partial success, like every other contract violation, instead of
+  failing the whole batch as retryable and poisoning the producer's export
+  loop while its valid sibling records never persisted.
+- **The SDK surfaces OTLP partial success** (#158): when Toise accepts an
+  export but rejects records as contract violations, `State`/`Delete` now
+  return a typed `emit.PartialError` (rejected count + the server's first
+  rejection reason, detectable with `errors.As`) instead of a silent `nil`.
 
 ## [0.5.0] - 2026-06-11
 
