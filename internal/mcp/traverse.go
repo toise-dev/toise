@@ -22,15 +22,17 @@ type edge struct {
 	direction string // "outgoing" when the edge leaves the current entity
 }
 
-// edgesOf lists the traversable edges of id, deterministically ordered, with
-// deleted endpoints already excluded.
-func (s *Server) edgesOf(id model.EntityID, relType string) []edge {
+// edgesOf lists the traversable edges of id on g, deterministically ordered,
+// with deleted endpoints already excluded. Taking the graph as a parameter
+// lets every traversal run against an as-of fold as well as the live
+// projection (#135).
+func edgesOf(g Graph, id model.EntityID, relType string) []edge {
 	var out []edge
-	outgoing := s.graph.ListRelations(relType, id, "")
+	outgoing := g.ListRelations(relType, id, "")
 	for i := range outgoing {
 		out = append(out, edge{rel: outgoing[i], other: outgoing[i].To, direction: "outgoing"})
 	}
-	incoming := s.graph.ListRelations(relType, "", id)
+	incoming := g.ListRelations(relType, "", id)
 	for i := range incoming {
 		if incoming[i].From == incoming[i].To {
 			continue // self-loop already covered by the outgoing scan
@@ -39,7 +41,7 @@ func (s *Server) edgesOf(id model.EntityID, relType string) []edge {
 	}
 	kept := out[:0]
 	for i := range out {
-		if _, ok, deleted := s.graph.GetEntity(out[i].other); ok && !deleted {
+		if _, ok, deleted := g.GetEntity(out[i].other); ok && !deleted {
 			kept = append(kept, out[i])
 		}
 	}
@@ -55,6 +57,7 @@ type FindPathInput struct {
 	ToID         string `json:"to_id" jsonschema:"logical id of the destination entity"`
 	RelationType string `json:"relation_type,omitempty" jsonschema:"only traverse relations of this type (omit to traverse any)"`
 	MaxDepth     int    `json:"max_depth,omitempty" jsonschema:"maximum hops to explore, 1 to 10 (default 10)"`
+	AsOf         string `json:"as_of,omitempty" jsonschema:"RFC 3339 instant: search the graph as it was then (event-time), instead of now"`
 }
 
 // PathHop is one entity along the path with the edge that reached it.
@@ -72,7 +75,7 @@ type FindPathOutput struct {
 	Path      []PathHop `json:"path,omitempty" jsonschema:"the entities along the shortest path, start first"`
 }
 
-func (s *Server) findPath(_ context.Context, _ *mcpsdk.CallToolRequest, in FindPathInput) (*mcpsdk.CallToolResult, FindPathOutput, error) {
+func (s *Server) findPath(ctx context.Context, _ *mcpsdk.CallToolRequest, in FindPathInput) (*mcpsdk.CallToolResult, FindPathOutput, error) {
 	if in.FromID == "" || in.ToID == "" {
 		return nil, FindPathOutput{}, fmt.Errorf("both from_id and to_id are required")
 	}
@@ -80,9 +83,13 @@ func (s *Server) findPath(_ context.Context, _ *mcpsdk.CallToolRequest, in FindP
 	if depth <= 0 || depth > maxPathDepth {
 		depth = maxPathDepth
 	}
+	g, err := s.graphAt(ctx, in.AsOf)
+	if err != nil {
+		return nil, FindPathOutput{}, err
+	}
 	from, to := model.EntityID(in.FromID), model.EntityID(in.ToID)
 	for _, id := range []model.EntityID{from, to} {
-		if _, ok, deleted := s.graph.GetEntity(id); !ok || deleted {
+		if _, ok, deleted := g.GetEntity(id); !ok || deleted {
 			return nil, FindPathOutput{}, fmt.Errorf("no live entity with id %q; use find_entities to discover ids", id)
 		}
 	}
@@ -98,7 +105,7 @@ func (s *Server) findPath(_ context.Context, _ *mcpsdk.CallToolRequest, in FindP
 	for d := 0; d < depth && len(frontier) > 0 && !found; d++ {
 		var next []model.EntityID
 		for _, cur := range frontier {
-			edges := s.edgesOf(cur, in.RelationType)
+			edges := edgesOf(g, cur, in.RelationType)
 			for i := range edges {
 				e := &edges[i]
 				if _, seen := parents[e.other]; seen {
@@ -124,7 +131,7 @@ func (s *Server) findPath(_ context.Context, _ *mcpsdk.CallToolRequest, in FindP
 	var hops []PathHop
 	for cur := to; ; {
 		p := parents[cur]
-		ent, _, _ := s.graph.GetEntity(cur)
+		ent, _, _ := g.GetEntity(cur)
 		hop := PathHop{Entity: entityOut(ent, false)}
 		if cur != from {
 			hop.ViaRelation = p.via.rel.Type

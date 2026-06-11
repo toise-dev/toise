@@ -89,11 +89,11 @@ type ComplexityRoot struct {
 	}
 
 	Query struct {
-		Entities      func(childComplexity int, filter *EntityFilter, first *int, after *string) int
-		Entity        func(childComplexity int, id string) int
+		Entities      func(childComplexity int, filter *EntityFilter, first *int, after *string, asOf *string) int
+		Entity        func(childComplexity int, id string, asOf *string) int
 		EntityHistory func(childComplexity int, id string, since *string, until *string, asKnownAt *string, first *int, after *string) int
 		RecentChanges func(childComplexity int, window string, first *int, after *string) int
-		Relations     func(childComplexity int, filter *RelationFilter, first *int, after *string) int
+		Relations     func(childComplexity int, filter *RelationFilter, first *int, after *string, asOf *string) int
 	}
 
 	Relation struct {
@@ -123,9 +123,9 @@ type ComplexityRoot struct {
 }
 
 type QueryResolver interface {
-	Entity(ctx context.Context, id string) (*Entity, error)
-	Entities(ctx context.Context, filter *EntityFilter, first *int, after *string) (*EntityConnection, error)
-	Relations(ctx context.Context, filter *RelationFilter, first *int, after *string) (*RelationConnection, error)
+	Entity(ctx context.Context, id string, asOf *string) (*Entity, error)
+	Entities(ctx context.Context, filter *EntityFilter, first *int, after *string, asOf *string) (*EntityConnection, error)
+	Relations(ctx context.Context, filter *RelationFilter, first *int, after *string, asOf *string) (*RelationConnection, error)
 	EntityHistory(ctx context.Context, id string, since *string, until *string, asKnownAt *string, first *int, after *string) (*ChangeConnection, error)
 	RecentChanges(ctx context.Context, window string, first *int, after *string) (*ChangeConnection, error)
 }
@@ -340,7 +340,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Query.Entities(childComplexity, args["filter"].(*EntityFilter), args["first"].(*int), args["after"].(*string)), true
+		return e.ComplexityRoot.Query.Entities(childComplexity, args["filter"].(*EntityFilter), args["first"].(*int), args["after"].(*string), args["asOf"].(*string)), true
 	case "Query.entity":
 		if e.ComplexityRoot.Query.Entity == nil {
 			break
@@ -351,7 +351,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Query.Entity(childComplexity, args["id"].(string)), true
+		return e.ComplexityRoot.Query.Entity(childComplexity, args["id"].(string), args["asOf"].(*string)), true
 	case "Query.entityHistory":
 		if e.ComplexityRoot.Query.EntityHistory == nil {
 			break
@@ -385,7 +385,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Query.Relations(childComplexity, args["filter"].(*RelationFilter), args["first"].(*int), args["after"].(*string)), true
+		return e.ComplexityRoot.Query.Relations(childComplexity, args["filter"].(*RelationFilter), args["first"].(*int), args["after"].(*string), args["asOf"].(*string)), true
 
 	case "Relation.attributes":
 		if e.ComplexityRoot.Relation.Attributes == nil {
@@ -736,17 +736,24 @@ input RelationFilter {
 }
 
 type Query {
-  "Fetch a single entity by its logical id. Returns null if unknown."
-  entity(id: ID!): Entity
+  """
+  Fetch a single entity by its logical id. Returns null if unknown. Provide
+  ` + "`" + `asOf` + "`" + ` (RFC 3339) to read the entity as it was at that instant (event-time).
+  """
+  entity(id: ID!, asOf: String): Entity
 
   """
   List entities (current state), newest-first, with Relay pagination. Use
   ` + "`" + `first` + "`" + ` (default 50) and ` + "`" + `after` + "`" + ` (an ` + "`" + `endCursor` + "`" + ` from a previous page).
+  Provide ` + "`" + `asOf` + "`" + ` (RFC 3339) to list the graph as it was at that instant.
   """
-  entities(filter: EntityFilter, first: Int = 50, after: String): EntityConnection!
+  entities(filter: EntityFilter, first: Int = 50, after: String, asOf: String): EntityConnection!
 
-  "List relations (current state) with Relay pagination."
-  relations(filter: RelationFilter, first: Int = 50, after: String): RelationConnection!
+  """
+  List relations (current state) with Relay pagination. Provide ` + "`" + `asOf` + "`" + `
+  (RFC 3339) to list the graph as it was at that instant.
+  """
+  relations(filter: RelationFilter, first: Int = 50, after: String, asOf: String): RelationConnection!
 
   """
   The timeline of change events for one entity. ` + "`" + `since` + "`" + `/` + "`" + `until` + "`" + ` (RFC 3339) bound
@@ -1079,6 +1086,14 @@ func (ec *executionContext) field_Query_entities_args(ctx context.Context, rawAr
 		return nil, err
 	}
 	args["after"] = arg2
+	arg3, err := graphql.ProcessArgField(ctx, rawArgs, "asOf",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["asOf"] = arg3
 	return args, nil
 }
 
@@ -1147,6 +1162,14 @@ func (ec *executionContext) field_Query_entity_args(ctx context.Context, rawArgs
 		return nil, err
 	}
 	args["id"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "asOf",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["asOf"] = arg1
 	return args, nil
 }
 
@@ -1207,6 +1230,14 @@ func (ec *executionContext) field_Query_relations_args(ctx context.Context, rawA
 		return nil, err
 	}
 	args["after"] = arg2
+	arg3, err := graphql.ProcessArgField(ctx, rawArgs, "asOf",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["asOf"] = arg3
 	return args, nil
 }
 
@@ -2041,7 +2072,7 @@ func (ec *executionContext) _Query_entity(ctx context.Context, field graphql.Col
 		},
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().Entity(ctx, fc.Args["id"].(string))
+			return ec.Resolvers.Query().Entity(ctx, fc.Args["id"].(string), fc.Args["asOf"].(*string))
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *Entity) graphql.Marshaler {
@@ -2085,7 +2116,7 @@ func (ec *executionContext) _Query_entities(ctx context.Context, field graphql.C
 		},
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().Entities(ctx, fc.Args["filter"].(*EntityFilter), fc.Args["first"].(*int), fc.Args["after"].(*string))
+			return ec.Resolvers.Query().Entities(ctx, fc.Args["filter"].(*EntityFilter), fc.Args["first"].(*int), fc.Args["after"].(*string), fc.Args["asOf"].(*string))
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *EntityConnection) graphql.Marshaler {
@@ -2129,7 +2160,7 @@ func (ec *executionContext) _Query_relations(ctx context.Context, field graphql.
 		},
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().Relations(ctx, fc.Args["filter"].(*RelationFilter), fc.Args["first"].(*int), fc.Args["after"].(*string))
+			return ec.Resolvers.Query().Relations(ctx, fc.Args["filter"].(*RelationFilter), fc.Args["first"].(*int), fc.Args["after"].(*string), fc.Args["asOf"].(*string))
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *RelationConnection) graphql.Marshaler {

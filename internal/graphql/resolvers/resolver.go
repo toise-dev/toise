@@ -12,12 +12,16 @@ import (
 	"github.com/toise-dev/toise/internal/change"
 	"github.com/toise-dev/toise/internal/graphql/generated"
 	"github.com/toise-dev/toise/internal/model"
+	"github.com/toise-dev/toise/internal/projection"
 )
 
 // EventReader is the subset of the store the resolvers read history from.
 type EventReader interface {
 	ReadByEntity(ctx context.Context, id model.EntityID) ([]model.Event, error)
 	ReadByTimeRange(ctx context.Context, start, end time.Time) ([]model.Event, error)
+	// PruneHorizon is the latest retention cutoff ever applied (zero = never
+	// pruned): the oldest instant an as-of read can answer completely.
+	PruneHorizon() time.Time
 }
 
 // Graph is the subset of the projection the resolvers read current state from.
@@ -43,6 +47,34 @@ func (r *Resolver) now() time.Time {
 	return time.Now()
 }
 
+// graphAt resolves which graph a query reads: the live projection when asOf is
+// nil/empty, otherwise a projection folded from the event log up to asOf —
+// the event-time reading ("the world as it was"), mirroring the MCP tools'
+// as_of (#135). An asOf older than the retention horizon is rejected: those
+// events are pruned and a silent partial graph would be worse than an error.
+func (r *Resolver) graphAt(ctx context.Context, asOf *string) (Graph, error) {
+	if asOf == nil || *asOf == "" {
+		return r.Graph, nil
+	}
+	t, err := parseOptTime(asOf, "asOf")
+	if err != nil {
+		return nil, err
+	}
+	if h := r.Store.PruneHorizon(); !h.IsZero() && t.Before(h) {
+		return nil, fmt.Errorf("asOf %s is before the retention horizon %s: events that old have been pruned",
+			t.UTC().Format(time.RFC3339), h.Format(time.RFC3339))
+	}
+	evs, err := r.Store.ReadByTimeRange(ctx, time.Unix(0, 0), t.Add(time.Nanosecond))
+	if err != nil {
+		return nil, fmt.Errorf("reading events up to %s: %w", t.UTC().Format(time.RFC3339), err)
+	}
+	g := projection.New()
+	for i := range evs {
+		g.Apply(evs[i])
+	}
+	return g, nil
+}
+
 // Query returns the query resolver.
 func (r *Resolver) Query() generated.QueryResolver { return &queryResolver{r} }
 
@@ -51,20 +83,28 @@ func (r *Resolver) Subscription() generated.SubscriptionResolver { return &subsc
 
 type queryResolver struct{ *Resolver }
 
-func (r *queryResolver) Entity(_ context.Context, id string) (*generated.Entity, error) {
-	e, ok, deleted := r.Graph.GetEntity(model.EntityID(id))
+func (r *queryResolver) Entity(ctx context.Context, id string, asOf *string) (*generated.Entity, error) {
+	g, err := r.graphAt(ctx, asOf)
+	if err != nil {
+		return nil, err
+	}
+	e, ok, deleted := g.GetEntity(model.EntityID(id))
 	if !ok {
 		return nil, nil
 	}
 	return entityToGQL(e, deleted), nil
 }
 
-func (r *queryResolver) Entities(_ context.Context, filter *generated.EntityFilter, first *int, after *string) (*generated.EntityConnection, error) {
+func (r *queryResolver) Entities(ctx context.Context, filter *generated.EntityFilter, first *int, after, asOf *string) (*generated.EntityConnection, error) {
+	g, err := r.graphAt(ctx, asOf)
+	if err != nil {
+		return nil, err
+	}
 	typ := ""
 	if filter != nil && filter.Type != nil {
 		typ = *filter.Type
 	}
-	all := r.Graph.ListEntities(typ)
+	all := g.ListEntities(typ)
 	page, end, hasNext, err := paginate(all, func(e model.Entity) string { return string(e.ID) }, first, after)
 	if err != nil {
 		return nil, err
@@ -80,7 +120,11 @@ func (r *queryResolver) Entities(_ context.Context, filter *generated.EntityFilt
 	}, nil
 }
 
-func (r *queryResolver) Relations(_ context.Context, filter *generated.RelationFilter, first *int, after *string) (*generated.RelationConnection, error) {
+func (r *queryResolver) Relations(ctx context.Context, filter *generated.RelationFilter, first *int, after, asOf *string) (*generated.RelationConnection, error) {
+	g, err := r.graphAt(ctx, asOf)
+	if err != nil {
+		return nil, err
+	}
 	var typ string
 	var from, to model.EntityID
 	if filter != nil {
@@ -94,7 +138,7 @@ func (r *queryResolver) Relations(_ context.Context, filter *generated.RelationF
 			to = model.EntityID(*filter.ToID)
 		}
 	}
-	all := r.Graph.ListRelations(typ, from, to)
+	all := g.ListRelations(typ, from, to)
 	page, end, hasNext, err := paginate(all, func(rel model.Relation) string { return string(rel.ID) }, first, after)
 	if err != nil {
 		return nil, err

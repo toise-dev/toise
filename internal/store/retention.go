@@ -169,12 +169,20 @@ func (s *Store) PruneOlderThan(cutoff time.Time) (events int, bytes int64, err e
 	if events == 0 {
 		return 0, 0, nil
 	}
+	// Record the horizon in the same durable batch: an as-of read older than
+	// the cutoff can no longer be answered completely (#135).
+	if berr := batch.Set(metaPruneHorizonKey, encodeU64(uint64(cutoff.UnixNano())), nil); berr != nil {
+		return 0, 0, fmt.Errorf("staging prune horizon: %w", berr)
+	}
 	if cerr := batch.Commit(pebble.Sync); cerr != nil {
 		return 0, 0, fmt.Errorf("committing prune: %w", cerr)
 	}
 	s.mu.Lock()
 	s.prunedEvents += uint64(events)
 	s.prunedBytes += uint64(bytes)
+	if n := cutoff.UnixNano(); n > s.pruneHorizon {
+		s.pruneHorizon = n
+	}
 	s.mu.Unlock()
 	return events, bytes, nil
 }

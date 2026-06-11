@@ -87,7 +87,10 @@ func (g *fakeGraph) RelationCount() int { return len(g.relations) }
 type fakeStore struct {
 	byEntity map[model.EntityID][]model.Event
 	byTime   []model.Event
+	horizon  time.Time
 }
+
+func (s *fakeStore) PruneHorizon() time.Time { return s.horizon }
 
 func (s *fakeStore) ReadByEntity(_ context.Context, id model.EntityID) ([]model.Event, error) {
 	return s.byEntity[id], nil
@@ -760,6 +763,8 @@ func (blockingStore) ReadByTimeRange(ctx context.Context, _, _ time.Time) ([]mod
 	return nil, ctx.Err()
 }
 
+func (blockingStore) PruneHorizon() time.Time { return time.Time{} }
+
 // TestToolCallTimeout pins the per-call budget: a tool whose read outlives the
 // deadline returns a deadline error instead of hanging the transport (#115).
 func TestToolCallTimeout(t *testing.T) {
@@ -779,5 +784,124 @@ func TestToolCallTimeout(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("tool call did not respect its timeout")
+	}
+}
+
+// TestAsOfReads pins #135: the read tools answer "as it was at T" from the
+// event log — entities appear, change, and disappear depending on the instant;
+// an as_of older than the retention horizon is refused.
+func TestAsOfReads(t *testing.T) {
+	t0 := time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC)
+	web, db := host("01W", "web-1"), host("01D", "db-1")
+	webV2 := web
+	webV2.Attributes = []model.KeyValue{{Key: "os.type", Value: model.StringValue("linux")}, {Key: "status", Value: model.StringValue("degraded")}}
+	mkE := func(ct model.ChangeType, e model.Entity, at time.Time) model.Event {
+		return model.Event{Entity: &model.EntityEvent{
+			EventID: fmt.Sprintf("e-%s-%d", e.ID, at.Unix()), ChangeType: ct, Entity: e,
+			EventTime: at, RecordedAt: at, SchemaVersion: "1.0",
+		}}
+	}
+	rel := model.Relation{ID: "R1", Type: "connected_to", From: web.ID, To: db.ID}
+	mkR := func(ct model.ChangeType, at time.Time) model.Event {
+		return model.Event{Relation: &model.RelationEvent{
+			EventID: fmt.Sprintf("r-%d", at.Unix()), ChangeType: ct, Relation: rel,
+			EventTime: at, RecordedAt: at, SchemaVersion: "1.0",
+		}}
+	}
+	st := &fakeStore{byTime: []model.Event{
+		mkE(model.EntityCreated, web, t0),                             // 12:00 web appears
+		mkE(model.EntityCreated, db, t0.Add(time.Hour)),               // 13:00 db appears
+		mkR(model.RelationAdded, t0.Add(2*time.Hour)),                 // 14:00 web->db
+		mkE(model.EntityAttributeUpdated, webV2, t0.Add(3*time.Hour)), // 15:00 web degraded
+		mkR(model.RelationRemoved, t0.Add(4*time.Hour)),               // 16:00 edge gone
+		mkE(model.EntityDeleted, db, t0.Add(5*time.Hour)),             // 17:00 db deleted
+	}}
+	g := &fakeGraph{entities: map[model.EntityID]model.Entity{}, deleted: map[model.EntityID]bool{}}
+	s := New(g, st) // the LIVE graph is empty: every hit below proves the as-of fold answered
+	ctx := context.Background()
+	at := func(h int) string { return t0.Add(time.Duration(h) * time.Hour).Format(time.RFC3339) }
+
+	// 12:30 — only web exists, no relations.
+	_, out, err := s.findEntities(ctx, nil, FindEntitiesInput{AsOf: t0.Add(30 * time.Minute).Format(time.RFC3339)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Total != 1 || out.Entities[0].ID != "01W" {
+		t.Fatalf("12:30 entities = %+v, want only web", out.Entities)
+	}
+
+	// 14:30 — both entities, the relation is live, web still healthy.
+	_, ds, err := s.describeSchema(ctx, nil, DescribeSchemaInput{AsOf: at(2) + ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ds.TotalEntities != 2 || ds.TotalRelations != 1 {
+		t.Fatalf("14:00 schema = %d/%d, want 2/1", ds.TotalEntities, ds.TotalRelations)
+	}
+	_, ge, err := s.getEntity(ctx, nil, GetEntityInput{ID: "01W", AsOf: at(2)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range ge.Entity.Attributes {
+		if a.Key == "status" {
+			t.Fatalf("14:00 web must not yet be degraded: %+v", ge.Entity.Attributes)
+		}
+	}
+	_, fp, err := s.findPath(ctx, nil, FindPathInput{FromID: "01W", ToID: "01D", AsOf: at(2)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fp.Reachable || fp.Hops != 1 {
+		t.Fatalf("14:00 path = %+v, want reachable in 1 hop", fp)
+	}
+
+	// 15:30 — web degraded; 16:30 — edge gone (unreachable, entities live).
+	_, ge, err = s.getEntity(ctx, nil, GetEntityInput{ID: "01W", AsOf: at(3)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, a := range ge.Entity.Attributes {
+		if a.Key == "status" && a.Value == "degraded" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("15:00 web must be degraded: %+v", ge.Entity.Attributes)
+	}
+	_, fp, err = s.findPath(ctx, nil, FindPathInput{FromID: "01W", ToID: "01D", AsOf: at(4)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fp.Reachable {
+		t.Fatal("16:00 path must be unreachable (edge removed)")
+	}
+
+	// 17:30 — db deleted: neighbors of web see nothing, find_entities sees one.
+	_, ns, err := s.getNeighbors(ctx, nil, GetNeighborsInput{EntityID: "01W", AsOf: at(5)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ns.Count != 0 {
+		t.Fatalf("17:00 neighbors = %d, want 0", ns.Count)
+	}
+
+	// Horizon refusal and format validation.
+	st.horizon = t0.Add(time.Hour)
+	if _, _, herr := s.findEntities(ctx, nil, FindEntitiesInput{AsOf: t0.Add(30 * time.Minute).Format(time.RFC3339)}); herr == nil || !strings.Contains(herr.Error(), "retention horizon") {
+		t.Fatalf("pre-horizon as_of = %v, want a retention-horizon error", herr)
+	}
+	st.horizon = time.Time{}
+	if _, _, ferr := s.findEntities(ctx, nil, FindEntitiesInput{AsOf: "yesterday"}); ferr == nil {
+		t.Fatal("invalid as_of format must error")
+	}
+
+	// Empty as_of still reads the live graph (which is empty here).
+	_, out, err = s.findEntities(ctx, nil, FindEntitiesInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Total != 0 {
+		t.Fatalf("live graph read = %d, want 0", out.Total)
 	}
 }
