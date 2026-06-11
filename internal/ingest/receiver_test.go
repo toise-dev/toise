@@ -314,6 +314,115 @@ func TestReceiverRejectsInvalidRecordPerRecord(t *testing.T) {
 	}
 }
 
+// TestReceiverRejectsUnknownEmbeddedRelationTypePerRecord pins the #163
+// boundary contract: an embedded relationship descriptor with an unregistered
+// relationship.type is rejected per record via OTLP partial success instead of
+// reaching the store, where its Event.Validate failure failed the whole batch
+// as codes.Unavailable — the producer retried the identical export forever and
+// none of its valid siblings ever persisted.
+func TestReceiverRejectsUnknownEmbeddedRelationTypePerRecord(t *testing.T) {
+	client, g, st := startReceiver(t)
+
+	ld := plog.NewLogs()
+	sl := ld.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty()
+	entityRecord(sl, evEntityState, model.TypeHost, map[string]string{"host.id": "h1"}, nil)
+	embeddedEntity(sl, t0, model.TypeServiceInstance, map[string]string{"service.instance.id": "s1"},
+		[]relDesc{{relType: "acme.made.up", toType: model.TypeHost, toID: map[string]string{"host.id": "h1"}}})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := client.Export(ctx, plogotlp.NewExportRequestFromLogs(ld))
+	if err != nil {
+		t.Fatalf("export errored (must be partial success, not failure): %v", err)
+	}
+	ps := resp.PartialSuccess()
+	if ps.RejectedLogRecords() != 1 {
+		t.Errorf("RejectedLogRecords = %d, want 1", ps.RejectedLogRecords())
+	}
+	if !strings.Contains(ps.ErrorMessage(), "acme.made.up") {
+		t.Errorf("partial-success message must name the unknown type, got %q", ps.ErrorMessage())
+	}
+	if g.EntityCount() != 2 {
+		t.Fatalf("EntityCount = %d, want 2 (both entities persisted)", g.EntityCount())
+	}
+	if g.RelationCount() != 0 {
+		t.Errorf("RelationCount = %d, want 0 (the bad edge must not be staged)", g.RelationCount())
+	}
+	// The projection must equal a replay of the durable log: the rejection
+	// happened before staging, not after a partial apply.
+	g2 := projection.New()
+	if err := g2.Replay(st); err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if g2.EntityCount() != g.EntityCount() || g2.RelationCount() != g.RelationCount() {
+		t.Errorf("projection diverged from replay(log): entities %d/%d relations %d/%d",
+			g.EntityCount(), g2.EntityCount(), g.RelationCount(), g2.RelationCount())
+	}
+
+	// The producer is not poison-pilled: a follow-up export with a registered
+	// relation type goes through end to end.
+	ld2 := plog.NewLogs()
+	sl2 := ld2.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty()
+	embeddedEntity(sl2, t0.Add(time.Minute), model.TypeServiceInstance, map[string]string{"service.instance.id": "s1"},
+		[]relDesc{{relType: model.RelRunsOn, toType: model.TypeHost, toID: map[string]string{"host.id": "h1"}}})
+	export(t, client, ld2)
+	if g.RelationCount() != 1 {
+		t.Errorf("RelationCount = %d after follow-up export, want 1", g.RelationCount())
+	}
+}
+
+// TestAcceptUnknownEmbeddedRelationType pins the open-vocabulary side of #163:
+// with accept_unknown_types on, a shape-valid embedded relationship of an
+// unregistered type is ingested end to end (boundary AND store backstop), not
+// rejected.
+func TestAcceptUnknownEmbeddedRelationType(t *testing.T) {
+	cfg := store.DefaultConfig()
+	cfg.AcceptUnknownTypes = true
+	st, err := store.Open(t.TempDir(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	g := projection.New()
+	eng := change.New(g, st, change.WithClock(func() time.Time { return t0 }))
+	rec := NewRoutedReceiver(func(string) (*change.Engine, error) { return eng, nil }, nil, nil, true, nil)
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = rec.Serve(lis) }()
+	t.Cleanup(rec.Stop)
+	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	client := plogotlp.NewGRPCClient(conn)
+
+	ld := plog.NewLogs()
+	sl := ld.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty()
+	entityRecord(sl, evEntityState, model.TypeHost, map[string]string{"host.id": "h1"}, nil)
+	embeddedEntity(sl, t0, model.TypeServiceInstance, map[string]string{"service.instance.id": "s1"},
+		[]relDesc{{relType: "acme.custom.link", toType: model.TypeHost, toID: map[string]string{"host.id": "h1"}}})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := client.Export(ctx, plogotlp.NewExportRequestFromLogs(ld))
+	if err != nil {
+		t.Fatalf("open-vocabulary export: %v", err)
+	}
+	if got := resp.PartialSuccess().RejectedLogRecords(); got != 0 {
+		t.Errorf("rejected = %d, want 0: %s", got, resp.PartialSuccess().ErrorMessage())
+	}
+	if g.RelationCount() != 1 {
+		t.Fatalf("RelationCount = %d, want 1 (the unknown-type edge)", g.RelationCount())
+	}
+	if n := len(g.ListRelations("acme.custom.link", "", "")); n != 1 {
+		t.Errorf("acme.custom.link relations = %d, want 1", n)
+	}
+}
+
 // TestExportStatusCodes pins the OTLP retryability contract (#111): transient
 // append failures must surface as codes.Unavailable (retryable) and permanent
 // caller errors as codes.InvalidArgument (not retried), never codes.Unknown.

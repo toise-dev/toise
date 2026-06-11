@@ -45,6 +45,13 @@ func newEmbeddedReconciler() *embeddedReconciler {
 // returns the dotted keys of any non-scalar or malformed descriptor values it
 // dropped, so the caller can surface the loss rather than discard it silently.
 func (r *embeddedReconciler) handle(e engine, lr plog.LogRecord) (dropped []string, err error) {
+	return r.handleVocab(e, lr, true)
+}
+
+// handleVocab is handle with the vocabulary check selectable, mirroring
+// routeRecordVocab: with strictVocab false (accept_unknown_types, #141) an
+// unknown relationship.type passes as long as the descriptor's shape is sound.
+func (r *embeddedReconciler) handleVocab(e engine, lr plog.LogRecord, strictVocab bool) (dropped []string, err error) {
 	attrs := lr.Attributes()
 	et := lr.EventName()
 	if et != evEntityState && et != evEntityDelete {
@@ -78,13 +85,16 @@ func (r *embeddedReconciler) handle(e engine, lr plog.LogRecord) (dropped []stri
 		return idDropped, nil
 	case evEntityState:
 		when := eventTimeOf(lr)
-		rels, relDropped := embeddedRelations(attrs, source, when)
+		rels, relDropped, relErr := embeddedRelations(attrs, source, when, strictVocab)
 		dropped = append(dropped, idDropped...)
 		dropped = append(dropped, relDropped...)
+		// The valid descriptors are still reconciled when one is rejected: the
+		// record's good edges (and absence-based removals) must not be held
+		// hostage by a sibling descriptor that can never become valid.
 		if rerr := r.reconcile(e, sk, rels, when); rerr != nil {
 			return dropped, rerr
 		}
-		return dropped, nil
+		return dropped, relErr
 	default:
 		return idDropped, nil
 	}
@@ -143,11 +153,15 @@ func (r *embeddedReconciler) reconcile(e engine, sourceKey string, desired []cha
 // embeddedRelations parses an entity-state record's `entity.relationships` array
 // into relation observations: From is the source entity, To is the descriptor
 // target. A malformed descriptor (non-map element, missing/empty fields) is
-// dropped (its key surfaced), never silently merged.
-func embeddedRelations(attrs pcommon.Map, source change.EndpointRef, when time.Time) (rels []change.RelationObservation, dropped []string) {
+// dropped (its key surfaced), never silently merged. With strictVocab, a
+// descriptor whose relationship.type is not registered makes the record invalid
+// (errInvalidRecord): validating here, before staging, bounds the blast radius —
+// the store would otherwise reject the producer's whole batch for one bad
+// descriptor, and the retryable failure would poison every subsequent export.
+func embeddedRelations(attrs pcommon.Map, source change.EndpointRef, when time.Time, strictVocab bool) (rels []change.RelationObservation, dropped []string, err error) {
 	v, ok := attrs.Get(attrEntityRelationships)
 	if !ok || v.Type() != pcommon.ValueTypeSlice {
-		return nil, nil
+		return nil, nil, nil
 	}
 	sl := v.Slice()
 	for i := 0; i < sl.Len(); i++ {
@@ -161,9 +175,17 @@ func embeddedRelations(attrs pcommon.Map, source change.EndpointRef, when time.T
 		relType, okT := strFromMap(m, relDescType)
 		toType, okTT := strFromMap(m, relDescEntityType)
 		idv, hasID := m.Get(relDescEntityID)
-		if !okT || !okTT || !hasID || idv.Type() != pcommon.ValueTypeMap {
+		if !okT || relType == "" || !okTT || !hasID || idv.Type() != pcommon.ValueTypeMap {
 			dropped = append(dropped, key)
 			continue
+		}
+		if strictVocab {
+			if _, known := model.RelationDef(relType); !known {
+				if err == nil {
+					err = fmt.Errorf("%w: unknown %s %q", errInvalidRecord, relDescType, relType)
+				}
+				continue
+			}
 		}
 		toID, idDropped := kvsFromMap(idv.Map(), key+"."+relDescEntityID)
 		dropped = append(dropped, idDropped...)
@@ -178,7 +200,7 @@ func embeddedRelations(attrs pcommon.Map, source change.EndpointRef, when time.T
 			EventTime: when,
 		})
 	}
-	return rels, dropped
+	return rels, dropped, err
 }
 
 func strFromMap(m pcommon.Map, key string) (string, bool) {
