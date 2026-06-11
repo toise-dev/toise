@@ -99,7 +99,7 @@ func (s *fakeStore) ReadByEntity(_ context.Context, id model.EntityID) ([]model.
 func (s *fakeStore) ReadByTimeRange(_ context.Context, start, end time.Time) ([]model.Event, error) {
 	var out []model.Event
 	for _, ev := range s.byTime {
-		et, _ := eventTimes(ev)
+		et, _ := ev.Times()
 		if !et.Before(start) && !et.After(end) {
 			out = append(out, ev)
 		}

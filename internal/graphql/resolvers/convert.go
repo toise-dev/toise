@@ -137,12 +137,16 @@ func paginate[T any](items []T, idOf func(T) string, first *int, after *string) 
 			}
 		}
 	}
+	const maxFirst = 200 // same page bound as the MCP tools (#144)
 	n := 50
 	if first != nil {
 		n = *first
 	}
-	if n < 0 {
+	switch {
+	case n < 0:
 		n = 0
+	case n > maxFirst:
+		n = maxFirst
 	}
 	if start > len(items) {
 		start = len(items)

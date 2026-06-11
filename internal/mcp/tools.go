@@ -206,7 +206,7 @@ func (s *Server) entityHistory(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 	out := EntityHistoryOutput{}
 	filtered := evs[:0:0]
 	for _, ev := range evs {
-		et, rt := eventTimes(ev)
+		et, rt := ev.Times()
 		if !since.IsZero() && et.Before(since) {
 			continue
 		}
@@ -227,8 +227,8 @@ func (s *Server) entityHistory(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 		filtered = append(filtered, ev)
 	}
 	sort.SliceStable(filtered, func(i, j int) bool {
-		ei, _ := eventTimes(filtered[i])
-		ej, _ := eventTimes(filtered[j])
+		ei, _ := filtered[i].Times()
+		ej, _ := filtered[j].Times()
 		return ei.Before(ej)
 	})
 	out.Total = len(filtered)
@@ -520,15 +520,4 @@ func parseOptTime(s, field string) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("invalid %s %q: use an RFC 3339 timestamp like 2026-05-29T14:00:00Z", field, s)
 	}
 	return t, nil
-}
-
-func eventTimes(ev model.Event) (eventTime, recordedAt time.Time) {
-	switch {
-	case ev.Entity != nil:
-		return ev.Entity.EventTime, ev.Entity.RecordedAt
-	case ev.Relation != nil:
-		return ev.Relation.EventTime, ev.Relation.RecordedAt
-	default:
-		return time.Time{}, time.Time{}
-	}
 }

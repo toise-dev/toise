@@ -225,3 +225,17 @@ func (e Event) validateEnvelope(vocabulary bool) error {
 		return ErrMissingEntity
 	}
 }
+
+// Times returns the event's bi-temporal pair: when the fact became true
+// (event time) and when Toise recorded it (ADR 0005). The zero Event yields
+// zero times. Shared by every read surface so the pair is extracted one way.
+func (e Event) Times() (eventTime, recordedAt time.Time) {
+	switch {
+	case e.Entity != nil:
+		return e.Entity.EventTime, e.Entity.RecordedAt
+	case e.Relation != nil:
+		return e.Relation.EventTime, e.Relation.RecordedAt
+	default:
+		return time.Time{}, time.Time{}
+	}
+}

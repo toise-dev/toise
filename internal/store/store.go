@@ -31,6 +31,14 @@ var metaSeqKey = []byte("meta/seq")
 // answered completely (#135).
 var metaPruneHorizonKey = []byte("meta/prune_horizon")
 
+// metaFormatKey marks the on-disk format version, so a future format change can
+// refuse or migrate explicitly instead of misreading the keys (#144). Stores
+// written before the marker existed are format 1 by definition.
+var metaFormatKey = []byte("meta/format_version")
+
+// formatVersion is the current on-disk format.
+const formatVersion = uint64(1)
+
 // Store is the append-only event log backed by Pebble. It is safe for
 // concurrent use; appends are serialized.
 type Store struct {
@@ -54,11 +62,35 @@ func Open(dir string, cfg Config) (*Store, error) {
 		return nil, fmt.Errorf("opening pebble at %s: %w", dir, err)
 	}
 	s := &Store{db: db, cfg: cfg}
+	if err := s.checkFormat(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := s.recoverSeq(); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 	return s, nil
+}
+
+// checkFormat stamps a fresh (or pre-marker) store with the current format
+// version and refuses one written by a NEWER format — misreading it would
+// corrupt silently; the error tells the operator which binary to use.
+func (s *Store) checkFormat() error {
+	v, closer, err := s.db.Get(metaFormatKey)
+	if errors.Is(err, pebble.ErrNotFound) {
+		return s.db.Set(metaFormatKey, encodeU64(formatVersion), pebble.Sync)
+	}
+	if err != nil {
+		return fmt.Errorf("reading format version: %w", err)
+	}
+	defer func() { _ = closer.Close() }()
+	if len(v) == 8 {
+		if got := binary.BigEndian.Uint64(v); got > formatVersion {
+			return fmt.Errorf("store format version %d is newer than this binary supports (%d): upgrade toise-server before opening this data dir", got, formatVersion)
+		}
+	}
+	return nil
 }
 
 // Close closes the underlying database.
