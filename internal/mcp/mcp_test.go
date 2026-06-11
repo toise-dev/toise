@@ -910,6 +910,37 @@ func TestAsOfReads(t *testing.T) {
 	}
 }
 
+// TestPreEpochTimestampsRejected pins #165: the time index encodes event_time
+// as unsigned nanoseconds, so a pre-1970 instant wraps above every real key —
+// as_of would fold the full current graph and graph_diff would silently come
+// back empty. Every event-time input must be refused at the parse boundary.
+func TestPreEpochTimestampsRejected(t *testing.T) {
+	s := newTestServer()
+	ctx := context.Background()
+	const preEpoch = "1950-01-01T00:00:00Z"
+	wantRejected := func(tool string, err error) {
+		t.Helper()
+		if err == nil || !strings.Contains(err.Error(), "1970") {
+			t.Fatalf("%s with a 1950 instant = %v, want a pre-1970 rejection", tool, err)
+		}
+	}
+
+	_, _, err := s.findEntities(ctx, nil, FindEntitiesInput{AsOf: preEpoch})
+	wantRejected("find_entities as_of", err)
+	_, _, err = s.getEntity(ctx, nil, GetEntityInput{EntityID: "01HOST_WEB", AsOf: preEpoch})
+	wantRejected("get_entity as_of", err)
+	_, _, err = s.graphDiff(ctx, nil, GraphDiffInput{From: preEpoch})
+	wantRejected("graph_diff from", err)
+	_, _, err = s.graphDiff(ctx, nil, GraphDiffInput{From: preEpoch, To: "2026-05-29T12:00:00Z"})
+	wantRejected("graph_diff from/to", err)
+	_, _, err = s.entityHistory(ctx, nil, EntityHistoryInput{EntityID: "01HOST_WEB", Since: preEpoch})
+	wantRejected("entity_history since", err)
+	_, _, err = s.entityHistory(ctx, nil, EntityHistoryInput{EntityID: "01HOST_WEB", Until: preEpoch})
+	wantRejected("entity_history until", err)
+	_, _, err = s.entityHistory(ctx, nil, EntityHistoryInput{EntityID: "01HOST_WEB", AsKnownAt: preEpoch})
+	wantRejected("entity_history as_known_at", err)
+}
+
 // TestImpactOf pins the #136 blast-radius semantics on the fixture topology
 // (proc -runs_on-> web -connected_to-> db): impact follows each relation
 // type's dependency direction and propagates transitively.
