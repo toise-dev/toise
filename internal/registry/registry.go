@@ -118,9 +118,15 @@ func OpenWithLimits(dataDir string, storeCfg store.Config, relBuf time.Duration,
 
 	// Boot opens what already exists (plus the default) regardless of limits:
 	// the limits bound runtime minting, never previously persisted tenants.
-	existing, err := tenantDirs(dataDir)
+	existing, skipped, err := tenantDirs(dataDir)
 	if err != nil {
 		return nil, err
+	}
+	if len(skipped) > 0 {
+		// A directory that does not sanitize as a tenant id is never opened —
+		// an ops accident (a hidden or renamed store) would otherwise vanish
+		// silently from the registry forever (#144).
+		logger.Warn("skipping non-tenant directories in the data dir", "data_dir", dataDir, "skipped", skipped)
 	}
 	for _, id := range existing {
 		if _, err := r.ensure(id); err != nil {
@@ -283,10 +289,10 @@ func (r *Registry) openStack(id string) (*Stack, error) {
 // tenantDirs lists the tenant subdirectories under dataDir — directories whose
 // name is already a valid, canonical tenant id. Hidden dirs and anything else are
 // skipped.
-func tenantDirs(dataDir string) ([]string, error) {
+func tenantDirs(dataDir string) (valid, skipped []string, err error) {
 	ents, err := os.ReadDir(dataDir)
 	if err != nil {
-		return nil, fmt.Errorf("listing data dir %s: %w", dataDir, err)
+		return nil, nil, fmt.Errorf("listing data dir %s: %w", dataDir, err)
 	}
 	var out []string
 	for _, e := range ents {
@@ -295,9 +301,11 @@ func tenantDirs(dataDir string) ([]string, error) {
 		}
 		if id, ok := tenant.Sanitize(e.Name()); ok && id == e.Name() {
 			out = append(out, e.Name())
+		} else {
+			skipped = append(skipped, e.Name())
 		}
 	}
-	return out, nil
+	return out, skipped, nil
 }
 
 // legacyMarker is the file Pebble keeps at the root of a store directory; its
