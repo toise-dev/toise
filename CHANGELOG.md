@@ -29,6 +29,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The `toise-emit` SDK and conformance kit.** `pkg/emit` is the first public
+  Go package: declare entities and relationships, call `State`/`Delete`, and
+  the SDK builds the spec-correct OTLP payload — deterministically (sorted
+  keys), so the checked-in `fixture_v1.bin` is the published contract: the SDK
+  reproduces it byte for byte and Toise's ingest accepts it with zero
+  rejections. `pkg/emit/conformance` validates any producer's output against
+  the contract in its own CI, without a running Toise — output that passes is
+  never rejected per-record. (#142)
 - **Maintenance observability with a tenant label.** Every background pass
   (liveness sweep, heartbeat coalescing, retention pruning, snapshots) records
   `toise_maintenance_runs_total{op,outcome,tenant}` and

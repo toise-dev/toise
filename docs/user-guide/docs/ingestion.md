@@ -120,3 +120,23 @@ whole path end to end:
 See [Installation](installation.md#a-live-run-over-the-real-otlp-path) for more
 producer scenarios, and the
 [data model](data-model.md) for what entities and relations Toise tracks.
+
+
+## The toise-emit SDK and conformance kit
+
+Hand-rolling the wire contract is how producers drift. Two tools replace it:
+
+- **`github.com/toise-dev/toise/pkg/emit`** — a small Go SDK: declare entities
+  (type, identity map, attributes, heartbeat interval, embedded relationships)
+  and call `State` / `Delete`; the SDK builds the spec-correct OTLP payload
+  (deterministically — sorted keys, stable bytes) and exports it over gRPC
+  with your auth headers and tenant.
+- **`pkg/emit/conformance`** — contract validation without a running Toise:
+  `conformance.Check(logs)` returns every violation (missing identity,
+  mis-typed interval, incomplete relationship descriptor, non-scalar values)
+  with its location. Run it in your producer's CI; output that passes is never
+  rejected per-record by Toise.
+
+The checked-in fixture (`pkg/emit/testdata/fixture_v1.bin`) is the published
+contract v1: the SDK reproduces it byte for byte and Toise's own ingest tests
+accept it with zero rejections — one artifact pins both sides.
