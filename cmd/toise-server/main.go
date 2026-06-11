@@ -17,6 +17,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -131,12 +132,25 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 			grpc.UnaryInterceptor(authn.UnaryInterceptor()),
 			grpc.StreamInterceptor(authn.StreamInterceptor()))
 	}
+	var tlsConf *tls.Config
 	if cfg.TLSEnabled() {
-		creds, terr := credentials.NewServerTLSFromFile(cfg.TLSCertFile, cfg.TLSKeyFile)
-		if terr != nil {
+		// Explicit TLS posture (#144): minimum 1.2, and the certificate is
+		// re-read per handshake so a renewed cert (certbot & friends) is
+		// picked up without a restart. The load error surfaces at startup.
+		if _, terr := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile); terr != nil {
 			return fmt.Errorf("loading TLS credentials: %w", terr)
 		}
-		grpcOpts = append(grpcOpts, grpc.Creds(creds))
+		tlsConf = &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+				cert, lerr := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
+				if lerr != nil {
+					return nil, lerr
+				}
+				return &cert, nil
+			},
+		}
+		grpcOpts = append(grpcOpts, grpc.Creds(credentials.NewTLS(tlsConf)))
 	}
 
 	ingestMetrics := ingest.NewMetrics()
@@ -219,6 +233,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		Addr:              cfg.Listen,
 		Handler:           authn.HTTPMiddleware(public)(mux),
 		ReadHeaderTimeout: 10 * time.Second,
+		TLSConfig:         tlsConf,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -359,7 +374,9 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 
 	go func() {
 		if cfg.TLSEnabled() {
-			errc <- httpSrv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
+			// Cert/key come from TLSConfig.GetCertificate; empty args keep them
+			// off the legacy path.
+			errc <- httpSrv.ListenAndServeTLS("", "")
 		} else {
 			errc <- httpSrv.ListenAndServe()
 		}
