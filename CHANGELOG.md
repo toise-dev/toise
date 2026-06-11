@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
+### Changed
+
+- **Projection memory is bounded by the live graph, not cumulative churn.**
+  Soft-deleted entities used to keep their full payload in memory forever;
+  on a long-lived instance with ephemeral entities (flapping veth interfaces),
+  tombstones eventually dominated. The projection now keeps the most recent
+  1024 tombstones readable by id (with `deleted: true`) and evicts older ones
+  entirely — their history stays in the log via `entity_history`, and the
+  `get_entity` not-found message says so. (#140)
+
 ### Added
 
 - **Liveness survives restarts.** The engine's liveness bookkeeping — producer

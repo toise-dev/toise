@@ -76,7 +76,7 @@ func (s *Server) getEntity(ctx context.Context, _ *mcpsdk.CallToolRequest, in Ge
 	}
 	e, ok, deleted := g.GetEntity(model.EntityID(in.ID))
 	if !ok {
-		return nil, GetEntityOutput{}, fmt.Errorf("no entity found with id %q; use find_entities to discover ids", in.ID)
+		return nil, GetEntityOutput{}, fmt.Errorf("no entity found with id %q; use find_entities to discover ids — if it was deleted a while ago its tombstone may have been evicted, but entity_history still has its past", in.ID)
 	}
 	return nil, GetEntityOutput{Entity: entityOut(e, deleted)}, nil
 }
