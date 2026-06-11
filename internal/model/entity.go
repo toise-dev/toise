@@ -56,13 +56,24 @@ func (e Entity) IdentityHash() string {
 	return e.Type + ":" + hex.EncodeToString(sum[:idHashBytes])
 }
 
-// Validate checks the entity's structural invariants. It does not require a
-// logical ID (that is assigned by the change engine). See ADR 0004.
-func (e Entity) Validate() error {
+// Validate checks the entity's structural invariants, including vocabulary
+// membership (the strict default). It does not require a logical ID (that is
+// assigned by the change engine). See ADR 0004.
+func (e Entity) Validate() error { return e.validate(true) }
+
+// ValidateShape checks everything Validate does EXCEPT vocabulary membership:
+// an unknown entity.type with a sound identity passes. Deployments that opt
+// into an open vocabulary (accept_unknown_types, #141) validate shape only —
+// garbage detection stays (empty identity, malformed key-values), and identity
+// hashing is type-prefixed, so unknown types are first-class identities with
+// no fuzzy-merge risk (ADR 0018/0020 unchanged).
+func (e Entity) ValidateShape() error { return e.validate(false) }
+
+func (e Entity) validate(vocabulary bool) error {
 	if e.Type == "" {
 		return ErrEmptyType
 	}
-	if !IsKnownEntityType(e.Type) {
+	if vocabulary && !IsKnownEntityType(e.Type) {
 		return fmt.Errorf("%w: %q", ErrUnknownType, e.Type)
 	}
 	if len(e.Identity) == 0 {

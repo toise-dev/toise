@@ -137,9 +137,14 @@ func (s *Store) Append(events ...model.Event) error {
 	defer func() { _ = batch.Close() }()
 
 	localSeq := s.seq
+	validate := func(ev model.Event) error { return ev.Validate() }
+	if s.cfg.AcceptUnknownTypes {
+		// Open vocabulary (#141): shape must still be sound, membership not.
+		validate = func(ev model.Event) error { return ev.ValidateShape() }
+	}
 	for i := range events {
 		ev := events[i]
-		if err := ev.Validate(); err != nil {
+		if err := validate(ev); err != nil {
 			return fmt.Errorf("event %d invalid: %w", i, err)
 		}
 		localSeq++

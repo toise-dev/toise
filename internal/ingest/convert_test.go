@@ -186,7 +186,7 @@ func TestEntityObsMistypedIntervalSurfaces(t *testing.T) {
 	a.PutEmptyMap(attrEntityID).PutStr("host.id", "h1")
 	a.PutStr(attrEntityInterval, "300") // wrong type: string, not int
 
-	obs, dropped, err := entityObs(a, time.Unix(1_700_000_000, 0))
+	obs, dropped, err := entityObs(a, time.Unix(1_700_000_000, 0), true)
 	if err != nil {
 		t.Fatalf("entityObs: %v", err)
 	}

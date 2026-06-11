@@ -21,6 +21,7 @@ import (
 	_ "google.golang.org/grpc/encoding/gzip"
 
 	"github.com/toise-dev/toise/internal/change"
+	"github.com/toise-dev/toise/internal/model"
 	"github.com/toise-dev/toise/internal/tenant"
 )
 
@@ -36,7 +37,7 @@ type Receiver struct {
 // logger uses slog.Default. It is shorthand for NewRoutedReceiver with a constant
 // engine and no metrics.
 func NewReceiver(e *change.Engine, logger *slog.Logger, opts ...grpc.ServerOption) *Receiver {
-	return NewRoutedReceiver(func(string) (*change.Engine, error) { return e, nil }, nil, nil, logger, opts...)
+	return NewRoutedReceiver(func(string) (*change.Engine, error) { return e, nil }, nil, nil, false, logger, opts...)
 }
 
 // NewRoutedReceiver builds a receiver that resolves the change engine per tenant.
@@ -46,12 +47,12 @@ func NewReceiver(e *change.Engine, logger *slog.Logger, opts ...grpc.ServerOptio
 // consulted for every RESOLVED tenant id — including the per-ResourceLogs
 // override, which a gRPC interceptor cannot see (#104). m carries the hot-path
 // ingest counters (nil counts nothing). A nil logger uses slog.Default.
-func NewRoutedReceiver(engineFor func(tenantID string) (*change.Engine, error), authorize func(ctx context.Context, tenantID string) bool, m *Metrics, logger *slog.Logger, opts ...grpc.ServerOption) *Receiver {
+func NewRoutedReceiver(engineFor func(tenantID string) (*change.Engine, error), authorize func(ctx context.Context, tenantID string) bool, m *Metrics, acceptUnknownTypes bool, logger *slog.Logger, opts ...grpc.ServerOption) *Receiver {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	srv := grpc.NewServer(opts...)
-	ls := &logsServer{engineFor: engineFor, authorize: authorize, metrics: m, logger: logger, reconcilers: make(map[string]*embeddedReconciler)}
+	ls := &logsServer{engineFor: engineFor, authorize: authorize, metrics: m, acceptUnknown: acceptUnknownTypes, logger: logger, reconcilers: make(map[string]*embeddedReconciler)}
 	plogotlp.RegisterGRPCServer(srv, ls)
 	return &Receiver{srv: srv, logs: ls, logger: logger}
 }
@@ -74,7 +75,10 @@ type logsServer struct {
 	engineFor func(tenantID string) (*change.Engine, error)
 	authorize func(ctx context.Context, tenantID string) bool
 	metrics   *Metrics
-	logger    *slog.Logger
+	// acceptUnknown relaxes the vocabulary check at the boundary (#141):
+	// unknown entity types pass shape validation and are counted, not rejected.
+	acceptUnknown bool
+	logger        *slog.Logger
 
 	// reconcilers holds the embedded-relationship state per tenant. It must be
 	// per-tenant: two tenants may assert the same source entity key, and a shared
@@ -155,7 +159,12 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (re
 				recs := sls.At(j).LogRecords()
 				for k := 0; k < recs.Len(); k++ {
 					lr := recs.At(k)
-					ok, drop, err := routeRecord(b, lr, producer)
+					ok, drop, err := routeRecordVocab(b, lr, producer, !s.acceptUnknown)
+					if ok && s.acceptUnknown && err == nil {
+						if typ, tok := strAttr(lr.Attributes(), attrEntityType); tok && !model.IsKnownEntityType(typ) {
+							s.metrics.unknownTypeAccepted()
+						}
+					}
 					dropped = append(dropped, drop...)
 					if err != nil {
 						// A contract violation is permanent and per-record:

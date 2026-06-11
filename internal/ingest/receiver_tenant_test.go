@@ -54,7 +54,7 @@ func startRoutedReceiver(t *testing.T) (plogotlp.GRPCClient, func(tenant string)
 		return engines[tenant], nil
 	}
 
-	rec := NewRoutedReceiver(engineFor, nil, nil, nil)
+	rec := NewRoutedReceiver(engineFor, nil, nil, false, nil)
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -239,7 +239,7 @@ func TestExportTenantAuthorization(t *testing.T) {
 	eng := change.New(projection.New(), st)
 	authn := auth.NewWithTenantTokens(nil, map[string][]string{"acme": {"acme-tok"}})
 	rec := NewRoutedReceiver(func(string) (*change.Engine, error) { return eng, nil },
-		authn.AllowedForTenantGRPC, nil, nil,
+		authn.AllowedForTenantGRPC, nil, false, nil,
 		grpc.UnaryInterceptor(authn.UnaryInterceptor()))
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0")

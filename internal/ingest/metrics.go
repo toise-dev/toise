@@ -13,6 +13,7 @@ type Metrics struct {
 	records          *prometheus.CounterVec // result: handled|ignored|rejected
 	droppedValues    prometheus.Counter
 	tenantRejections prometheus.Counter
+	unknownTypes     prometheus.Counter
 }
 
 // NewMetrics builds the ingest counters, pre-registering every label value so
@@ -35,6 +36,10 @@ func NewMetrics() *Metrics {
 			Name: "toise_ingest_tenant_rejections_total",
 			Help: "Exports rejected for an invalid tenant id (X-Scope-OrgID metadata or tenant.id resource attribute).",
 		}),
+		unknownTypes: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "toise_ingest_unknown_type_records_total",
+			Help: "Records accepted with an entity type outside the built-in registry (accept_unknown_types).",
+		}),
 	}
 	for _, v := range []string{"ok", "error"} {
 		m.exports.WithLabelValues(v)
@@ -48,7 +53,7 @@ func NewMetrics() *Metrics {
 // Collectors returns the underlying collectors for registration on a
 // Prometheus registry (alongside the scrape-time state collector).
 func (m *Metrics) Collectors() []prometheus.Collector {
-	return []prometheus.Collector{m.exports, m.records, m.droppedValues, m.tenantRejections}
+	return []prometheus.Collector{m.exports, m.records, m.droppedValues, m.tenantRejections, m.unknownTypes}
 }
 
 func (m *Metrics) export(ok bool) {
@@ -74,6 +79,13 @@ func (m *Metrics) addDroppedValues(n int) {
 		return
 	}
 	m.droppedValues.Add(float64(n))
+}
+
+func (m *Metrics) unknownTypeAccepted() {
+	if m == nil {
+		return
+	}
+	m.unknownTypes.Inc()
 }
 
 func (m *Metrics) tenantRejected() {

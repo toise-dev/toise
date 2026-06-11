@@ -72,12 +72,19 @@ type engine interface {
 // producer's contract is flat scalar maps; a nested value is a producer bug worth
 // seeing).
 func routeRecord(e engine, lr plog.LogRecord, producer string) (handled bool, dropped []string, err error) {
+	return routeRecordVocab(e, lr, producer, true)
+}
+
+// routeRecordVocab is routeRecord with the vocabulary check selectable: with
+// strictVocab false (accept_unknown_types, #141) an unknown entity.type passes
+// as long as the record's shape is sound.
+func routeRecordVocab(e engine, lr plog.LogRecord, producer string, strictVocab bool) (handled bool, dropped []string, err error) {
 	attrs := lr.Attributes()
 	when := eventTimeOf(lr)
 
 	switch lr.EventName() {
 	case evEntityState:
-		obs, drop, oerr := entityObs(attrs, when)
+		obs, drop, oerr := entityObs(attrs, when, strictVocab)
 		if oerr != nil {
 			return true, drop, oerr
 		}
@@ -85,7 +92,7 @@ func routeRecord(e engine, lr plog.LogRecord, producer string) (handled bool, dr
 		_, oerr = e.ObserveEntity(obs)
 		return true, drop, oerr
 	case evEntityDelete:
-		obs, drop, oerr := entityObs(attrs, when)
+		obs, drop, oerr := entityObs(attrs, when, strictVocab)
 		if oerr != nil {
 			return true, drop, oerr
 		}
@@ -97,7 +104,7 @@ func routeRecord(e engine, lr plog.LogRecord, producer string) (handled bool, dr
 	}
 }
 
-func entityObs(attrs pcommon.Map, when time.Time) (change.EntityObservation, []string, error) {
+func entityObs(attrs pcommon.Map, when time.Time, strictVocab bool) (change.EntityObservation, []string, error) {
 	typ, ok := strAttr(attrs, attrEntityType)
 	if !ok {
 		return change.EntityObservation{}, nil, fmt.Errorf("%w: missing %s", errInvalidRecord, attrEntityType)
@@ -110,12 +117,18 @@ func entityObs(attrs pcommon.Map, when time.Time) (change.EntityObservation, []s
 	dropped := make([]string, 0, len(identDropped)+len(descDropped))
 	dropped = append(dropped, identDropped...)
 	dropped = append(dropped, descDropped...)
-	// The wire contract requires a registered entity.type and well-formed
-	// key-values. Validating per record here, before classification, bounds the
-	// blast radius: the store would otherwise reject the whole batch for one
-	// bad record, after it was already applied and broadcast (#109).
-	if err := (model.Entity{Type: typ, Identity: ident, Attributes: descriptive}).Validate(); err != nil {
-		return change.EntityObservation{}, dropped, fmt.Errorf("%w: %w", errInvalidRecord, err)
+	// The wire contract requires well-formed key-values and — unless the
+	// deployment opted into an open vocabulary (#141) — a registered
+	// entity.type. Validating per record here, before classification, bounds
+	// the blast radius: the store would otherwise reject the whole batch for
+	// one bad record, after it was already applied and broadcast (#109).
+	ent := model.Entity{Type: typ, Identity: ident, Attributes: descriptive}
+	verr := ent.Validate()
+	if !strictVocab {
+		verr = ent.ValidateShape()
+	}
+	if verr != nil {
+		return change.EntityObservation{}, dropped, fmt.Errorf("%w: %w", errInvalidRecord, verr)
 	}
 	var interval time.Duration
 	if v, present := attrs.Get(attrEntityInterval); present {

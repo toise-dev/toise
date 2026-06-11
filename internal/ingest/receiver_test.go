@@ -374,7 +374,7 @@ func TestIngestCounters(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 	eng := change.New(projection.New(), st, change.WithClock(func() time.Time { return t0 }))
 	m := NewMetrics()
-	rec := NewRoutedReceiver(func(string) (*change.Engine, error) { return eng, nil }, nil, m, nil)
+	rec := NewRoutedReceiver(func(string) (*change.Engine, error) { return eng, nil }, nil, m, false, nil)
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -451,4 +451,81 @@ func TestIngestCounters(t *testing.T) {
 	if v := get("toise_ingest_tenant_rejections_total", ""); v != 1 {
 		t.Errorf("tenant_rejections = %v, want 1", v)
 	}
+}
+
+// TestAcceptUnknownTypes pins #141: with the open vocabulary on, an unknown
+// entity type with a sound shape is ingested end to end (boundary AND store
+// backstop) and counted; shape garbage is still rejected; the strict default
+// keeps rejecting unknown types per record.
+func TestAcceptUnknownTypes(t *testing.T) {
+	cfg := store.DefaultConfig()
+	cfg.AcceptUnknownTypes = true
+	st, err := store.Open(t.TempDir(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	g := projection.New()
+	eng := change.New(g, st, change.WithClock(func() time.Time { return t0 }))
+	m := NewMetrics()
+	rec := NewRoutedReceiver(func(string) (*change.Engine, error) { return eng, nil }, nil, m, true, nil)
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = rec.Serve(lis) }()
+	t.Cleanup(rec.Stop)
+	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	client := plogotlp.NewGRPCClient(conn)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// An unknown but well-shaped type lands in the graph and is counted.
+	ld := plog.NewLogs()
+	sl := ld.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty()
+	entityRecord(sl, evEntityState, "acme.satellite.dish", map[string]string{"dish.serial": "D-7"}, map[string]string{"azimuth": "42"})
+	// Shape garbage (empty identity) is still rejected per record.
+	lr := sl.LogRecords().AppendEmpty()
+	lr.SetEventName(evEntityState)
+	lr.Attributes().PutStr(attrEntityType, "acme.satellite.dish")
+	lr.Attributes().PutEmptyMap(attrEntityID)
+	resp, err := client.Export(ctx, plogotlp.NewExportRequestFromLogs(ld))
+	if err != nil {
+		t.Fatalf("open-vocabulary export: %v", err)
+	}
+	if resp.PartialSuccess().RejectedLogRecords() != 1 {
+		t.Errorf("rejected = %d, want 1 (the shapeless record): %s", resp.PartialSuccess().RejectedLogRecords(), resp.PartialSuccess().ErrorMessage())
+	}
+	if g.EntityCount() != 1 {
+		t.Fatalf("EntityCount = %d, want 1 (the well-shaped unknown type)", g.EntityCount())
+	}
+	if got := g.CountByType()["acme.satellite.dish"]; got != 1 {
+		t.Errorf("CountByType = %d, want 1", got)
+	}
+	if v := counterValue(t, m.unknownTypes); v != 1 {
+		t.Errorf("unknown-type counter = %v, want 1", v)
+	}
+
+	// Replay sanity: the persisted unknown-type event rebuilds identically.
+	g2 := projection.New()
+	if err := g2.Replay(st); err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if g2.CountByType()["acme.satellite.dish"] != 1 {
+		t.Error("unknown-type entity lost on replay")
+	}
+}
+
+func counterValue(t *testing.T, c prometheus.Counter) float64 {
+	t.Helper()
+	var d dto.Metric
+	if err := c.Write(&d); err != nil {
+		t.Fatal(err)
+	}
+	return d.GetCounter().GetValue()
 }
