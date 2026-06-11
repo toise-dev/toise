@@ -42,8 +42,10 @@ const formatVersion = uint64(1)
 // Store is the append-only event log backed by Pebble. It is safe for
 // concurrent use; appends are serialized.
 type Store struct {
-	db  *pebble.DB
-	cfg Config
+	db       *pebble.DB
+	cfg      Config
+	dir      string
+	readOnly bool
 
 	mu               sync.Mutex // guards seq/counters and serializes appends
 	maintMu          sync.Mutex // serializes maintenance (coalesce/prune) against itself, NOT against appends
@@ -57,11 +59,23 @@ type Store struct {
 
 // Open opens (creating if needed) the event log at dir.
 func Open(dir string, cfg Config) (*Store, error) {
-	db, err := pebble.Open(dir, &pebble.Options{})
+	return open(dir, cfg, false)
+}
+
+// OpenReadOnly opens an existing event log at dir without ever writing to it:
+// no directory creation, no format-version stamp, and every mutation fails
+// with pebble's read-only error. It is the open for offline tooling — taking a
+// backup must not be able to alter or mint the store it backs up.
+func OpenReadOnly(dir string, cfg Config) (*Store, error) {
+	return open(dir, cfg, true)
+}
+
+func open(dir string, cfg Config, readOnly bool) (*Store, error) {
+	db, err := pebble.Open(dir, &pebble.Options{ReadOnly: readOnly})
 	if err != nil {
 		return nil, fmt.Errorf("opening pebble at %s: %w", dir, err)
 	}
-	s := &Store{db: db, cfg: cfg}
+	s := &Store{db: db, cfg: cfg, dir: dir, readOnly: readOnly}
 	if err := s.checkFormat(); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -79,6 +93,11 @@ func Open(dir string, cfg Config) (*Store, error) {
 func (s *Store) checkFormat() error {
 	v, closer, err := s.db.Get(metaFormatKey)
 	if errors.Is(err, pebble.ErrNotFound) {
+		if s.readOnly {
+			// A pre-marker store is format 1 by definition; a read-only open
+			// reads it as such instead of stamping it.
+			return nil
+		}
 		return s.db.Set(metaFormatKey, encodeU64(formatVersion), pebble.Sync)
 	}
 	if err != nil {

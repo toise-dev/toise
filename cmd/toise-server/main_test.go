@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -299,6 +300,159 @@ func TestCheckpointSubcommand(t *testing.T) {
 	if err := runCheckpoint([]string{"--data-dir", dataDir}, func(string) string { return "" }); err == nil {
 		t.Error("missing destination must error with usage")
 	}
+}
+
+// TestCheckpointRefusesMissingDataDir pins #162: a typo'd --data-dir (or a
+// wrong cwd) must be a hard error, not a freshly minted empty store backed up
+// with exit 0.
+func TestCheckpointRefusesMissingDataDir(t *testing.T) {
+	dataDir := filepath.Join(t.TempDir(), "no-such-dir")
+	dst := filepath.Join(t.TempDir(), "backup")
+	if err := runCheckpoint([]string{"--data-dir", dataDir, dst}, func(string) string { return "" }); err == nil {
+		t.Fatal("checkpoint of a missing data dir must error")
+	}
+	if _, err := os.Stat(dataDir); !os.IsNotExist(err) {
+		t.Errorf("checkpoint created the data dir %s (stat err = %v)", dataDir, err)
+	}
+	if _, err := os.Stat(dst); !os.IsNotExist(err) {
+		t.Errorf("checkpoint created the destination %s (stat err = %v)", dst, err)
+	}
+}
+
+// TestCheckpointRefusesEmptyDataDir pins #162: a data dir holding no tenant
+// stores means the operator pointed at the wrong place — backing up nothing
+// must not look like success.
+func TestCheckpointRefusesEmptyDataDir(t *testing.T) {
+	dataDir := t.TempDir()
+	dst := filepath.Join(t.TempDir(), "backup")
+	err := runCheckpoint([]string{"--data-dir", dataDir, dst}, func(string) string { return "" })
+	if err == nil || !strings.Contains(err.Error(), "no tenant stores") {
+		t.Fatalf("err = %v, want a no-tenant-stores refusal", err)
+	}
+	ents, rerr := os.ReadDir(dataDir)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	if len(ents) != 0 {
+		t.Errorf("checkpoint left %d entries in the data dir", len(ents))
+	}
+}
+
+// TestCheckpointLeavesSourceUntouched pins the read-only contract of #162:
+// checkpointing must not mint a default tenant in the source nor write to it
+// (the format stamp included) — the source listing is identical before and
+// after, and only the persisted tenant is backed up.
+func TestCheckpointLeavesSourceUntouched(t *testing.T) {
+	dataDir := t.TempDir()
+	st, err := store.Open(filepath.Join(dataDir, "acme"), store.DefaultConfig())
+	if err != nil {
+		t.Fatalf("seed store: %v", err)
+	}
+	when := time.Unix(1_700_000_000, 0).UTC()
+	ev := model.Event{Entity: &model.EntityEvent{
+		EventID: model.NewEventID(), ChangeType: model.EntityCreated,
+		Entity: model.Entity{ID: "e1", Type: model.TypeHost,
+			Identity: []model.KeyValue{{Key: "host.id", Value: model.StringValue("h1")}}},
+		EventTime: when, RecordedAt: when, SchemaVersion: model.SchemaVersion,
+	}}
+	if aerr := st.Append(ev); aerr != nil {
+		t.Fatal(aerr)
+	}
+	if cerr := st.Close(); cerr != nil {
+		t.Fatal(cerr)
+	}
+	before := dirListing(t, dataDir)
+
+	dst := filepath.Join(t.TempDir(), "backup")
+	if rerr := runCheckpoint([]string{"--data-dir", dataDir, dst}, func(string) string { return "" }); rerr != nil {
+		t.Fatalf("runCheckpoint: %v", rerr)
+	}
+
+	if after := dirListing(t, dataDir); before != after {
+		t.Errorf("source modified by checkpoint:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+	if _, serr := os.Stat(filepath.Join(dataDir, "default")); !os.IsNotExist(serr) {
+		t.Errorf("checkpoint minted a default tenant in the source (stat err = %v)", serr)
+	}
+
+	restored, err := store.Open(filepath.Join(dst, "acme"), store.DefaultConfig())
+	if err != nil {
+		t.Fatalf("open checkpoint: %v", err)
+	}
+	t.Cleanup(func() { _ = restored.Close() })
+	g := projection.New()
+	if err := g.Replay(restored); err != nil {
+		t.Fatalf("replay checkpoint: %v", err)
+	}
+	if g.EntityCount() != 1 {
+		t.Errorf("restored EntityCount = %d, want 1", g.EntityCount())
+	}
+}
+
+// TestCheckpointHonorsConfigFile pins #162's second aggravator: the shipped
+// systemd setup puts data_dir in the YAML config, so the subcommand must
+// resolve it through the same layers as the server.
+func TestCheckpointHonorsConfigFile(t *testing.T) {
+	dataDir := t.TempDir()
+	st, err := store.Open(filepath.Join(dataDir, "acme"), store.DefaultConfig())
+	if err != nil {
+		t.Fatalf("seed store: %v", err)
+	}
+	if cerr := st.Close(); cerr != nil {
+		t.Fatal(cerr)
+	}
+	cfgPath := filepath.Join(t.TempDir(), "toise-server.yaml")
+	if werr := os.WriteFile(cfgPath, []byte("data_dir: "+dataDir+"\n"), 0o644); werr != nil {
+		t.Fatal(werr)
+	}
+
+	dst := filepath.Join(t.TempDir(), "backup")
+	if rerr := runCheckpoint([]string{"--config", cfgPath, dst}, func(string) string { return "" }); rerr != nil {
+		t.Fatalf("runCheckpoint with --config: %v", rerr)
+	}
+	if _, serr := os.Stat(filepath.Join(dst, "acme")); serr != nil {
+		t.Errorf("config-file data dir not honored: %v", serr)
+	}
+
+	env := func(k string) string {
+		if k == "TOISE_CONFIG" {
+			return cfgPath
+		}
+		return ""
+	}
+	dst2 := filepath.Join(t.TempDir(), "backup-env")
+	if rerr := runCheckpoint([]string{dst2}, env); rerr != nil {
+		t.Fatalf("runCheckpoint with TOISE_CONFIG: %v", rerr)
+	}
+	if _, serr := os.Stat(filepath.Join(dst2, "acme")); serr != nil {
+		t.Errorf("TOISE_CONFIG data dir not honored: %v", serr)
+	}
+}
+
+// dirListing returns a recursive name+size listing of dir, to assert a
+// directory was not modified.
+func dirListing(t *testing.T, dir string) string {
+	t.Helper()
+	var b strings.Builder
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, werr error) error {
+		if werr != nil {
+			return werr
+		}
+		rel, rerr := filepath.Rel(dir, path)
+		if rerr != nil {
+			return rerr
+		}
+		if info.IsDir() {
+			b.WriteString(rel + "/\n")
+			return nil
+		}
+		b.WriteString(rel + " " + strconv.FormatInt(info.Size(), 10) + "\n")
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking %s: %v", dir, err)
+	}
+	return b.String()
 }
 
 // TestShutdownWithOpenStream pins #130: a deploy with a connected streaming

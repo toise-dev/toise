@@ -413,35 +413,52 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 
 // runCheckpoint takes a consistent Pebble checkpoint of every tenant store
 // into <dst>/<tenant> — the operator-facing trigger for Store.Checkpoint the
-// docs promise (#115). It opens the data dir directly, so it is a cold-backup
-// tool: run it while toise-server is stopped (a running server holds the
-// pebble lock, and the open fails cleanly).
+// docs promise (#115). The data dir resolves with the server's precedence
+// (defaults < config file < TOISE_* env < flags), and the stores are opened
+// strictly read-only: a backup must never mint or alter what it backs up, so
+// a missing data dir or one holding no tenant stores is a hard error instead
+// of an empty "success" (#162). It is a cold-backup tool: run it while
+// toise-server is stopped (a running server holds the pebble lock, and the
+// open fails cleanly).
 func runCheckpoint(args []string, getenv func(string) string) error {
-	defaultDir := "toise-data"
-	if v := getenv("TOISE_DATA_DIR"); v != "" {
-		defaultDir = v
-	}
 	fs := flag.NewFlagSet("toise-server checkpoint", flag.ContinueOnError)
-	dataDir := fs.String("data-dir", defaultDir, "directory of the tenant event logs (env: TOISE_DATA_DIR)")
+	configPath := fs.String("config", "", "path to a YAML config file (env: TOISE_CONFIG)")
+	dataDir := fs.String("data-dir", "", "directory of the tenant event logs (env: TOISE_DATA_DIR)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return fmt.Errorf("usage: toise-server checkpoint [--data-dir dir] <destination-dir>")
+		return fmt.Errorf("usage: toise-server checkpoint [--config file] [--data-dir dir] <destination-dir>")
 	}
 	dst := fs.Arg(0)
 
-	reg, err := registry.Open(*dataDir, store.DefaultConfig(), 0, slog.Default())
-	if err != nil {
-		return fmt.Errorf("opening tenant registry (is toise-server still running?): %w", err)
+	var cfgArgs []string
+	if *configPath != "" {
+		cfgArgs = append(cfgArgs, "--config="+*configPath)
 	}
-	defer func() { _ = reg.Close() }()
-	for _, st := range reg.Stacks() {
-		out := filepath.Join(dst, st.Tenant)
-		if err := st.Store.Checkpoint(out); err != nil {
-			return fmt.Errorf("tenant %s: %w", st.Tenant, err)
+	if *dataDir != "" {
+		cfgArgs = append(cfgArgs, "--data-dir="+*dataDir)
+	}
+	cfg, err := config.Load(cfgArgs, getenv)
+	if err != nil {
+		return fmt.Errorf("resolving configuration: %w", err)
+	}
+
+	stores, err := registry.OpenExisting(cfg.DataDir, store.DefaultConfig(), slog.Default())
+	if err != nil {
+		return fmt.Errorf("opening tenant stores: %w", err)
+	}
+	defer func() {
+		for _, ts := range stores {
+			_ = ts.Store.Close()
 		}
-		fmt.Printf("checkpointed tenant %s -> %s\n", st.Tenant, out)
+	}()
+	for _, ts := range stores {
+		out := filepath.Join(dst, ts.Tenant)
+		if cerr := ts.Store.Checkpoint(out); cerr != nil {
+			return fmt.Errorf("tenant %s: %w", ts.Tenant, cerr)
+		}
+		fmt.Printf("checkpointed tenant %s -> %s\n", ts.Tenant, out)
 	}
 	return nil
 }
