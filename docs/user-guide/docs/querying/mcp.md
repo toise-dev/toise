@@ -20,7 +20,7 @@ and OTLP servers and just reads the given data directory.
 
 ## The tools
 
-The assistant sees ten typed tools. Each carries a rich description and examples
+The assistant sees eleven typed tools. Each carries a rich description and examples
 so the model picks the right one, and each returns **structured, name-bearing**
 results — ids carry human labels and types — so a single call answers the
 question without a second lookup.
@@ -28,6 +28,7 @@ question without a second lookup.
 | Tool | What it does |
 | --- | --- |
 | `describe_schema()` | a natural-language description of the entity and relation types currently in the graph, to bootstrap the model's understanding |
+| `describe_type(type)` | zoom on one type: observed attribute keys with examples, empirical relation shapes and peers — or, for a relation type, endpoint shapes and failure-propagation direction |
 | `find_entities(type, match, limit)` | entities matching a type / attribute filter, with `total`/`truncated` |
 | `get_entity(id)` | a full entity with its attributes |
 | `get_neighbors(entity_id, relation_type, depth)` | traverse relations up to `depth` (**capped at 5**); each neighbor carries the relation type, direction, and hop distance that reached it |

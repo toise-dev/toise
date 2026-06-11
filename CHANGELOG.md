@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`describe_type` MCP tool — the per-type zoom.** For an entity type: its
+  registration, live count, the identifying and descriptive attribute keys
+  actually observed (with usage counts and example values, bounded sampling),
+  the relation types it participates in with directions and empirically
+  observed peer types, and example labels. For a relation type: its observed
+  endpoint-type shapes with counts, the structural flag, and the
+  failure-propagation direction. One call answers "what does a
+  network.interface look like HERE?". (#137)
 - **`impact_of` MCP tool — the blast radius.** Propagate a hypothetical
   failure of one entity through the graph and get back everything it takes
   down, nearest first, grouped by type, with a one-line summary. Propagation
