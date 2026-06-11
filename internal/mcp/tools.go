@@ -57,8 +57,8 @@ func (s *Server) findEntities(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 
 // GetEntityInput names the entity to fetch.
 type GetEntityInput struct {
-	ID   string `json:"id" jsonschema:"the logical entity id to fetch"`
-	AsOf string `json:"as_of,omitempty" jsonschema:"RFC 3339 instant: read the entity as it was then (event-time), instead of now"`
+	EntityID string `json:"entity_id" jsonschema:"the logical entity id to fetch"`
+	AsOf     string `json:"as_of,omitempty" jsonschema:"RFC 3339 instant: read the entity as it was then (event-time), instead of now"`
 }
 
 // GetEntityOutput carries the entity.
@@ -67,16 +67,16 @@ type GetEntityOutput struct {
 }
 
 func (s *Server) getEntity(ctx context.Context, _ *mcpsdk.CallToolRequest, in GetEntityInput) (*mcpsdk.CallToolResult, GetEntityOutput, error) {
-	if in.ID == "" {
+	if in.EntityID == "" {
 		return nil, GetEntityOutput{}, fmt.Errorf("an entity id is required")
 	}
 	g, err := s.graphAt(ctx, in.AsOf)
 	if err != nil {
 		return nil, GetEntityOutput{}, err
 	}
-	e, ok, deleted := g.GetEntity(model.EntityID(in.ID))
+	e, ok, deleted := g.GetEntity(model.EntityID(in.EntityID))
 	if !ok {
-		return nil, GetEntityOutput{}, fmt.Errorf("no entity found with id %q; use find_entities to discover ids — if it was deleted a while ago its tombstone may have been evicted, but entity_history still has its past", in.ID)
+		return nil, GetEntityOutput{}, fmt.Errorf("no entity found with id %q; use find_entities to discover ids — if it was deleted a while ago its tombstone may have been evicted, but entity_history still has its past", in.EntityID)
 	}
 	return nil, GetEntityOutput{Entity: entityOut(e, deleted)}, nil
 }
@@ -250,7 +250,7 @@ func (s *Server) entityHistory(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 
 // RecentChangesInput selects a window and kind of change.
 type RecentChangesInput struct {
-	Window string `json:"window" jsonschema:"a positive Go duration looking back from now, e.g. 15m, 2h, 24h"`
+	Window string `json:"window,omitempty" jsonschema:"a positive Go duration looking back from now, e.g. 15m, 2h, 24h (default 1h)"`
 	Kind   string `json:"kind,omitempty" jsonschema:"filter: entity, relation, structural, or all (default all)"`
 	// Budget controls (#115): a live window is heartbeat-dominated, so
 	// heartbeats are excluded and the result is bounded by default.
@@ -267,6 +267,9 @@ type RecentChangesOutput struct {
 }
 
 func (s *Server) recentChanges(ctx context.Context, _ *mcpsdk.CallToolRequest, in RecentChangesInput) (*mcpsdk.CallToolResult, RecentChangesOutput, error) {
+	if in.Window == "" {
+		in.Window = "1h"
+	}
 	d, err := time.ParseDuration(in.Window)
 	if err != nil || d <= 0 {
 		return nil, RecentChangesOutput{}, fmt.Errorf("invalid window %q: use a positive Go duration like 15m, 2h, or 24h", in.Window)
