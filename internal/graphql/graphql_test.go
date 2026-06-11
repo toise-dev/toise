@@ -3,6 +3,7 @@ package graphql_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -294,6 +295,14 @@ func TestEntitiesAsOf(t *testing.T) {
 	// Malformed asOf is a clear error.
 	if err := c.Post(`{ entities(asOf: "yesterday") { totalCount } }`, &resp); err == nil {
 		t.Fatal("invalid asOf must error")
+	}
+
+	// Pre-epoch asOf is refused (#165): the time index is unsigned, so a
+	// pre-1970 instant would cover the whole log and answer with the full
+	// CURRENT graph dressed up as ancient history.
+	err := c.Post(`{ entities(asOf: "1950-01-01T00:00:00Z") { totalCount } }`, &resp)
+	if err == nil || !strings.Contains(err.Error(), "1970") {
+		t.Fatalf("pre-epoch asOf = %v, want a pre-1970 rejection", err)
 	}
 }
 

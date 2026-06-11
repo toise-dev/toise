@@ -142,7 +142,9 @@ func checkEvery(ctx context.Context, n int) error {
 }
 
 // timeKeyBound builds a time-index bound key (prefix + event_time nanos) without
-// a sequence suffix, for use as an iterator lower/upper bound.
+// a sequence suffix, for use as an iterator lower/upper bound. The unsigned
+// encoding is persisted on the write side, so a negative eventNano wraps above
+// every real key — callers must reject pre-epoch instants before getting here.
 func timeKeyBound(eventNano int64) []byte {
 	return append([]byte(timePrefix), encodeU64(uint64(eventNano))...)
 }

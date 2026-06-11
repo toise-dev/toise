@@ -305,5 +305,11 @@ func parseOptTime(s *string, field string) (time.Time, error) {
 	if err != nil {
 		return time.Time{}, fmt.Errorf("invalid %s %q: use an RFC 3339 timestamp like 2026-05-29T14:00:00Z", field, *s)
 	}
+	// The persisted time index encodes event_time as unsigned nanoseconds, so
+	// a pre-epoch instant would wrap above every real key and read the whole
+	// log; reject it here instead of migrating the on-disk encoding.
+	if t.Before(time.Unix(0, 0)) {
+		return time.Time{}, fmt.Errorf("invalid %s %q: RFC 3339 timestamps before 1970-01-01T00:00:00Z are not supported", field, *s)
+	}
 	return t, nil
 }
