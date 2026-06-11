@@ -9,6 +9,12 @@ called out below with a migration path.
 
 ## Releases
 
+- [**0.5.0**](0.5.0.md) — 2026-06-11 — **time travel and the producer SDK**:
+  `as_of` on every read surface, `impact_of` blast radius, `describe_type`,
+  subscription filters with an honest gap signal, restart-surviving liveness,
+  bounded tombstones, opt-in open vocabulary, and the `toise-emit` SDK with a
+  byte-pinned published contract. *(No wire-contract change, no data
+  migration; sharper defaults — see the migration guide.)*
 - [**0.4.0**](0.4.0.md) — 2026-06-10 — **correctness and LLM querying**: the
   audit-driven integrity lot (log-is-truth under failure, clean restarts),
   three new MCP tools (`graph_diff`, `find_path`, `telemetry_keys`), result

@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
+## [0.5.0] - 2026-06-11
+
+**The time-travel and producer-SDK release.** 0.5.0 completes the audit-driven
+P2 lane: the bi-temporal log becomes queryable in the past tense (`as_of` on
+every read surface), failures become predictable (`impact_of` blast radius),
+producers get a real SDK with a byte-pinned published contract, and the
+remaining unbounded internals (tombstones, vocabulary coupling, subscription
+backpressure, restart liveness) are closed. No wire-contract change, no data
+migration; a handful of sharper behaviors are listed in the
+[0.4 → 0.5 migration guide](docs/migration/0.4-to-0.5.md).
+
 ### Changed
 
 - **Low-severity hardening sweep** (#144): boot logs any data-dir entry it

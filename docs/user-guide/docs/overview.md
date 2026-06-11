@@ -83,10 +83,11 @@ through GraphQL, MCP, and a debug UI, all from a single Apache-2.0 Go binary wit
 no external runtime dependencies. 0.3.0 added the operational surface for real
 deployments (native auth and TLS, `--production` lockdown,
 `/healthz`·`/readyz`·Prometheus `/metrics`, retention, snapshots, multi-tenant
-isolation); **0.4.0 hardens correctness under failure and makes the MCP surface
-a precise, budget-aware query layer** — nine tools including `graph_diff`,
-`find_path`, and `telemetry_keys`, with tenant-scoped tokens and observable
-ingestion. Expect breaking changes between minor releases (each with a migration
-guide).
+isolation); 0.4.0 hardened correctness under failure and made the MCP surface a precise,
+budget-aware query layer; **0.5.0 makes the bi-temporal log queryable in the
+past tense (`as_of` everywhere), adds the `impact_of` blast radius — eleven
+tools total — and ships the `toise-emit` producer SDK with a byte-pinned
+published contract.** Expect breaking changes between minor releases (each
+with a migration guide).
 
 Next: [install and run toise-server](installation.md).
