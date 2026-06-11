@@ -140,6 +140,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	}
 
 	ingestMetrics := ingest.NewMetrics()
+	maint := metrics.NewMaintenance()
 	authFailures := metrics.NewAuthFailures()
 	authn.OnFailure(authFailures.Inc)
 
@@ -200,6 +201,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		return nil
 	}))
 	metricsExtra := append(ingestMetrics.Collectors(), authFailures)
+	metricsExtra = append(metricsExtra, maint.Collectors()...)
 	mux.Handle("/metrics", metrics.Handler(metrics.NewCollector(
 		aggregateGraph{reg}, aggregateStore{reg}, version.Version, version.Commit), metricsExtra...))
 	if cfg.Playground {
@@ -243,9 +245,12 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 					return
 				case <-ticker.C:
 					for _, st := range reg.Stacks() {
-						if n := st.Engine.Sweep(); n > 0 {
-							logger.Info("liveness sweep expired stale entities", "tenant", st.Tenant, "count", n)
-						}
+						_ = maint.Observe("sweep", st.Tenant, func() error {
+							if n := st.Engine.Sweep(); n > 0 {
+								logger.Info("liveness sweep expired stale entities", "tenant", st.Tenant, "count", n)
+							}
+							return nil
+						})
 					}
 				}
 			}
@@ -267,17 +272,31 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 					return
 				case <-ticker.C:
 					for _, st := range reg.Stacks() {
-						if n, err := st.Store.CoalesceHeartbeats(); err != nil {
+						if err := maint.Observe("coalesce", st.Tenant, func() error {
+							n, cerr := st.Store.CoalesceHeartbeats()
+							if cerr != nil {
+								return cerr
+							}
+							if n > 0 {
+								logger.Info("coalesced heartbeat records", "tenant", st.Tenant, "removed", n)
+							}
+							return nil
+						}); err != nil {
 							logger.Error("heartbeat coalescing failed", "tenant", st.Tenant, "err", err)
-						} else if n > 0 {
-							logger.Info("coalesced heartbeat records", "tenant", st.Tenant, "removed", n)
 						}
 						if storeCfg.RetentionMaxAge > 0 {
 							cutoff := time.Now().Add(-storeCfg.RetentionMaxAge)
-							if ev, by, err := st.Store.PruneOlderThan(cutoff); err != nil {
+							if err := maint.Observe("prune", st.Tenant, func() error {
+								ev, by, perr := st.Store.PruneOlderThan(cutoff)
+								if perr != nil {
+									return perr
+								}
+								if ev > 0 {
+									logger.Info("pruned events past retention", "tenant", st.Tenant, "events", ev, "bytes", by, "older_than", storeCfg.RetentionMaxAge.String())
+								}
+								return nil
+							}); err != nil {
 								logger.Error("retention pruning failed", "tenant", st.Tenant, "err", err)
-							} else if ev > 0 {
-								logger.Info("pruned events past retention", "tenant", st.Tenant, "events", ev, "bytes", by, "older_than", storeCfg.RetentionMaxAge.String())
 							}
 						}
 					}
@@ -305,16 +324,20 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 					return
 				case <-ticker.C:
 					for _, st := range reg.Stacks() {
-						seq := st.Store.Sequence()
-						events := st.Graph.SnapshotEvents(time.Now())
-						liveness, lerr := st.Engine.LivenessBlob()
-						if lerr != nil {
-							logger.Error("liveness snapshot failed; writing snapshot without it", "tenant", st.Tenant, "err", lerr)
-						}
-						if werr := st.Store.WriteSnapshot(seq, events, liveness); werr != nil {
-							logger.Error("snapshot write failed", "tenant", st.Tenant, "err", werr)
-						} else {
+						if err := maint.Observe("snapshot", st.Tenant, func() error {
+							seq := st.Store.Sequence()
+							events := st.Graph.SnapshotEvents(time.Now())
+							liveness, lerr := st.Engine.LivenessBlob()
+							if lerr != nil {
+								logger.Error("liveness snapshot failed; writing snapshot without it", "tenant", st.Tenant, "err", lerr)
+							}
+							if werr := st.Store.WriteSnapshot(seq, events, liveness); werr != nil {
+								return werr
+							}
 							logger.Info("wrote projection snapshot", "tenant", st.Tenant, "snapshot_seq", seq, "events", len(events))
+							return nil
+						}); err != nil {
+							logger.Error("snapshot write failed", "tenant", st.Tenant, "err", err)
 						}
 					}
 				}

@@ -91,3 +91,27 @@ func TestByTypeCardinalityCap(t *testing.T) {
 		t.Errorf("other = %v, want 55 (sum of the folded tail)", other)
 	}
 }
+
+// TestMaintenanceObserve pins #143: each maintenance pass records its outcome
+// and duration, per op and tenant — the signal the aggregate gauges hide.
+func TestMaintenanceObserve(t *testing.T) {
+	m := NewMaintenance()
+	if err := m.Observe("sweep", "acme", func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Observe("prune", "acme", func() error { return fmt.Errorf("disk full") }); err == nil {
+		t.Fatal("Observe must propagate the op error")
+	}
+	if v := testutil.ToFloat64(m.runs.WithLabelValues("sweep", "ok", "acme")); v != 1 {
+		t.Errorf("sweep ok runs = %v, want 1", v)
+	}
+	if v := testutil.ToFloat64(m.runs.WithLabelValues("prune", "error", "acme")); v != 1 {
+		t.Errorf("prune error runs = %v, want 1", v)
+	}
+	// nil receiver: observes nothing, still runs fn.
+	ran := false
+	var nilM *Maintenance
+	if err := nilM.Observe("sweep", "x", func() error { ran = true; return nil }); err != nil || !ran {
+		t.Errorf("nil Maintenance must run fn (ran=%v err=%v)", ran, err)
+	}
+}
