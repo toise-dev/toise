@@ -21,6 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Maintenance observability with a tenant label.** Every background pass
+  (liveness sweep, heartbeat coalescing, retention pruning, snapshots) records
+  `toise_maintenance_runs_total{op,outcome,tenant}` and
+  `toise_maintenance_last_duration_seconds{op,tenant}` — a single tenant's
+  failing or slowing maintenance is no longer hidden inside cross-tenant
+  aggregates. The engine's subscriber contract (non-blocking, non-reentrant,
+  runs on the commit path) is now documented on `Subscribe`. (#143)
 - **Opt-in open producer vocabulary.** `accept_unknown_types` (off by default)
   lets entity and relation types outside the built-in registry through ingest
   and the store, as long as their SHAPE is sound — identity present,

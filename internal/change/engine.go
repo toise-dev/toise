@@ -191,6 +191,14 @@ func New(graph *projection.Graph, appender Appender, opts ...Option) *Engine {
 }
 
 // Subscribe registers fn and returns a function that unsubscribes it.
+//
+// CONTRACT (#143): fn runs synchronously on the commit path, after the durable
+// append, while the engine's observation lock is held. It MUST NOT block — a
+// blocking subscriber freezes this tenant's ingestion — and MUST NOT call back
+// into the engine (Observe*/Delete*/Sweep/Batch), which would deadlock. Fan
+// out to consumers through a bounded queue and count your drops, as the
+// GraphQL subscription stream does (it announces gaps in-band); do not do
+// consumer work inline here.
 func (e *Engine) Subscribe(fn Subscriber) func() {
 	e.subMu.Lock()
 	defer e.subMu.Unlock()
