@@ -66,6 +66,23 @@ const (
 	RelAdjacentTo = "adjacent_to" // legacy: use port-to-port connected_to
 )
 
+// ImpactFlow says in which direction a failure propagates across a relation
+// of this type: when one endpoint fails, which other endpoint is affected.
+// "X runs_on Y" means Y failing takes X down (impact flows To->From), while
+// "X has_interface Y" means X failing takes Y down (From->To); connectivity
+// edges propagate both ways. Unregistered types default to both — over-
+// reporting impact is safer than silently missing it (#136).
+type ImpactFlow int
+
+const (
+	// ImpactBoth: a failure at either endpoint affects the other.
+	ImpactBoth ImpactFlow = iota
+	// ImpactToFrom: a failure at To affects From (dependency edges: runs_on).
+	ImpactToFrom
+	// ImpactFromTo: a failure at From affects To (containment edges: has_interface).
+	ImpactFromTo
+)
+
 // RelationTypeDef describes a known relation type and its constraints.
 type RelationTypeDef struct {
 	Type string
@@ -75,6 +92,8 @@ type RelationTypeDef struct {
 	// Structural marks whether the relation's appearance/disappearance is
 	// significant (suitable for alerting). See ADR 0006.
 	Structural bool
+	// Impact is the failure-propagation direction across this relation.
+	Impact ImpactFlow
 }
 
 var entityTypes = map[string]struct{}{
@@ -91,19 +110,39 @@ var entityTypes = map[string]struct{}{
 }
 
 var relationTypes = map[string]RelationTypeDef{
-	RelRunsOn:       {Type: RelRunsOn, From: TypeProcess, To: TypeHost, Structural: true},
-	RelHasInterface: {Type: RelHasInterface, From: TypeHost, To: TypeNetworkInterface, Structural: true},
-	RelBoundTo:      {Type: RelBoundTo, From: TypeNetworkAddress, To: TypeNetworkInterface, Structural: true},
-	RelNextHopVia:   {Type: RelNextHopVia, From: TypeNetworkRoute, To: TypeNetworkAddress, Structural: true},
-	RelListensOn:    {Type: RelListensOn, From: TypeServiceListener, To: TypeNetworkInterface, Structural: true},
+	// "X runs_on Y": the host failing takes the process down, not the reverse.
+	RelRunsOn: {Type: RelRunsOn, From: TypeProcess, To: TypeHost, Structural: true, Impact: ImpactToFrom},
+	// "X has_interface Y": the host/device failing takes its interface down.
+	RelHasInterface: {Type: RelHasInterface, From: TypeHost, To: TypeNetworkInterface, Structural: true, Impact: ImpactFromTo},
+	// "X bound_to Y": the interface failing takes the address down.
+	RelBoundTo: {Type: RelBoundTo, From: TypeNetworkAddress, To: TypeNetworkInterface, Structural: true, Impact: ImpactToFrom},
+	// "X next_hop_via Y": the next-hop address failing breaks the route.
+	RelNextHopVia: {Type: RelNextHopVia, From: TypeNetworkRoute, To: TypeNetworkAddress, Structural: true, Impact: ImpactToFrom},
+	// "X listens_on Y": the interface failing takes the listener down.
+	RelListensOn: {Type: RelListensOn, From: TypeServiceListener, To: TypeNetworkInterface, Structural: true, Impact: ImpactToFrom},
 	// producer vocabulary (From/To advisory, not runtime-enforced)
-	RelMonitors:    {Type: RelMonitors, From: TypeServiceInstance, To: TypeHost, Structural: true},
-	RelHasRoute:    {Type: RelHasRoute, From: TypeNetworkDevice, To: TypeNetworkRoute, Structural: true},
-	RelConnectedTo: {Type: RelConnectedTo, From: TypeNetworkInterface, To: TypeNetworkInterface, Structural: true},
+	// monitoring is observation, not dependency: a monitor failing does not
+	// take the host down, nor the reverse — but losing the host DOES lose the
+	// monitoring coverage, so model it as a dependency of the monitor.
+	RelMonitors: {Type: RelMonitors, From: TypeServiceInstance, To: TypeHost, Structural: true, Impact: ImpactToFrom},
+	// "X has_route Y": the device failing drops its routes.
+	RelHasRoute: {Type: RelHasRoute, From: TypeNetworkDevice, To: TypeNetworkRoute, Structural: true, Impact: ImpactFromTo},
+	// connectivity is symmetric: either side failing breaks the link.
+	RelConnectedTo: {Type: RelConnectedTo, From: TypeNetworkInterface, To: TypeNetworkInterface, Structural: true, Impact: ImpactBoth},
 	// legacy device-level edges (superseded; not emitted — see the const block)
-	RelRoutesVia:  {Type: RelRoutesVia, From: TypeNetworkDevice, To: TypeNetworkDevice, Structural: true},
-	RelForwardsTo: {Type: RelForwardsTo, From: TypeNetworkDevice, To: TypeNetworkDevice, Structural: true},
-	RelAdjacentTo: {Type: RelAdjacentTo, From: TypeNetworkDevice, To: TypeNetworkDevice, Structural: true},
+	RelRoutesVia:  {Type: RelRoutesVia, From: TypeNetworkDevice, To: TypeNetworkDevice, Structural: true, Impact: ImpactToFrom},
+	RelForwardsTo: {Type: RelForwardsTo, From: TypeNetworkDevice, To: TypeNetworkDevice, Structural: true, Impact: ImpactBoth},
+	RelAdjacentTo: {Type: RelAdjacentTo, From: TypeNetworkDevice, To: TypeNetworkDevice, Structural: true, Impact: ImpactBoth},
+}
+
+// ImpactFlowOf returns the failure-propagation direction for a relation type.
+// Unregistered types propagate both ways: over-reporting impact is safer than
+// silently missing it.
+func ImpactFlowOf(relType string) ImpactFlow {
+	if def, ok := relationTypes[relType]; ok {
+		return def.Impact
+	}
+	return ImpactBoth
 }
 
 // IsKnownEntityType reports whether t is a registered entity type.

@@ -358,8 +358,8 @@ func TestMCPRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	if len(tools.Tools) != 9 {
-		t.Fatalf("want 9 tools, got %d", len(tools.Tools))
+	if len(tools.Tools) != 10 {
+		t.Fatalf("want 10 tools, got %d", len(tools.Tools))
 	}
 
 	res, err := cs.CallTool(ctx, &mcpsdk.CallToolParams{
@@ -903,5 +903,77 @@ func TestAsOfReads(t *testing.T) {
 	}
 	if out.Total != 0 {
 		t.Fatalf("live graph read = %d, want 0", out.Total)
+	}
+}
+
+// TestImpactOf pins the #136 blast-radius semantics on the fixture topology
+// (proc -runs_on-> web -connected_to-> db): impact follows each relation
+// type's dependency direction and propagates transitively.
+func TestImpactOf(t *testing.T) {
+	s := newTestServer()
+	ctx := context.Background()
+
+	// web fails: proc depends on it (runs_on, To->From) and db shares a
+	// connectivity edge (both ways) — two impacted at depth 1.
+	_, out, err := s.impactOf(ctx, nil, ImpactOfInput{EntityID: "01HOST_WEB"})
+	if err != nil {
+		t.Fatalf("impactOf: %v", err)
+	}
+	if out.Total != 2 || out.Truncated {
+		t.Fatalf("web blast radius = %d (truncated=%v), want 2", out.Total, out.Truncated)
+	}
+	via := map[string]string{}
+	for _, e := range out.Impacted {
+		via[e.ID] = e.Via
+		if e.Depth != 1 {
+			t.Errorf("impacted %s at depth %d, want 1", e.ID, e.Depth)
+		}
+	}
+	if via["01PROC_NGINX"] != "runs_on" || via["01HOST_DB"] != "connected_to" {
+		t.Errorf("via map = %v", via)
+	}
+	if !strings.Contains(out.Summary, "impacts 2 entities") {
+		t.Errorf("summary = %q", out.Summary)
+	}
+
+	// proc fails: nothing depends on it — zero impact is a first-class answer.
+	_, out, err = s.impactOf(ctx, nil, ImpactOfInput{EntityID: "01PROC_NGINX"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Total != 0 {
+		t.Fatalf("proc blast radius = %d, want 0 (impact must not flow From->To across runs_on)", out.Total)
+	}
+	if !strings.Contains(out.Summary, "Nothing depends on") {
+		t.Errorf("empty summary = %q", out.Summary)
+	}
+
+	// db fails: web via connectivity (depth 1), then proc transitively
+	// (depth 2, runs_on against web).
+	_, out, err = s.impactOf(ctx, nil, ImpactOfInput{EntityID: "01HOST_DB"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Total != 2 {
+		t.Fatalf("db blast radius = %d, want 2 (transitive)", out.Total)
+	}
+	depths := map[string]int{}
+	for _, e := range out.Impacted {
+		depths[e.ID] = e.Depth
+	}
+	if depths["01HOST_WEB"] != 1 || depths["01PROC_NGINX"] != 2 {
+		t.Errorf("depths = %v, want web:1 proc:2", depths)
+	}
+
+	// Limit caps the list, never the totals; bad ids error.
+	_, out, err = s.impactOf(ctx, nil, ImpactOfInput{EntityID: "01HOST_DB", Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Total != 2 || len(out.Impacted) != 1 || !out.Truncated {
+		t.Errorf("limited = total %d, returned %d, truncated %v", out.Total, len(out.Impacted), out.Truncated)
+	}
+	if _, _, gerr := s.impactOf(ctx, nil, ImpactOfInput{EntityID: "ghost"}); gerr == nil {
+		t.Error("unknown entity must error")
 	}
 }
