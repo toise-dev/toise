@@ -53,8 +53,8 @@ type Engine struct {
 	// any producer references it; it is deleted only when the last reference is
 	// released (explicit delete or interval expiry). See ADR 0019. Per-relation
 	// edge deadlines for the optional per-edge TTL. Guarded by obsMu.
-	refs         map[model.EntityID]map[string]time.Time
-	relDeadlines map[model.RelationID]time.Time
+	refs         map[model.EntityID]map[string]liveRef
+	relDeadlines map[model.RelationID]liveRef
 
 	// batch staging: while a Batch runs, commit stages each event and its
 	// projection effects here instead of applying them; the durable append, the
@@ -71,6 +71,15 @@ type Engine struct {
 type pendingRelation struct {
 	obs      RelationObservation
 	deadline time.Time
+}
+
+// liveRef is one armed liveness backstop: the absolute expiry deadline and the
+// producer-declared heartbeat interval that armed it. The interval is kept so
+// a deadline restored from a snapshot can be re-floored after downtime (see
+// RestoreLiveness). A zero deadline means explicit-only (no interval).
+type liveRef struct {
+	deadline time.Time
+	interval time.Duration
 }
 
 // staged is a batch's uncommitted unit of work: the events to flush plus an
@@ -181,8 +190,8 @@ func New(graph *projection.Graph, appender Appender, opts ...Option) *Engine {
 		now:          time.Now,
 		logger:       slog.Default(),
 		subs:         make(map[int]Subscriber),
-		refs:         make(map[model.EntityID]map[string]time.Time),
-		relDeadlines: make(map[model.RelationID]time.Time),
+		refs:         make(map[model.EntityID]map[string]liveRef),
+		relDeadlines: make(map[model.RelationID]liveRef),
 	}
 	for _, o := range opts {
 		o(e)
@@ -389,13 +398,13 @@ func (e *Engine) observeEntityLocked(obs EntityObservation) (model.Event, error)
 	// interval, released only by an explicit delete). See ADR 0019.
 	producers := e.refs[entityID]
 	if producers == nil {
-		producers = make(map[string]time.Time)
+		producers = make(map[string]liveRef)
 		e.refs[entityID] = producers
 	}
 	if obs.Interval > 0 {
-		producers[obs.Producer] = e.now().Add(obs.Interval)
+		producers[obs.Producer] = liveRef{deadline: e.now().Add(obs.Interval), interval: obs.Interval}
 	} else {
-		producers[obs.Producer] = time.Time{}
+		producers[obs.Producer] = liveRef{}
 	}
 	// A new/updated entity may be the missing endpoint of a parked edge.
 	e.flushPending()
@@ -481,8 +490,8 @@ func (e *Engine) Sweep() int {
 	// surviving reference is expired (ADR 0019).
 	var orphaned []model.EntityID
 	for id, producers := range e.refs {
-		for p, deadline := range producers {
-			if !deadline.IsZero() && now.After(deadline) {
+		for p, ref := range producers {
+			if !ref.deadline.IsZero() && now.After(ref.deadline) {
 				delete(producers, p)
 			}
 		}
@@ -532,8 +541,8 @@ func (e *Engine) Sweep() int {
 	}
 
 	var expiredRelations []model.RelationID
-	for id, deadline := range e.relDeadlines {
-		if now.After(deadline) {
+	for id, ref := range e.relDeadlines {
+		if now.After(ref.deadline) {
 			expiredRelations = append(expiredRelations, id)
 		}
 	}
@@ -598,7 +607,7 @@ func (e *Engine) observeRelationLocked(obs RelationObservation) (model.Event, bo
 	// Arm (or clear) the edge liveness backstop, even when the observation is
 	// otherwise unchanged — re-asserting an edge resets its deadline.
 	if obs.Interval > 0 {
-		e.relDeadlines[rel.ID] = e.now().Add(obs.Interval)
+		e.relDeadlines[rel.ID] = liveRef{deadline: e.now().Add(obs.Interval), interval: obs.Interval}
 	} else {
 		delete(e.relDeadlines, rel.ID)
 	}
@@ -839,11 +848,16 @@ func canonMap(kvs []model.KeyValue) map[string]string {
 // livenessSnapshot is the serialized form of the engine's liveness bookkeeping
 // (the Memento, #139): producer references with their absolute expiry
 // deadlines, and per-relation deadlines. Absolute times mean downtime counts
-// against them — a producer that died while the server was down is swept on
-// the first tick after restart instead of leaving zombies forever.
+// against them; the parallel interval maps let RestoreLiveness re-floor lapsed
+// deadlines so a restart after long downtime does not mass-delete entities of
+// producers that are alive but have not re-exported yet. Blobs written before
+// the interval maps existed decode with zero intervals and keep their stored
+// deadlines as-is.
 type livenessSnapshot struct {
-	Refs         map[string]map[string]time.Time `json:"refs"`
-	RelDeadlines map[string]time.Time            `json:"rel_deadlines"`
+	Refs         map[string]map[string]time.Time     `json:"refs"`
+	RelDeadlines map[string]time.Time                `json:"rel_deadlines"`
+	RefIntervals map[string]map[string]time.Duration `json:"ref_intervals,omitempty"`
+	RelIntervals map[string]time.Duration            `json:"rel_intervals,omitempty"`
 }
 
 // LivenessBlob serializes the current liveness bookkeeping for inclusion in
@@ -853,16 +867,22 @@ func (e *Engine) LivenessBlob() ([]byte, error) {
 	snap := livenessSnapshot{
 		Refs:         make(map[string]map[string]time.Time, len(e.refs)),
 		RelDeadlines: make(map[string]time.Time, len(e.relDeadlines)),
+		RefIntervals: make(map[string]map[string]time.Duration, len(e.refs)),
+		RelIntervals: make(map[string]time.Duration, len(e.relDeadlines)),
 	}
 	for id, producers := range e.refs {
-		ps := make(map[string]time.Time, len(producers))
-		for p, deadline := range producers {
-			ps[p] = deadline
+		ds := make(map[string]time.Time, len(producers))
+		is := make(map[string]time.Duration, len(producers))
+		for p, ref := range producers {
+			ds[p] = ref.deadline
+			is[p] = ref.interval
 		}
-		snap.Refs[string(id)] = ps
+		snap.Refs[string(id)] = ds
+		snap.RefIntervals[string(id)] = is
 	}
-	for id, deadline := range e.relDeadlines {
-		snap.RelDeadlines[string(id)] = deadline
+	for id, ref := range e.relDeadlines {
+		snap.RelDeadlines[string(id)] = ref.deadline
+		snap.RelIntervals[string(id)] = ref.interval
 	}
 	e.obsMu.Unlock()
 	b, err := json.Marshal(snap)
@@ -884,17 +904,38 @@ func (e *Engine) RestoreLiveness(blob []byte) error {
 	if err := json.Unmarshal(blob, &snap); err != nil {
 		return fmt.Errorf("unmarshaling liveness snapshot: %w", err)
 	}
+	now := e.now()
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()
 	for id, producers := range snap.Refs {
-		ps := make(map[string]time.Time, len(producers))
+		ps := make(map[string]liveRef, len(producers))
 		for p, deadline := range producers {
-			ps[p] = deadline
+			interval := snap.RefIntervals[id][p]
+			ps[p] = liveRef{deadline: floorDeadline(deadline, interval, now), interval: interval}
 		}
 		e.refs[model.EntityID(id)] = ps
 	}
 	for id, deadline := range snap.RelDeadlines {
-		e.relDeadlines[model.RelationID(id)] = deadline
+		interval := snap.RelIntervals[id]
+		e.relDeadlines[model.RelationID(id)] = liveRef{deadline: floorDeadline(deadline, interval, now), interval: interval}
 	}
 	return nil
+}
+
+// floorDeadline raises a restored deadline to now+interval: after downtime
+// longer than a producer's heartbeat interval every stored deadline has
+// lapsed, and without the floor the first sweep would mass-delete entities of
+// producers that are alive but have not re-exported yet, only for them to be
+// re-created moments later. The trade-off: an entity of a producer that truly
+// died during the downtime lingers at most one extra interval before the
+// sweep reaps it. Zero deadlines (explicit-only) and entries without a known
+// interval (pre-interval blobs) are returned unchanged.
+func floorDeadline(deadline time.Time, interval time.Duration, now time.Time) time.Time {
+	if deadline.IsZero() || interval <= 0 {
+		return deadline
+	}
+	if floor := now.Add(interval); deadline.Before(floor) {
+		return floor
+	}
+	return deadline
 }

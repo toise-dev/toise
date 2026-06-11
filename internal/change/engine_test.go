@@ -724,11 +724,11 @@ func TestPendingBufferCapAndSweepExpiry(t *testing.T) {
 	}
 }
 
-// TestLivenessMementoSurvivesRestart pins #139: a producer that dies while the
-// server is down leaves entities the post-restart sweeper CAN reap, because
-// the liveness bookkeeping (absolute deadlines) round-trips through the
-// snapshot. Pre-fix, the refs map restarted empty and the zombies lived
-// forever.
+// TestLivenessMementoSurvivesRestart pins #139 and #164: the liveness
+// bookkeeping round-trips through the snapshot so the post-restart sweeper CAN
+// reap a producer that died while the server was down — but only after a
+// one-interval boot grace, so a restart after long downtime does not
+// mass-delete entities of producers that are alive and about to re-export.
 func TestLivenessMementoSurvivesRestart(t *testing.T) {
 	g := projection.New()
 	now := t0
@@ -753,14 +753,29 @@ func TestLivenessMementoSurvivesRestart(t *testing.T) {
 		g2.Apply(ev)
 	}
 	now = t0.Add(5 * time.Minute)
+	boot := now
 	e2 := New(g2, &fakeAppender{}, WithClock(func() time.Time { return now }),
 		WithLogger(slog.New(slog.DiscardHandler)))
 	if err := e2.RestoreLiveness(blob); err != nil {
 		t.Fatal(err)
 	}
 
+	// Restored deadlines are floored to boot + the producer's interval (#164):
+	// the first sweep right after boot must NOT mass-delete entities of
+	// producers that are alive but simply have not re-exported yet.
+	now = boot.Add(time.Second)
+	if n := e2.Sweep(); n != 0 {
+		t.Fatalf("sweep right after boot expired %d, want 0 (one-interval boot grace)", n)
+	}
+	if g2.EntityCount() != 1 {
+		t.Fatalf("EntityCount = %d after boot-time sweep, want 1", g2.EntityCount())
+	}
+
+	// Past the floored deadline (boot + the 30s interval) the dead producer's
+	// entity IS reaped — the memento still closes the #139 zombie.
+	now = boot.Add(31 * time.Second)
 	if n := e2.Sweep(); n != 1 {
-		t.Fatalf("post-restart sweep expired %d, want 1 (the dead producer's entity)", n)
+		t.Fatalf("post-grace sweep expired %d, want 1 (the dead producer's entity)", n)
 	}
 	if g2.EntityCount() != 0 {
 		t.Errorf("EntityCount = %d after sweep, want 0", g2.EntityCount())
@@ -782,5 +797,40 @@ func TestLivenessMementoSurvivesRestart(t *testing.T) {
 	// Empty blob (pre-#139 snapshot) is a clean no-op.
 	if err := e2.RestoreLiveness(nil); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestRestoreLivenessOldBlobWithoutIntervals pins read-compatibility with
+// blobs written before the interval maps existed: deadlines restore as stored
+// (no floor is possible without the interval), so a lapsed one is swept on the
+// first tick — the original #139 semantics.
+func TestRestoreLivenessOldBlobWithoutIntervals(t *testing.T) {
+	g := projection.New()
+	now := t0
+	e := New(g, &fakeAppender{}, WithClock(func() time.Time { return now }))
+	ev, err := e.ObserveEntity(EntityObservation{Type: model.TypeHost,
+		Identity: []model.KeyValue{kv("host.id", "legacy")},
+		Interval: 30 * time.Second, Producer: "p1", EventTime: t0})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	g2 := projection.New()
+	for _, sev := range g.SnapshotEvents(t0) {
+		g2.Apply(sev)
+	}
+	now = t0.Add(5 * time.Minute)
+	e2 := New(g2, &fakeAppender{}, WithClock(func() time.Time { return now }),
+		WithLogger(slog.New(slog.DiscardHandler)))
+	oldBlob := fmt.Sprintf(`{"refs":{%q:{"p1":%q}},"rel_deadlines":{}}`,
+		string(ev.Entity.Entity.ID), t0.Add(30*time.Second).Format(time.RFC3339Nano))
+	if err := e2.RestoreLiveness([]byte(oldBlob)); err != nil {
+		t.Fatal(err)
+	}
+	if n := e2.Sweep(); n != 1 {
+		t.Fatalf("sweep after old-blob restore expired %d, want 1", n)
+	}
+	if g2.EntityCount() != 0 {
+		t.Errorf("EntityCount = %d, want 0", g2.EntityCount())
 	}
 }

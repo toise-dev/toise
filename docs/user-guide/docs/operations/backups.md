@@ -20,7 +20,7 @@ Run it **while the server is stopped** — a running server holds the Pebble loc
 
 ## Live restart acceleration: projection snapshots
 
-`--snapshot-interval` (off by default) periodically writes a projection snapshot *inside* the store so a restart replays only the tail. It is a restart optimization, not a backup: it lives in the same directory it would have to protect.
+`--snapshot-interval` (default `5m`) periodically writes a projection snapshot *inside* the store so a restart replays only the tail; a final one is written at graceful shutdown. It is a restart optimization, not a backup: it lives in the same directory it would have to protect.
 
 ## What to back up
 

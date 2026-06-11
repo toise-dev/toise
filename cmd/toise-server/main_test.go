@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -28,6 +29,7 @@ import (
 	"github.com/toise-dev/toise/internal/projection"
 	"github.com/toise-dev/toise/internal/registry"
 	"github.com/toise-dev/toise/internal/store"
+	"github.com/toise-dev/toise/internal/tenant"
 )
 
 const bootToken = "boot-test-token"
@@ -515,5 +517,114 @@ func TestShutdownWithOpenStream(t *testing.T) {
 		}
 	case <-time.After(15 * time.Second):
 		t.Fatal("run() did not return within 15s of SIGTERM")
+	}
+}
+
+// syncWriter is a goroutine-safe log sink: run()'s servers log concurrently.
+type syncWriter struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (w *syncWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.Write(p)
+}
+
+func (w *syncWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.String()
+}
+
+// TestShutdownWritesFinalSnapshot pins #164: producer references acquired
+// since the last periodic snapshot must survive a graceful SIGTERM. With the
+// ticker at 1h it never fires inside the test, so the only possible snapshot
+// is the one the shutdown path writes.
+func TestShutdownWritesFinalSnapshot(t *testing.T) {
+	dataDir := t.TempDir()
+	httpAddr, otlpAddr := freeAddr(t), freeAddr(t)
+	cfg, err := config.Load([]string{
+		"--listen", httpAddr,
+		"--otlp-listen", otlpAddr,
+		"--data-dir", dataDir,
+		"--snapshot-interval", "1h",
+	}, func(string) string { return "" })
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- run(cfg, store.DefaultConfig(), slog.New(slog.DiscardHandler)) }()
+	waitReady(t, "http://"+httpAddr+"/readyz")
+	exportEntity(t, otlpAddr, "", "h-final")
+
+	if kerr := syscall.Kill(os.Getpid(), syscall.SIGTERM); kerr != nil {
+		t.Fatal(kerr)
+	}
+	select {
+	case rerr := <-done:
+		if rerr != nil {
+			t.Fatalf("run() returned %v after SIGTERM, want nil", rerr)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("run() did not return within 10s of SIGTERM")
+	}
+
+	st, err := store.Open(filepath.Join(dataDir, tenant.Default), store.DefaultConfig())
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	_, events, liveness, ok, err := st.ReadSnapshot()
+	if err != nil {
+		t.Fatalf("read snapshot: %v", err)
+	}
+	if !ok {
+		t.Fatal("no snapshot after graceful shutdown: refs since the last periodic snapshot are lost")
+	}
+	if len(events) != 1 {
+		t.Errorf("snapshot events = %d, want 1", len(events))
+	}
+	if len(liveness) == 0 {
+		t.Error("final snapshot carries no liveness memento")
+	}
+}
+
+// TestWarnsWhenSweepingWithoutSnapshots pins #164: sweeping without snapshots
+// means the liveness backstop silently forgets every producer at each
+// restart — the combination deserves a loud startup line.
+func TestWarnsWhenSweepingWithoutSnapshots(t *testing.T) {
+	httpAddr, otlpAddr := freeAddr(t), freeAddr(t)
+	cfg, err := config.Load([]string{
+		"--listen", httpAddr,
+		"--otlp-listen", otlpAddr,
+		"--data-dir", t.TempDir(),
+		"--snapshot-interval", "0",
+	}, func(string) string { return "" })
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	if cfg.LivenessSweepInterval.D() <= 0 {
+		t.Fatal("precondition: sweeping must be on by default")
+	}
+	logs := &syncWriter{}
+	done := make(chan error, 1)
+	go func() { done <- run(cfg, store.DefaultConfig(), slog.New(slog.NewTextHandler(logs, nil))) }()
+	waitReady(t, "http://"+httpAddr+"/readyz")
+
+	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run() returned %v after SIGTERM, want nil", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("run() did not return within 10s of SIGTERM")
+	}
+	if !strings.Contains(logs.String(), "snapshots are disabled") {
+		t.Error("no startup warning for sweeping-on/snapshots-off")
 	}
 }

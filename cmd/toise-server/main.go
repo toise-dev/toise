@@ -95,6 +95,22 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	}
 	defer func() { _ = reg.Close() }()
 
+	// Final snapshot at graceful shutdown, declared right after the close so it
+	// runs just before it (after the maintenance loops have joined and ingest
+	// has stopped): producer references acquired since the last periodic
+	// snapshot would otherwise be lost, leaving permanent zombies for producers
+	// that die during the downtime (#139). Per-tenant failures are logged, never
+	// allowed to abort the shutdown.
+	if cfg.SnapshotInterval.D() > 0 {
+		defer func() {
+			for _, st := range reg.Stacks() {
+				if serr := writeTenantSnapshot(st, logger); serr != nil {
+					logger.Error("final snapshot at shutdown failed", "tenant", st.Tenant, "err", serr)
+				}
+			}
+		}()
+	}
+
 	if cfg.MCPStdio {
 		// stdio carries no per-request tenant metadata, so it serves the default
 		// tenant only (ADR 0025).
@@ -327,6 +343,9 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	// Periodic projection snapshot for fast restart: replay only the tail since the
 	// snapshot on the next start. The reference sequence is read before sampling the
 	// graph, so the replayed tail overlaps idempotently rather than skips (#49).
+	// The snapshot also carries the liveness memento (#139): with sweeping on but
+	// snapshots off, producer refs die with every restart and a producer that was
+	// merely quiet across the restart leaves zombies — worth a loud line.
 	if snap := cfg.SnapshotInterval.D(); snap > 0 {
 		wg.Add(1)
 		go func() {
@@ -340,17 +359,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 				case <-ticker.C:
 					for _, st := range reg.Stacks() {
 						if err := maint.Observe("snapshot", st.Tenant, func() error {
-							seq := st.Store.Sequence()
-							events := st.Graph.SnapshotEvents(time.Now())
-							liveness, lerr := st.Engine.LivenessBlob()
-							if lerr != nil {
-								logger.Error("liveness snapshot failed; writing snapshot without it", "tenant", st.Tenant, "err", lerr)
-							}
-							if werr := st.Store.WriteSnapshot(seq, events, liveness); werr != nil {
-								return werr
-							}
-							logger.Info("wrote projection snapshot", "tenant", st.Tenant, "snapshot_seq", seq, "events", len(events))
-							return nil
+							return writeTenantSnapshot(st, logger)
 						}); err != nil {
 							logger.Error("snapshot write failed", "tenant", st.Tenant, "err", err)
 						}
@@ -358,6 +367,8 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 				}
 			}
 		}()
+	} else if cfg.LivenessSweepInterval.D() > 0 {
+		logger.Warn("liveness sweeping is on but snapshots are disabled: producer references will NOT survive restarts, so entities of producers that die while the server is down are never expired — set snapshot_interval (default 5m)")
 	}
 
 	fmt.Printf("Toise %s — the living map of your infrastructure\n", version.String())
@@ -409,6 +420,24 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		}
 		return nil
 	}
+}
+
+// writeTenantSnapshot writes one projection snapshot for st: the reference
+// sequence is read before sampling the graph so the replayed tail overlaps
+// idempotently (#49), and the liveness memento rides along (#139). A failed
+// liveness blob degrades to a snapshot without it rather than no snapshot.
+func writeTenantSnapshot(st *registry.Stack, logger *slog.Logger) error {
+	seq := st.Store.Sequence()
+	events := st.Graph.SnapshotEvents(time.Now())
+	liveness, lerr := st.Engine.LivenessBlob()
+	if lerr != nil {
+		logger.Error("liveness snapshot failed; writing snapshot without it", "tenant", st.Tenant, "err", lerr)
+	}
+	if werr := st.Store.WriteSnapshot(seq, events, liveness); werr != nil {
+		return werr
+	}
+	logger.Info("wrote projection snapshot", "tenant", st.Tenant, "snapshot_seq", seq, "events", len(events))
+	return nil
 }
 
 // runCheckpoint takes a consistent Pebble checkpoint of every tenant store
