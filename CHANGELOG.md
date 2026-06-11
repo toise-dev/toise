@@ -7,7 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-<!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
+### Changed
+
+- **MCP `get_entity` argument renamed `id` -> `entity_id`**, aligning it with
+  every other entity-taking tool (`get_neighbors`, `entity_history`,
+  `telemetry_keys`, `impact_of`); the 0.5.0 recette flagged the odd one out.
+  Breaking for MCP clients that called `get_entity` with `id`.
+- MCP `recent_changes` no longer requires `window`: omitted, it defaults to
+  the last hour.
 
 ## [0.5.0] - 2026-06-11
 

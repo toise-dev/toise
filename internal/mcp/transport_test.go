@@ -78,7 +78,7 @@ func TestStreamableHTTPSession(t *testing.T) {
 	}
 
 	// A tool-level error surfaces as an MCP tool error, not a transport error.
-	res, err = session.CallTool(ctx, &mcpsdk.CallToolParams{Name: "get_entity", Arguments: map[string]any{"id": "ghost"}})
+	res, err = session.CallTool(ctx, &mcpsdk.CallToolParams{Name: "get_entity", Arguments: map[string]any{"entity_id": "ghost"}})
 	if err != nil {
 		t.Fatalf("transport must carry tool errors in-band: %v", err)
 	}

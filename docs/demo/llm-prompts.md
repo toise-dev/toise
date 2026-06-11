@@ -43,7 +43,7 @@ calls below use names like `<nginx-id>` for those resolved ids.
 > *"Show me everything about the nginx process."*
 
 - **Tools:** `find_entities(type: "process", match: {"process.executable.name": "nginx"})`
-  → `get_entity(id: "<nginx-id>")`
+  → `get_entity(entity_id: "<nginx-id>")`
 - **Answer shape:** nginx's identity (`process.pid=1010` +
   `process.creation.time`) and descriptive attributes
   (`process.executable.name=nginx`, `status=running`), with its stable logical id.

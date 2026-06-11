@@ -212,7 +212,7 @@ func TestFindEntitiesLimitTruncates(t *testing.T) {
 
 func TestGetEntity(t *testing.T) {
 	s := newTestServer()
-	_, out, err := s.getEntity(context.Background(), nil, GetEntityInput{ID: "01HOST_WEB"})
+	_, out, err := s.getEntity(context.Background(), nil, GetEntityInput{EntityID: "01HOST_WEB"})
 	if err != nil {
 		t.Fatalf("getEntity: %v", err)
 	}
@@ -220,7 +220,7 @@ func TestGetEntity(t *testing.T) {
 		t.Fatalf("unexpected entity: %+v", out.Entity)
 	}
 
-	if _, _, err := s.getEntity(context.Background(), nil, GetEntityInput{ID: "nope"}); err == nil {
+	if _, _, err := s.getEntity(context.Background(), nil, GetEntityInput{EntityID: "nope"}); err == nil {
 		t.Fatal("expected error for unknown id")
 	}
 	if _, _, err := s.getEntity(context.Background(), nil, GetEntityInput{}); err == nil {
@@ -303,6 +303,10 @@ func TestRecentChanges(t *testing.T) {
 	}
 	if _, _, err := s.recentChanges(ctx, nil, RecentChangesInput{Window: "1h", Kind: "bogus"}); err == nil {
 		t.Fatal("expected error for bad kind")
+	}
+
+	if _, _, err := s.recentChanges(ctx, nil, RecentChangesInput{}); err != nil {
+		t.Fatalf("omitted window should default to 1h, got error: %v", err)
 	}
 }
 
@@ -838,7 +842,7 @@ func TestAsOfReads(t *testing.T) {
 	if ds.TotalEntities != 2 || ds.TotalRelations != 1 {
 		t.Fatalf("14:00 schema = %d/%d, want 2/1", ds.TotalEntities, ds.TotalRelations)
 	}
-	_, ge, err := s.getEntity(ctx, nil, GetEntityInput{ID: "01W", AsOf: at(2)})
+	_, ge, err := s.getEntity(ctx, nil, GetEntityInput{EntityID: "01W", AsOf: at(2)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -856,7 +860,7 @@ func TestAsOfReads(t *testing.T) {
 	}
 
 	// 15:30 — web degraded; 16:30 — edge gone (unreachable, entities live).
-	_, ge, err = s.getEntity(ctx, nil, GetEntityInput{ID: "01W", AsOf: at(3)})
+	_, ge, err = s.getEntity(ctx, nil, GetEntityInput{EntityID: "01W", AsOf: at(3)})
 	if err != nil {
 		t.Fatal(err)
 	}
