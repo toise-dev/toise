@@ -13,6 +13,14 @@ type EventScanner interface {
 	Scan(fn func(seq uint64, ev model.Event) error) error
 }
 
+// defaultTombstoneCap bounds how many soft-deleted entities keep their full
+// payload readable by id. Beyond it the oldest tombstones are evicted from the
+// projection entirely — their history stays in the log (entity_history), but
+// GetEntity answers not-found. Without a bound, projection memory grows with
+// CUMULATIVE churn (every veth interface that ever flapped), not with the
+// live graph (#140).
+const defaultTombstoneCap = 1024
+
 // Graph is the in-memory projection of the event log. It is safe for concurrent
 // use.
 type Graph struct {
@@ -27,18 +35,35 @@ type Graph struct {
 
 	byHash map[string]model.EntityID
 	byType map[string]map[model.EntityID]struct{}
+
+	// tombstones is the deletion-order queue backing the bounded tombstone
+	// cache; tombstoneCap bounds liveTombstones, the count of queue entries
+	// still actually tombstoned (the queue may carry stale ids) (#140).
+	tombstones     []model.EntityID
+	tombstoneCap   int
+	liveTombstones int
 }
 
-// New returns an empty graph.
+// New returns an empty graph with the default tombstone bound.
 func New() *Graph {
+	return NewWithTombstoneCap(defaultTombstoneCap)
+}
+
+// NewWithTombstoneCap returns an empty graph keeping at most limit soft-deleted
+// entities readable by id (limit <= 0 means the default).
+func NewWithTombstoneCap(limit int) *Graph {
+	if limit <= 0 {
+		limit = defaultTombstoneCap
+	}
 	return &Graph{
-		entities:  make(map[model.EntityID]model.Entity),
-		deleted:   make(map[model.EntityID]bool),
-		relations: make(map[model.RelationID]model.Relation),
-		out:       make(map[model.EntityID]map[model.RelationID]struct{}),
-		in:        make(map[model.EntityID]map[model.RelationID]struct{}),
-		byHash:    make(map[string]model.EntityID),
-		byType:    make(map[string]map[model.EntityID]struct{}),
+		entities:     make(map[model.EntityID]model.Entity),
+		deleted:      make(map[model.EntityID]bool),
+		relations:    make(map[model.RelationID]model.Relation),
+		out:          make(map[model.EntityID]map[model.RelationID]struct{}),
+		in:           make(map[model.EntityID]map[model.RelationID]struct{}),
+		byHash:       make(map[string]model.EntityID),
+		byType:       make(map[string]map[model.EntityID]struct{}),
+		tombstoneCap: limit,
 	}
 }
 
@@ -86,7 +111,12 @@ func (g *Graph) applyEntity(ee *model.EntityEvent) {
 				delete(set, id)
 			}
 		}
-		g.deleted[id] = true
+		if !g.deleted[id] {
+			g.deleted[id] = true
+			g.tombstones = append(g.tombstones, id)
+			g.liveTombstones++
+			g.evictTombstones()
+		}
 	case model.EntityUnchanged:
 		// heartbeat: ensure presence, no state change
 		if _, ok := g.entities[id]; !ok {
@@ -95,8 +125,28 @@ func (g *Graph) applyEntity(ee *model.EntityEvent) {
 	}
 }
 
+// evictTombstones drops the oldest soft-deleted entities beyond the cap,
+// amortized O(1) per delete. Entries whose entity was resurrected (replay
+// ensure-presence) are skipped — the queue may carry stale ids, the maps and
+// the live counter are the truth.
+func (g *Graph) evictTombstones() {
+	for g.liveTombstones > g.tombstoneCap && len(g.tombstones) > 0 {
+		id := g.tombstones[0]
+		g.tombstones = g.tombstones[1:]
+		if !g.deleted[id] {
+			continue // stale entry; not a tombstone anymore
+		}
+		delete(g.entities, id)
+		delete(g.deleted, id)
+		g.liveTombstones--
+	}
+}
+
 func (g *Graph) putEntity(e model.Entity) {
 	g.entities[e.ID] = e
+	if g.deleted[e.ID] {
+		g.liveTombstones-- // resurrection un-tombstones; its queue entry goes stale
+	}
 	delete(g.deleted, e.ID)
 	g.byHash[e.IdentityHash()] = e.ID
 	set := g.byType[e.Type]

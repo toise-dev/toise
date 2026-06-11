@@ -1,6 +1,7 @@
 package projection
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/toise-dev/toise/internal/model"
@@ -169,5 +170,54 @@ func TestApplyIndexesWhenUpdateIsFirstEvent(t *testing.T) {
 	}})
 	if n := len(g.Neighbors("e1", "", 1)); n != 1 {
 		t.Errorf("Neighbors = %d via a relation whose first event is attribute_changed, want 1 (adjacency lost)", n)
+	}
+}
+
+// TestTombstoneCacheBounded pins #140: projection memory tracks the live graph
+// plus a bounded tombstone window, not cumulative churn. Recent deletions stay
+// readable by id; the oldest are evicted entirely; resurrected ids do not
+// count against the bound.
+func TestTombstoneCacheBounded(t *testing.T) {
+	g := NewWithTombstoneCap(4)
+	mk := func(i int) model.Entity {
+		return model.Entity{ID: model.EntityID(fmt.Sprintf("e%02d", i)), Type: model.TypeHost,
+			Identity: []model.KeyValue{{Key: "host.id", Value: model.StringValue(fmt.Sprintf("h%02d", i))}}}
+	}
+	apply := func(ct model.ChangeType, e model.Entity) {
+		g.Apply(model.Event{Entity: &model.EntityEvent{
+			EventID: model.NewEventID(), ChangeType: ct, Entity: e, SchemaVersion: model.SchemaVersion,
+		}})
+	}
+
+	// Churn 12 entities through create+delete with a cap of 4.
+	for i := 0; i < 12; i++ {
+		apply(model.EntityCreated, mk(i))
+		apply(model.EntityDeleted, mk(i))
+	}
+	if g.EntityCount() != 0 {
+		t.Fatalf("EntityCount = %d, want 0", g.EntityCount())
+	}
+	if n := len(g.entities); n != 4 {
+		t.Fatalf("retained payloads = %d, want 4 (the tombstone cap, not the 12 churned)", n)
+	}
+	// The most recent deletions read back with deleted=true.
+	if _, ok, deleted := g.GetEntity("e11"); !ok || !deleted {
+		t.Errorf("e11 = ok %v deleted %v, want readable tombstone", ok, deleted)
+	}
+	// The oldest are evicted entirely.
+	if _, ok, _ := g.GetEntity("e00"); ok {
+		t.Error("e00 must be evicted past the cap")
+	}
+
+	// A replayed create for a tombstoned id (defensive: the engine never emits
+	// one, but a crafted log could) un-tombstones it and frees its slot.
+	apply(model.EntityCreated, mk(11))
+	if _, ok, deleted := g.GetEntity("e11"); !ok || deleted {
+		t.Errorf("re-created e11 = ok %v deleted %v, want live", ok, deleted)
+	}
+	apply(model.EntityCreated, mk(20))
+	apply(model.EntityDeleted, mk(20))
+	if _, ok, deleted := g.GetEntity("e20"); !ok || !deleted {
+		t.Errorf("e20 tombstone = ok %v deleted %v, want readable", ok, deleted)
 	}
 }
