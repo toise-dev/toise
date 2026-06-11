@@ -10,6 +10,7 @@ import (
 
 	"github.com/toise-dev/toise/internal/change"
 	"github.com/toise-dev/toise/internal/model"
+	"github.com/toise-dev/toise/pkg/emit/wire"
 )
 
 // errInvalidRecord marks an entity record that violates the wire contract
@@ -19,39 +20,40 @@ import (
 // one bad record must not block its valid siblings (#109).
 var errInvalidRecord = errors.New("invalid entity record")
 
-// LogRecord attribute keys for the merged OTel entity-events convention
-// (specification/entities/entity-events.md, merged 2026-06-04). See ADR 0009,
-// ADR 0022, and docs/data-model/otel-mapping.md.
+// The wire vocabulary is spelled once, in pkg/emit/wire, shared with the SDK
+// and the conformance kit so producer and consumer cannot drift apart literal
+// by literal. The local names are aliases kept for the package's readability.
+//
+// Embedded relationships: an entity *state* event MAY carry an
+// `entity.relationships` array; each descriptor is a map with the
+// `relationship.type` and the target's `entity.type` + `entity.id` (map). This
+// is the sole on-wire relationship form (ADR 0022): the source is implicit (the
+// entity carrying the array) and removal is by absence on re-emit (no explicit
+// relation-delete). The ingest boundary translates each descriptor into the
+// engine's first-class relation events. See docs/data-model/otel-mapping.md.
 const (
-	attrEntityType = "entity.type"
-	attrEntityID   = "entity.id"
-	attrEntityDesc = "entity.description" // descriptive (non-identifying) attributes
+	attrEntityType = wire.AttrEntityType
+	attrEntityID   = wire.AttrEntityID
+	attrEntityDesc = wire.AttrEntityDescription
 	// report interval is the producer's heartbeat cadence in SECONDS; it is a
 	// liveness backstop (a stale entity is expired), not a primary delete signal.
-	attrEntityInterval = "entity.report.interval"
+	attrEntityInterval = wire.AttrEntityReportInterval
 
-	// resAttrProducer is the OTLP Resource attribute identifying the producing
-	// agent; liveness is reference-counted per producer (ADR 0019).
-	resAttrProducer = "service.instance.id"
+	// resAttrProducer identifies the producing agent; liveness is
+	// reference-counted per producer (ADR 0019).
+	resAttrProducer = wire.ResServiceInstanceID
 
-	// Embedded relationships: an entity *state* event MAY carry an
-	// `entity.relationships` array; each descriptor is a map with the
-	// `relationship.type` and the target's `entity.type` + `entity.id` (map). This is
-	// the sole on-wire relationship form (ADR 0022): the source is implicit (the
-	// entity carrying the array) and removal is by absence on re-emit (no explicit
-	// relation-delete). The ingest boundary translates each descriptor into the
-	// engine's first-class relation events. See docs/data-model/otel-mapping.md.
-	attrEntityRelationships = "entity.relationships"
-	relDescType             = "relationship.type"
-	relDescEntityType       = "entity.type"
-	relDescEntityID         = "entity.id"
+	attrEntityRelationships = wire.AttrEntityRelationships
+	relDescType             = wire.RelType
+	relDescEntityType       = wire.RelTargetType
+	relDescEntityID         = wire.RelTargetID
 )
 
 // Entity lifecycle events are identified by the LogRecord EventName (OTel spec),
 // not by an attribute.
 const (
-	evEntityState  = "entity.state"
-	evEntityDelete = "entity.delete"
+	evEntityState  = wire.EventEntityState
+	evEntityDelete = wire.EventEntityDelete
 )
 
 // engine is the subset of *change.Engine the receiver routes to.

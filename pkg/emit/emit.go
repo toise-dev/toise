@@ -23,24 +23,8 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
-)
 
-// Wire contract attribute keys (docs/data-model/otel-mapping.md).
-const (
-	eventState  = "entity.state"
-	eventDelete = "entity.delete"
-
-	attrType          = "entity.type"
-	attrID            = "entity.id"
-	attrDescription   = "entity.description"
-	attrInterval      = "entity.report.interval"
-	attrRelationships = "entity.relationships"
-	relType           = "relationship.type"
-	relTargetType     = "entity.type"
-	relTargetID       = "entity.id"
-
-	resServiceName     = "service.name"
-	resServiceInstance = "service.instance.id"
+	"github.com/toise-dev/toise/pkg/emit/wire"
 )
 
 // Entity is one entity observation to emit.
@@ -148,7 +132,7 @@ func (c *Client) Close() error { return c.conn.Close() }
 // accepted but some records were rejected as contract violations — do not
 // retry it; fix the producer.
 func (c *Client) State(ctx context.Context, entities ...Entity) error {
-	return c.export(ctx, eventState, entities)
+	return c.export(ctx, wire.EventEntityState, entities)
 }
 
 // Delete emits one entity.delete event per entity. Toise releases this
@@ -157,7 +141,7 @@ func (c *Client) State(ctx context.Context, entities ...Entity) error {
 // but some records were rejected as contract violations — do not retry it;
 // fix the producer.
 func (c *Client) Delete(ctx context.Context, entities ...Entity) error {
-	return c.export(ctx, eventDelete, entities)
+	return c.export(ctx, wire.EventEntityDelete, entities)
 }
 
 func (c *Client) export(ctx context.Context, eventName string, entities []Entity) error {
@@ -191,10 +175,10 @@ func (c *Client) Build(eventName string, entities []Entity) (plog.Logs, error) {
 	rl := ld.ResourceLogs().AppendEmpty()
 	res := rl.Resource().Attributes()
 	if c.opts.ServiceName != "" {
-		res.PutStr(resServiceName, c.opts.ServiceName)
+		res.PutStr(wire.ResServiceName, c.opts.ServiceName)
 	}
 	if c.opts.ServiceInstanceID != "" {
-		res.PutStr(resServiceInstance, c.opts.ServiceInstanceID)
+		res.PutStr(wire.ResServiceInstanceID, c.opts.ServiceInstanceID)
 	}
 	putSorted(res, c.opts.Resource)
 	sl := rl.ScopeLogs().AppendEmpty()
@@ -213,25 +197,25 @@ func (c *Client) Build(eventName string, entities []Entity) (plog.Logs, error) {
 		lr.SetTimestamp(when)
 		lr.SetEventName(eventName)
 		a := lr.Attributes()
-		a.PutStr(attrType, e.Type)
-		putSorted(a.PutEmptyMap(attrID), e.ID)
+		a.PutStr(wire.AttrEntityType, e.Type)
+		putSorted(a.PutEmptyMap(wire.AttrEntityID), e.ID)
 		if len(e.Attributes) > 0 {
-			putSorted(a.PutEmptyMap(attrDescription), e.Attributes)
+			putSorted(a.PutEmptyMap(wire.AttrEntityDescription), e.Attributes)
 		}
 		if e.Interval > 0 {
-			a.PutInt(attrInterval, int64(e.Interval/time.Second))
+			a.PutInt(wire.AttrEntityReportInterval, int64(e.Interval/time.Second))
 		}
-		if eventName == eventState && len(e.Relationships) > 0 {
-			slc := a.PutEmptySlice(attrRelationships)
+		if eventName == wire.EventEntityState && len(e.Relationships) > 0 {
+			slc := a.PutEmptySlice(wire.AttrEntityRelationships)
 			for j := range e.Relationships {
 				r := &e.Relationships[j]
 				if r.Type == "" || r.TargetType == "" || len(r.TargetID) == 0 {
 					return plog.Logs{}, fmt.Errorf("emit: entity %d (%s) relationship %d is incomplete (need Type, TargetType, TargetID)", i, e.Type, j)
 				}
 				m := slc.AppendEmpty().SetEmptyMap()
-				m.PutStr(relType, r.Type)
-				m.PutStr(relTargetType, r.TargetType)
-				putSorted(m.PutEmptyMap(relTargetID), r.TargetID)
+				m.PutStr(wire.RelType, r.Type)
+				m.PutStr(wire.RelTargetType, r.TargetType)
+				putSorted(m.PutEmptyMap(wire.RelTargetID), r.TargetID)
 			}
 		}
 	}

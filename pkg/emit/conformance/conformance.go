@@ -18,6 +18,8 @@ import (
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
+
+	"github.com/toise-dev/toise/pkg/emit/wire"
 )
 
 // Problem is one contract violation, with where it was found.
@@ -53,7 +55,7 @@ func Check(ld plog.Logs) []Problem {
 				lr := recs.At(k)
 				where := fmt.Sprintf("resourceLogs[%d].scopeLogs[%d].logRecords[%d]", i, j, k)
 				out = append(out, checkRecord(where, lr)...)
-				if name := lr.EventName(); name == "entity.state" || name == "entity.delete" {
+				if name := lr.EventName(); name == wire.EventEntityState || name == wire.EventEntityDelete {
 					entityEvents = true
 				}
 			}
@@ -71,7 +73,7 @@ func Check(ld plog.Logs) []Problem {
 // service.instance.id (ADR 0019), and without a stable instance id every
 // producer collapses into one anonymous reference.
 func checkResource(i int, res pcommon.Resource) []Problem {
-	if v, ok := res.Attributes().Get("service.instance.id"); ok && v.Type() == pcommon.ValueTypeStr && v.Str() != "" {
+	if v, ok := res.Attributes().Get(wire.ResServiceInstanceID); ok && v.Type() == pcommon.ValueTypeStr && v.Str() != "" {
 		return nil
 	}
 	return []Problem{{
@@ -83,7 +85,7 @@ func checkResource(i int, res pcommon.Resource) []Problem {
 
 func checkRecord(where string, lr plog.LogRecord) []Problem {
 	name := lr.EventName()
-	if name != "entity.state" && name != "entity.delete" {
+	if name != wire.EventEntityState && name != wire.EventEntityDelete {
 		if name == "" {
 			return nil // ordinary log record; not an entity event
 		}
@@ -95,7 +97,7 @@ func checkRecord(where string, lr plog.LogRecord) []Problem {
 	}
 	attrs := lr.Attributes()
 
-	typ, ok := attrs.Get("entity.type")
+	typ, ok := attrs.Get(wire.AttrEntityType)
 	switch {
 	case !ok:
 		bad("missing entity.type")
@@ -105,7 +107,7 @@ func checkRecord(where string, lr plog.LogRecord) []Problem {
 		bad("entity.type is empty")
 	}
 
-	id, ok := attrs.Get("entity.id")
+	id, ok := attrs.Get(wire.AttrEntityID)
 	switch {
 	case !ok:
 		bad("missing entity.id")
@@ -117,7 +119,7 @@ func checkRecord(where string, lr plog.LogRecord) []Problem {
 		checkScalarMap(&out, where, "entity.id", id.Map())
 	}
 
-	if desc, ok := attrs.Get("entity.description"); ok {
+	if desc, ok := attrs.Get(wire.AttrEntityDescription); ok {
 		if desc.Type() != pcommon.ValueTypeMap {
 			bad("entity.description must be a map, got %s", desc.Type())
 		} else {
@@ -125,7 +127,7 @@ func checkRecord(where string, lr plog.LogRecord) []Problem {
 		}
 	}
 
-	if iv, ok := attrs.Get("entity.report.interval"); ok {
+	if iv, ok := attrs.Get(wire.AttrEntityReportInterval); ok {
 		if iv.Type() != pcommon.ValueTypeInt {
 			bad("entity.report.interval must be an int (seconds), got %s — a mis-typed interval silently disarms the liveness backstop", iv.Type())
 		} else if iv.Int() < 0 {
@@ -133,8 +135,8 @@ func checkRecord(where string, lr plog.LogRecord) []Problem {
 		}
 	}
 
-	if rels, ok := attrs.Get("entity.relationships"); ok {
-		if name == "entity.delete" {
+	if rels, ok := attrs.Get(wire.AttrEntityRelationships); ok {
+		if name == wire.EventEntityDelete {
 			bad("entity.relationships on an entity.delete record is ignored by consumers; emit them on entity.state")
 		}
 		if rels.Type() != pcommon.ValueTypeSlice {
@@ -149,13 +151,13 @@ func checkRecord(where string, lr plog.LogRecord) []Problem {
 					continue
 				}
 				m := el.Map()
-				if v, ok := m.Get("relationship.type"); !ok || v.Type() != pcommon.ValueTypeStr || v.Str() == "" {
+				if v, ok := m.Get(wire.RelType); !ok || v.Type() != pcommon.ValueTypeStr || v.Str() == "" {
 					out = append(out, Problem{Record: rw, Issue: "missing or non-string relationship.type"})
 				}
-				if v, ok := m.Get("entity.type"); !ok || v.Type() != pcommon.ValueTypeStr || v.Str() == "" {
+				if v, ok := m.Get(wire.RelTargetType); !ok || v.Type() != pcommon.ValueTypeStr || v.Str() == "" {
 					out = append(out, Problem{Record: rw, Issue: "missing or non-string target entity.type"})
 				}
-				if v, ok := m.Get("entity.id"); !ok || v.Type() != pcommon.ValueTypeMap || v.Map().Len() == 0 {
+				if v, ok := m.Get(wire.RelTargetID); !ok || v.Type() != pcommon.ValueTypeMap || v.Map().Len() == 0 {
 					out = append(out, Problem{Record: rw, Issue: "missing, non-map, or empty target entity.id"})
 				}
 			}
