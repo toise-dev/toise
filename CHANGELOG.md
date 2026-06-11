@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Liveness survives restarts.** The engine's liveness bookkeeping — producer
+  references with their expiry deadlines (ADR 0019) and per-relation deadlines
+  — now rides the projection snapshot and is restored at boot, with absolute
+  deadlines so downtime counts against them: a producer that died WHILE the
+  server was down is swept on the first tick after restart, instead of leaving
+  zombie entities the backstop could never reap. Pre-existing snapshots (no
+  liveness section) keep reading fine. (#139)
 - **GraphQL subscriptions: server-side filters and an in-band gap signal.**
   `entityChanged` and `relationChanged` take a `ChangeFilter` (entity/relation
   type, change classification, structural-only), so a consumer watching one

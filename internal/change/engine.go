@@ -1,6 +1,7 @@
 package change
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -825,4 +826,67 @@ func canonMap(kvs []model.KeyValue) map[string]string {
 		m[kv.Key] = kv.Value.String()
 	}
 	return m
+}
+
+// livenessSnapshot is the serialized form of the engine's liveness bookkeeping
+// (the Memento, #139): producer references with their absolute expiry
+// deadlines, and per-relation deadlines. Absolute times mean downtime counts
+// against them — a producer that died while the server was down is swept on
+// the first tick after restart instead of leaving zombies forever.
+type livenessSnapshot struct {
+	Refs         map[string]map[string]time.Time `json:"refs"`
+	RelDeadlines map[string]time.Time            `json:"rel_deadlines"`
+}
+
+// LivenessBlob serializes the current liveness bookkeeping for inclusion in
+// the projection snapshot.
+func (e *Engine) LivenessBlob() ([]byte, error) {
+	e.obsMu.Lock()
+	snap := livenessSnapshot{
+		Refs:         make(map[string]map[string]time.Time, len(e.refs)),
+		RelDeadlines: make(map[string]time.Time, len(e.relDeadlines)),
+	}
+	for id, producers := range e.refs {
+		ps := make(map[string]time.Time, len(producers))
+		for p, deadline := range producers {
+			ps[p] = deadline
+		}
+		snap.Refs[string(id)] = ps
+	}
+	for id, deadline := range e.relDeadlines {
+		snap.RelDeadlines[string(id)] = deadline
+	}
+	e.obsMu.Unlock()
+	b, err := json.Marshal(snap)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling liveness snapshot: %w", err)
+	}
+	return b, nil
+}
+
+// RestoreLiveness seeds the liveness bookkeeping from a snapshot blob, called
+// once at boot after the projection is restored. Entries pointing at entities
+// or relations the snapshot does not contain are harmless: Sweep self-heals
+// them. A nil/empty blob (pre-#139 snapshots) is a no-op.
+func (e *Engine) RestoreLiveness(blob []byte) error {
+	if len(blob) == 0 {
+		return nil
+	}
+	var snap livenessSnapshot
+	if err := json.Unmarshal(blob, &snap); err != nil {
+		return fmt.Errorf("unmarshaling liveness snapshot: %w", err)
+	}
+	e.obsMu.Lock()
+	defer e.obsMu.Unlock()
+	for id, producers := range snap.Refs {
+		ps := make(map[string]time.Time, len(producers))
+		for p, deadline := range producers {
+			ps[p] = deadline
+		}
+		e.refs[model.EntityID(id)] = ps
+	}
+	for id, deadline := range snap.RelDeadlines {
+		e.relDeadlines[model.RelationID(id)] = deadline
+	}
+	return nil
 }

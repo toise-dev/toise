@@ -246,7 +246,8 @@ func (r *Registry) openStack(id string) (*Stack, error) {
 	}
 	graph := projection.New()
 	restoredFrom := uint64(0)
-	if seq, snapEvents, ok, rerr := st.ReadSnapshot(); rerr != nil {
+	var liveness []byte
+	if seq, snapEvents, blob, ok, rerr := st.ReadSnapshot(); rerr != nil {
 		_ = st.Close()
 		return nil, fmt.Errorf("reading snapshot for tenant %q: %w", id, rerr)
 	} else if ok {
@@ -254,6 +255,7 @@ func (r *Registry) openStack(id string) (*Stack, error) {
 			graph.Apply(snapEvents[i])
 		}
 		restoredFrom = seq
+		liveness = blob
 	}
 	if err := st.ScanFrom(restoredFrom, func(_ uint64, ev model.Event) error {
 		graph.Apply(ev)
@@ -265,6 +267,13 @@ func (r *Registry) openStack(id string) (*Stack, error) {
 	engine := change.New(graph, st,
 		change.WithLogger(r.logger.With("tenant", id)),
 		change.WithRelationBuffer(r.relBuf))
+	// Restore the liveness Memento (#139): absolute deadlines, so a producer
+	// that died during the downtime is swept on the first tick after boot.
+	if err := engine.RestoreLiveness(liveness); err != nil {
+		// A corrupt liveness section must not block boot: the projection is
+		// intact, only the backstop re-arms lazily on the next observations.
+		r.logger.Warn("ignoring unreadable liveness snapshot section", "tenant", id, "err", err)
+	}
 	r.logger.Info("tenant stack ready", "tenant", id,
 		"entities", graph.EntityCount(), "relations", graph.RelationCount(),
 		"from_snapshot_seq", restoredFrom)

@@ -43,7 +43,7 @@ func TestSnapshotThenTailEqualsFullReplay(t *testing.T) {
 		t.Fatalf("replay: %v", e)
 	}
 	seq := s.Sequence()
-	if e := s.WriteSnapshot(seq, atSnapshot.SnapshotEvents(tsx(30))); e != nil {
+	if e := s.WriteSnapshot(seq, atSnapshot.SnapshotEvents(tsx(30)), nil); e != nil {
 		t.Fatalf("write snapshot: %v", e)
 	}
 
@@ -53,7 +53,7 @@ func TestSnapshotThenTailEqualsFullReplay(t *testing.T) {
 
 	// Rebuild from snapshot + tail.
 	restored := projection.New()
-	rseq, evs, ok, rerr := s.ReadSnapshot()
+	rseq, evs, _, ok, rerr := s.ReadSnapshot()
 	if rerr != nil || !ok {
 		t.Fatalf("ReadSnapshot ok=%v err=%v", ok, rerr)
 	}
@@ -157,12 +157,12 @@ func TestSnapshotRestoreDoesNotResurrectDeleted(t *testing.T) {
 	if e := g.Replay(s); e != nil {
 		t.Fatalf("replay: %v", e)
 	}
-	if e := s.WriteSnapshot(s.Sequence(), g.SnapshotEvents(tsx(30))); e != nil {
+	if e := s.WriteSnapshot(s.Sequence(), g.SnapshotEvents(tsx(30)), nil); e != nil {
 		t.Fatalf("write snapshot: %v", e)
 	}
 
 	restored := projection.New()
-	_, evs, ok, rerr := s.ReadSnapshot()
+	_, evs, _, ok, rerr := s.ReadSnapshot()
 	if rerr != nil || !ok {
 		t.Fatalf("ReadSnapshot ok=%v err=%v", ok, rerr)
 	}
@@ -179,5 +179,45 @@ func TestSnapshotRestoreDoesNotResurrectDeleted(t *testing.T) {
 	}
 	if _, found, _ := restored.GetEntity(b); found {
 		t.Error("deleted entity b present after restore: the snapshot must omit it")
+	}
+}
+
+// TestSnapshotLivenessSection pins the #139 format extension: the opaque
+// liveness blob rides the snapshot and round-trips; snapshots written without
+// one (the pre-#139 format) read back with no liveness and no error.
+func TestSnapshotLivenessSection(t *testing.T) {
+	s := mustOpenStore(t, t.TempDir())
+	t.Cleanup(func() { _ = s.Close() })
+	a := model.EntityID("a")
+	if aerr := s.Append(entEvt(a, model.EntityCreated, tsx(0))); aerr != nil {
+		t.Fatal(aerr)
+	}
+	g := projection.New()
+	if rerr := g.Replay(s); rerr != nil {
+		t.Fatal(rerr)
+	}
+
+	blob := []byte(`{"refs":{"a":{"p1":"2026-06-11T00:00:00Z"}}}`)
+	if werr := s.WriteSnapshot(s.Sequence(), g.SnapshotEvents(tsx(10)), blob); werr != nil {
+		t.Fatal(werr)
+	}
+	_, evs, got, ok, err := s.ReadSnapshot()
+	if err != nil || !ok {
+		t.Fatalf("read: ok=%v err=%v", ok, err)
+	}
+	if len(evs) != 1 {
+		t.Fatalf("events = %d, want 1", len(evs))
+	}
+	if string(got) != string(blob) {
+		t.Fatalf("liveness round-trip = %q, want %q", got, blob)
+	}
+
+	// Old format: no liveness section at all.
+	if werr := s.WriteSnapshot(s.Sequence(), g.SnapshotEvents(tsx(10)), nil); werr != nil {
+		t.Fatal(werr)
+	}
+	_, _, got, ok, err = s.ReadSnapshot()
+	if err != nil || !ok || got != nil {
+		t.Fatalf("pre-section snapshot: liveness=%v ok=%v err=%v, want nil/true/nil", got, ok, err)
 	}
 }
