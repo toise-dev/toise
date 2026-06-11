@@ -168,6 +168,7 @@ func Default() Config {
 		LivenessSweepInterval: Duration(30 * time.Second),
 		RetentionMaxAge:       0,
 		CompactionInterval:    Duration(time.Hour),
+		SnapshotInterval:      Duration(5 * time.Minute),
 		LogFormat:             "text",
 		LogLevel:              "info",
 		Production:            false,

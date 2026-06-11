@@ -18,6 +18,15 @@ func TestHardeningDefaults(t *testing.T) {
 	}
 }
 
+// TestSnapshotOnByDefault pins #164: snapshots default to 5m so the liveness
+// memento survives restarts out of the box; a 0 default left the sweeper
+// backstop silently restart-amnesiac.
+func TestSnapshotOnByDefault(t *testing.T) {
+	if d := Default(); d.SnapshotInterval.D() != 5*time.Minute {
+		t.Errorf("default snapshot_interval = %v, want 5m", d.SnapshotInterval.D())
+	}
+}
+
 func TestProductionLockdownWinsOverToggles(t *testing.T) {
 	// --production forces all three off, even if a toggle tries to re-enable.
 	cfg, err := Load([]string{"--production", "--playground=true"}, env(nil))

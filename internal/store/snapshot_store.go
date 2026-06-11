@@ -89,13 +89,23 @@ func (s *Store) ReadSnapshot() (seq uint64, events []model.Event, liveness []byt
 		if n == livenessSentinel {
 			// The liveness section: one length-delimited opaque blob, owned by
 			// the change engine (#139). Pre-section snapshots never reach here.
+			// A truncated section must not fail the read — the projection
+			// events before it are intact, and the blob is only a liveness
+			// hint the engine's sweep self-heals without. Returning whatever
+			// bytes remain lets the engine's own decoder reject (and the
+			// caller warn about) the partial blob, the same path as JSON-level
+			// corruption.
 			if len(rest) < 4 {
-				return 0, nil, nil, false, errors.New("snapshot truncated (liveness length)")
+				liveness = rest
+				rest = nil
+				continue
 			}
 			ln := binary.BigEndian.Uint32(rest[:4])
 			rest = rest[4:]
 			if uint32(len(rest)) < ln {
-				return 0, nil, nil, false, errors.New("snapshot truncated (liveness body)")
+				liveness = rest
+				rest = nil
+				continue
 			}
 			liveness = rest[:ln]
 			rest = rest[ln:]
