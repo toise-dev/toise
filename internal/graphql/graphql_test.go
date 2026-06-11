@@ -313,13 +313,13 @@ func TestSubscriptionFiltersAndGapSignal(t *testing.T) {
 	}
 	// One matching event, one non-matching (process), one relation (never on
 	// this stream).
-	if _, err := s.engine.ObserveEntity(change.EntityObservation{Type: model.TypeHost,
-		Identity: []model.KeyValue{kv("host.id", "h-sub")}, EventTime: t0}); err != nil {
-		t.Fatal(err)
+	if _, oerr := s.engine.ObserveEntity(change.EntityObservation{Type: model.TypeHost,
+		Identity: []model.KeyValue{kv("host.id", "h-sub")}, EventTime: t0}); oerr != nil {
+		t.Fatal(oerr)
 	}
-	if _, err := s.engine.ObserveEntity(change.EntityObservation{Type: model.TypeProcess,
-		Identity: []model.KeyValue{kv("pid", "777")}, EventTime: t0}); err != nil {
-		t.Fatal(err)
+	if _, oerr := s.engine.ObserveEntity(change.EntityObservation{Type: model.TypeProcess,
+		Identity: []model.KeyValue{kv("pid", "777")}, EventTime: t0}); oerr != nil {
+		t.Fatal(oerr)
 	}
 	got := <-ch
 	if got.Entity == nil || got.Entity.Type != "host" {
@@ -338,9 +338,9 @@ func TestSubscriptionFiltersAndGapSignal(t *testing.T) {
 	// drain — the next delivered event reports exactly the drops.
 	const overflow = 3
 	for i := 0; i < 16+overflow; i++ {
-		if _, err := s.engine.ObserveEntity(change.EntityObservation{Type: model.TypeHost,
-			Identity: []model.KeyValue{kv("host.id", fmt.Sprintf("h-flood-%d", i))}, EventTime: t0}); err != nil {
-			t.Fatal(err)
+		if _, oerr := s.engine.ObserveEntity(change.EntityObservation{Type: model.TypeHost,
+			Identity: []model.KeyValue{kv("host.id", fmt.Sprintf("h-flood-%d", i))}, EventTime: t0}); oerr != nil {
+			t.Fatal(oerr)
 		}
 	}
 	for i := 0; i < 16; i++ {
@@ -348,9 +348,9 @@ func TestSubscriptionFiltersAndGapSignal(t *testing.T) {
 			t.Fatalf("buffered event %d dropped = %d, want 0", i, ev.Dropped)
 		}
 	}
-	if _, err := s.engine.ObserveEntity(change.EntityObservation{Type: model.TypeHost,
-		Identity: []model.KeyValue{kv("host.id", "h-after-gap")}, EventTime: t0}); err != nil {
-		t.Fatal(err)
+	if _, oerr := s.engine.ObserveEntity(change.EntityObservation{Type: model.TypeHost,
+		Identity: []model.KeyValue{kv("host.id", "h-after-gap")}, EventTime: t0}); oerr != nil {
+		t.Fatal(oerr)
 	}
 	after := <-ch
 	if after.Dropped != overflow {
@@ -363,12 +363,12 @@ func TestSubscriptionFiltersAndGapSignal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.engine.ObserveRelation(change.RelationObservation{
+	if _, _, oerr := s.engine.ObserveRelation(change.RelationObservation{
 		Type:      model.RelRunsOn,
 		From:      change.EndpointRef{Type: model.TypeProcess, Identity: []model.KeyValue{kv("pid", "777")}},
 		To:        change.EndpointRef{Type: model.TypeHost, Identity: []model.KeyValue{kv("host.id", "h-sub")}},
-		EventTime: t0}); err != nil {
-		t.Fatal(err)
+		EventTime: t0}); oerr != nil {
+		t.Fatal(oerr)
 	}
 	rev := <-rch
 	if rev.Relation == nil || rev.Relation.Type != "runs_on" {
