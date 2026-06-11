@@ -149,3 +149,18 @@ Hand-rolling the wire contract is how producers drift. Two tools replace it:
 The checked-in fixture (`pkg/emit/testdata/fixture_v1.bin`) is the published
 contract v1: the SDK reproduces it byte for byte and Toise's own ingest tests
 accept it with zero rejections — one artifact pins both sides.
+
+The SDK is its own Go module
+([ADR 0027](https://github.com/toise-dev/toise/blob/main/docs/architecture/adr/0027-sdk-module-and-versioning.md)),
+versioned independently of the server and dependency-light: importing it pulls
+in the OTel pdata types and gRPC, none of the server's storage or query stack.
+It is installable at a tagged version once the first SDK tag
+(`pkg/emit/v0.1.0`) is cut — Go resolves the nested module path from the tag
+automatically:
+
+```bash
+go get github.com/toise-dev/toise/pkg/emit@v0.1.0
+```
+
+Until then, `go get github.com/toise-dev/toise/pkg/emit@main` resolves a
+pseudo-version of the latest main.

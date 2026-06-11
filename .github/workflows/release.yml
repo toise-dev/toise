@@ -1,10 +1,14 @@
 name: Release
 
-# Fires on a version tag (no "v" prefix, e.g. 0.2.0). The tag/release is cut by
-# the release-manager flow; this workflow attaches the build artifacts.
+# Fires on a server version tag (v-prefixed from v0.6.0, e.g. v0.6.0; see
+# ADR 0027). The tag/release is cut by the release-manager flow; this workflow
+# attaches the build artifacts. SDK tags (pkg/emit/vX.Y.Z) do NOT trigger it:
+# GitHub's "*" glob does not cross "/", so only top-level server tags match.
+# Asset and image names carry the ref name verbatim (toise_v0.6.0_..., ghcr
+# tag v0.6.0), matching what `git describe` stamps into the binary.
 on:
   push:
-    tags: ["*.*.*"]
+    tags: ["v*.*.*"]
 
 permissions:
   contents: read
