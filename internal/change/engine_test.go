@@ -723,3 +723,64 @@ func TestPendingBufferCapAndSweepExpiry(t *testing.T) {
 		t.Errorf("pending = %d after sweep past TTL, want 0", len(e.pending))
 	}
 }
+
+// TestLivenessMementoSurvivesRestart pins #139: a producer that dies while the
+// server is down leaves entities the post-restart sweeper CAN reap, because
+// the liveness bookkeeping (absolute deadlines) round-trips through the
+// snapshot. Pre-fix, the refs map restarted empty and the zombies lived
+// forever.
+func TestLivenessMementoSurvivesRestart(t *testing.T) {
+	g := projection.New()
+	now := t0
+	e := New(g, &fakeAppender{}, WithClock(func() time.Time { return now }))
+
+	// A producer asserts an entity with a 30s heartbeat interval.
+	if _, err := e.ObserveEntity(EntityObservation{Type: model.TypeHost,
+		Identity: []model.KeyValue{kv("host.id", "doomed")},
+		Interval: 30 * time.Second, Producer: "p1", EventTime: t0}); err != nil {
+		t.Fatal(err)
+	}
+
+	blob, err := e.LivenessBlob()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// "Restart": a fresh graph (from the snapshot events) and a fresh engine,
+	// with the wall clock now PAST the producer's deadline — the downtime ate it.
+	g2 := projection.New()
+	for _, ev := range g.SnapshotEvents(t0) {
+		g2.Apply(ev)
+	}
+	now = t0.Add(5 * time.Minute)
+	e2 := New(g2, &fakeAppender{}, WithClock(func() time.Time { return now }),
+		WithLogger(slog.New(slog.DiscardHandler)))
+	if err := e2.RestoreLiveness(blob); err != nil {
+		t.Fatal(err)
+	}
+
+	if n := e2.Sweep(); n != 1 {
+		t.Fatalf("post-restart sweep expired %d, want 1 (the dead producer's entity)", n)
+	}
+	if g2.EntityCount() != 0 {
+		t.Errorf("EntityCount = %d after sweep, want 0", g2.EntityCount())
+	}
+
+	// Without the memento (pre-fix behavior): the zombie survives every sweep.
+	g3 := projection.New()
+	for _, ev := range g.SnapshotEvents(t0) {
+		g3.Apply(ev)
+	}
+	e3 := New(g3, &fakeAppender{}, WithClock(func() time.Time { return now }))
+	if n := e3.Sweep(); n != 0 {
+		t.Fatalf("control: sweep without restored liveness expired %d, want 0", n)
+	}
+	if g3.EntityCount() != 1 {
+		t.Error("control: the zombie must survive without the memento — that IS the bug")
+	}
+
+	// Empty blob (pre-#139 snapshot) is a clean no-op.
+	if err := e2.RestoreLiveness(nil); err != nil {
+		t.Fatal(err)
+	}
+}

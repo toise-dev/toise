@@ -15,8 +15,14 @@ import (
 
 // snapshotKey holds the latest projection snapshot inside Pebble, so a consistent
 // store copy (Checkpoint) includes it. The value is: an 8-byte big-endian
-// reference sequence, then length-delimited (uint32 + bytes) marshaled events.
+// reference sequence, then length-delimited (uint32 + bytes) marshaled events,
+// then optionally the livenessSentinel length prefix followed by one
+// length-delimited opaque liveness blob (#139). Snapshots written before the
+// liveness section simply end after the events and read fine.
 var snapshotKey = []byte("meta/snapshot")
+
+// livenessSentinel is an impossible event length marking the liveness section.
+const livenessSentinel = uint32(0xFFFFFFFF)
 
 // WriteSnapshot persists a projection snapshot: the reference sequence (events at
 // or before it are reflected in the snapshot) and the synthetic events that
@@ -24,7 +30,7 @@ var snapshotKey = []byte("meta/snapshot")
 // after seq are replayed — bounding restart time by snapshot age, not history (#45
 // /#49). seq should be read BEFORE the graph is sampled, so the replayed tail
 // overlaps rather than skips (re-applying a create/add is idempotent).
-func (s *Store) WriteSnapshot(seq uint64, events []model.Event) error {
+func (s *Store) WriteSnapshot(seq uint64, events []model.Event, liveness []byte) error {
 	var buf bytes.Buffer
 	buf.Write(encodeU64(seq))
 	var lenbuf [4]byte
@@ -36,6 +42,13 @@ func (s *Store) WriteSnapshot(seq uint64, events []model.Event) error {
 		binary.BigEndian.PutUint32(lenbuf[:], uint32(len(b)))
 		buf.Write(lenbuf[:])
 		buf.Write(b)
+	}
+	if len(liveness) > 0 {
+		binary.BigEndian.PutUint32(lenbuf[:], livenessSentinel)
+		buf.Write(lenbuf[:])
+		binary.BigEndian.PutUint32(lenbuf[:], uint32(len(liveness)))
+		buf.Write(lenbuf[:])
+		buf.Write(liveness)
 	}
 
 	s.mu.Lock()
@@ -50,40 +63,55 @@ func (s *Store) WriteSnapshot(seq uint64, events []model.Event) error {
 
 // ReadSnapshot returns the stored snapshot's reference sequence and events. ok is
 // false when no snapshot exists yet.
-func (s *Store) ReadSnapshot() (seq uint64, events []model.Event, ok bool, err error) {
+func (s *Store) ReadSnapshot() (seq uint64, events []model.Event, liveness []byte, ok bool, err error) {
 	v, closer, gerr := s.db.Get(snapshotKey)
 	if errors.Is(gerr, pebble.ErrNotFound) {
-		return 0, nil, false, nil
+		return 0, nil, nil, false, nil
 	}
 	if gerr != nil {
-		return 0, nil, false, fmt.Errorf("reading snapshot: %w", gerr)
+		return 0, nil, nil, false, fmt.Errorf("reading snapshot: %w", gerr)
 	}
 	data := make([]byte, len(v))
 	copy(data, v)
 	_ = closer.Close()
 
 	if len(data) < 8 {
-		return 0, nil, false, fmt.Errorf("snapshot too short: %d bytes", len(data))
+		return 0, nil, nil, false, fmt.Errorf("snapshot too short: %d bytes", len(data))
 	}
 	seq = binary.BigEndian.Uint64(data[:8])
 	rest := data[8:]
 	for len(rest) > 0 {
 		if len(rest) < 4 {
-			return 0, nil, false, errors.New("snapshot truncated (length prefix)")
+			return 0, nil, nil, false, errors.New("snapshot truncated (length prefix)")
 		}
 		n := binary.BigEndian.Uint32(rest[:4])
 		rest = rest[4:]
+		if n == livenessSentinel {
+			// The liveness section: one length-delimited opaque blob, owned by
+			// the change engine (#139). Pre-section snapshots never reach here.
+			if len(rest) < 4 {
+				return 0, nil, nil, false, errors.New("snapshot truncated (liveness length)")
+			}
+			ln := binary.BigEndian.Uint32(rest[:4])
+			rest = rest[4:]
+			if uint32(len(rest)) < ln {
+				return 0, nil, nil, false, errors.New("snapshot truncated (liveness body)")
+			}
+			liveness = rest[:ln]
+			rest = rest[ln:]
+			continue
+		}
 		if uint32(len(rest)) < n {
-			return 0, nil, false, errors.New("snapshot truncated (event body)")
+			return 0, nil, nil, false, errors.New("snapshot truncated (event body)")
 		}
 		var pe toisev1.Event
 		if uerr := proto.Unmarshal(rest[:n], &pe); uerr != nil {
-			return 0, nil, false, fmt.Errorf("decoding snapshot event: %w", uerr)
+			return 0, nil, nil, false, fmt.Errorf("decoding snapshot event: %w", uerr)
 		}
 		events = append(events, model.EventFromProto(&pe))
 		rest = rest[n:]
 	}
-	return seq, events, true, nil
+	return seq, events, liveness, true, nil
 }
 
 // ScanFrom visits events whose sequence is strictly greater than afterSeq, in

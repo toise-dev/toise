@@ -306,7 +306,11 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 					for _, st := range reg.Stacks() {
 						seq := st.Store.Sequence()
 						events := st.Graph.SnapshotEvents(time.Now())
-						if werr := st.Store.WriteSnapshot(seq, events); werr != nil {
+						liveness, lerr := st.Engine.LivenessBlob()
+						if lerr != nil {
+							logger.Error("liveness snapshot failed; writing snapshot without it", "tenant", st.Tenant, "err", lerr)
+						}
+						if werr := st.Store.WriteSnapshot(seq, events, liveness); werr != nil {
 							logger.Error("snapshot write failed", "tenant", st.Tenant, "err", werr)
 						} else {
 							logger.Info("wrote projection snapshot", "tenant", st.Tenant, "snapshot_seq", seq, "events", len(events))

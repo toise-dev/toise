@@ -41,7 +41,7 @@ func TestAggregateSumAndMaxSemantics(t *testing.T) {
 			}
 			st.Graph.Apply(ev(id))
 		}
-		if werr := st.Store.WriteSnapshot(st.Store.Sequence(), st.Graph.SnapshotEvents(when)); werr != nil {
+		if werr := st.Store.WriteSnapshot(st.Store.Sequence(), st.Graph.SnapshotEvents(when), nil); werr != nil {
 			t.Fatalf("snapshot: %v", werr)
 		}
 	}
