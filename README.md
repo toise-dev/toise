@@ -17,8 +17,9 @@ language — inventory, topology, dependencies, and *what changed*. Humans can
 also query it directly via GraphQL or a built-in debug UI.
 
 **OpenTelemetry-native.** Toise ingests OTLP entity events from any
-OpenTelemetry producer — for example senhub-agent, an OpenTelemetry Collector,
-or your own instrumentation. Toise itself runs no collectors.
+OpenTelemetry producer — for example
+[senhub-agent](https://github.com/senhub-io/senhub-agent), an OpenTelemetry
+Collector, or your own instrumentation. Toise itself runs no collectors.
 
 **Temporal by construction.** An event-sourced, bi-temporal log makes history
 and change first-class: not just "what is the state", but "what changed", "why
