@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`impact_of` MCP tool — the blast radius.** Propagate a hypothetical
+  failure of one entity through the graph and get back everything it takes
+  down, nearest first, grouped by type, with a one-line summary. Propagation
+  follows each relation type's registered dependency direction (a host failing
+  takes down what `runs_on` it and its interfaces; connectivity breaks both
+  ways; unregistered types propagate conservatively both ways), transitively,
+  under the usual budget contract — and accepts `as_of` to ask the question of
+  a past graph. (#136)
 - **As-of time travel on the read surfaces.** Every graph-reading MCP tool
   (`find_entities`, `get_entity`, `get_neighbors`, `find_path`,
   `telemetry_keys`, `describe_schema`) takes an `as_of` instant (RFC 3339), and

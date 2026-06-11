@@ -20,7 +20,7 @@ and OTLP servers and just reads the given data directory.
 
 ## The tools
 
-The assistant sees nine typed tools. Each carries a rich description and examples
+The assistant sees ten typed tools. Each carries a rich description and examples
 so the model picks the right one, and each returns **structured, name-bearing**
 results — ids carry human labels and types — so a single call answers the
 question without a second lookup.
@@ -32,6 +32,7 @@ question without a second lookup.
 | `get_entity(id)` | a full entity with its attributes |
 | `get_neighbors(entity_id, relation_type, depth)` | traverse relations up to `depth` (**capped at 5**); each neighbor carries the relation type, direction, and hop distance that reached it |
 | `find_path(from_id, to_id, relation_type, max_depth)` | the shortest relation path between two entities; `reachable: false` is a first-class answer, never an error |
+| `impact_of(entity_id, max_depth)` | the blast radius of a failure: everything the entity takes down, following each relation type's dependency direction, nearest first |
 | `entity_history(entity_id, since, until, ...)` | an entity's timeline from the event log (bi-temporal), heartbeats excluded by default, bounded by `limit`, with a per-type digest |
 | `recent_changes(window, kind, change_type, ...)` | recent qualified changes across the graph — same budget and digest contract |
 | `graph_diff(window | from/to, limit)` | the folded **net** difference between two instants: created / deleted / changed / **transient** (flapping) entities and relations, churn collapsed away |

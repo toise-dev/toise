@@ -135,6 +135,16 @@ func (s *Server) register(srv *mcpsdk.Server) {
 	}, withTimeout(s.budget, s.findPath))
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
+		Name: "impact_of",
+		Description: "Propagate a (hypothetical) failure of one entity through the graph and " +
+			"return everything it takes down — the blast radius, nearest first, grouped by " +
+			"type. Propagation follows each relation type's dependency direction: a host " +
+			"failing takes down what runs_on it and its interfaces, connectivity breaks both " +
+			"ways. Use it to answer 'if X goes down, what is affected?'. Set as_of (RFC 3339) " +
+			"to ask it of the graph as it was at that instant.",
+	}, withTimeout(s.budget, s.impactOf))
+
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name: "entity_history",
 		Description: "Return the timeline of changes for one entity, oldest first. Optionally " +
 			"bound it with since/until (RFC 3339, in event-time — when changes became true). " +
