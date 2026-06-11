@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Low-severity hardening sweep** (#144): boot logs any data-dir entry it
+  skips as a non-tenant directory (an accidentally hidden store no longer
+  vanishes silently); GraphQL `first` is clamped to 200 like the MCP tools;
+  native TLS uses an explicit config — minimum TLS 1.2, certificate re-read
+  per handshake so renewals apply without a restart; the store stamps an
+  on-disk format version and refuses a newer one with an actionable error;
+  the unused phase-1 `Snapshotter` stub is gone; the bi-temporal accessor is
+  one shared `Event.Times()` across every read surface.
 - **Projection memory is bounded by the live graph, not cumulative churn.**
   Soft-deleted entities used to keep their full payload in memory forever;
   on a long-lived instance with ephemeral entities (flapping veth interfaces),
