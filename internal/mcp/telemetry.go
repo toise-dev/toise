@@ -43,6 +43,7 @@ var joinKeyNotes = map[string]string{
 // TelemetryKeysInput names the entity.
 type TelemetryKeysInput struct {
 	EntityID string `json:"entity_id" jsonschema:"the entity whose telemetry join keys to derive"`
+	AsOf     string `json:"as_of,omitempty" jsonschema:"RFC 3339 instant: derive the keys from the graph as it was then (event-time), instead of now"`
 }
 
 // TelemetryKey is one attribute usable to find the entity's metrics and logs.
@@ -61,11 +62,15 @@ type TelemetryKeysOutput struct {
 	Guidance string         `json:"guidance" jsonschema:"how to apply the keys against metric and log backends"`
 }
 
-func (s *Server) telemetryKeys(_ context.Context, _ *mcpsdk.CallToolRequest, in TelemetryKeysInput) (*mcpsdk.CallToolResult, TelemetryKeysOutput, error) {
+func (s *Server) telemetryKeys(ctx context.Context, _ *mcpsdk.CallToolRequest, in TelemetryKeysInput) (*mcpsdk.CallToolResult, TelemetryKeysOutput, error) {
 	if in.EntityID == "" {
 		return nil, TelemetryKeysOutput{}, fmt.Errorf("an entity_id is required")
 	}
-	ent, ok, deleted := s.graph.GetEntity(model.EntityID(in.EntityID))
+	g, err := s.graphAt(ctx, in.AsOf)
+	if err != nil {
+		return nil, TelemetryKeysOutput{}, err
+	}
+	ent, ok, deleted := g.GetEntity(model.EntityID(in.EntityID))
 	if !ok {
 		return nil, TelemetryKeysOutput{}, fmt.Errorf("no entity found with id %q; use find_entities to discover ids", in.EntityID)
 	}
@@ -97,9 +102,9 @@ func (s *Server) telemetryKeys(_ context.Context, _ *mcpsdk.CallToolRequest, in 
 	// Context enrichment: the entity's own keys often only narrow within a
 	// host or device — walk one hop and inherit the join keys of the entities
 	// it is attached to (a listener gains its host's host.id via runs_on).
-	edges := s.edgesOf(model.EntityID(in.EntityID), "")
+	edges := edgesOf(g, model.EntityID(in.EntityID), "")
 	for i := range edges {
-		other, ok, deleted := s.graph.GetEntity(edges[i].other)
+		other, ok, deleted := g.GetEntity(edges[i].other)
 		if !ok || deleted {
 			continue
 		}

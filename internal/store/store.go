@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/cockroachdb/pebble"
 	"google.golang.org/protobuf/proto"
@@ -25,6 +26,11 @@ const (
 
 var metaSeqKey = []byte("meta/seq")
 
+// metaPruneHorizonKey persists the latest retention cutoff ever applied: events
+// recorded before it may be gone, so an as-of read older than it cannot be
+// answered completely (#135).
+var metaPruneHorizonKey = []byte("meta/prune_horizon")
+
 // Store is the append-only event log backed by Pebble. It is safe for
 // concurrent use; appends are serialized.
 type Store struct {
@@ -34,6 +40,7 @@ type Store struct {
 	mu               sync.Mutex // guards seq/counters and serializes appends
 	maintMu          sync.Mutex // serializes maintenance (coalesce/prune) against itself, NOT against appends
 	seq              uint64     // last assigned sequence
+	pruneHorizon     int64      // unix nanos of the latest prune cutoff (0 = never pruned)
 	prunedEvents     uint64     // cumulative events removed by retention pruning
 	prunedBytes      uint64     // cumulative approximate bytes removed by pruning
 	snapshotSeq      uint64     // reference sequence of the last written snapshot
@@ -94,7 +101,27 @@ func (s *Store) recoverSeq() error {
 	if len(v) == 8 {
 		s.seq = binary.BigEndian.Uint64(v)
 	}
+	if hv, hcloser, herr := s.db.Get(metaPruneHorizonKey); herr == nil {
+		if len(hv) == 8 {
+			s.pruneHorizon = int64(binary.BigEndian.Uint64(hv))
+		}
+		_ = hcloser.Close()
+	} else if !errors.Is(herr, pebble.ErrNotFound) {
+		return fmt.Errorf("reading prune horizon: %w", herr)
+	}
 	return nil
+}
+
+// PruneHorizon returns the latest retention cutoff ever applied (zero if the
+// store has never pruned): the oldest instant an as-of read can answer
+// completely.
+func (s *Store) PruneHorizon() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pruneHorizon == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, s.pruneHorizon).UTC()
 }
 
 // Append durably writes the given events to the log in a single atomic batch

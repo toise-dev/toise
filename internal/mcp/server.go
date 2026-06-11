@@ -38,6 +38,9 @@ type Graph interface {
 type EventReader interface {
 	ReadByEntity(ctx context.Context, id model.EntityID) ([]model.Event, error)
 	ReadByTimeRange(ctx context.Context, start, end time.Time) ([]model.Event, error)
+	// PruneHorizon is the latest retention cutoff ever applied (zero = never
+	// pruned): the oldest instant an as-of read can answer completely.
+	PruneHorizon() time.Time
 }
 
 // toolTimeout bounds every tool call. The Streamable HTTP GET listening stream
@@ -101,14 +104,15 @@ func (s *Server) register(srv *mcpsdk.Server) {
 			"by entity type and by attribute key/value pairs (matched against both " +
 			"identifying and descriptive attributes). Returns entity summaries with a " +
 			"human-readable label, ids, types, and attributes. Use describe_schema first " +
-			"if you are unsure which entity types or attribute keys exist.",
+			"if you are unsure which entity types or attribute keys exist. Set as_of " +
+			"(RFC 3339) to query the graph as it was at that instant.",
 	}, withTimeout(s.budget, s.findEntities))
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name: "get_entity",
 		Description: "Fetch a single entity by its logical id, with all of its identifying " +
 			"and descriptive attributes. Use the id returned by find_entities, get_neighbors, " +
-			"or recent_changes.",
+			"or recent_changes. Set as_of (RFC 3339) to read it as it was at that instant.",
 	}, withTimeout(s.budget, s.getEntity))
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
@@ -117,7 +121,8 @@ func (s *Server) register(srv *mcpsdk.Server) {
 			"either direction up to a given depth (capped at 5). Optionally filter by relation " +
 			"type. Returns the reachable entities, each with the relation type, direction, and " +
 			"hop distance that first reached it. Use this to answer questions about what an " +
-			"entity is connected to, runs on, or depends on.",
+			"entity is connected to, runs on, or depends on. Set as_of (RFC 3339) to traverse " +
+			"the graph as it was at that instant.",
 	}, withTimeout(s.budget, s.getNeighbors))
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
@@ -125,7 +130,8 @@ func (s *Server) register(srv *mcpsdk.Server) {
 		Description: "Find the shortest relation path between two entities, traversing edges in " +
 			"either direction (optionally only one relation type), up to max_depth hops. " +
 			"reachable=false is a first-class answer meaning no path exists within the cap — " +
-			"use it to answer 'does A depend on B?' or 'how are these connected?'.",
+			"use it to answer 'does A depend on B?' or 'how are these connected?'. Set as_of " +
+			"(RFC 3339) to search the graph as it was at that instant.",
 	}, withTimeout(s.budget, s.findPath))
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
@@ -173,6 +179,7 @@ func (s *Server) register(srv *mcpsdk.Server) {
 		Name: "describe_schema",
 		Description: "Describe the entity and relation types currently present in the graph, " +
 			"with counts, in natural language. Call this first to bootstrap your understanding " +
-			"of what this Toise instance knows about before issuing other tools.",
+			"of what this Toise instance knows about before issuing other tools. Set as_of " +
+			"(RFC 3339) to describe the graph as it was at that instant.",
 	}, withTimeout(s.budget, s.describeSchema))
 }

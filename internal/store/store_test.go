@@ -284,3 +284,51 @@ func TestReadsHonorContextCancellation(t *testing.T) {
 		t.Errorf("live ctx read: %v", err)
 	}
 }
+
+// TestPruneHorizonPersisted pins #135: the latest prune cutoff survives a
+// reopen, so as-of reads can refuse instants whose events are gone.
+func TestPruneHorizonPersisted(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir, DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.PruneHorizon().IsZero() {
+		t.Error("fresh store must have a zero horizon")
+	}
+	when := time.Unix(1_700_000_000, 0).UTC()
+	mk := func(id string, ct model.ChangeType, at time.Time) model.Event {
+		return model.Event{Entity: &model.EntityEvent{
+			EventID: model.NewEventID(), ChangeType: ct,
+			Entity: model.Entity{ID: model.EntityID(id), Type: model.TypeHost,
+				Identity: []model.KeyValue{{Key: "host.id", Value: model.StringValue(id)}}},
+			EventTime: at, RecordedAt: at, SchemaVersion: model.SchemaVersion,
+		}}
+	}
+	for _, ev := range []model.Event{
+		mk("a", model.EntityCreated, when),
+		mk("a", model.EntityAttributeUpdated, when.Add(time.Hour)),
+	} {
+		if aerr := s.Append(ev); aerr != nil {
+			t.Fatal(aerr)
+		}
+	}
+	cutoff := when.Add(30 * time.Minute)
+	if _, _, perr := s.PruneOlderThan(cutoff); perr != nil {
+		t.Fatal(perr)
+	}
+	if got := s.PruneHorizon(); !got.Equal(cutoff) {
+		t.Fatalf("horizon = %v, want %v", got, cutoff)
+	}
+	if cerr := s.Close(); cerr != nil {
+		t.Fatal(cerr)
+	}
+	reopened, err := Open(dir, DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	if got := reopened.PruneHorizon(); !got.Equal(cutoff) {
+		t.Fatalf("horizon after reopen = %v, want %v", got, cutoff)
+	}
+}

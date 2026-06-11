@@ -19,6 +19,7 @@ type FindEntitiesInput struct {
 	Type  string            `json:"type,omitempty" jsonschema:"restrict to this entity type (omit for all types)"`
 	Match map[string]string `json:"match,omitempty" jsonschema:"attribute key/value pairs every result must have (string comparison, against identity and attributes)"`
 	Limit int               `json:"limit,omitempty" jsonschema:"maximum entities to return (default 50, max 200)"`
+	AsOf  string            `json:"as_of,omitempty" jsonschema:"RFC 3339 instant: read the graph as it was then (event-time), instead of now"`
 }
 
 // FindEntitiesOutput carries the matching entities.
@@ -28,9 +29,13 @@ type FindEntitiesOutput struct {
 	Truncated bool     `json:"truncated" jsonschema:"true if more entities matched than were returned; narrow the filter or raise the limit"`
 }
 
-func (s *Server) findEntities(_ context.Context, _ *mcpsdk.CallToolRequest, in FindEntitiesInput) (*mcpsdk.CallToolResult, FindEntitiesOutput, error) {
+func (s *Server) findEntities(ctx context.Context, _ *mcpsdk.CallToolRequest, in FindEntitiesInput) (*mcpsdk.CallToolResult, FindEntitiesOutput, error) {
+	g, err := s.graphAt(ctx, in.AsOf)
+	if err != nil {
+		return nil, FindEntitiesOutput{}, err
+	}
 	limit := clampLimit(in.Limit)
-	all := s.graph.ListEntities(in.Type)
+	all := g.ListEntities(in.Type)
 	matched := make([]model.Entity, 0, len(all))
 	for _, e := range all {
 		if matches(e, in.Match) {
@@ -52,7 +57,8 @@ func (s *Server) findEntities(_ context.Context, _ *mcpsdk.CallToolRequest, in F
 
 // GetEntityInput names the entity to fetch.
 type GetEntityInput struct {
-	ID string `json:"id" jsonschema:"the logical entity id to fetch"`
+	ID   string `json:"id" jsonschema:"the logical entity id to fetch"`
+	AsOf string `json:"as_of,omitempty" jsonschema:"RFC 3339 instant: read the entity as it was then (event-time), instead of now"`
 }
 
 // GetEntityOutput carries the entity.
@@ -60,11 +66,15 @@ type GetEntityOutput struct {
 	Entity Entity `json:"entity"`
 }
 
-func (s *Server) getEntity(_ context.Context, _ *mcpsdk.CallToolRequest, in GetEntityInput) (*mcpsdk.CallToolResult, GetEntityOutput, error) {
+func (s *Server) getEntity(ctx context.Context, _ *mcpsdk.CallToolRequest, in GetEntityInput) (*mcpsdk.CallToolResult, GetEntityOutput, error) {
 	if in.ID == "" {
 		return nil, GetEntityOutput{}, fmt.Errorf("an entity id is required")
 	}
-	e, ok, deleted := s.graph.GetEntity(model.EntityID(in.ID))
+	g, err := s.graphAt(ctx, in.AsOf)
+	if err != nil {
+		return nil, GetEntityOutput{}, err
+	}
+	e, ok, deleted := g.GetEntity(model.EntityID(in.ID))
 	if !ok {
 		return nil, GetEntityOutput{}, fmt.Errorf("no entity found with id %q; use find_entities to discover ids", in.ID)
 	}
@@ -78,6 +88,7 @@ type GetNeighborsInput struct {
 	EntityID     string `json:"entity_id" jsonschema:"the entity to traverse outward from"`
 	RelationType string `json:"relation_type,omitempty" jsonschema:"only follow relations of this type (omit to follow any)"`
 	Depth        int    `json:"depth,omitempty" jsonschema:"how many relation hops to traverse, 1 to 5 (default 1)"`
+	AsOf         string `json:"as_of,omitempty" jsonschema:"RFC 3339 instant: traverse the graph as it was then (event-time), instead of now"`
 }
 
 // Neighbor is a reachable entity plus the edge facts that reached it: the
@@ -95,7 +106,7 @@ type GetNeighborsOutput struct {
 	Count     int        `json:"count"`
 }
 
-func (s *Server) getNeighbors(_ context.Context, _ *mcpsdk.CallToolRequest, in GetNeighborsInput) (*mcpsdk.CallToolResult, GetNeighborsOutput, error) {
+func (s *Server) getNeighbors(ctx context.Context, _ *mcpsdk.CallToolRequest, in GetNeighborsInput) (*mcpsdk.CallToolResult, GetNeighborsOutput, error) {
 	if in.EntityID == "" {
 		return nil, GetNeighborsOutput{}, fmt.Errorf("an entity_id is required")
 	}
@@ -106,8 +117,12 @@ func (s *Server) getNeighbors(_ context.Context, _ *mcpsdk.CallToolRequest, in G
 	if depth > maxDepth {
 		return nil, GetNeighborsOutput{}, fmt.Errorf("depth %d exceeds the maximum of %d; try a smaller depth", in.Depth, maxDepth)
 	}
+	g, err := s.graphAt(ctx, in.AsOf)
+	if err != nil {
+		return nil, GetNeighborsOutput{}, err
+	}
 	start := model.EntityID(in.EntityID)
-	if _, ok, _ := s.graph.GetEntity(start); !ok {
+	if _, ok, _ := g.GetEntity(start); !ok {
 		return nil, GetNeighborsOutput{}, fmt.Errorf("no entity found with id %q; use find_entities to discover ids", in.EntityID)
 	}
 	// BFS through the edge view so each neighbor carries how it was reached;
@@ -118,7 +133,7 @@ func (s *Server) getNeighbors(_ context.Context, _ *mcpsdk.CallToolRequest, in G
 	for d := 1; d <= depth && len(frontier) > 0; d++ {
 		var next []model.EntityID
 		for _, cur := range frontier {
-			edges := s.edgesOf(cur, in.RelationType)
+			edges := edgesOf(g, cur, in.RelationType)
 			for i := range edges {
 				e := &edges[i]
 				if _, seen := visited[e.other]; seen {
@@ -126,7 +141,7 @@ func (s *Server) getNeighbors(_ context.Context, _ *mcpsdk.CallToolRequest, in G
 				}
 				visited[e.other] = struct{}{}
 				next = append(next, e.other)
-				ent, _, _ := s.graph.GetEntity(e.other)
+				ent, _, _ := g.GetEntity(e.other)
 				out.Neighbors = append(out.Neighbors, Neighbor{
 					Entity:      entityOut(ent, false),
 					ViaRelation: e.rel.Type,
@@ -405,8 +420,10 @@ func clampLimit(limit int) int {
 
 // --- describe_schema ---
 
-// DescribeSchemaInput takes no parameters.
-type DescribeSchemaInput struct{}
+// DescribeSchemaInput optionally pins the instant to describe.
+type DescribeSchemaInput struct {
+	AsOf string `json:"as_of,omitempty" jsonschema:"RFC 3339 instant: describe the graph as it was then (event-time), instead of now"`
+}
 
 // TypeCount pairs a type name with the number of instances in the graph.
 type TypeCount struct {
@@ -423,14 +440,18 @@ type DescribeSchemaOutput struct {
 	TotalRelations int         `json:"total_relations"`
 }
 
-func (s *Server) describeSchema(_ context.Context, _ *mcpsdk.CallToolRequest, _ DescribeSchemaInput) (*mcpsdk.CallToolResult, DescribeSchemaOutput, error) {
-	entTypes := sortedCounts(s.graph.CountByType())
-	relTypes := sortedCounts(relationCounts(s.graph.ListRelations("", "", "")))
+func (s *Server) describeSchema(ctx context.Context, _ *mcpsdk.CallToolRequest, in DescribeSchemaInput) (*mcpsdk.CallToolResult, DescribeSchemaOutput, error) {
+	g, err := s.graphAt(ctx, in.AsOf)
+	if err != nil {
+		return nil, DescribeSchemaOutput{}, err
+	}
+	entTypes := sortedCounts(g.CountByType())
+	relTypes := sortedCounts(relationCounts(g.ListRelations("", "", "")))
 	out := DescribeSchemaOutput{
 		EntityTypes:    entTypes,
 		RelationTypes:  relTypes,
-		TotalEntities:  s.graph.EntityCount(),
-		TotalRelations: s.graph.RelationCount(),
+		TotalEntities:  g.EntityCount(),
+		TotalRelations: g.RelationCount(),
 	}
 	out.Description = describe(out)
 	return nil, out, nil

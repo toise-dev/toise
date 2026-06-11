@@ -2,6 +2,7 @@ package graphql_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -225,5 +226,72 @@ func TestSubscriptionEntityChanged(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for subscription event")
+	}
+}
+
+// TestEntitiesAsOf pins the GraphQL half of #135: asOf folds the log to the
+// requested instant, mirroring the MCP tools' as_of.
+func TestEntitiesAsOf(t *testing.T) {
+	s := newStack(t)
+	c := s.client(t)
+
+	var resp struct {
+		Entities struct {
+			TotalCount int
+			Edges      []struct {
+				Node struct {
+					ID         string
+					Attributes []struct{ Key, Value string }
+				}
+			}
+		}
+	}
+	// Before anything existed.
+	q := fmt.Sprintf(`{ entities(asOf: %q) { totalCount edges { node { id } } } }`,
+		t0.Add(-time.Second).Format(time.RFC3339))
+	if err := c.Post(q, &resp); err != nil {
+		t.Fatalf("asOf pre-genesis: %v", err)
+	}
+	if resp.Entities.TotalCount != 0 {
+		t.Fatalf("pre-genesis totalCount = %d, want 0", resp.Entities.TotalCount)
+	}
+
+	// Thirty seconds in: both entities exist, the status flip (t0+1m) has not
+	// happened yet — the host must still read "up".
+	q = fmt.Sprintf(`{ entities(asOf: %q) { totalCount edges { node { id attributes { key value } } } } }`,
+		t0.Add(30*time.Second).Format(time.RFC3339))
+	if err := c.Post(q, &resp); err != nil {
+		t.Fatalf("asOf mid-history: %v", err)
+	}
+	if resp.Entities.TotalCount != 2 {
+		t.Fatalf("mid-history totalCount = %d, want 2", resp.Entities.TotalCount)
+	}
+	for _, e := range resp.Entities.Edges {
+		for _, a := range e.Node.Attributes {
+			if a.Key == "status" && a.Value != "up" {
+				t.Fatalf("as-of host status = %q, want the pre-flip value up", a.Value)
+			}
+		}
+	}
+
+	// Live (no asOf): the flip is visible.
+	if err := c.Post(`{ entities { edges { node { attributes { key value } } } } }`, &resp); err != nil {
+		t.Fatal(err)
+	}
+	down := false
+	for _, e := range resp.Entities.Edges {
+		for _, a := range e.Node.Attributes {
+			if a.Key == "status" && a.Value == "down" {
+				down = true
+			}
+		}
+	}
+	if !down {
+		t.Fatal("live read must see the status flip")
+	}
+
+	// Malformed asOf is a clear error.
+	if err := c.Post(`{ entities(asOf: "yesterday") { totalCount } }`, &resp); err == nil {
+		t.Fatal("invalid asOf must error")
 	}
 }

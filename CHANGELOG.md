@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
+### Added
+
+- **As-of time travel on the read surfaces.** Every graph-reading MCP tool
+  (`find_entities`, `get_entity`, `get_neighbors`, `find_path`,
+  `telemetry_keys`, `describe_schema`) takes an `as_of` instant (RFC 3339), and
+  the GraphQL `entity` / `entities` / `relations` queries take `asOf`: the
+  answer is the graph **as it was then** (event-time reading), folded from the
+  bi-temporal log. An as-of older than the retention horizon is refused with a
+  clear error (those events are pruned — the store now persists the latest
+  prune cutoff); the audit "as known at" reading stays on `entity_history`.
+  (#135)
+
 ## [0.4.0] - 2026-06-10
 
 **The correctness and LLM-querying release.** A full multi-dimensional audit of

@@ -178,17 +178,24 @@ input RelationFilter {
 }
 
 type Query {
-  "Fetch a single entity by its logical id. Returns null if unknown."
-  entity(id: ID!): Entity
+  """
+  Fetch a single entity by its logical id. Returns null if unknown. Provide
+  `asOf` (RFC 3339) to read the entity as it was at that instant (event-time).
+  """
+  entity(id: ID!, asOf: String): Entity
 
   """
   List entities (current state), newest-first, with Relay pagination. Use
   `first` (default 50) and `after` (an `endCursor` from a previous page).
+  Provide `asOf` (RFC 3339) to list the graph as it was at that instant.
   """
-  entities(filter: EntityFilter, first: Int = 50, after: String): EntityConnection!
+  entities(filter: EntityFilter, first: Int = 50, after: String, asOf: String): EntityConnection!
 
-  "List relations (current state) with Relay pagination."
-  relations(filter: RelationFilter, first: Int = 50, after: String): RelationConnection!
+  """
+  List relations (current state) with Relay pagination. Provide `asOf`
+  (RFC 3339) to list the graph as it was at that instant.
+  """
+  relations(filter: RelationFilter, first: Int = 50, after: String, asOf: String): RelationConnection!
 
   """
   The timeline of change events for one entity. `since`/`until` (RFC 3339) bound

@@ -37,6 +37,13 @@ question without a second lookup.
 | `graph_diff(window | from/to, limit)` | the folded **net** difference between two instants: created / deleted / changed / **transient** (flapping) entities and relations, churn collapsed away |
 | `telemetry_keys(entity_id)` | the OTel resource attributes that locate this entity's metrics and logs in observability backends — own and 1-hop-inherited keys, each with its flattened metric-label spelling and usage caveats |
 
+**Time travel.** Every graph-reading tool takes `as_of` (RFC 3339): the answer
+is the graph as it was at that instant, rebuilt from the event log — "show me
+db-07's dependencies as they were last Tuesday" is one call. An `as_of` older
+than the retention horizon is refused explicitly (those events are pruned).
+The audit reading — what Toise *knew* at an instant — stays on
+`entity_history`'s `as_known_at`.
+
 **Budgets.** The timeline tools exclude `entity.unchanged` heartbeats unless
 asked (`include_heartbeats`), bound their output (`limit`, default 50, max 200),
 and report a digest — `total`, `truncated`, `heartbeats_excluded`, counts per
