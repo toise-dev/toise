@@ -49,11 +49,11 @@ func New() *Graph {
 	return NewWithTombstoneCap(defaultTombstoneCap)
 }
 
-// NewWithTombstoneCap returns an empty graph keeping at most cap soft-deleted
-// entities readable by id (cap <= 0 means the default).
-func NewWithTombstoneCap(cap int) *Graph {
-	if cap <= 0 {
-		cap = defaultTombstoneCap
+// NewWithTombstoneCap returns an empty graph keeping at most limit soft-deleted
+// entities readable by id (limit <= 0 means the default).
+func NewWithTombstoneCap(limit int) *Graph {
+	if limit <= 0 {
+		limit = defaultTombstoneCap
 	}
 	return &Graph{
 		entities:     make(map[model.EntityID]model.Entity),
@@ -63,7 +63,7 @@ func NewWithTombstoneCap(cap int) *Graph {
 		in:           make(map[model.EntityID]map[model.RelationID]struct{}),
 		byHash:       make(map[string]model.EntityID),
 		byType:       make(map[string]map[model.EntityID]struct{}),
-		tombstoneCap: cap,
+		tombstoneCap: limit,
 	}
 }
 
