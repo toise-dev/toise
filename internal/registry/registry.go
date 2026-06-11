@@ -143,6 +143,59 @@ func OpenWithLimits(dataDir string, storeCfg store.Config, relBuf time.Duration,
 	return r, nil
 }
 
+// TenantStore pairs a tenant id with its event store, for the read-only path.
+type TenantStore struct {
+	Tenant string
+	Store  *store.Store
+}
+
+// OpenExisting opens, read-only, the event store of every tenant already
+// persisted under dataDir — the no-mint counterpart to Open, for offline
+// tooling such as the checkpoint subcommand. The registry is the only place
+// that mints tenant stores, so the guarantee that this path creates nothing
+// lives here too: a missing data dir, an unmigrated legacy layout, or a dir
+// holding no tenant stores are errors rather than an empty registry, and
+// each store is opened with store.OpenReadOnly so even the format stamp is
+// skipped. Callers own closing the returned stores.
+func OpenExisting(dataDir string, storeCfg store.Config, logger *slog.Logger) ([]TenantStore, error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if _, err := os.Stat(dataDir); err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("data dir %s does not exist", dataDir)
+		}
+		return nil, fmt.Errorf("checking data dir %s: %w", dataDir, err)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, legacyMarker)); err == nil {
+		return nil, fmt.Errorf("data dir %s holds a legacy single-tenant store: start toise-server against it once to migrate to the per-tenant layout", dataDir)
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("checking for legacy data layout: %w", err)
+	}
+	existing, skipped, err := tenantDirs(dataDir)
+	if err != nil {
+		return nil, err
+	}
+	if len(skipped) > 0 {
+		logger.Warn("skipping non-tenant directories in the data dir", "data_dir", dataDir, "skipped", skipped)
+	}
+	if len(existing) == 0 {
+		return nil, fmt.Errorf("no tenant stores found in %s", dataDir)
+	}
+	out := make([]TenantStore, 0, len(existing))
+	for _, id := range existing {
+		st, oerr := store.OpenReadOnly(filepath.Join(dataDir, id), storeCfg)
+		if oerr != nil {
+			for _, ts := range out {
+				_ = ts.Store.Close()
+			}
+			return nil, fmt.Errorf("opening event log for tenant %q (is toise-server still running?): %w", id, oerr)
+		}
+		out = append(out, TenantStore{Tenant: id, Store: st})
+	}
+	return out, nil
+}
+
 // For returns the stack for a (raw) tenant id, opening and caching it on first
 // use. The id is sanitized to a safe single path segment; an id that cannot be
 // sanitized is rejected rather than silently coerced. Creating a NEW tenant is
