@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -330,5 +331,34 @@ func TestPruneHorizonPersisted(t *testing.T) {
 	t.Cleanup(func() { _ = reopened.Close() })
 	if got := reopened.PruneHorizon(); !got.Equal(cutoff) {
 		t.Fatalf("horizon after reopen = %v, want %v", got, cutoff)
+	}
+}
+
+// TestFormatVersionMarker pins #144: a fresh store is stamped with the current
+// format, a same-version store reopens, and a NEWER format is refused with an
+// actionable error instead of being misread.
+func TestFormatVersionMarker(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir, DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cerr := s.Close(); cerr != nil {
+		t.Fatal(cerr)
+	}
+	// Same version: reopens.
+	s, err = Open(dir, DefaultConfig())
+	if err != nil {
+		t.Fatalf("same-format reopen: %v", err)
+	}
+	// Forge a future format and expect a refusal naming both versions.
+	if serr := s.db.Set(metaFormatKey, encodeU64(formatVersion+1), nil); serr != nil {
+		t.Fatal(serr)
+	}
+	if cerr := s.Close(); cerr != nil {
+		t.Fatal(cerr)
+	}
+	if _, err := Open(dir, DefaultConfig()); err == nil || !strings.Contains(err.Error(), "newer than this binary") {
+		t.Fatalf("future-format open = %v, want a refusal", err)
 	}
 }
