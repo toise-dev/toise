@@ -1,7 +1,12 @@
 // Package conformance validates producer output against the Toise entity-event
 // wire contract, without a running Toise: feed it the plog.Logs your producer
 // emits (or the bytes of an ExportRequest) and fix every Problem it returns.
-// A producer that passes never trips Toise's per-record rejection.
+// A producer that passes never trips Toise's per-record rejection for shape
+// reasons. Type-registry membership is enforced separately: under the default
+// strict vocabulary an entity.type outside the registry is still rejected per
+// record, unless the deployment opts into accept_unknown_types (#141).
+// Problems marked Advisory are not rejections; they flag misconfigurations
+// that degrade consumer behavior.
 //
 // The checked-in fixture (testdata/fixture_v1.bin) is the published contract
 // v1: the toise-emit SDK reproduces it byte for byte, and Toise's own ingest
@@ -19,9 +24,19 @@ import (
 type Problem struct {
 	Record string // which record, e.g. "resourceLogs[0].scopeLogs[0].logRecords[2]"
 	Issue  string
+	// Advisory marks a problem that does not cause per-record rejection but
+	// flags a producer misconfiguration that degrades consumer behavior (e.g.
+	// a missing service.instance.id collapses multi-producer liveness
+	// reference counting, ADR 0019).
+	Advisory bool
 }
 
-func (p Problem) String() string { return p.Record + ": " + p.Issue }
+func (p Problem) String() string {
+	if p.Advisory {
+		return p.Record + ": advisory: " + p.Issue
+	}
+	return p.Record + ": " + p.Issue
+}
 
 // Check validates every entity-event record in ld against the wire contract.
 // Records that are not entity events (no entity.state/entity.delete EventName)
@@ -30,16 +45,40 @@ func Check(ld plog.Logs) []Problem {
 	var out []Problem
 	rls := ld.ResourceLogs()
 	for i := 0; i < rls.Len(); i++ {
+		entityEvents := false
 		sls := rls.At(i).ScopeLogs()
 		for j := 0; j < sls.Len(); j++ {
 			recs := sls.At(j).LogRecords()
 			for k := 0; k < recs.Len(); k++ {
+				lr := recs.At(k)
 				where := fmt.Sprintf("resourceLogs[%d].scopeLogs[%d].logRecords[%d]", i, j, k)
-				out = append(out, checkRecord(where, recs.At(k))...)
+				out = append(out, checkRecord(where, lr)...)
+				if name := lr.EventName(); name == "entity.state" || name == "entity.delete" {
+					entityEvents = true
+				}
 			}
+		}
+		if entityEvents {
+			out = append(out, checkResource(i, rls.At(i).Resource())...)
 		}
 	}
 	return out
+}
+
+// checkResource flags producer-identity misconfigurations on the Resource of a
+// ResourceLogs that carries entity events. Advisory only: Toise accepts the
+// records, but liveness is reference-counted per producer via
+// service.instance.id (ADR 0019), and without a stable instance id every
+// producer collapses into one anonymous reference.
+func checkResource(i int, res pcommon.Resource) []Problem {
+	if v, ok := res.Attributes().Get("service.instance.id"); ok && v.Type() == pcommon.ValueTypeStr && v.Str() != "" {
+		return nil
+	}
+	return []Problem{{
+		Record:   fmt.Sprintf("resourceLogs[%d].resource", i),
+		Issue:    "missing or empty service.instance.id — liveness is reference-counted per producer (ADR 0019); set a stable instance id or all producers share one reference",
+		Advisory: true,
+	}}
 }
 
 func checkRecord(where string, lr plog.LogRecord) []Problem {
@@ -125,10 +164,15 @@ func checkRecord(where string, lr plog.LogRecord) []Problem {
 	return out
 }
 
-// checkScalarMap flags non-scalar values: the contract is flat scalar maps,
-// and Toise drops non-scalar values with a warning.
+// checkScalarMap flags empty keys and non-scalar values: the contract is flat
+// scalar maps with non-empty keys. Toise rejects an empty key in every mode
+// (strict and accept_unknown_types alike) and drops non-scalar values with a
+// warning.
 func checkScalarMap(out *[]Problem, where, field string, m pcommon.Map) {
 	m.Range(func(k string, v pcommon.Value) bool {
+		if k == "" {
+			*out = append(*out, Problem{Record: where, Issue: fmt.Sprintf("%s has an empty attribute key; Toise rejects it in every mode", field)})
+		}
 		switch v.Type() {
 		case pcommon.ValueTypeStr, pcommon.ValueTypeInt, pcommon.ValueTypeDouble, pcommon.ValueTypeBool:
 		default:

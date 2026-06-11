@@ -130,12 +130,21 @@ Hand-rolling the wire contract is how producers drift. Two tools replace it:
   (type, identity map, attributes, heartbeat interval, embedded relationships)
   and call `State` / `Delete`; the SDK builds the spec-correct OTLP payload
   (deterministically — sorted keys, stable bytes) and exports it over gRPC
-  with your auth headers and tenant.
+  with your auth headers and tenant. When Toise accepts the export but rejects
+  some records (OTLP partial success), `State`/`Delete` return a typed
+  `emit.PartialError` carrying the rejected count and the server's first
+  rejection reason — do not retry it; fix the producer.
 - **`pkg/emit/conformance`** — contract validation without a running Toise:
-  `conformance.Check(logs)` returns every violation (missing identity,
-  mis-typed interval, incomplete relationship descriptor, non-scalar values)
-  with its location. Run it in your producer's CI; output that passes is never
-  rejected per-record by Toise.
+  `conformance.Check(logs)` returns every violation (missing identity, empty
+  attribute keys, mis-typed interval, incomplete relationship descriptor,
+  non-scalar values) with its location. Run it in your producer's CI; output
+  that passes is never rejected per-record by Toise **for shape reasons**.
+  Type-registry membership is enforced separately: under the default strict
+  vocabulary an `entity.type` outside the registry is still rejected per
+  record, unless the deployment sets `accept_unknown_types`. `Check` also
+  returns *advisory* problems (`Problem.Advisory`, not rejections) for
+  misconfigurations such as a missing `service.instance.id` resource
+  attribute, which collapses multi-producer liveness reference counting.
 
 The checked-in fixture (`pkg/emit/testdata/fixture_v1.bin`) is the published
 contract v1: the SDK reproduces it byte for byte and Toise's own ingest tests
