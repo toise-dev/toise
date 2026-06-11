@@ -55,6 +55,7 @@ type ComplexityRoot struct {
 	ChangeEvent struct {
 		ChangeType    func(childComplexity int) int
 		ChangedKeys   func(childComplexity int) int
+		Dropped       func(childComplexity int) int
 		Entity        func(childComplexity int) int
 		EventTime     func(childComplexity int) int
 		ID            func(childComplexity int) int
@@ -117,8 +118,8 @@ type ComplexityRoot struct {
 	}
 
 	Subscription struct {
-		EntityChanged   func(childComplexity int) int
-		RelationChanged func(childComplexity int) int
+		EntityChanged   func(childComplexity int, filter *ChangeFilter) int
+		RelationChanged func(childComplexity int, filter *ChangeFilter) int
 	}
 }
 
@@ -130,8 +131,8 @@ type QueryResolver interface {
 	RecentChanges(ctx context.Context, window string, first *int, after *string) (*ChangeConnection, error)
 }
 type SubscriptionResolver interface {
-	EntityChanged(ctx context.Context) (<-chan *ChangeEvent, error)
-	RelationChanged(ctx context.Context) (<-chan *ChangeEvent, error)
+	EntityChanged(ctx context.Context, filter *ChangeFilter) (<-chan *ChangeEvent, error)
+	RelationChanged(ctx context.Context, filter *ChangeFilter) (<-chan *ChangeEvent, error)
 }
 
 type executableSchema graphql.ExecutableSchemaState[ResolverRoot, DirectiveRoot, ComplexityRoot]
@@ -211,6 +212,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ChangeEvent.ChangedKeys(childComplexity), true
+	case "ChangeEvent.dropped":
+		if e.ComplexityRoot.ChangeEvent.Dropped == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ChangeEvent.Dropped(childComplexity), true
 	case "ChangeEvent.entity":
 		if e.ComplexityRoot.ChangeEvent.Entity == nil {
 			break
@@ -461,13 +468,23 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			break
 		}
 
-		return e.ComplexityRoot.Subscription.EntityChanged(childComplexity), true
+		args, err := ec.field_Subscription_entityChanged_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Subscription.EntityChanged(childComplexity, args["filter"].(*ChangeFilter)), true
 	case "Subscription.relationChanged":
 		if e.ComplexityRoot.Subscription.RelationChanged == nil {
 			break
 		}
 
-		return e.ComplexityRoot.Subscription.RelationChanged(childComplexity), true
+		args, err := ec.field_Subscription_relationChanged_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Subscription.RelationChanged(childComplexity, args["filter"].(*ChangeFilter)), true
 
 	}
 	return 0, false
@@ -477,6 +494,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 	opCtx := graphql.GetOperationContext(ctx)
 	ec := newExecutionContext(opCtx, e, make(chan graphql.DeferredResult))
 	inputUnmarshalMap := graphql.BuildUnmarshalerMap(
+		ec.unmarshalInputChangeFilter,
 		ec.unmarshalInputEntityFilter,
 		ec.unmarshalInputRelationFilter,
 	)
@@ -668,6 +686,11 @@ type ChangeEvent {
   schemaVersion: String!
   "For attribute/state changes, the keys that changed."
   changedKeys: [String!]!
+  """
+  Events dropped just before this one because this subscriber could not keep
+  up. Positive means you have a gap: re-query the current state and resume.
+  """
+  dropped: Int!
   "The entity this event is about, if it is an entity event."
   entity: Entity
   "The relation this event is about, if it is a relation event."
@@ -769,11 +792,26 @@ type Query {
   recentChanges(window: String!, first: Int = 100, after: String): ChangeConnection!
 }
 
+"""
+Server-side filter for a change subscription: only matching events are
+delivered, so a consumer watching one type does not receive everything.
+"""
+input ChangeFilter {
+  "Only events about entities of this type (entityChanged)."
+  entityType: String
+  "Only events about relations of this type (relationChanged)."
+  relationType: String
+  "Only this change classification."
+  changeType: ChangeType
+  "Only structural relation changes — alert-worthy topology (relationChanged)."
+  structuralOnly: Boolean
+}
+
 type Subscription {
   "Stream entity change events as they are classified."
-  entityChanged: ChangeEvent!
+  entityChanged(filter: ChangeFilter): ChangeEvent!
   "Stream relation change events as they are classified."
-  relationChanged: ChangeEvent!
+  relationChanged(filter: ChangeFilter): ChangeEvent!
 }
 `, BuiltIn: false},
 }
@@ -831,6 +869,8 @@ func (ec *executionContext) childFields_ChangeEvent(ctx context.Context, field g
 		return ec.fieldContext_ChangeEvent_schemaVersion(ctx, field)
 	case "changedKeys":
 		return ec.fieldContext_ChangeEvent_changedKeys(ctx, field)
+	case "dropped":
+		return ec.fieldContext_ChangeEvent_dropped(ctx, field)
 	case "entity":
 		return ec.fieldContext_ChangeEvent_entity(ctx, field)
 	case "relation":
@@ -1238,6 +1278,34 @@ func (ec *executionContext) field_Query_relations_args(ctx context.Context, rawA
 		return nil, err
 	}
 	args["asOf"] = arg3
+	return args, nil
+}
+
+func (ec *executionContext) field_Subscription_entityChanged_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "filter",
+		func(ctx context.Context, v any) (*ChangeFilter, error) {
+			return ec.unmarshalOChangeFilter2ᚖgithubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐChangeFilter(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["filter"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Subscription_relationChanged_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "filter",
+		func(ctx context.Context, v any) (*ChangeFilter, error) {
+			return ec.unmarshalOChangeFilter2ᚖgithubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐChangeFilter(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["filter"] = arg0
 	return args, nil
 }
 
@@ -1652,6 +1720,29 @@ func (ec *executionContext) _ChangeEvent_changedKeys(ctx context.Context, field 
 }
 func (ec *executionContext) fieldContext_ChangeEvent_changedKeys(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("ChangeEvent", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ChangeEvent_dropped(ctx context.Context, field graphql.CollectedField, obj *ChangeEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ChangeEvent_dropped(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Dropped, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ChangeEvent_dropped(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ChangeEvent", field, false, false, errors.New("field of type Int does not have child fields"))
 }
 
 func (ec *executionContext) _ChangeEvent_entity(ctx context.Context, field graphql.CollectedField, obj *ChangeEvent) (ret graphql.Marshaler) {
@@ -2656,7 +2747,8 @@ func (ec *executionContext) _Subscription_entityChanged(ctx context.Context, fie
 			return ec.fieldContext_Subscription_entityChanged(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
-			return ec.Resolvers.Subscription().EntityChanged(ctx)
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Subscription().EntityChanged(ctx, fc.Args["filter"].(*ChangeFilter))
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *ChangeEvent) graphql.Marshaler {
@@ -2666,7 +2758,7 @@ func (ec *executionContext) _Subscription_entityChanged(ctx context.Context, fie
 		true,
 	)
 }
-func (ec *executionContext) fieldContext_Subscription_entityChanged(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_Subscription_entityChanged(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "Subscription",
 		Field:      field,
@@ -2675,6 +2767,17 @@ func (ec *executionContext) fieldContext_Subscription_entityChanged(_ context.Co
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return ec.childFields_ChangeEvent(ctx, field)
 		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Subscription_entityChanged_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
 	}
 	return fc, nil
 }
@@ -2688,7 +2791,8 @@ func (ec *executionContext) _Subscription_relationChanged(ctx context.Context, f
 			return ec.fieldContext_Subscription_relationChanged(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
-			return ec.Resolvers.Subscription().RelationChanged(ctx)
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Subscription().RelationChanged(ctx, fc.Args["filter"].(*ChangeFilter))
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *ChangeEvent) graphql.Marshaler {
@@ -2698,7 +2802,7 @@ func (ec *executionContext) _Subscription_relationChanged(ctx context.Context, f
 		true,
 	)
 }
-func (ec *executionContext) fieldContext_Subscription_relationChanged(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_Subscription_relationChanged(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "Subscription",
 		Field:      field,
@@ -2707,6 +2811,17 @@ func (ec *executionContext) fieldContext_Subscription_relationChanged(_ context.
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return ec.childFields_ChangeEvent(ctx, field)
 		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Subscription_relationChanged_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
 	}
 	return fc, nil
 }
@@ -3770,6 +3885,57 @@ func (ec *executionContext) fieldContext___Type_isOneOf(_ context.Context, field
 
 // region    **************************** input.gotpl *****************************
 
+func (ec *executionContext) unmarshalInputChangeFilter(ctx context.Context, obj any) (ChangeFilter, error) {
+	var it ChangeFilter
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"entityType", "relationType", "changeType", "structuralOnly"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "entityType":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("entityType"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.EntityType = data
+		case "relationType":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("relationType"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.RelationType = data
+		case "changeType":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("changeType"))
+			data, err := ec.unmarshalOChangeType2ᚖgithubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐChangeType(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ChangeType = data
+		case "structuralOnly":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("structuralOnly"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.StructuralOnly = data
+		}
+	}
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputEntityFilter(ctx context.Context, obj any) (EntityFilter, error) {
 	var it EntityFilter
 	if obj == nil {
@@ -4032,6 +4198,11 @@ func (ec *executionContext) _ChangeEvent(ctx context.Context, sel ast.SelectionS
 			}
 		case "changedKeys":
 			out.Values[i] = ec._ChangeEvent_changedKeys(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "dropped":
+			out.Values[i] = ec._ChangeEvent_dropped(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -5380,6 +5551,30 @@ func (ec *executionContext) marshalOBoolean2ᚖbool(ctx context.Context, sel ast
 	_ = ctx
 	res := graphql.MarshalBoolean(*v)
 	return res
+}
+
+func (ec *executionContext) unmarshalOChangeFilter2ᚖgithubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐChangeFilter(ctx context.Context, v any) (*ChangeFilter, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputChangeFilter(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalOChangeType2ᚖgithubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐChangeType(ctx context.Context, v any) (*ChangeType, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var res = new(ChangeType)
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOChangeType2ᚖgithubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐChangeType(ctx context.Context, sel ast.SelectionSet, v *ChangeType) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return v
 }
 
 func (ec *executionContext) marshalOEntity2ᚖgithubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐEntity(ctx context.Context, sel ast.SelectionSet, v *Entity) graphql.Marshaler {

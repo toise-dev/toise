@@ -10,6 +10,7 @@ import (
 
 	"github.com/toise-dev/toise/internal/change"
 	"github.com/toise-dev/toise/internal/graphql"
+	"github.com/toise-dev/toise/internal/graphql/generated"
 	"github.com/toise-dev/toise/internal/graphql/resolvers"
 	"github.com/toise-dev/toise/internal/model"
 	"github.com/toise-dev/toise/internal/projection"
@@ -213,7 +214,7 @@ func TestSubscriptionEntityChanged(t *testing.T) {
 	s := newStack(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	ch, err := s.res.Subscription().EntityChanged(ctx)
+	ch, err := s.res.Subscription().EntityChanged(ctx, nil)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -293,5 +294,84 @@ func TestEntitiesAsOf(t *testing.T) {
 	// Malformed asOf is a clear error.
 	if err := c.Post(`{ entities(asOf: "yesterday") { totalCount } }`, &resp); err == nil {
 		t.Fatal("invalid asOf must error")
+	}
+}
+
+// TestSubscriptionFiltersAndGapSignal pins #138: server-side filters deliver
+// only matching events, and a consumer that falls behind learns it in-band —
+// the next delivered event carries the count of drops, never a silent gap.
+func TestSubscriptionFiltersAndGapSignal(t *testing.T) {
+	s := newStack(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Filter: only host entity events.
+	hostType := "host"
+	ch, err := s.res.Subscription().EntityChanged(ctx, &generated.ChangeFilter{EntityType: &hostType})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// One matching event, one non-matching (process), one relation (never on
+	// this stream).
+	if _, oerr := s.engine.ObserveEntity(change.EntityObservation{Type: model.TypeHost,
+		Identity: []model.KeyValue{kv("host.id", "h-sub")}, EventTime: t0}); oerr != nil {
+		t.Fatal(oerr)
+	}
+	if _, oerr := s.engine.ObserveEntity(change.EntityObservation{Type: model.TypeProcess,
+		Identity: []model.KeyValue{kv("pid", "777")}, EventTime: t0}); oerr != nil {
+		t.Fatal(oerr)
+	}
+	got := <-ch
+	if got.Entity == nil || got.Entity.Type != "host" {
+		t.Fatalf("filtered stream delivered %+v, want the host event", got)
+	}
+	if got.Dropped != 0 {
+		t.Fatalf("first delivery dropped = %d, want 0", got.Dropped)
+	}
+	select {
+	case ev := <-ch:
+		t.Fatalf("filter leaked a non-matching event: %+v", ev)
+	default:
+	}
+
+	// Gap signal: fill the 16-slot buffer without reading, overflow it, then
+	// drain — the next delivered event reports exactly the drops.
+	const overflow = 3
+	for i := 0; i < 16+overflow; i++ {
+		if _, oerr := s.engine.ObserveEntity(change.EntityObservation{Type: model.TypeHost,
+			Identity: []model.KeyValue{kv("host.id", fmt.Sprintf("h-flood-%d", i))}, EventTime: t0}); oerr != nil {
+			t.Fatal(oerr)
+		}
+	}
+	for i := 0; i < 16; i++ {
+		if ev := <-ch; ev.Dropped != 0 {
+			t.Fatalf("buffered event %d dropped = %d, want 0", i, ev.Dropped)
+		}
+	}
+	if _, oerr := s.engine.ObserveEntity(change.EntityObservation{Type: model.TypeHost,
+		Identity: []model.KeyValue{kv("host.id", "h-after-gap")}, EventTime: t0}); oerr != nil {
+		t.Fatal(oerr)
+	}
+	after := <-ch
+	if after.Dropped != overflow {
+		t.Fatalf("post-gap event dropped = %d, want %d (the gap must be announced)", after.Dropped, overflow)
+	}
+
+	// Structural-only relation filter.
+	structural := true
+	rch, err := s.res.Subscription().RelationChanged(ctx, &generated.ChangeFilter{StructuralOnly: &structural})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, oerr := s.engine.ObserveRelation(change.RelationObservation{
+		Type:      model.RelRunsOn,
+		From:      change.EndpointRef{Type: model.TypeProcess, Identity: []model.KeyValue{kv("pid", "777")}},
+		To:        change.EndpointRef{Type: model.TypeHost, Identity: []model.KeyValue{kv("host.id", "h-sub")}},
+		EventTime: t0}); oerr != nil {
+		t.Fatal(oerr)
+	}
+	rev := <-rch
+	if rev.Relation == nil || rev.Relation.Type != "runs_on" {
+		t.Fatalf("structural stream = %+v, want the runs_on add", rev)
 	}
 }

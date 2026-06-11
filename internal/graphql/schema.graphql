@@ -110,6 +110,11 @@ type ChangeEvent {
   schemaVersion: String!
   "For attribute/state changes, the keys that changed."
   changedKeys: [String!]!
+  """
+  Events dropped just before this one because this subscriber could not keep
+  up. Positive means you have a gap: re-query the current state and resume.
+  """
+  dropped: Int!
   "The entity this event is about, if it is an entity event."
   entity: Entity
   "The relation this event is about, if it is a relation event."
@@ -211,9 +216,24 @@ type Query {
   recentChanges(window: String!, first: Int = 100, after: String): ChangeConnection!
 }
 
+"""
+Server-side filter for a change subscription: only matching events are
+delivered, so a consumer watching one type does not receive everything.
+"""
+input ChangeFilter {
+  "Only events about entities of this type (entityChanged)."
+  entityType: String
+  "Only events about relations of this type (relationChanged)."
+  relationType: String
+  "Only this change classification."
+  changeType: ChangeType
+  "Only structural relation changes — alert-worthy topology (relationChanged)."
+  structuralOnly: Boolean
+}
+
 type Subscription {
   "Stream entity change events as they are classified."
-  entityChanged: ChangeEvent!
+  entityChanged(filter: ChangeFilter): ChangeEvent!
   "Stream relation change events as they are classified."
-  relationChanged: ChangeEvent!
+  relationChanged(filter: ChangeFilter): ChangeEvent!
 }
