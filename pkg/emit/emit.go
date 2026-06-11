@@ -98,6 +98,20 @@ func (o Options) WithClock(now func() time.Time) Options {
 	return o
 }
 
+// PartialError reports an OTLP partial success: the server accepted the export
+// as a whole (no retry is due), but rejected Rejected records as permanent
+// contract violations. Message carries the server's first rejection reason.
+// Detect it with errors.As to distinguish partial acceptance from a transport
+// failure.
+type PartialError struct {
+	Rejected int64
+	Message  string
+}
+
+func (e PartialError) Error() string {
+	return fmt.Sprintf("emit: server rejected %d record(s): %s", e.Rejected, e.Message)
+}
+
 // Client emits entity events to one endpoint. Safe for concurrent use.
 type Client struct {
 	opts Options
@@ -130,14 +144,18 @@ func New(opts Options) (*Client, error) {
 func (c *Client) Close() error { return c.conn.Close() }
 
 // State emits one entity.state event per entity, in one OTLP export (one
-// durable append on the Toise side).
+// durable append on the Toise side). A PartialError means the export was
+// accepted but some records were rejected as contract violations — do not
+// retry it; fix the producer.
 func (c *Client) State(ctx context.Context, entities ...Entity) error {
 	return c.export(ctx, eventState, entities)
 }
 
 // Delete emits one entity.delete event per entity. Toise releases this
 // producer's liveness reference; the entity is deleted when the last
-// reference goes (ADR 0019).
+// reference goes (ADR 0019). A PartialError means the export was accepted
+// but some records were rejected as contract violations — do not retry it;
+// fix the producer.
 func (c *Client) Delete(ctx context.Context, entities ...Entity) error {
 	return c.export(ctx, eventDelete, entities)
 }
@@ -153,8 +171,15 @@ func (c *Client) export(ctx context.Context, eventName string, entities []Entity
 	for k, v := range c.opts.Headers {
 		ctx = metadata.AppendToOutgoingContext(ctx, k, v)
 	}
-	if _, err := c.grpc.Export(ctx, plogotlp.NewExportRequestFromLogs(ld)); err != nil {
+	resp, err := c.grpc.Export(ctx, plogotlp.NewExportRequestFromLogs(ld))
+	if err != nil {
 		return fmt.Errorf("emit: exporting %d %s events: %w", len(entities), eventName, err)
+	}
+	// Toise reports per-record contract violations via OTLP partial success:
+	// the export succeeds at the transport, the rejection rides in the
+	// response. Dropping it would turn rejected records into silent data loss.
+	if ps := resp.PartialSuccess(); ps.RejectedLogRecords() > 0 {
+		return PartialError{Rejected: ps.RejectedLogRecords(), Message: ps.ErrorMessage()}
 	}
 	return nil
 }

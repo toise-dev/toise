@@ -130,7 +130,10 @@ Hand-rolling the wire contract is how producers drift. Two tools replace it:
   (type, identity map, attributes, heartbeat interval, embedded relationships)
   and call `State` / `Delete`; the SDK builds the spec-correct OTLP payload
   (deterministically — sorted keys, stable bytes) and exports it over gRPC
-  with your auth headers and tenant.
+  with your auth headers and tenant. When Toise accepts the export but rejects
+  some records (OTLP partial success), `State`/`Delete` return a typed
+  `emit.PartialError` carrying the rejected count and the server's first
+  rejection reason — do not retry it; fix the producer.
 - **`pkg/emit/conformance`** — contract validation without a running Toise:
   `conformance.Check(logs)` returns every violation (missing identity,
   mis-typed interval, incomplete relationship descriptor, non-scalar values)
