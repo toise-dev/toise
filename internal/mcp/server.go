@@ -176,6 +176,16 @@ func (s *Server) register(srv *mcpsdk.Server) {
 	}, withTimeout(s.budget, s.graphDiff))
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
+		Name: "describe_type",
+		Description: "Zoom on one entity or relation type: its registration, live count, the " +
+			"identifying and descriptive attribute keys actually observed (with example " +
+			"values), how it connects (relation types, directions, and peer types seen " +
+			"empirically), example labels — or, for a relation type, its observed " +
+			"endpoint-type shapes, structural flag, and failure-propagation direction. Use it " +
+			"after describe_schema to learn what a type looks like HERE before querying it.",
+	}, withTimeout(s.budget, s.describeType))
+
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name: "telemetry_keys",
 		Description: "Derive the join keys that locate an entity's metrics and logs in telemetry " +
 			"backends: the OTel resource attributes on the entity itself plus those inherited " +

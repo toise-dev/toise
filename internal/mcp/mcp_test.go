@@ -358,8 +358,8 @@ func TestMCPRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	if len(tools.Tools) != 10 {
-		t.Fatalf("want 10 tools, got %d", len(tools.Tools))
+	if len(tools.Tools) != 11 {
+		t.Fatalf("want 11 tools, got %d", len(tools.Tools))
 	}
 
 	res, err := cs.CallTool(ctx, &mcpsdk.CallToolParams{
@@ -975,5 +975,67 @@ func TestImpactOf(t *testing.T) {
 	}
 	if _, _, gerr := s.impactOf(ctx, nil, ImpactOfInput{EntityID: "ghost"}); gerr == nil {
 		t.Error("unknown entity must error")
+	}
+}
+
+// TestDescribeType pins #137: the per-type zoom answers from the live graph —
+// observed keys with usage, empirical relation shapes, and the relation-kind
+// view with endpoint shapes and impact flow.
+func TestDescribeType(t *testing.T) {
+	s := newTestServer()
+	ctx := context.Background()
+
+	_, out, err := s.describeType(ctx, nil, DescribeTypeInput{Type: "host"})
+	if err != nil {
+		t.Fatalf("describeType(host): %v", err)
+	}
+	if out.Kind != "entity" || out.Count != 2 {
+		t.Fatalf("host = kind %s count %d, want entity/2", out.Kind, out.Count)
+	}
+	if len(out.IdentityKeys) == 0 || out.IdentityKeys[0].Key != "host.name" || out.IdentityKeys[0].Seen != 2 {
+		t.Errorf("identity keys = %+v, want host.name seen 2x", out.IdentityKeys)
+	}
+	if len(out.AttributeKeys) == 0 || out.AttributeKeys[0].Key != "os.type" || out.AttributeKeys[0].Example == "" {
+		t.Errorf("attribute keys = %+v, want os.type with example", out.AttributeKeys)
+	}
+	// hosts participate in runs_on (incoming from process) and connected_to.
+	var runsOn *RelationParticipation
+	for i := range out.Relations {
+		if out.Relations[i].RelationType == "runs_on" && out.Relations[i].Direction == "incoming" {
+			runsOn = &out.Relations[i]
+		}
+	}
+	if runsOn == nil || runsOn.Count != 1 || len(runsOn.PeerTypes) != 1 || runsOn.PeerTypes[0].Type != "process" {
+		t.Fatalf("runs_on participation = %+v", out.Relations)
+	}
+	if len(out.Samples) == 0 || out.Description == "" {
+		t.Error("samples and description must be present")
+	}
+
+	// Relation kind: endpoint shapes observed empirically + impact direction.
+	_, rel, err := s.describeType(ctx, nil, DescribeTypeInput{Type: "runs_on"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rel.Kind != "relation" || !rel.Registered || rel.Count != 1 || !rel.Structural {
+		t.Fatalf("runs_on = %+v", rel)
+	}
+	if rel.ImpactFlow != "to_from" {
+		t.Errorf("runs_on impact = %s, want to_from", rel.ImpactFlow)
+	}
+	if len(rel.EndpointShapes) != 1 || rel.EndpointShapes[0].FromType != "process" || rel.EndpointShapes[0].ToType != "host" {
+		t.Errorf("shapes = %+v, want process->host", rel.EndpointShapes)
+	}
+
+	// A registered-but-empty type still answers; garbage errors with the hint.
+	_, empty, err := s.describeType(ctx, nil, DescribeTypeInput{Type: "network.route"})
+	if err != nil {
+		t.Fatalf("registered empty type: %v", err)
+	}
+	if empty.Count != 0 || empty.Kind != "entity" {
+		t.Errorf("network.route = %+v", empty)
+	}
+	if _, _, gerr := s.describeType(ctx, nil, DescribeTypeInput{Type: "no.such.type"}); gerr == nil || !strings.Contains(gerr.Error(), "describe_schema") {
+		t.Errorf("unknown type error = %v", gerr)
 	}
 }
