@@ -71,6 +71,7 @@ func main() {
 	storeCfg := store.DefaultConfig()
 	storeCfg.RetentionMaxAge = cfg.RetentionMaxAge.D()
 	storeCfg.CompactionInterval = cfg.CompactionInterval.D()
+	storeCfg.AcceptUnknownTypes = cfg.AcceptUnknownTypes
 
 	logger := slog.New(cfg.NewLogHandler(os.Stderr))
 	if err := run(cfg, storeCfg, logger); err != nil {
@@ -160,7 +161,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	// sweep starts expiring entities (#112). Exiting lets the supervisor restart.
 	errc := make(chan error, 2)
 
-	receiver := ingest.NewRoutedReceiver(engineFor, authn.AllowedForTenantGRPC, ingestMetrics, logger, grpcOpts...)
+	receiver := ingest.NewRoutedReceiver(engineFor, authn.AllowedForTenantGRPC, ingestMetrics, cfg.AcceptUnknownTypes, logger, grpcOpts...)
 	lis, err := net.Listen("tcp", cfg.OTLPListen)
 	if err != nil {
 		return fmt.Errorf("otlp listen on %s: %w", cfg.OTLPListen, err)

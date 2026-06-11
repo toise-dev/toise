@@ -21,6 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Opt-in open producer vocabulary.** `accept_unknown_types` (off by default)
+  lets entity and relation types outside the built-in registry through ingest
+  and the store, as long as their SHAPE is sound — identity present,
+  well-formed key-values. Accepted unknown types are counted
+  (`toise_ingest_unknown_type_records_total`) and show as `registered: false`
+  in `describe_type`. Identity hashing is type-prefixed, so unknown types are
+  first-class identities with no merge ambiguity (ADR 0018/0020 unchanged) —
+  and a new producer lot no longer requires a lockstep Toise release. (#141)
 - **Liveness survives restarts.** The engine's liveness bookkeeping — producer
   references with their expiry deadlines (ADR 0019) and per-relation deadlines
   — now rides the projection snapshot and is restored at boot, with absolute

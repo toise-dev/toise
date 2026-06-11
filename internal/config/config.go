@@ -78,6 +78,13 @@ type Config struct {
 	// (and CORS). Empty means same-origin only.
 	AllowedOrigins []string `yaml:"allowed_origins"`
 
+	// AcceptUnknownTypes opens the producer vocabulary: entity/relation types
+	// outside the built-in registry are accepted when their shape is sound
+	// (identity present, well-formed key-values), instead of rejected per
+	// record. Identity hashing is type-prefixed, so unknown types are
+	// first-class identities with no merge ambiguity. Off by default. (#141)
+	AcceptUnknownTypes bool `yaml:"accept_unknown_types"`
+
 	// TenantAutoCreate allows a first write to a new tenant id to create its
 	// isolated stack (the open multi-tenant posture). Off, only pre-existing
 	// tenants and the default are served. TenantAllowlist, when non-empty,
@@ -207,6 +214,13 @@ func (c *Config) applyEnv(getenv func(string) string) error {
 	}
 	if v := getenv("TOISE_TENANT_TOKENS"); v != "" {
 		c.TenantTokens = splitOrigins(v)
+	}
+	if v := getenv("TOISE_ACCEPT_UNKNOWN_TYPES"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("invalid TOISE_ACCEPT_UNKNOWN_TYPES %q: %w", v, err)
+		}
+		c.AcceptUnknownTypes = b
 	}
 	if v := getenv("TOISE_TENANT_AUTO_CREATE"); v != "" {
 		b, err := strconv.ParseBool(v)
@@ -346,6 +360,7 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	debugUI := fs.Bool("debug-ui", cfg.DebugUI, "serve the debug UI at / (off under --production)")
 	allowedOrigins := fs.String("allowed-origins", strings.Join(cfg.AllowedOrigins, ","),
 		"comma-separated browser Origin allowlist for WebSocket/CORS (empty = same-origin only)")
+	acceptUnknownTypes := fs.Bool("accept-unknown-types", cfg.AcceptUnknownTypes, "accept entity/relation types outside the built-in registry (shape still validated)")
 	tenantAutoCreate := fs.Bool("tenant-auto-create", cfg.TenantAutoCreate, "allow a first write to a new tenant id to create its stack")
 	tenantAllowlist := fs.String("tenant-allowlist", strings.Join(cfg.TenantAllowlist, ","), "comma-separated tenant ids allowed to be created (empty: any)")
 	maxTenants := fs.Int("max-tenants", cfg.MaxTenants, "cap on open tenants, 0 = unbounded")
@@ -370,6 +385,7 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	cfg.Playground = *playground
 	cfg.DebugUI = *debugUI
 	cfg.AllowedOrigins = splitOrigins(*allowedOrigins)
+	cfg.AcceptUnknownTypes = *acceptUnknownTypes
 	cfg.TenantAutoCreate = *tenantAutoCreate
 	cfg.TenantAllowlist = splitOrigins(*tenantAllowlist)
 	cfg.MaxTenants = *maxTenants

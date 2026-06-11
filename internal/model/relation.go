@@ -43,12 +43,19 @@ func NewRelation(relType string, from, to EntityID, attrs ...KeyValue) Relation 
 // constraints (e.g. runs_on connects a process to a host) are enforced by the
 // change engine, which has access to the entities; here we validate the type is
 // known and the endpoints are present.
-func (r Relation) Validate() error {
+func (r Relation) Validate() error { return r.validate(true) }
+
+// ValidateShape is Validate without the vocabulary-membership check (#141).
+func (r Relation) ValidateShape() error { return r.validate(false) }
+
+func (r Relation) validate(vocabulary bool) error {
 	if r.Type == "" {
 		return ErrEmptyType
 	}
-	if _, ok := RelationDef(r.Type); !ok {
-		return fmt.Errorf("%w: %q", ErrUnknownType, r.Type)
+	if vocabulary {
+		if _, ok := RelationDef(r.Type); !ok {
+			return fmt.Errorf("%w: %q", ErrUnknownType, r.Type)
+		}
 	}
 	if r.From == "" || r.To == "" {
 		return ErrEmptyEndpoint

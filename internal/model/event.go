@@ -50,7 +50,12 @@ type Event struct {
 }
 
 // Validate checks the entity event's invariants.
-func (e EntityEvent) Validate() error {
+func (e EntityEvent) Validate() error { return e.validate(true) }
+
+// ValidateShape is Validate with the entity's vocabulary check relaxed (#141).
+func (e EntityEvent) ValidateShape() error { return e.validate(false) }
+
+func (e EntityEvent) validate(vocabulary bool) error {
 	if e.ChangeType == ChangeUnspecified {
 		return ErrChangeTypeUnset
 	}
@@ -60,14 +65,19 @@ func (e EntityEvent) Validate() error {
 	if err := commonEventChecks(e.EventTime, e.RecordedAt, e.SchemaVersion); err != nil {
 		return err
 	}
-	if err := e.Entity.Validate(); err != nil {
+	if err := e.Entity.validate(vocabulary); err != nil {
 		return fmt.Errorf("entity: %w", err)
 	}
 	return nil
 }
 
 // Validate checks the relation event's invariants.
-func (r RelationEvent) Validate() error {
+func (r RelationEvent) Validate() error { return r.validate(true) }
+
+// ValidateShape is Validate with the relation's vocabulary check relaxed (#141).
+func (r RelationEvent) ValidateShape() error { return r.validate(false) }
+
+func (r RelationEvent) validate(vocabulary bool) error {
 	if r.ChangeType == ChangeUnspecified {
 		return ErrChangeTypeUnset
 	}
@@ -77,7 +87,7 @@ func (r RelationEvent) Validate() error {
 	if err := commonEventChecks(r.EventTime, r.RecordedAt, r.SchemaVersion); err != nil {
 		return err
 	}
-	if err := r.Relation.Validate(); err != nil {
+	if err := r.Relation.validate(vocabulary); err != nil {
 		return fmt.Errorf("relation: %w", err)
 	}
 	return nil
@@ -198,14 +208,19 @@ func EventFromProto(p *toisev1.Event) Event {
 }
 
 // Validate checks the envelope contains exactly one valid event.
-func (e Event) Validate() error {
+func (e Event) Validate() error { return e.validateEnvelope(true) }
+
+// ValidateShape is Validate with vocabulary membership relaxed (#141).
+func (e Event) ValidateShape() error { return e.validateEnvelope(false) }
+
+func (e Event) validateEnvelope(vocabulary bool) error {
 	switch {
 	case e.Entity != nil && e.Relation != nil:
 		return fmt.Errorf("%w: envelope has both entity and relation events", ErrChangeTypeMismatch)
 	case e.Entity != nil:
-		return e.Entity.Validate()
+		return e.Entity.validate(vocabulary)
 	case e.Relation != nil:
-		return e.Relation.Validate()
+		return e.Relation.validate(vocabulary)
 	default:
 		return ErrMissingEntity
 	}

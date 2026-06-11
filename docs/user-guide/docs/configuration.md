@@ -37,6 +37,7 @@ for the rationale.
 | `allowed_origins` | `TOISE_ALLOWED_ORIGINS` | `--allowed-origins` | (empty) | comma-separated browser Origin allowlist (WebSocket/CORS); empty = same-origin only |
 | `auth_tokens` | `TOISE_AUTH_TOKENS` | *(none — secret)* | (empty) | comma-separated bearer tokens, valid for every tenant; empty = auth disabled |
 | `tenant_tokens` | `TOISE_TENANT_TOKENS` | *(none — secret)* | (empty) | comma-separated `tenant:token` pairs — the token is authorized only for its tenant (HTTP 403 / gRPC PermissionDenied elsewhere) |
+| `accept_unknown_types` | `TOISE_ACCEPT_UNKNOWN_TYPES` | `--accept-unknown-types` | `false` | accept entity/relation types outside the built-in registry (shape still validated; counted on /metrics) |
 | `tenant_auto_create` | `TOISE_TENANT_AUTO_CREATE` | `--tenant-auto-create` | `true` | allow a first write to a new tenant id to create its stack; off = only pre-existing tenants (and `default`) are served |
 | `tenant_allowlist` | `TOISE_TENANT_ALLOWLIST` | `--tenant-allowlist` | (empty) | comma-separated tenant ids allowed to be created; empty = any (subject to auto-create and the cap) |
 | `max_tenants` | `TOISE_MAX_TENANTS` | `--max-tenants` | `0` | cap on open tenants; `0` = unbounded. Reading an unknown tenant never creates it (404) |
