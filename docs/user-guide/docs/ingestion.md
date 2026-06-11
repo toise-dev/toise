@@ -135,10 +135,16 @@ Hand-rolling the wire contract is how producers drift. Two tools replace it:
   `emit.PartialError` carrying the rejected count and the server's first
   rejection reason — do not retry it; fix the producer.
 - **`pkg/emit/conformance`** — contract validation without a running Toise:
-  `conformance.Check(logs)` returns every violation (missing identity,
-  mis-typed interval, incomplete relationship descriptor, non-scalar values)
-  with its location. Run it in your producer's CI; output that passes is never
-  rejected per-record by Toise.
+  `conformance.Check(logs)` returns every violation (missing identity, empty
+  attribute keys, mis-typed interval, incomplete relationship descriptor,
+  non-scalar values) with its location. Run it in your producer's CI; output
+  that passes is never rejected per-record by Toise **for shape reasons**.
+  Type-registry membership is enforced separately: under the default strict
+  vocabulary an `entity.type` outside the registry is still rejected per
+  record, unless the deployment sets `accept_unknown_types`. `Check` also
+  returns *advisory* problems (`Problem.Advisory`, not rejections) for
+  misconfigurations such as a missing `service.instance.id` resource
+  attribute, which collapses multi-producer liveness reference counting.
 
 The checked-in fixture (`pkg/emit/testdata/fixture_v1.bin`) is the published
 contract v1: the SDK reproduces it byte for byte and Toise's own ingest tests
