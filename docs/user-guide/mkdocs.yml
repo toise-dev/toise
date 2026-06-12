@@ -87,6 +87,7 @@ nav:
   - Installation: installation.md
   - Configuration: configuration.md
   - Ingesting data (OTLP): ingestion.md
+  - Write a producer: write-a-producer.md
   - Querying the graph:
       - Overview: querying/index.md
       - GraphQL API: querying/graphql.md
