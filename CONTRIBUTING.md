@@ -8,6 +8,19 @@ and contributions from the broader community are welcome.
 This document explains how to get set up, how we work, and what we expect from
 a contribution.
 
+## Ways to contribute
+
+- **Write a producer.** The highest-leverage contribution: a program that emits
+  entity events from a source you care about (a cloud, a device, an app). It is
+  self-contained — no engine internals needed — and widens what the graph can
+  see. Start with the [Write a producer guide](https://toise.dev/docs/latest/write-a-producer/)
+  and the `pkg/emit` SDK.
+- **Pick a [good first issue](https://github.com/toise-dev/toise/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22).**
+  Several are scoped producer examples.
+- **Improve the docs**, report a bug, or open a
+  [discussion](https://github.com/toise-dev/toise/discussions) to ask a question
+  or float an idea before writing code.
+
 ## Philosophy
 
 Toise favors clarity over cleverness, small reviewable changes over large ones,
