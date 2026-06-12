@@ -87,7 +87,9 @@ isolation); 0.4.0 hardened correctness under failure and made the MCP surface a 
 budget-aware query layer; **0.5.0 makes the bi-temporal log queryable in the
 past tense (`as_of` everywhere), adds the `impact_of` blast radius — eleven
 tools total — and ships the `toise-emit` producer SDK with a byte-pinned
-published contract.** Expect breaking changes between minor releases (each
+published contract; 0.6.0 closes the follow-up audit's entire P0 lot and moves
+to standard Go versioning (v-prefixed tags, independently versioned SDK
+module).** Expect breaking changes between minor releases (each
 with a migration guide).
 
 Next: [install and run toise-server](installation.md).

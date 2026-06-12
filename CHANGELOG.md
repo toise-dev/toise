@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+<!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
+
+## [0.6.0] - 2026-06-12
+
+**The corrective release.** A second full audit ran against 0.5.0 the day it
+shipped; this release closes its entire P0 lot in one pass — the SDK now
+*tells you* when records are rejected, the conformance kit promises exactly
+what it checks, backups can no longer back up nothing, reads no longer trip
+over maintenance, the liveness memento protects default deployments, and the
+project moves to standard Go versioning (v-prefixed tags, independently
+versioned SDK module). No wire-contract change, no data migration; the
+sharper behaviors are listed in the
+[0.5 -> 0.6 migration guide](docs/migration/0.5-to-0.6.md).
+
 ### Changed
 
 - **MCP `get_entity` argument renamed `id` -> `entity_id`**, aligning it with
