@@ -260,4 +260,7 @@ func (s *Server) register(srv *mcpsdk.Server) {
 			"identifying or descriptive attributes. Merges onto existing annotations; an empty " +
 			"value removes a key. Requires a write-capable (full or tenant-scoped) token.",
 	}, observe(s, "annotate_entity", s.annotateEntity))
+
+	s.registerResources(srv)
+	s.registerPrompts(srv)
 }
