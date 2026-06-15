@@ -285,10 +285,11 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 				case <-ticker.C:
 					for _, st := range reg.Stacks() {
 						_ = maint.Observe("sweep", st.Tenant, func() error {
-							if n := st.Engine.Sweep(); n > 0 {
+							n, err := st.Engine.Sweep()
+							if n > 0 {
 								logger.Info("liveness sweep expired stale entities", "tenant", st.Tenant, "count", n)
 							}
-							return nil
+							return err
 						})
 					}
 				}

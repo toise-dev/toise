@@ -353,7 +353,7 @@ func TestOpenStackRestoresLivenessMemento(t *testing.T) {
 	if !hasHost(st2.Graph, "h-memento") {
 		t.Fatal("snapshot did not restore the entity")
 	}
-	if n := st2.Engine.Sweep(); n != 0 {
+	if n, _ := st2.Engine.Sweep(); n != 0 {
 		t.Fatalf("first sweep after boot expired %d, want 0 (producer is fresh)", n)
 	}
 	_, emitted, derr := st2.Engine.DeleteEntity(change.EntityObservation{
@@ -458,7 +458,7 @@ func TestOpenStackFloorsRestoredDeadlines(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n := st2.Engine.Sweep(); n != 0 {
+	if n, _ := st2.Engine.Sweep(); n != 0 {
 		t.Fatalf("sweep right after boot expired %d, want 0 (deadline floored to boot+interval)", n)
 	}
 	if !hasHost(st2.Graph, "h-floor") {
@@ -467,7 +467,7 @@ func TestOpenStackFloorsRestoredDeadlines(t *testing.T) {
 
 	// Past the floored deadline the producer is genuinely silent: reap it.
 	time.Sleep(120 * time.Millisecond)
-	if n := st2.Engine.Sweep(); n != 1 {
+	if n, _ := st2.Engine.Sweep(); n != 1 {
 		t.Fatalf("post-grace sweep expired %d, want 1", n)
 	}
 	if hasHost(st2.Graph, "h-floor") {
