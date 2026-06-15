@@ -104,10 +104,11 @@ func (s *Store) checkFormat() error {
 		return fmt.Errorf("reading format version: %w", err)
 	}
 	defer func() { _ = closer.Close() }()
-	if len(v) == 8 {
-		if got := binary.BigEndian.Uint64(v); got > formatVersion {
-			return fmt.Errorf("store format version %d is newer than this binary supports (%d): upgrade toise-server before opening this data dir", got, formatVersion)
-		}
+	if len(v) != 8 {
+		return fmt.Errorf("corrupt format-version marker: %d bytes, want 8", len(v))
+	}
+	if got := binary.BigEndian.Uint64(v); got > formatVersion {
+		return fmt.Errorf("store format version %d is newer than this binary supports (%d): upgrade toise-server before opening this data dir", got, formatVersion)
 	}
 	return nil
 }
@@ -148,17 +149,40 @@ func (s *Store) recoverSeq() error {
 	if err != nil {
 		return fmt.Errorf("reading sequence: %w", err)
 	}
-	defer func() { _ = closer.Close() }()
-	if len(v) == 8 {
+	n := len(v)
+	if n == 8 {
 		s.seq = binary.BigEndian.Uint64(v)
 	}
+	_ = closer.Close()
+	// A present-but-malformed marker is corruption, not a fresh store: silently
+	// resetting the sequence to 0 would re-issue sequences and clobber the log.
+	if n != 8 {
+		return fmt.Errorf("corrupt sequence marker: %d bytes, want 8", n)
+	}
+
 	if hv, hcloser, herr := s.db.Get(metaPruneHorizonKey); herr == nil {
-		if len(hv) == 8 {
+		hn := len(hv)
+		if hn == 8 {
 			s.pruneHorizon = int64(binary.BigEndian.Uint64(hv))
 		}
 		_ = hcloser.Close()
+		if hn != 8 {
+			return fmt.Errorf("corrupt prune-horizon marker: %d bytes, want 8", hn)
+		}
 	} else if !errors.Is(herr, pebble.ErrNotFound) {
 		return fmt.Errorf("reading prune horizon: %w", herr)
+	}
+
+	// Seed snapshotSeq from the persisted snapshot (its 8-byte sequence prefix)
+	// so the snapshot_seq metric reflects reality immediately after a restart,
+	// not only once the next snapshot is written.
+	if sv, scloser, serr := s.db.Get(snapshotKey); serr == nil {
+		if len(sv) >= 8 {
+			s.snapshotSeq = binary.BigEndian.Uint64(sv[:8])
+		}
+		_ = scloser.Close()
+	} else if !errors.Is(serr, pebble.ErrNotFound) {
+		return fmt.Errorf("reading snapshot reference: %w", serr)
 	}
 	return nil
 }

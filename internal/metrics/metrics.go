@@ -10,6 +10,7 @@ package metrics
 import (
 	"net/http"
 	"sort"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
@@ -31,6 +32,7 @@ type Storer interface {
 	PrunedBytes() uint64
 	SnapshotSeq() uint64
 	SnapshotsWritten() uint64
+	PruneHorizon() time.Time
 }
 
 // Collector samples the live graph and store on each Prometheus scrape.
@@ -50,6 +52,7 @@ type Collector struct {
 	prunedBytes    *prometheus.Desc
 	snapshotSeq    *prometheus.Desc
 	snapshots      *prometheus.Desc
+	pruneHorizon   *prometheus.Desc
 }
 
 // NewCollector builds a collector over the graph and store, stamping build info
@@ -80,6 +83,8 @@ func NewCollector(g Grapher, s Storer, version, commit string) *Collector {
 			"Reference sequence of the last projection snapshot written (0 if none).", nil, nil),
 		snapshots: prometheus.NewDesc("toise_snapshots_written_total",
 			"Total projection snapshots written.", nil, nil),
+		pruneHorizon: prometheus.NewDesc("toise_store_prune_horizon_seconds",
+			"Unix time of the latest retention cutoff applied (0 if never pruned); the oldest instant an as-of read can answer completely.", nil, nil),
 	}
 }
 
@@ -95,6 +100,7 @@ func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.prunedBytes
 	ch <- c.snapshotSeq
 	ch <- c.snapshots
+	ch <- c.pruneHorizon
 }
 
 // Collect implements prometheus.Collector, sampling the live state.
@@ -108,6 +114,11 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	ch <- prometheus.MustNewConstMetric(c.prunedBytes, prometheus.CounterValue, float64(c.store.PrunedBytes()))
 	ch <- prometheus.MustNewConstMetric(c.snapshotSeq, prometheus.GaugeValue, float64(c.store.SnapshotSeq()))
 	ch <- prometheus.MustNewConstMetric(c.snapshots, prometheus.CounterValue, float64(c.store.SnapshotsWritten()))
+	horizon := float64(0)
+	if h := c.store.PruneHorizon(); !h.IsZero() {
+		horizon = float64(h.Unix())
+	}
+	ch <- prometheus.MustNewConstMetric(c.pruneHorizon, prometheus.GaugeValue, horizon)
 	emitByType(ch, c.entitiesByType, c.graph.CountByType())
 }
 
