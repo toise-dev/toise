@@ -492,38 +492,46 @@ func (e *Engine) deleteEntityLocked(obs EntityObservation) (ev model.Event, emit
 	if err := e.commit(ev, false); err != nil {
 		return model.Event{}, false, err
 	}
-	e.removeIncidentRelations(id, obs.EventTime)
-	return ev, true, nil
+	// The delete emitted; surface any cascade error so a failed edge removal is
+	// retried (idempotent) rather than silently dropped.
+	_, rerr := e.removeIncidentRelations(id, obs.EventTime)
+	return ev, true, rerr
 }
 
 // removeIncidentRelations emits relation.removed for every edge touching id: an
 // edge to a deleted entity is meaningless, so edge liveness is derived from its
 // endpoints (a deleted node takes its edges with it). The caller must hold obsMu.
-func (e *Engine) removeIncidentRelations(id model.EntityID, when time.Time) int {
+func (e *Engine) removeIncidentRelations(id model.EntityID, when time.Time) (int, error) {
 	n := 0
+	var errs []error
 	for _, rel := range e.listRelationsTouching(id) {
 		ev := e.relationEvent(model.RelationRemoved, rel, when)
 		if err := e.commit(ev, rel.Structural); err != nil {
 			e.logger.Error("failed to remove edge of deleted entity", "relation_id", rel.ID, "err", err)
+			errs = append(errs, fmt.Errorf("removing edge %s of deleted %s: %w", rel.ID, id, err))
 			continue
 		}
 		delete(e.relDeadlines, rel.ID)
 		n++
 	}
-	return n
+	return n, errors.Join(errs...)
 }
 
 // Sweep expires entities whose liveness backstop has lapsed: an entity observed
 // or edge with an interval that has not been re-asserted within it is soft-deleted
 // (entity.deleted / relation.removed), as a safety net for missed explicit deletes
 // (crash, host off, network partition). It returns the number of entities and
-// edges expired. Drive it from a periodic ticker.
-func (e *Engine) Sweep() int {
+// edges expired, and any commit errors joined: a failed commit is logged and
+// skipped (the pass stays resilient and retries next tick) but also returned, so
+// the maintenance metric's error outcome is reachable instead of structurally
+// impossible. Drive it from a periodic ticker.
+func (e *Engine) Sweep() (int, error) {
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()
 
 	now := e.now()
 	n := 0
+	var errs []error
 
 	// Drop each producer reference whose interval has lapsed; an entity with no
 	// surviving reference is expired (ADR 0019).
@@ -554,13 +562,18 @@ func (e *Engine) Sweep() int {
 		}}
 		if err := e.commit(ev, false); err != nil {
 			e.logger.Error("failed to expire stale entity", "id", id, "err", err)
+			errs = append(errs, fmt.Errorf("expiring stale entity %s: %w", id, err))
 			continue // leave the (empty) ref set to retry next sweep
 		}
 		delete(e.refs, id)
 		e.logger.Warn("expired stale entity: no producer heartbeat within its interval",
 			"entity_type", ent.Type, "entity_id", id)
 		n++
-		n += e.removeIncidentRelations(id, now) // edges die with their node
+		rn, rerr := e.removeIncidentRelations(id, now) // edges die with their node
+		n += rn
+		if rerr != nil {
+			errs = append(errs, rerr)
+		}
 	}
 
 	// Expire parked out-of-order edges past their TTL: flushPending only runs on
@@ -595,6 +608,7 @@ func (e *Engine) Sweep() int {
 		ev := e.relationEvent(model.RelationRemoved, rel, now)
 		if err := e.commit(ev, rel.Structural); err != nil {
 			e.logger.Error("failed to expire stale relation", "id", id, "err", err)
+			errs = append(errs, fmt.Errorf("expiring stale relation %s: %w", id, err))
 			continue
 		}
 		delete(e.relDeadlines, id)
@@ -607,7 +621,7 @@ func (e *Engine) Sweep() int {
 	// did not return to claim (#183). Not counted in n (no event is emitted —
 	// the entity was already soft-deleted).
 	e.graph.PruneTombstones()
-	return n
+	return n, errors.Join(errs...)
 }
 
 // ObserveRelation classifies an observed relation. It emits relation.added for a

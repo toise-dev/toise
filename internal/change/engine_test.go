@@ -248,7 +248,7 @@ func TestLivenessSweepExpiresStaleEntities(t *testing.T) {
 
 	// before the deadline nothing expires
 	now = now.Add(30 * time.Second)
-	if n := e.Sweep(); n != 0 {
+	if n, _ := e.Sweep(); n != 0 {
 		t.Fatalf("premature expiry: swept %d", n)
 	}
 
@@ -257,13 +257,13 @@ func TestLivenessSweepExpiresStaleEntities(t *testing.T) {
 		t.Fatal(err)
 	}
 	now = now.Add(45 * time.Second) // 75s since first sight, but only 45s since the heartbeat
-	if n := e.Sweep(); n != 0 {
+	if n, _ := e.Sweep(); n != 0 {
 		t.Fatalf("heartbeat should have reset the deadline; swept %d", n)
 	}
 
 	// let it lapse: the stale entity expires, the interval-less one survives
 	now = now.Add(time.Minute)
-	if n := e.Sweep(); n != 1 {
+	if n, _ := e.Sweep(); n != 1 {
 		t.Fatalf("stale entity should expire; swept %d, want 1", n)
 	}
 	if _, found := g.MatchIdentity(model.TypeHost, host1); found {
@@ -275,7 +275,7 @@ func TestLivenessSweepExpiresStaleEntities(t *testing.T) {
 	if g.EntityCount() != 1 {
 		t.Errorf("EntityCount = %d, want 1", g.EntityCount())
 	}
-	if n := e.Sweep(); n != 0 {
+	if n, _ := e.Sweep(); n != 0 {
 		t.Errorf("re-sweep should be a no-op; swept %d", n)
 	}
 }
@@ -379,7 +379,7 @@ func TestMultiProducerIntervalExpiry(t *testing.T) {
 	}
 	// past A's deadline (t0+60) but not B's (t0+110): A's ref lapses, db survives
 	now = now.Add(40 * time.Second) // t0+90s
-	if n := e.Sweep(); n != 0 {
+	if n, _ := e.Sweep(); n != 0 {
 		t.Fatalf("db must survive while B's heartbeat is fresh; swept %d", n)
 	}
 	if _, found := g.MatchIdentity(model.TypeDatabase, ident); !found {
@@ -387,7 +387,7 @@ func TestMultiProducerIntervalExpiry(t *testing.T) {
 	}
 	// past B's deadline too: the db expires
 	now = now.Add(40 * time.Second) // t0+130s, past B's t0+110
-	if n := e.Sweep(); n != 1 {
+	if n, _ := e.Sweep(); n != 1 {
 		t.Fatalf("db must expire once all producers lapse; swept %d, want 1", n)
 	}
 	if _, found := g.MatchIdentity(model.TypeDatabase, ident); found {
@@ -438,7 +438,7 @@ func TestLivenessSweepExpiresStaleRelations(t *testing.T) {
 	}
 
 	now = now.Add(30 * time.Second)
-	if n := e.Sweep(); n != 0 {
+	if n, _ := e.Sweep(); n != 0 {
 		t.Fatalf("premature edge expiry: swept %d", n)
 	}
 	// re-asserting (even unchanged) resets the deadline
@@ -447,17 +447,17 @@ func TestLivenessSweepExpiresStaleRelations(t *testing.T) {
 		t.Fatal(err)
 	}
 	now = now.Add(45 * time.Second)
-	if n := e.Sweep(); n != 0 {
+	if n, _ := e.Sweep(); n != 0 {
 		t.Fatalf("heartbeat should reset the edge deadline; swept %d", n)
 	}
 	now = now.Add(time.Minute)
-	if n := e.Sweep(); n != 1 {
+	if n, _ := e.Sweep(); n != 1 {
 		t.Fatalf("stale edge should expire; swept %d, want 1", n)
 	}
 	if g.RelationCount() != 0 {
 		t.Errorf("expired edge should be removed; count=%d", g.RelationCount())
 	}
-	if n := e.Sweep(); n != 0 {
+	if n, _ := e.Sweep(); n != 0 {
 		t.Errorf("re-sweep should be a no-op; swept %d", n)
 	}
 }
@@ -565,6 +565,35 @@ func (f *failingAppender) Append(evs ...model.Event) error {
 	}
 	f.events += len(evs)
 	return nil
+}
+
+// TestSweepReturnsCommitError pins #166: Sweep no longer swallows a failed
+// expiry — it logs and keeps going (resilient), but returns the error so the
+// maintenance metric's "error" outcome is reachable instead of impossible.
+func TestSweepReturnsCommitError(t *testing.T) {
+	g := projection.New()
+	ap := &failingAppender{}
+	now := t0
+	e := New(g, ap, WithClock(func() time.Time { return now }), WithLogger(slog.New(slog.DiscardHandler)))
+
+	host := []model.KeyValue{kv("host.id", "h1")}
+	if _, err := e.ObserveEntity(EntityObservation{Type: model.TypeHost, Identity: host, Interval: time.Minute, EventTime: now}); err != nil {
+		t.Fatal(err)
+	}
+	// Past the interval, with appends now failing: the expiry commit fails.
+	now = now.Add(2 * time.Minute)
+	ap.fail = true
+	n, err := e.Sweep()
+	if err == nil {
+		t.Fatal("Sweep must return the commit error, not swallow it")
+	}
+	if n != 0 {
+		t.Errorf("n = %d, want 0 (the expiry did not commit)", n)
+	}
+	// The failed expiry leaves the entity live so the next sweep retries it.
+	if _, found := g.MatchIdentity(model.TypeHost, host); !found {
+		t.Error("a failed expiry must leave the entity live to retry")
+	}
 }
 
 // TestBatchFlushFailureKeepsProjectionAndSubscribersClean pins the staged-commit
@@ -753,7 +782,7 @@ func TestPendingBufferCapAndSweepExpiry(t *testing.T) {
 	// Sweep drops every parked edge once its TTL lapses, with no observation
 	// needed to trigger the flush.
 	now = now.Add(time.Minute)
-	e.Sweep()
+	_, _ = e.Sweep()
 	if len(e.pending) != 0 {
 		t.Errorf("pending = %d after sweep past TTL, want 0", len(e.pending))
 	}
@@ -799,7 +828,7 @@ func TestLivenessMementoSurvivesRestart(t *testing.T) {
 	// the first sweep right after boot must NOT mass-delete entities of
 	// producers that are alive but simply have not re-exported yet.
 	now = boot.Add(time.Second)
-	if n := e2.Sweep(); n != 0 {
+	if n, _ := e2.Sweep(); n != 0 {
 		t.Fatalf("sweep right after boot expired %d, want 0 (one-interval boot grace)", n)
 	}
 	if g2.EntityCount() != 1 {
@@ -809,7 +838,7 @@ func TestLivenessMementoSurvivesRestart(t *testing.T) {
 	// Past the floored deadline (boot + the 30s interval) the dead producer's
 	// entity IS reaped — the memento still closes the #139 zombie.
 	now = boot.Add(31 * time.Second)
-	if n := e2.Sweep(); n != 1 {
+	if n, _ := e2.Sweep(); n != 1 {
 		t.Fatalf("post-grace sweep expired %d, want 1 (the dead producer's entity)", n)
 	}
 	if g2.EntityCount() != 0 {
@@ -822,7 +851,7 @@ func TestLivenessMementoSurvivesRestart(t *testing.T) {
 		g3.Apply(ev)
 	}
 	e3 := New(g3, &fakeAppender{}, WithClock(func() time.Time { return now }))
-	if n := e3.Sweep(); n != 0 {
+	if n, _ := e3.Sweep(); n != 0 {
 		t.Fatalf("control: sweep without restored liveness expired %d, want 0", n)
 	}
 	if g3.EntityCount() != 1 {
@@ -862,7 +891,7 @@ func TestRestoreLivenessOldBlobWithoutIntervals(t *testing.T) {
 	if err := e2.RestoreLiveness([]byte(oldBlob)); err != nil {
 		t.Fatal(err)
 	}
-	if n := e2.Sweep(); n != 1 {
+	if n, _ := e2.Sweep(); n != 1 {
 		t.Fatalf("sweep after old-blob restore expired %d, want 1", n)
 	}
 	if g2.EntityCount() != 0 {
