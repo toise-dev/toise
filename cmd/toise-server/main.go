@@ -181,6 +181,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	maint := metrics.NewMaintenance()
 	authFailures := metrics.NewAuthFailures()
 	authn.OnFailure(authFailures.Inc)
+	queryMetrics := metrics.NewQueryMetrics() // per-MCP-tool call/duration, shared across tenants
 
 	// An exposed listener without auth or TLS deserves a loud line at startup:
 	// the trusted-network defaults are loopback, and leaving them is a choice
@@ -223,7 +224,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		}), nil
 	})
 	mcpRouter := newTenantRouter(reg, logger, func(st *registry.Stack) (http.Handler, error) {
-		return mcp.New(st.Graph, st.Store).HTTPHandler(), nil
+		return mcp.New(st.Graph, st.Store).SetObserver(queryMetrics).HTTPHandler(), nil
 	})
 
 	mux := http.NewServeMux()
@@ -245,6 +246,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	}
 	metricsExtra := append(ingestMetrics.Collectors(), authFailures, quarantined)
 	metricsExtra = append(metricsExtra, maint.Collectors()...)
+	metricsExtra = append(metricsExtra, queryMetrics.Collectors()...)
 	mux.Handle("/metrics", metrics.Handler(metrics.NewCollector(
 		aggregateGraph{reg}, aggregateStore{reg}, version.Version, version.Commit), metricsExtra...))
 	if cfg.Playground {
