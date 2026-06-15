@@ -122,7 +122,9 @@ func (c Config) Validate() error {
 		return fmt.Errorf("retention_max_age is set but retention_compaction_interval is 0: nothing would ever prune")
 	}
 	switch strings.ToLower(c.LogLevel) {
-	case "debug", "info", "warn", "error":
+	// "warning" is accepted as an alias for "warn" to match SlogLevel, which
+	// already maps it — Validate must not reject a level the handler honors.
+	case "debug", "info", "warn", "warning", "error":
 	default:
 		return fmt.Errorf("unknown log_level %q: use debug, info, warn, or error", c.LogLevel)
 	}
@@ -133,6 +135,17 @@ func (c Config) Validate() error {
 	}
 	if _, err := c.TenantTokensMap(); err != nil {
 		return err
+	}
+	if c.MaxTenants < 0 {
+		return fmt.Errorf("max_tenants must be >= 0 (0 = unbounded), got %d", c.MaxTenants)
+	}
+	// Tenant ids become X-Scope-OrgID header values and on-disk stack directory
+	// names; an empty or whitespace-bearing allowlist entry can never match a
+	// real tenant and signals a malformed config rather than a deliberate rule.
+	for _, t := range c.TenantAllowlist {
+		if t == "" || strings.ContainsAny(t, " \t\r\n") {
+			return fmt.Errorf("tenant_allowlist entry %q is invalid: tenant ids must not be empty or contain whitespace", t)
+		}
 	}
 	return nil
 }
