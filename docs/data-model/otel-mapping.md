@@ -354,7 +354,8 @@ the boundary. The registry is:
 
 - **entities:** `host`, `process`, `network.interface`, `network.address`,
   `network.route`, `service.listener`, and the producer vocabulary
-  `service.instance`, `db`, `network.device`;
+  `service.instance`, `db`, `network.device`, `network.endpoint`, `compute.vm`,
+  `container`;
 - **relations:** `runs_on`, `has_interface`, `has_route`, `bound_to`,
   `next_hop_via`, `listens_on`, `connected_to`, and the producer vocabulary
   `monitors` (each with declared endpoint types and a structural flag);
@@ -363,10 +364,11 @@ the boundary. The registry is:
   use `network.route` + `has_route` + `next_hop_via`, and port-to-port
   `connected_to`, respectively.
 
-`runs_on` is the foundational producer edge — `service.instance --runs_on--> host`
-as well as the existing `process --runs_on--> host`. Endpoint-type pairings are
-**advisory** (not runtime-enforced), so `monitors` may target a host, db, or
-network.device. A host's own routing table is modeled the same way as a device's:
+`runs_on` is the foundational producer edge — `service.instance`, `compute.vm`,
+and `container` each `--runs_on--> host`, as well as the existing
+`process --runs_on--> host`. Endpoint-type pairings are **advisory** (not
+runtime-enforced), so `monitors` may target a host, db, network.device,
+compute.vm, or container. A host's own routing table is modeled the same way as a device's:
 a `network.route` keyed `{host's network.device.id-equivalent…}` — in practice
 host-sourced routing stays deferred with the host↔network.device *identity* twin
 (§6b). Resolve each device endpoint to its canonical id where known (else

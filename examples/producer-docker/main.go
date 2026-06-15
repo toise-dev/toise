@@ -2,10 +2,9 @@
 // "container" entity per running container, the host they run on, and a runs_on
 // edge. It refreshes on a heartbeat and deletes containers as they disappear.
 //
-// "container" is not part of the built-in vocabulary, so run toise-server with
-// --accept-unknown-types (the open-vocabulary posture, #141):
+// "container" is a built-in entity type, so this runs against a stock server:
 //
-//	./bin/toise-server --data-dir /tmp/toise-data --debug-ui --accept-unknown-types
+//	./bin/toise-server --data-dir /tmp/toise-data --debug-ui
 //	go run ./examples/producer-docker --endpoint 127.0.0.1:4317
 //
 // It shells out to `docker ps`, so it needs the docker CLI on PATH and a running

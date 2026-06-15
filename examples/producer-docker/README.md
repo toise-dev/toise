@@ -11,11 +11,11 @@ A good template for any "bring your own source" producer with
 ## Requirements
 
 - The `docker` CLI on `PATH` and a running daemon (it shells out to `docker ps`).
-- `container` is **not** a built-in entity type, so start the server with
-  `--accept-unknown-types` (the open-vocabulary posture):
+
+`container` is a built-in entity type, so this runs against a stock server:
 
 ```sh
-./bin/toise-server --data-dir /tmp/toise-data --debug-ui --accept-unknown-types
+./bin/toise-server --data-dir /tmp/toise-data --debug-ui
 ```
 
 ## Run it
