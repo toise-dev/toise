@@ -339,11 +339,21 @@ func (g *Graph) GetRelation(id model.RelationID) (model.Relation, bool) {
 	return r, ok
 }
 
-// EntityCount returns the number of live (non-deleted) entities.
+// EntityCount returns the number of live (non-deleted) entities. It counts live
+// entities by membership rather than len(entities)-len(deleted): a delete whose
+// create aged out of retention leaves a phantom tombstone (an id in deleted but
+// never in entities), and the subtraction would undercount — even go negative
+// when phantoms outnumber live entities, which a clamp alone would not fix.
 func (g *Graph) EntityCount() int {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	return len(g.entities) - len(g.deleted)
+	n := 0
+	for id := range g.entities {
+		if !g.deleted[id] {
+			n++
+		}
+	}
+	return n
 }
 
 // RelationCount returns the number of relations.
