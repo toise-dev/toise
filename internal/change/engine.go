@@ -187,6 +187,10 @@ func New(graph *projection.Graph, appender Appender, opts ...Option) *Engine {
 	for _, o := range opts {
 		o(e)
 	}
+	// The projection's tombstone grace window must judge "expired" on the same
+	// clock the engine stamps events with, so tests with a fake clock stay
+	// deterministic (#183).
+	graph.SetClock(e.now)
 	return e
 }
 
@@ -241,6 +245,21 @@ func (e *Engine) matchIdentity(typ string, identity []model.KeyValue) (model.Ent
 		return id, true
 	}
 	return "", false
+}
+
+// matchTombstone resolves a soft-deleted entity's id for resurrection, layering
+// the batch's staged effects over the projection like matchIdentity: an id
+// deleted earlier in this same batch must not be resurrected by a later
+// observation in it.
+func (e *Engine) matchTombstone(typ string, identity []model.KeyValue) (model.EntityID, bool) {
+	id, ok := e.graph.MatchTombstone(typ, identity)
+	if !ok {
+		return "", false
+	}
+	if st := e.staged; st != nil && st.deleted[id] {
+		return "", false
+	}
+	return id, true
 }
 
 func (e *Engine) getEntity(id model.EntityID) (model.Entity, bool, bool) {
@@ -351,7 +370,14 @@ func (e *Engine) observeEntityLocked(obs EntityObservation) (model.Event, error)
 	)
 	switch {
 	case !found:
-		ct, entityID = model.EntityCreated, model.NewEntityID()
+		// Resurrection: a re-asserted identity within the tombstone grace window
+		// reclaims its original logical id, so entity_history stays continuous
+		// across a producer outage instead of fragmenting across ULIDs (#183).
+		if rid, ok := e.matchTombstone(obs.Type, obs.Identity); ok {
+			ct, entityID = model.EntityCreated, rid
+		} else {
+			ct, entityID = model.EntityCreated, model.NewEntityID()
+		}
 	default:
 		entityID = id
 		existing, _, _ := e.getEntity(id)
@@ -553,6 +579,11 @@ func (e *Engine) Sweep() int {
 			"relation_type", rel.Type, "relation_id", id)
 		n++
 	}
+
+	// Bound the resurrection grace window in time: drop tombstones a producer
+	// did not return to claim (#183). Not counted in n (no event is emitted —
+	// the entity was already soft-deleted).
+	e.graph.PruneTombstones()
 	return n
 }
 
