@@ -64,6 +64,19 @@ func (s *Store) WriteSnapshot(seq uint64, events []model.Event, liveness []byte)
 	return nil
 }
 
+// DropSnapshot removes the persisted projection snapshot, so the next start
+// replays the full log. The recovery path for a corrupt snapshot: it discards
+// the snapshot without touching the event log (the source of truth).
+func (s *Store) DropSnapshot() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.db.Delete(snapshotKey, pebble.Sync); err != nil {
+		return fmt.Errorf("dropping snapshot: %w", err)
+	}
+	s.snapshotSeq = 0
+	return nil
+}
+
 // ReadSnapshot returns the stored snapshot's reference sequence and events. ok is
 // false when no snapshot exists yet.
 func (s *Store) ReadSnapshot() (seq uint64, events []model.Event, liveness []byte, ok bool, err error) {

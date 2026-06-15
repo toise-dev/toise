@@ -8,6 +8,41 @@ import (
 	"github.com/toise-dev/toise/internal/model"
 )
 
+// TestDropSnapshot: dropping the snapshot leaves the log untouched but makes the
+// next read find none, and resets the snapshot_seq metric (#166 P1).
+func TestDropSnapshot(t *testing.T) {
+	s := newTestStore(t)
+	events := []model.Event{mkEntityEvent("a", model.EntityCreated, ts(0))}
+	if err := s.WriteSnapshot(7, events, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, ok, err := s.ReadSnapshot(); err != nil || !ok {
+		t.Fatalf("precondition: ReadSnapshot ok=%v err=%v, want true/<nil>", ok, err)
+	}
+	if err := s.DropSnapshot(); err != nil {
+		t.Fatalf("DropSnapshot: %v", err)
+	}
+	if _, _, _, ok, err := s.ReadSnapshot(); err != nil || ok {
+		t.Fatalf("after drop: ReadSnapshot ok=%v err=%v, want false/<nil>", ok, err)
+	}
+	if seq := s.SnapshotSeq(); seq != 0 {
+		t.Errorf("SnapshotSeq after drop = %d, want 0", seq)
+	}
+}
+
+// TestReadSnapshotRejectsCorruptHeader: a snapshot too short to hold the 8-byte
+// reference sequence is an error — the condition the boot path tolerates by
+// falling back to a full replay instead of failing to start (#166 P1).
+func TestReadSnapshotRejectsCorruptHeader(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.db.Set(snapshotKey, []byte{0x01, 0x02, 0x03}, pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, ok, err := s.ReadSnapshot(); err == nil || ok {
+		t.Fatalf("ReadSnapshot on a 3-byte snapshot: ok=%v err=%v, want false/error", ok, err)
+	}
+}
+
 // TestReadSnapshotTruncatedLivenessSection pins #164: a torn write that
 // truncates the liveness section must not fail ReadSnapshot — the projection
 // events before it are intact, and the blob is only a hint the sweep
