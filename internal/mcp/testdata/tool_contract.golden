@@ -4,6 +4,7 @@ tool find_entities
   limit int
   match map
   type string
+  verbosity string
   out:
   entities []object
     attributes []object
@@ -24,6 +25,7 @@ tool get_entity
   in:
   as_of string
   entity_id string
+  verbosity string
   out:
   entity object
     attributes []object
@@ -45,6 +47,7 @@ tool get_neighbors
   limit int
   max_depth int
   relation_type string
+  verbosity string
   out:
   count int
   neighbors []object
