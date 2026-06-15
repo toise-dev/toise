@@ -24,10 +24,11 @@ a stock server.
 | Example | Source it maps | Notes |
 |---------|----------------|-------|
 | [producer-minimal](./producer-minimal/) | A host and a service listener (static) | The smallest useful producer; built-in types, no flags. |
-| [producer-docker](./producer-docker/) | Local Docker containers | Needs `docker` + `--accept-unknown-types`. |
-| [producer-uptime](./producer-uptime/) | HTTP/website uptime of a URL list | Needs `--accept-unknown-types`. |
-| [producer-systemd](./producer-systemd/) | systemd service units (Linux) | Needs `systemctl` + `--accept-unknown-types`. |
+| [producer-docker](./producer-docker/) | Local Docker containers | Needs `docker`; `container` is a built-in type. |
+| [producer-uptime](./producer-uptime/) | HTTP/website uptime of a URL list | Needs `--accept-unknown-types` (`service.endpoint`). |
+| [producer-systemd](./producer-systemd/) | systemd service units (Linux) | Needs `systemctl` + `--accept-unknown-types` (`service`). |
 
-Examples beyond the minimal one emit entity types outside the built-in registry,
-so they run against a server started with `--accept-unknown-types` (the
-open-vocabulary posture) — each example's README spells this out.
+The uptime and systemd examples emit entity types outside the built-in registry
+(`service.endpoint`, `service`), so they run against a server started with
+`--accept-unknown-types` (the open-vocabulary posture) — each README spells this
+out. The minimal and docker examples use only built-in types.
