@@ -95,13 +95,13 @@ func run(endpoint string, urls []string, probe, timeout time.Duration) error {
 		case <-ticker.C:
 			probeAll()
 		case <-ctx.Done():
-			delCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
 			gone := make([]emit.Entity, 0, len(urls))
 			for _, u := range urls {
 				gone = append(gone, emit.Entity{Type: "service.endpoint", ID: map[string]string{"url": u}})
 			}
+			delCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			_ = client.Delete(delCtx, gone...)
+			cancel()
 			log.Print("deleted endpoints; bye")
 			return nil
 		}

@@ -101,14 +101,14 @@ func run(endpoint string, interval, heartbeat time.Duration) error {
 				log.Printf("scan failed (will retry): %v", err)
 			}
 		case <-ctx.Done():
-			delCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
 			all := []emit.Entity{}
 			for _, s := range prev {
 				all = append(all, s)
 			}
 			if len(all) > 0 {
+				delCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				_ = client.Delete(delCtx, all...)
+				cancel()
 			}
 			log.Print("deleted services; bye")
 			return nil

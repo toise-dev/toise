@@ -88,10 +88,11 @@ func run(endpoint string, interval, heartbeat time.Duration) error {
 				log.Printf("heartbeat failed (will retry): %v", err)
 			}
 		case <-ctx.Done():
-			// Use a fresh context: the signal already cancelled ctx.
+			// Use a fresh context: the signal already canceled ctx.
 			delCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			if err := client.Delete(delCtx, entities...); err != nil {
+			err := client.Delete(delCtx, entities...)
+			cancel()
+			if err != nil {
 				return fmt.Errorf("delete on shutdown: %w", err)
 			}
 			log.Print("deleted entities; bye")
