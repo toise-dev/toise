@@ -39,6 +39,9 @@ type Graph interface {
 type EventReader interface {
 	ReadByEntity(ctx context.Context, id model.EntityID) ([]model.Event, error)
 	ReadByTimeRange(ctx context.Context, start, end time.Time) ([]model.Event, error)
+	// ScanByTimeRange streams the range to fn (no intermediate slice), backing
+	// the as-of fold (projection.At).
+	ScanByTimeRange(ctx context.Context, start, end time.Time, fn func(model.Event) error) error
 	// PruneHorizon is the latest retention cutoff ever applied (zero = never
 	// pruned): the oldest instant an as-of read can answer completely.
 	PruneHorizon() time.Time

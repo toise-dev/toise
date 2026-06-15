@@ -19,6 +19,9 @@ import (
 type EventReader interface {
 	ReadByEntity(ctx context.Context, id model.EntityID) ([]model.Event, error)
 	ReadByTimeRange(ctx context.Context, start, end time.Time) ([]model.Event, error)
+	// ScanByTimeRange streams the range to fn (no intermediate slice), backing
+	// the as-of fold (projection.At).
+	ScanByTimeRange(ctx context.Context, start, end time.Time, fn func(model.Event) error) error
 	// PruneHorizon is the latest retention cutoff ever applied (zero = never
 	// pruned): the oldest instant an as-of read can answer completely.
 	PruneHorizon() time.Time
@@ -48,10 +51,10 @@ func (r *Resolver) now() time.Time {
 }
 
 // graphAt resolves which graph a query reads: the live projection when asOf is
-// nil/empty, otherwise a projection folded from the event log up to asOf —
-// the event-time reading ("the world as it was"), mirroring the MCP tools'
-// as_of (#135). An asOf older than the retention horizon is rejected: those
-// events are pruned and a silent partial graph would be worse than an error.
+// nil/empty, otherwise the projection folded from the event log up to asOf via
+// the shared as-of service (projection.At) — the same streaming, horizon-checked,
+// concurrency-bounded fold the MCP as_of path uses (#135, #166). The reading is
+// event-time ("the world as it was at T").
 func (r *Resolver) graphAt(ctx context.Context, asOf *string) (Graph, error) {
 	if asOf == nil || *asOf == "" {
 		return r.Graph, nil
@@ -60,19 +63,7 @@ func (r *Resolver) graphAt(ctx context.Context, asOf *string) (Graph, error) {
 	if err != nil {
 		return nil, err
 	}
-	if h := r.Store.PruneHorizon(); !h.IsZero() && t.Before(h) {
-		return nil, fmt.Errorf("asOf %s is before the retention horizon %s: events that old have been pruned",
-			t.UTC().Format(time.RFC3339), h.Format(time.RFC3339))
-	}
-	evs, err := r.Store.ReadByTimeRange(ctx, time.Unix(0, 0), t.Add(time.Nanosecond))
-	if err != nil {
-		return nil, fmt.Errorf("reading events up to %s: %w", t.UTC().Format(time.RFC3339), err)
-	}
-	g := projection.New()
-	for i := range evs {
-		g.Apply(evs[i])
-	}
-	return g, nil
+	return projection.At(ctx, r.Store, t)
 }
 
 // Query returns the query resolver.

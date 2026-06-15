@@ -122,6 +122,18 @@ func (s *fakeStore) ReadByTimeRange(_ context.Context, start, end time.Time) ([]
 	return out, nil
 }
 
+func (s *fakeStore) ScanByTimeRange(_ context.Context, start, end time.Time, fn func(model.Event) error) error {
+	for _, ev := range s.byTime {
+		et, _ := ev.Times()
+		if !et.Before(start) && !et.After(end) {
+			if err := fn(ev); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // --- fixture -----------------------------------------------------------------
 
 func host(id, name string) model.Entity {
@@ -819,6 +831,11 @@ func (blockingStore) ReadByEntity(ctx context.Context, _ model.EntityID) ([]mode
 func (blockingStore) ReadByTimeRange(ctx context.Context, _, _ time.Time) ([]model.Event, error) {
 	<-ctx.Done()
 	return nil, ctx.Err()
+}
+
+func (blockingStore) ScanByTimeRange(ctx context.Context, _, _ time.Time, _ func(model.Event) error) error {
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 func (blockingStore) PruneHorizon() time.Time { return time.Time{} }
