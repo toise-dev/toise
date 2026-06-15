@@ -158,6 +158,18 @@ type TenantStore struct {
 // each store is opened with store.OpenReadOnly so even the format stamp is
 // skipped. Callers own closing the returned stores.
 func OpenExisting(dataDir string, storeCfg store.Config, logger *slog.Logger) ([]TenantStore, error) {
+	return openExistingStores(dataDir, storeCfg, logger, true)
+}
+
+// OpenExistingWritable is OpenExisting but opens the stores read-write, for cold
+// maintenance tools that must mutate them (the drop-snapshot subcommand). Same
+// lock semantics: run with the server stopped, as a running server holds the
+// pebble lock and the open fails cleanly.
+func OpenExistingWritable(dataDir string, storeCfg store.Config, logger *slog.Logger) ([]TenantStore, error) {
+	return openExistingStores(dataDir, storeCfg, logger, false)
+}
+
+func openExistingStores(dataDir string, storeCfg store.Config, logger *slog.Logger, readOnly bool) ([]TenantStore, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -182,9 +194,13 @@ func OpenExisting(dataDir string, storeCfg store.Config, logger *slog.Logger) ([
 	if len(existing) == 0 {
 		return nil, fmt.Errorf("no tenant stores found in %s", dataDir)
 	}
+	open := store.OpenReadOnly
+	if !readOnly {
+		open = store.Open
+	}
 	out := make([]TenantStore, 0, len(existing))
 	for _, id := range existing {
-		st, oerr := store.OpenReadOnly(filepath.Join(dataDir, id), storeCfg)
+		st, oerr := open(filepath.Join(dataDir, id), storeCfg)
 		if oerr != nil {
 			for _, ts := range out {
 				_ = ts.Store.Close()
@@ -307,8 +323,12 @@ func (r *Registry) openStack(id string) (*Stack, error) {
 	restoredFrom := uint64(0)
 	var liveness []byte
 	if seq, snapEvents, blob, ok, rerr := st.ReadSnapshot(); rerr != nil {
-		_ = st.Close()
-		return nil, fmt.Errorf("reading snapshot for tenant %q: %w", id, rerr)
+		// A corrupt/unreadable snapshot must not block boot: the log is the
+		// source of truth, so fall back to a full replay from the start instead
+		// of failing. Clear it with `toise-server drop-snapshot` to stop the
+		// warning and let a fresh snapshot be written.
+		r.logger.Warn("ignoring unreadable projection snapshot; falling back to full replay",
+			"tenant", id, "err", rerr)
 	} else if ok {
 		for i := range snapEvents {
 			graph.Apply(snapEvents[i])

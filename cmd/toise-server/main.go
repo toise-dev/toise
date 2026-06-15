@@ -60,6 +60,14 @@ func main() {
 		return
 	}
 
+	if len(os.Args) > 1 && os.Args[1] == "drop-snapshot" {
+		if err := runDropSnapshot(os.Args[2:], os.Getenv); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	cfg, err := config.Load(os.Args[1:], os.Getenv)
 	if errors.Is(err, config.ErrHelp) {
 		os.Exit(0)
@@ -488,6 +496,53 @@ func runCheckpoint(args []string, getenv func(string) string) error {
 			return fmt.Errorf("tenant %s: %w", ts.Tenant, cerr)
 		}
 		fmt.Printf("checkpointed tenant %s -> %s\n", ts.Tenant, out)
+	}
+	return nil
+}
+
+// runDropSnapshot deletes the persisted projection snapshot of every tenant
+// store so the next start replays the full log — the recovery path for a corrupt
+// snapshot that fails to read (the server falls back to full replay and warns;
+// dropping it stops the warning and lets a fresh snapshot be written). The event
+// log is untouched. Cold tool: run it while toise-server is stopped (a running
+// server holds the pebble lock and the open fails cleanly).
+func runDropSnapshot(args []string, getenv func(string) string) error {
+	fs := flag.NewFlagSet("toise-server drop-snapshot", flag.ContinueOnError)
+	configPath := fs.String("config", "", "path to a YAML config file (env: TOISE_CONFIG)")
+	dataDir := fs.String("data-dir", "", "directory of the tenant event logs (env: TOISE_DATA_DIR)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("usage: toise-server drop-snapshot [--config file] [--data-dir dir]")
+	}
+
+	var cfgArgs []string
+	if *configPath != "" {
+		cfgArgs = append(cfgArgs, "--config="+*configPath)
+	}
+	if *dataDir != "" {
+		cfgArgs = append(cfgArgs, "--data-dir="+*dataDir)
+	}
+	cfg, err := config.Load(cfgArgs, getenv)
+	if err != nil {
+		return fmt.Errorf("resolving configuration: %w", err)
+	}
+
+	stores, err := registry.OpenExistingWritable(cfg.DataDir, store.DefaultConfig(), slog.Default())
+	if err != nil {
+		return fmt.Errorf("opening tenant stores: %w", err)
+	}
+	defer func() {
+		for _, ts := range stores {
+			_ = ts.Store.Close()
+		}
+	}()
+	for _, ts := range stores {
+		if derr := ts.Store.DropSnapshot(); derr != nil {
+			return fmt.Errorf("tenant %s: %w", ts.Tenant, derr)
+		}
+		fmt.Printf("dropped snapshot for tenant %s\n", ts.Tenant)
 	}
 	return nil
 }

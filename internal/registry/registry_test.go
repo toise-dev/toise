@@ -370,6 +370,57 @@ func TestOpenStackRestoresLivenessMemento(t *testing.T) {
 	}
 }
 
+// TestOpenStackFallsBackOnCorruptSnapshot: an unreadable projection snapshot must
+// not block boot — the log is the source of truth, so openStack falls back to a
+// full replay and rebuilds the graph intact (#166 P1).
+func TestOpenStackFallsBackOnCorruptSnapshot(t *testing.T) {
+	dataDir := t.TempDir()
+	reg, err := Open(dataDir, store.DefaultConfig(), 0, discard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := reg.For(tenant.Default)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ident := []model.KeyValue{{Key: "host.id", Value: model.StringValue("h-corrupt")}}
+	if _, oerr := st.Engine.ObserveEntity(change.EntityObservation{
+		Type: model.TypeHost, Identity: ident, EventTime: time.Now(),
+	}); oerr != nil {
+		t.Fatal(oerr)
+	}
+	snapshotStack(t, st)
+	if cerr := reg.Close(); cerr != nil {
+		t.Fatal(cerr)
+	}
+
+	// Corrupt the persisted snapshot (too short to hold the 8-byte reference
+	// sequence). "meta/snapshot" is the store's stable on-disk snapshot key.
+	db, err := pebble.Open(stackDir(reg, tenant.Default), &pebble.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if serr := db.Set([]byte("meta/snapshot"), []byte{0x01}, pebble.Sync); serr != nil {
+		t.Fatal(serr)
+	}
+	if cerr := db.Close(); cerr != nil {
+		t.Fatal(cerr)
+	}
+
+	reg2, err := Open(dataDir, store.DefaultConfig(), 0, discard())
+	if err != nil {
+		t.Fatalf("boot must succeed despite a corrupt snapshot: %v", err)
+	}
+	t.Cleanup(func() { _ = reg2.Close() })
+	st2, err := reg2.For(tenant.Default)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasHost(st2.Graph, "h-corrupt") {
+		t.Fatal("full-replay fallback did not rebuild the entity")
+	}
+}
+
 // TestOpenStackFloorsRestoredDeadlines pins the #164 boot grace end-to-end:
 // a memento whose deadlines lapsed during downtime must not feed a delete
 // storm on the first sweep after boot; only a sweep past boot+interval reaps.

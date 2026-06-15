@@ -52,7 +52,7 @@ calls below use names like `<nginx-id>` for those resolved ids.
 
 > *"What is attached to eth0?"*
 
-- **Tools:** `find_entities(type: "network.interface")` → `get_neighbors(entity_id: "<eth0-id>", depth: 1)`
+- **Tools:** `find_entities(type: "network.interface")` → `get_neighbors(entity_id: "<eth0-id>", max_depth: 1)`
 - **Answer shape:** the host (`has_interface`), the bound address `10.0.2.7`
   (`bound_to`), and the two service listeners `:80` and `:5432` (`listens_on`).
 
@@ -60,7 +60,7 @@ calls below use names like `<nginx-id>` for those resolved ids.
 
 > *"Starting from web-server-1, what does it run and what is it connected to, two hops out?"*
 
-- **Tools:** `find_entities(type: "host")` → `get_neighbors(entity_id: "<host-id>", depth: 2)`
+- **Tools:** `find_entities(type: "host")` → `get_neighbors(entity_id: "<host-id>", max_depth: 2)`
 - **Answer shape:** hop 1 = its processes (`nginx`, `postgres`) and `eth0`; hop 2
   via `eth0` = the address and listeners. Asking for `depth: 7` instead returns a
   friendly "depth 7 exceeds the maximum of 5" error rather than a huge result.

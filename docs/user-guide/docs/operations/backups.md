@@ -22,6 +22,14 @@ Run it **while the server is stopped** — a running server holds the Pebble loc
 
 `--snapshot-interval` (default `5m`) periodically writes a projection snapshot *inside* the store so a restart replays only the tail; a final one is written at graceful shutdown. It is a restart optimization, not a backup: it lives in the same directory it would have to protect.
 
+An unreadable snapshot never blocks startup: the server logs a warning and **falls back to a full replay** of the log (the source of truth), then writes a fresh snapshot. To clear a bad snapshot explicitly — stopping the warning — run, with the server stopped:
+
+```
+toise-server drop-snapshot --data-dir /var/lib/toise/data
+```
+
+It deletes every tenant's snapshot without touching the event log; the next start rebuilds the projection by full replay.
+
 ## What to back up
 
 | Concern | Answer |

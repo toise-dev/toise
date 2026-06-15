@@ -55,7 +55,7 @@ func BenchmarkFindEntities(b *testing.B) {
 func BenchmarkGetNeighbors(b *testing.B) {
 	s := New(benchGraph(10_000), &fakeStore{})
 	ctx := context.Background()
-	in := GetNeighborsInput{EntityID: "host-005000", Depth: 2}
+	in := GetNeighborsInput{EntityID: "host-005000", MaxDepth: 2}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

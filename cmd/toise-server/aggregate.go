@@ -1,6 +1,10 @@
 package main
 
-import "github.com/toise-dev/toise/internal/registry"
+import (
+	"time"
+
+	"github.com/toise-dev/toise/internal/registry"
+)
 
 // The /metrics surface reports one Toise instance, not one tenant: the existing
 // metric names and shapes are preserved by summing each gauge/counter across all
@@ -87,4 +91,17 @@ func (s aggregateStore) SnapshotsWritten() uint64 {
 		n += st.Store.SnapshotsWritten()
 	}
 	return n
+}
+
+// PruneHorizon is per-tenant; the aggregate reports the latest cutoff across
+// tenants — the most-recently-pruned tenant is what bounds how far back a
+// fleet-wide as-of read can answer completely.
+func (s aggregateStore) PruneHorizon() time.Time {
+	var latest time.Time
+	for _, st := range s.reg.Stacks() {
+		if h := st.Store.PruneHorizon(); h.After(latest) {
+			latest = h
+		}
+	}
+	return latest
 }
