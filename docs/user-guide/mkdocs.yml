@@ -94,6 +94,7 @@ nav:
       - MCP for AI assistants: querying/mcp.md
       - Debug UI: querying/debug-ui.md
   - Data model: data-model.md
+  - API stability: api-stability.md
   - Operations:
       - Backups: operations/backups.md
       - Performance: operations/performance.md
