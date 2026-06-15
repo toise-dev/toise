@@ -144,6 +144,13 @@ pre-existing data directory is migrated to `<data_dir>/default/` automatically o
 first start (take a backup first, as with any upgrade). `/metrics` reports the sum
 across tenants, so existing dashboards are unchanged.
 
+**Boot quarantine:** if a tenant's store cannot be opened at startup (a corrupt
+or half-written store), the server **does not abort** — it logs a warning, skips
+that tenant, counts it in the `toise_tenants_quarantined` gauge, and serves the
+healthy tenants. The `default` tenant is the exception: it is required, so its
+failure is fatal. A quarantined tenant's directory is left on disk under
+`<data_dir>/<tenant>/` for recovery; restore or remove it and restart.
+
 !!! warning "Authentication is not yet bound to a tenant"
     A valid bearer token may set any `X-Scope-OrgID`. Isolation therefore relies on
     the upstream OTel Collector authenticating each client and stamping its tenant;
