@@ -464,6 +464,36 @@ func (g *Graph) ListRelations(typ string, from, to model.EntityID) []model.Relat
 	return out
 }
 
+// RelationsTouching returns every relation incident to id (as From or To),
+// optionally filtered by type, using the out/in adjacency index — O(degree of id)
+// rather than the full O(all relations) scan two ListRelations calls would do.
+// Order is by relation id, like ListRelations; a self-loop appears once.
+func (g *Graph) RelationsTouching(id model.EntityID, relType string) []model.Relation {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	seen := make(map[model.RelationID]struct{})
+	var out []model.Relation
+	add := func(rid model.RelationID) {
+		if _, dup := seen[rid]; dup {
+			return
+		}
+		r, ok := g.relations[rid]
+		if !ok || (relType != "" && r.Type != relType) {
+			return
+		}
+		seen[rid] = struct{}{}
+		out = append(out, r)
+	}
+	for rid := range g.out[id] {
+		add(rid)
+	}
+	for rid := range g.in[id] {
+		add(rid)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
 // MatchIdentity finds the logical entity ID for an observed identity by an
 // exact identity-hash match against a live entity of the same type. Identity is
 // immutable (ADR 0018, superseding ADR 0017): an observation whose identity does

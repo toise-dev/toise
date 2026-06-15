@@ -3,7 +3,6 @@ package mcp
 import (
 	"context"
 	"fmt"
-	"sort"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -27,26 +26,22 @@ type edge struct {
 // lets every traversal run against an as-of fold as well as the live
 // projection (#135).
 func edgesOf(g Graph, id model.EntityID, relType string) []edge {
-	var out []edge
-	outgoing := g.ListRelations(relType, id, "")
-	for i := range outgoing {
-		out = append(out, edge{rel: outgoing[i], other: outgoing[i].To, direction: "outgoing"})
-	}
-	incoming := g.ListRelations(relType, "", id)
-	for i := range incoming {
-		if incoming[i].From == incoming[i].To {
-			continue // self-loop already covered by the outgoing scan
+	// One indexed lookup over id's incident edges (sorted by rel id) instead of
+	// two full ListRelations scans of every relation in the graph.
+	rels := g.RelationsTouching(id, relType)
+	out := make([]edge, 0, len(rels))
+	for i := range rels {
+		r := rels[i]
+		other, direction := r.To, "outgoing"
+		if r.To == id && r.From != id { // incoming; a self-loop stays outgoing
+			other, direction = r.From, "incoming"
 		}
-		out = append(out, edge{rel: incoming[i], other: incoming[i].From, direction: "incoming"})
-	}
-	kept := out[:0]
-	for i := range out {
-		if _, ok, deleted := g.GetEntity(out[i].other); ok && !deleted {
-			kept = append(kept, out[i])
+		if _, ok, deleted := g.GetEntity(other); !ok || deleted {
+			continue
 		}
+		out = append(out, edge{rel: r, other: other, direction: direction})
 	}
-	sort.Slice(kept, func(i, j int) bool { return kept[i].rel.ID < kept[j].rel.ID })
-	return kept
+	return out
 }
 
 // --- find_path ---
