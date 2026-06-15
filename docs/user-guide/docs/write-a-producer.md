@@ -182,8 +182,21 @@ if err := client.State(ctx, entities...); errors.As(err, &pe) {
 
 `pkg/emit` ships a **conformance kit** (`pkg/emit/conformance`) that checks the
 exact bytes your producer emits against the published contract, with a
-byte-pinned fixture. Wire it into your producer's tests so a future change can't
-silently drift off-spec.
+byte-pinned fixture. Go producers wire it into their tests so a future change
+can't silently drift off-spec.
+
+Producers in **any language** can use the `toise-conformance` CLI — no running
+Toise needed. Dump the OTLP `ExportLogsServiceRequest` you would send (protobuf
+or JSON) and pipe it in:
+
+```bash
+go install github.com/toise-dev/toise/pkg/emit/cmd/toise-conformance@latest
+my-producer --dump-otlp | toise-conformance     # exit 0 = conformant
+```
+
+It reports every contract violation and exits non-zero on rejections (add
+`-strict` to also fail on advisories like a missing `service.instance.id`). See
+the [Producer directory](producers.md) for the full catalog and tool usage.
 
 ## Contribute it back
 

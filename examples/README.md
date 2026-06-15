@@ -32,3 +32,8 @@ The uptime and systemd examples emit entity types outside the built-in registry
 (`service.endpoint`, `service`), so they run against a server started with
 `--accept-unknown-types` (the open-vocabulary posture) — each README spells this
 out. The minimal and docker examples use only built-in types.
+
+To validate any producer's output against the wire contract without a running
+server, use the [`toise-conformance`](../pkg/emit/cmd/toise-conformance) CLI. The
+full catalog of known producers (these examples, the SDK, and external producers)
+lives in the [producer directory](../docs/user-guide/docs/producers.md).
