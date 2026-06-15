@@ -84,15 +84,30 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Compute image tags
+        id: tags
+        run: |
+          set -euo pipefail
+          tags="ghcr.io/toise-dev/toise:${GITHUB_REF_NAME}"
+          # Only move :latest for a stable release; a prerelease tag (with a
+          # "-" suffix, e.g. v0.6.0-rc1) still matches v*.*.* and would
+          # otherwise repoint :latest at a prerelease image.
+          if [[ "${GITHUB_REF_NAME}" != *-* ]]; then
+            tags="${tags}"$'\n'"ghcr.io/toise-dev/toise:latest"
+          fi
+          {
+            echo "tags<<EOF"
+            echo "${tags}"
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+
       - name: Build and push (multi-arch)
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/toise-dev/toise:${{ github.ref_name }}
-            ghcr.io/toise-dev/toise:latest
+          tags: ${{ steps.tags.outputs.tags }}
           build-args: |
             VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}
