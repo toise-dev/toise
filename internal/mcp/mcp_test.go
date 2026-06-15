@@ -470,8 +470,8 @@ func TestMCPRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	if len(tools.Tools) != 11 {
-		t.Fatalf("want 11 tools, got %d", len(tools.Tools))
+	if len(tools.Tools) != 12 {
+		t.Fatalf("want 12 tools, got %d", len(tools.Tools))
 	}
 
 	res, err := cs.CallTool(ctx, &mcpsdk.CallToolParams{

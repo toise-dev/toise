@@ -45,8 +45,8 @@ func TestStreamableHTTPSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	if len(tools.Tools) != 11 {
-		t.Fatalf("tools over http = %d, want 11", len(tools.Tools))
+	if len(tools.Tools) != 12 {
+		t.Fatalf("tools over http = %d, want 12", len(tools.Tools))
 	}
 
 	res, err := session.CallTool(ctx, &mcpsdk.CallToolParams{Name: "describe_schema", Arguments: map[string]any{}})

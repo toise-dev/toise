@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/toise-dev/toise/internal/annotations"
 	"github.com/toise-dev/toise/internal/change"
 	"github.com/toise-dev/toise/internal/model"
 	"github.com/toise-dev/toise/internal/projection"
@@ -26,10 +27,11 @@ import (
 // Stack is one tenant's isolated graph: its event store, the in-memory projection
 // rebuilt from it, and the change engine that appends to it.
 type Stack struct {
-	Tenant string
-	Store  *store.Store
-	Graph  *projection.Graph
-	Engine *change.Engine
+	Tenant      string
+	Store       *store.Store
+	Graph       *projection.Graph
+	Engine      *change.Engine
+	Annotations *annotations.Store
 }
 
 // Limits bounds runtime tenant creation (#115). Tenants whose directory
@@ -327,6 +329,11 @@ func (r *Registry) Close() error {
 		if err := s.Store.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
+		if s.Annotations != nil {
+			if err := s.Annotations.Close(); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
 	}
 	return firstErr
 }
@@ -374,10 +381,17 @@ func (r *Registry) openStack(id string) (*Stack, error) {
 		// intact, only the backstop re-arms lazily on the next observations.
 		r.logger.Warn("ignoring unreadable liveness snapshot section", "tenant", id, "err", err)
 	}
+	// Annotations live in a per-tenant Pebble sidecar inside the tenant dir,
+	// separate from the event log: never replayed, never in the projection (0.7.0).
+	annStore, aerr := annotations.Open(filepath.Join(dir, "annotations"))
+	if aerr != nil {
+		_ = st.Close()
+		return nil, fmt.Errorf("opening annotations for tenant %q: %w", id, aerr)
+	}
 	r.logger.Info("tenant stack ready", "tenant", id,
 		"entities", graph.EntityCount(), "relations", graph.RelationCount(),
 		"from_snapshot_seq", restoredFrom)
-	return &Stack{Tenant: id, Store: st, Graph: graph, Engine: engine}, nil
+	return &Stack{Tenant: id, Store: st, Graph: graph, Engine: engine, Annotations: annStore}, nil
 }
 
 // tenantDirs lists the tenant subdirectories under dataDir — directories whose

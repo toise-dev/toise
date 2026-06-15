@@ -1,3 +1,9 @@
+directive @goField(
+  forceResolver: Boolean
+  name: String
+  omittable: Boolean
+) on INPUT_FIELD_DEFINITION | FIELD_DEFINITION
+
 """
 The kind of a typed attribute value. Toise attribute values are scalars: a
 string, a 64-bit integer, a double, or a boolean.
@@ -68,6 +74,36 @@ type Entity {
   schemaUrl: String!
   "True if the entity has been soft-deleted (its history is retained)."
   deleted: Boolean!
+  """
+  Operator annotations attached out-of-band, or null if the entity has none.
+  These are an overlay kept in a per-tenant sidecar — never producer truth and
+  never part of the event log.
+  """
+  annotations: Annotation @goField(forceResolver: true)
+}
+
+"""
+A single operator annotation: a key paired with a free-text value. Unlike an
+`Attribute`, an annotation value is always a string and carries no `ValueType`.
+"""
+type AnnotationEntry {
+  "The annotation key, e.g. `owner` or `runbook`."
+  key: String!
+  "The free-text value."
+  value: String!
+}
+
+"""
+The operator annotations on an entity: out-of-band notes an operator attached,
+kept in a per-tenant sidecar and never mixed into producer truth or the log.
+"""
+type Annotation {
+  "The annotation entries, sorted by key."
+  values: [AnnotationEntry!]!
+  "Who set them, if recorded (may be empty)."
+  author: String
+  "When they were last updated (RFC 3339), or empty if never set."
+  updatedAt: String
 }
 
 """
@@ -230,6 +266,25 @@ input ChangeFilter {
   changeType: ChangeType
   "Only structural relation changes — alert-worthy topology (relationChanged)."
   structuralOnly: Boolean
+}
+
+"A single annotation to merge: an empty `value` removes that key."
+input AnnotationInput {
+  "The annotation key."
+  key: String!
+  "The free-text value; empty removes the key."
+  value: String!
+}
+
+type Mutation {
+  """
+  Attach operator annotations to an entity, merging onto any existing ones (an
+  empty value removes that key). Annotations are an overlay kept in a per-tenant
+  sidecar — never producer truth and never part of the event log. Requires a
+  write-capable bearer token (full or tenant-scoped); a read-only token is
+  refused. Returns the merged annotation.
+  """
+  annotateEntity(id: ID!, annotations: [AnnotationInput!]!): Annotation!
 }
 
 type Subscription {

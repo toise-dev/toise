@@ -9,6 +9,34 @@ import (
 	"strconv"
 )
 
+// The operator annotations on an entity: out-of-band notes an operator attached,
+// kept in a per-tenant sidecar and never mixed into producer truth or the log.
+type Annotation struct {
+	// The annotation entries, sorted by key.
+	Values []AnnotationEntry `json:"values"`
+	// Who set them, if recorded (may be empty).
+	Author *string `json:"author,omitempty"`
+	// When they were last updated (RFC 3339), or empty if never set.
+	UpdatedAt *string `json:"updatedAt,omitempty"`
+}
+
+// A single operator annotation: a key paired with a free-text value. Unlike an
+// `Attribute`, an annotation value is always a string and carries no `ValueType`.
+type AnnotationEntry struct {
+	// The annotation key, e.g. `owner` or `runbook`.
+	Key string `json:"key"`
+	// The free-text value.
+	Value string `json:"value"`
+}
+
+// A single annotation to merge: an empty `value` removes that key.
+type AnnotationInput struct {
+	// The annotation key.
+	Key string `json:"key"`
+	// The free-text value; empty removes the key.
+	Value string `json:"value"`
+}
+
 // A single attribute: a key paired with a typed value. The value is rendered as a
 // string for transport; `type` tells you how to interpret it (e.g. the string
 // `"8"` with type INT is the integer 8). Example: { key: "status", value: "up",
@@ -90,6 +118,10 @@ type Entity struct {
 	SchemaURL string `json:"schemaUrl"`
 	// True if the entity has been soft-deleted (its history is retained).
 	Deleted bool `json:"deleted"`
+	// Operator annotations attached out-of-band, or null if the entity has none.
+	// These are an overlay kept in a per-tenant sidecar — never producer truth and
+	// never part of the event log.
+	Annotations *Annotation `json:"annotations,omitempty"`
 }
 
 // A paginated list of entities.
@@ -109,6 +141,9 @@ type EntityEdge struct {
 type EntityFilter struct {
 	// Restrict to this entity type, e.g. `host`.
 	Type *string `json:"type,omitempty"`
+}
+
+type Mutation struct {
 }
 
 // Relay-style pagination metadata.

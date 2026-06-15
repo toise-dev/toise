@@ -46,8 +46,18 @@ curl -s http://127.0.0.1:8080/graphql \
 | `entityChanged` | `ChangeEvent!` as entity changes are classified |
 | `relationChanged` | `ChangeEvent!` as relation changes are classified |
 
-There are **no mutations**: Toise is a read model. State enters only through the
-OTLP ingestion boundary (see [Ingesting data](../ingestion.md)).
+### Mutations
+
+| Mutation | Returns | Purpose |
+| --- | --- | --- |
+| `annotateEntity(id!, annotations: [AnnotationInput!]!)` | `Annotation!` | merge operator notes onto an entity (an empty value removes a key) |
+
+Toise stays a **read model for producer truth**: graph state enters only through
+the OTLP ingestion boundary (see [Ingesting data](../ingestion.md)). The sole
+mutation, `annotateEntity`, writes an *overlay* — out-of-band operator notes kept
+in a per-tenant sidecar, never mixed into the event log or replay. It requires a
+write-capable bearer token (full or tenant-scoped); a read-only token is refused.
+Annotations surface on `Entity.annotations`.
 
 ### Core types (abridged)
 
@@ -59,6 +69,13 @@ type Entity {
   attributes: [Attribute!]!
   schemaUrl: String!
   deleted: Boolean!    # soft-deleted (history retained)
+  annotations: Annotation  # operator overlay, null if none
+}
+
+type Annotation {        # operator notes — an overlay, NOT producer truth
+  values: [AnnotationEntry!]!   # entries sorted by key
+  author: String
+  updatedAt: String      # RFC 3339
 }
 
 type Relation {

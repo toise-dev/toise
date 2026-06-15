@@ -9,6 +9,7 @@ import (
 
 	"github.com/99designs/gqlgen/client"
 
+	"github.com/toise-dev/toise/internal/annotations"
 	"github.com/toise-dev/toise/internal/change"
 	"github.com/toise-dev/toise/internal/graphql"
 	"github.com/toise-dev/toise/internal/graphql/generated"
@@ -101,6 +102,63 @@ func TestEntityQuery(t *testing.T) {
 	}
 	if len(resp.Entity.Attributes) != 1 || resp.Entity.Attributes[0].Key != "status" || resp.Entity.Attributes[0].Value != "down" {
 		t.Errorf("attributes = %+v", resp.Entity.Attributes)
+	}
+}
+
+// TestAnnotateEntityMutation pins the 0.7.0 annotate surface on GraphQL: the
+// annotateEntity mutation merges an overlay and the Entity.annotations field
+// surfaces it. The overlay is never producer truth (no event-log roundtrip).
+func TestAnnotateEntityMutation(t *testing.T) {
+	s := newStack(t)
+	annStore, err := annotations.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open annotations: %v", err)
+	}
+	t.Cleanup(func() { _ = annStore.Close() })
+	s.res.Annotations = annStore
+	c := s.client(t)
+
+	var mut struct {
+		AnnotateEntity struct {
+			Values    []struct{ Key, Value string }
+			Author    *string
+			UpdatedAt *string
+		}
+	}
+	c.MustPost(
+		`mutation($id:ID!){ annotateEntity(id:$id, annotations:[{key:"owner",value:"sre"},{key:"ticket",value:"OPS-1"}]){ values{ key value } author updatedAt } }`,
+		&mut, client.Var("id", string(s.hostID)))
+	if len(mut.AnnotateEntity.Values) != 2 {
+		t.Fatalf("want 2 annotation entries, got %+v", mut.AnnotateEntity.Values)
+	}
+	if mut.AnnotateEntity.UpdatedAt == nil || *mut.AnnotateEntity.UpdatedAt == "" {
+		t.Error("updatedAt must be set")
+	}
+
+	var q struct {
+		Entity struct {
+			Annotations *struct {
+				Values []struct{ Key, Value string }
+			}
+		}
+	}
+	c.MustPost(`query($id:ID!){ entity(id:$id){ annotations{ values{ key value } } } }`, &q, client.Var("id", string(s.hostID)))
+	if q.Entity.Annotations == nil || len(q.Entity.Annotations.Values) != 2 {
+		t.Fatalf("annotations not surfaced on entity: %+v", q.Entity.Annotations)
+	}
+	if q.Entity.Annotations.Values[0].Key != "owner" {
+		t.Errorf("entries must be sorted by key, got %+v", q.Entity.Annotations.Values)
+	}
+
+	// An entity with no annotation surfaces null.
+	var none struct {
+		Entity struct {
+			Annotations *struct{ Values []struct{ Key string } }
+		}
+	}
+	c.MustPost(`query($id:ID!){ entity(id:$id){ annotations{ values{ key } } } }`, &none, client.Var("id", string(s.procID)))
+	if none.Entity.Annotations != nil {
+		t.Errorf("un-annotated entity must surface null, got %+v", none.Entity.Annotations)
 	}
 }
 

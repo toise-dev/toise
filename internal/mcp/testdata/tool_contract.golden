@@ -27,6 +27,10 @@ tool get_entity
   entity_id string
   verbosity string
   out:
+  annotations object
+    author string
+    updated_at string
+    values map
   entity object
     attributes []object
       key string
@@ -423,3 +427,12 @@ tool describe_schema
     type string
   total_entities int
   total_relations int
+tool annotate_entity
+  in:
+  annotations map
+  entity_id string
+  out:
+  annotation object
+    author string
+    updated_at string
+    values map

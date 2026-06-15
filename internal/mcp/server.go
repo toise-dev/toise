@@ -7,6 +7,7 @@ import (
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/toise-dev/toise/internal/annotations"
 	"github.com/toise-dev/toise/internal/model"
 	"github.com/toise-dev/toise/internal/version"
 )
@@ -96,6 +97,15 @@ type Server struct {
 	timeout time.Duration // per-tool-call budget
 	srv     *mcpsdk.Server
 	obs     Observer
+	ann     *annotations.Store // per-tenant annotation sidecar; nil disables annotate_entity
+}
+
+// SetAnnotations attaches the per-tenant annotation sidecar, enabling
+// annotate_entity and the annotations block on get_entity; returns s for
+// chaining. nil leaves annotations disabled.
+func (s *Server) SetAnnotations(a *annotations.Store) *Server {
+	s.ann = a
+	return s
 }
 
 // SetObserver attaches a query-observability recorder; returns s for chaining.
@@ -241,4 +251,13 @@ func (s *Server) register(srv *mcpsdk.Server) {
 			"of what this Toise instance knows about before issuing other tools. Set as_of " +
 			"(RFC 3339) to describe the graph as it was at that instant.",
 	}, observe(s, "describe_schema", s.describeSchema))
+
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
+		Name: "annotate_entity",
+		Description: "Attach operator annotations (free-form key/value notes — owner, runbook " +
+			"link, ticket, a remark) to an entity. These are an OVERLAY, not producer truth: " +
+			"stored separately and surfaced on get_entity, never mixed into the entity's " +
+			"identifying or descriptive attributes. Merges onto existing annotations; an empty " +
+			"value removes a key. Requires a write-capable (full or tenant-scoped) token.",
+	}, observe(s, "annotate_entity", s.annotateEntity))
 }
