@@ -4,8 +4,11 @@
 FROM golang:1.26 AS build
 WORKDIR /src
 
-# Cache modules first.
+# Cache modules first. The main module replaces github.com/toise-dev/toise/pkg/emit
+# with the local nested module (Toise's ingest imports pkg/emit/wire), so
+# `go mod download` must see its go.mod to resolve the replace directive.
 COPY go.mod go.sum ./
+COPY pkg/emit/go.mod pkg/emit/go.sum ./pkg/emit/
 RUN go mod download
 
 COPY . .
