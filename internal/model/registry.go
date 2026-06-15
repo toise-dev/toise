@@ -24,6 +24,14 @@ const (
 	TypeDatabase = "db"
 	// TypeNetworkDevice is a discovered network asset (switch, router, …).
 	TypeNetworkDevice = "network.device"
+	// TypeNetworkEndpoint is a remote network endpoint observed by a producer
+	// (e.g. the foreign end of an outbound TCP connection) but not canonically
+	// identifiable by the observer. Identity is what the observer can see:
+	// server.address + server.port + network.transport. The consumer resolves it
+	// to the canonical host/service.listener at read time (#184), per the OTel
+	// data-model rule "emit a different entity type keyed on what you can
+	// reliably obtain" — see docs/design/netstat-connection-topology.md.
+	TypeNetworkEndpoint = "network.endpoint"
 )
 
 // Phase-1 relation types. See ADR 0004.
@@ -54,6 +62,14 @@ const (
 	// embeddable form that supersedes adjacent_to + port attributes; device-level
 	// adjacency is derived from it at read time, not stored.
 	RelConnectedTo = "connected_to"
+
+	// RelDependsOn is a durable dependency a producer asserts from one of its own
+	// entities to a remote endpoint it depends on (the foreign end of a
+	// persistent outbound connection). Source-carried per the embedded-relationship
+	// model; the target is a network.endpoint the consumer resolves. "depends_on"
+	// is a sanctioned example type in the merged OTel entity spec but has no
+	// normative semantics yet — treat as transitional (#184).
+	RelDependsOn = "depends_on"
 
 	// Legacy device-level edges — superseded under topology-as-entities (ADR 0022)
 	// and NOT to be emitted by producers: routes_via is replaced by network.route +
@@ -107,6 +123,7 @@ var entityTypes = map[string]struct{}{
 	TypeServiceInstance: {},
 	TypeDatabase:        {},
 	TypeNetworkDevice:   {},
+	TypeNetworkEndpoint: {},
 }
 
 var relationTypes = map[string]RelationTypeDef{
@@ -129,6 +146,8 @@ var relationTypes = map[string]RelationTypeDef{
 	RelHasRoute: {Type: RelHasRoute, From: TypeNetworkDevice, To: TypeNetworkRoute, Structural: true, Impact: ImpactFromTo},
 	// connectivity is symmetric: either side failing breaks the link.
 	RelConnectedTo: {Type: RelConnectedTo, From: TypeNetworkInterface, To: TypeNetworkInterface, Structural: true, Impact: ImpactBoth},
+	// "X depends_on Y": the dependency target failing affects the dependent.
+	RelDependsOn: {Type: RelDependsOn, From: TypeServiceInstance, To: TypeNetworkEndpoint, Structural: true, Impact: ImpactToFrom},
 	// legacy device-level edges (superseded; not emitted — see the const block)
 	RelRoutesVia:  {Type: RelRoutesVia, From: TypeNetworkDevice, To: TypeNetworkDevice, Structural: true, Impact: ImpactToFrom},
 	RelForwardsTo: {Type: RelForwardsTo, From: TypeNetworkDevice, To: TypeNetworkDevice, Structural: true, Impact: ImpactBoth},
