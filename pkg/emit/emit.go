@@ -60,7 +60,8 @@ type Options struct {
 	// (loopback / trusted-network posture).
 	TLS *tls.Config
 	// Headers are sent as gRPC metadata on every export (e.g. "authorization":
-	// "Bearer …", "x-scope-orgid": tenant).
+	// "Bearer …", "x-scope-orgid": tenant). With TLS nil they travel in clear
+	// text — only send a bearer token over TLS or a trusted network.
 	Headers map[string]string
 	// ServiceName and ServiceInstanceID identify this producer on the OTLP
 	// Resource. The instance id is the liveness reference key on the consumer
