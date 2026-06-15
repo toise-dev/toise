@@ -9,6 +9,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
+## [0.7.0] - 2026-06-15
+
+**The integration release.** 0.7.0 widens what an integrator can do with Toise:
+an AI assistant gets pinnable context and ready-made workflows, operators can
+annotate the graph, a dashboard can hold a token that can never write, and a
+producer in any language can prove it is on-spec before it ships. It also lands
+the identity hardening (resurrection, connection topology) and the audit P1/P2
+lot. **Not a wire-contract break**, no data migration; one MCP argument was
+renamed — see the
+[0.6 → 0.7 migration guide](docs/migration/0.6-to-0.7.md).
+
+### Added
+
+- **Operator annotations** — `annotate_entity` (MCP) and the **first GraphQL
+  mutation** `annotateEntity` attach free-form key/value notes (owner, runbook,
+  ticket) to an entity as an **overlay**: kept in a per-tenant sidecar, surfaced
+  on `get_entity` and `Entity.annotations`, never mixed into producer truth or
+  the event log, never replayed. Merge semantics; an empty value removes a key.
+- **MCP resources and prompts.** Resources expose pinnable context under
+  `toise://` — `toise://schema` (the live graph schema as JSON), `toise://guide`
+  (a markdown orientation), and the template `toise://entity/{id}`. Prompts ship
+  ready-made operator workflows: `investigate_incident`, `blast_radius`,
+  `explain_entity`, `whats_changed`.
+- **Token roles.** Bearer tokens can be **read-only** (`TOISE_READ_TOKENS`, the
+  query surfaces only — a dashboard or assistant that must never write) or
+  **ingest-only** (`TOISE_INGEST_TOKENS`, OTLP only — a producer that must never
+  read), alongside full tokens (`TOISE_AUTH_TOKENS`, both). A read-only token is
+  refused on `annotate_entity`.
+- **Verbosity tiers.** `find_entities`, `get_entity` and `get_neighbors` take an
+  optional `verbosity`: `compact` returns just id/type/label (cheap to scan a
+  large set), `full` (default) adds identity and attributes.
+- **`toise-conformance` CLI** — validate a producer's OTLP entity-event output
+  against the wire contract **without a running Toise**, in any language: pipe
+  it the `ExportLogsServiceRequest` bytes (protobuf or JSON). Exit 0 conformant,
+  1 on rejections (`-strict` also fails on advisories). Plus a **producer
+  directory** documenting the SDK, the example producers, and external ones.
+- **API stability policy** (`docs/api-stability`) and a golden contract test
+  that pins the entire MCP surface — tools (name + input/output fields),
+  resources, and prompts — so any change is deliberate and fails the build until
+  the golden is regenerated.
+- **Identity-stable resurrection.** An entity re-asserted within a bounded grace
+  window after deletion keeps its logical id instead of forking a new one.
+- **Connection-topology endpoints** with read-time peer resolution.
+- **New entity types** `compute.vm` and `container` in the built-in registry.
+- **`get_neighbors` digest** (`total`/`truncated`) and unified traversal-depth
+  naming across `get_neighbors`/`find_path`/`impact_of` (`max_depth`).
+- **`toise-server delete-tenant` and `drop-snapshot`** subcommands; a
+  `prune_horizon` metric; per-tool MCP query observability via a shared Observer
+  seam.
+- **Producer examples** (`examples/producer-{minimal,docker,uptime,systemd}`), a
+  "Write a producer" guide, and contributor on-ramps.
+
+### Changed
+
+- **MCP `get_neighbors` renamed `depth` → `max_depth`**, matching `find_path`
+  and `impact_of`. Breaking for clients that passed `depth`.
+- **One streaming as-of fold** now backs both MCP and GraphQL time-travel reads
+  (shared, horizon-checked, concurrency-bounded), replacing duplicated
+  materialize-then-fold paths.
+- **Graph traversal goes through the adjacency index** instead of scanning all
+  relations; the embedded-relation buffer is indexed by waited-on endpoint hash.
+
+### Fixed
+
+- **`Sweep` returns its commit errors** so the liveness-sweep error metric is
+  actually reachable.
+- **A tenant whose store fails to open is quarantined at boot** instead of
+  taking down the whole server.
+- **Live entities are counted by membership** (phantom-delete: a deleted entity
+  no longer skews the count).
+- **The SDK validates `eventName` and rejects a sub-second `Interval`** before
+  it reaches the wire.
+- GraphQL `entities` ordering documented correctly; the `ChangeType` mapping is
+  pinned. Tenant and log-level config validation tightened; store meta recovery
+  hardened; the `:latest` image tag is gated on stable release tags.
+
 ## [0.6.0] - 2026-06-12
 
 **The corrective release.** A second full audit ran against 0.5.0 the day it
@@ -526,7 +602,9 @@ contract converged with the senhub-agent reference producer.
   default and are intended for trusted networks only; the WebSocket subscription
   endpoint enforces an origin check.
 
-[Unreleased]: https://github.com/toise-dev/toise/compare/0.2.0...HEAD
+[Unreleased]: https://github.com/toise-dev/toise/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/toise-dev/toise/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/toise-dev/toise/compare/0.5.0...v0.6.0
 [0.2.0]: https://github.com/toise-dev/toise/compare/0.1.1...0.2.0
 [0.1.1]: https://github.com/toise-dev/toise/compare/0.1.0...0.1.1
 [0.1.0]: https://github.com/toise-dev/toise/releases/tag/0.1.0
