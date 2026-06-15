@@ -29,9 +29,9 @@ question without a second lookup.
 | --- | --- |
 | `describe_schema()` | a natural-language description of the entity and relation types currently in the graph, to bootstrap the model's understanding |
 | `describe_type(type)` | zoom on one type: observed attribute keys with examples, empirical relation shapes and peers — or, for a relation type, endpoint shapes and failure-propagation direction |
-| `find_entities(type, match, limit)` | entities matching a type / attribute filter, with `total`/`truncated` |
-| `get_entity(entity_id)` | a full entity with its attributes |
-| `get_neighbors(entity_id, relation_type, max_depth, limit)` | traverse relations up to `max_depth` (**capped at 5**); each neighbor carries the relation type, direction, and hop distance that reached it, with `total`/`truncated` like the other list tools |
+| `find_entities(type, match, limit, verbosity)` | entities matching a type / attribute filter, with `total`/`truncated` |
+| `get_entity(entity_id, verbosity)` | a full entity with its attributes |
+| `get_neighbors(entity_id, relation_type, max_depth, limit, verbosity)` | traverse relations up to `max_depth` (**capped at 5**); each neighbor carries the relation type, direction, and hop distance that reached it, with `total`/`truncated` like the other list tools |
 | `find_path(from_id, to_id, relation_type, max_depth)` | the shortest relation path between two entities; `reachable: false` is a first-class answer, never an error |
 | `impact_of(entity_id, max_depth)` | the blast radius of a failure: everything the entity takes down, following each relation type's dependency direction, nearest first |
 | `entity_history(entity_id, since, until, ...)` | an entity's timeline from the event log (bi-temporal), heartbeats excluded by default, bounded by `limit`, with a per-type digest |
@@ -51,6 +51,12 @@ asked (`include_heartbeats`), bound their output (`limit`, default 50, max 200),
 and report a digest — `total`, `truncated`, `heartbeats_excluded`, counts per
 change type — so the model can narrow instead of paging blind. Every tool call
 runs under a 30-second budget.
+
+**Verbosity.** The entity-returning tools (`find_entities`, `get_entity`,
+`get_neighbors`) take an optional `verbosity`: `compact` returns just the id,
+type and label of each entity — cheap to scan a large set — and `full` (the
+default) adds the identity and descriptive attributes. Scan compact, then
+re-fetch the one entity you care about in full.
 
 Errors are plain, user-friendly messages (e.g. "max_depth 7 exceeds the maximum
 of 5"), never stack traces.

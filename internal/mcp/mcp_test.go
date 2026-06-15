@@ -237,6 +237,48 @@ func TestFindEntitiesLimitTruncates(t *testing.T) {
 	}
 }
 
+// TestVerbosityCompact pins the 0.7.0 verbosity tiers: compact drops identity
+// and attributes (cheap to scan), full (default) keeps them, unknown errors.
+func TestVerbosityCompact(t *testing.T) {
+	s := newTestServer()
+	ctx := context.Background()
+
+	_, full, err := s.findEntities(ctx, nil, FindEntitiesInput{Type: "host"})
+	if err != nil || len(full.Entities) == 0 {
+		t.Fatalf("full find_entities: %v", err)
+	}
+	if len(full.Entities[0].Identity) == 0 || len(full.Entities[0].Attributes) == 0 {
+		t.Fatal("full must carry identity and attributes")
+	}
+
+	_, comp, err := s.findEntities(ctx, nil, FindEntitiesInput{Type: "host", Verbosity: "compact"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := comp.Entities[0]
+	if len(e.Identity) != 0 || len(e.Attributes) != 0 {
+		t.Errorf("compact must omit identity/attributes, got %+v", e)
+	}
+	if e.ID == "" || e.Type == "" || e.Label == "" {
+		t.Errorf("compact must keep id/type/label, got %+v", e)
+	}
+
+	if _, _, err := s.findEntities(ctx, nil, FindEntitiesInput{Verbosity: "verbose"}); err == nil {
+		t.Error("unknown verbosity must error")
+	}
+
+	_, ge, _ := s.getEntity(ctx, nil, GetEntityInput{EntityID: "01HOST_WEB", Verbosity: "compact"})
+	if len(ge.Entity.Identity) != 0 {
+		t.Error("get_entity compact must omit identity")
+	}
+	_, gn, _ := s.getNeighbors(ctx, nil, GetNeighborsInput{EntityID: "01HOST_WEB", MaxDepth: 1, Verbosity: "compact"})
+	for _, nb := range gn.Neighbors {
+		if len(nb.Identity) != 0 {
+			t.Error("get_neighbors compact must omit neighbor identity")
+		}
+	}
+}
+
 func TestGetEntity(t *testing.T) {
 	s := newTestServer()
 	_, out, err := s.getEntity(context.Background(), nil, GetEntityInput{EntityID: "01HOST_WEB"})
