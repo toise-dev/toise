@@ -157,7 +157,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	authn := auth.NewWithTenantTokens(cfg.AuthTokens, scopedTokens)
+	authn := auth.NewWithRoles(cfg.AuthTokens, cfg.ReadTokens, cfg.IngestTokens, scopedTokens)
 	var grpcOpts []grpc.ServerOption
 	if authn.Enabled() {
 		grpcOpts = append(grpcOpts,

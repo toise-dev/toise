@@ -98,6 +98,13 @@ type Config struct {
 	// debug UI, OTLP ingest). Empty disables auth (trusted-network default). These
 	// are secrets: source them from TOISE_AUTH_TOKENS (env), never a flag.
 	AuthTokens []string `yaml:"auth_tokens"`
+	// ReadTokens are bearer tokens valid only on the read surfaces (GraphQL, MCP,
+	// debug UI) — a dashboard or assistant that must never ingest. IngestTokens
+	// are valid only on OTLP ingest — a producer that must never read. Same secret
+	// rules as AuthTokens: TOISE_READ_TOKENS / TOISE_INGEST_TOKENS (env). Tokens in
+	// AuthTokens remain full (both surfaces). (0.7.0 token roles.)
+	ReadTokens   []string `yaml:"read_tokens"`
+	IngestTokens []string `yaml:"ingest_tokens"`
 	// TenantTokens are tenant-scoped bearer tokens as "tenant:token" pairs: the
 	// token authenticates like any other but is authorized only for its tenant
 	// (#104). Same secret rules: TOISE_TENANT_TOKENS (env), never a flag.
@@ -300,6 +307,12 @@ func (c *Config) applyEnv(getenv func(string) string) error {
 	}
 	if v := getenv("TOISE_AUTH_TOKENS"); v != "" {
 		c.AuthTokens = splitOrigins(v)
+	}
+	if v := getenv("TOISE_READ_TOKENS"); v != "" {
+		c.ReadTokens = splitOrigins(v)
+	}
+	if v := getenv("TOISE_INGEST_TOKENS"); v != "" {
+		c.IngestTokens = splitOrigins(v)
 	}
 	if v := getenv("TOISE_TLS_CERT_FILE"); v != "" {
 		c.TLSCertFile = v

@@ -72,6 +72,45 @@ func TestUnaryInterceptor(t *testing.T) {
 	}
 }
 
+// TestTokenRoles pins the 0.7.0 token roles: a read-only token works on the HTTP
+// read surface but not on OTLP ingest; an ingest-only token the reverse; a full
+// token on both.
+func TestTokenRoles(t *testing.T) {
+	a := NewWithRoles([]string{"full"}, []string{"reader"}, []string{"writer"}, nil)
+
+	readOK := func(token string) bool {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/graphql", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		a.HTTPMiddleware(nil)(okHandler()).ServeHTTP(rec, req)
+		return rec.Code == http.StatusOK
+	}
+	ui := a.UnaryInterceptor()
+	ingestOK := func(token string) bool {
+		ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+token))
+		_, err := ui(ctx, nil, nil, func(context.Context, any) (any, error) { return "ok", nil })
+		return err == nil
+	}
+
+	cases := []struct {
+		token            string
+		wantRead, wantIn bool
+	}{
+		{"full", true, true},
+		{"reader", true, false},
+		{"writer", false, true},
+		{"nope", false, false},
+	}
+	for _, c := range cases {
+		if got := readOK(c.token); got != c.wantRead {
+			t.Errorf("%s on read surface = %v, want %v", c.token, got, c.wantRead)
+		}
+		if got := ingestOK(c.token); got != c.wantIn {
+			t.Errorf("%s on ingest surface = %v, want %v", c.token, got, c.wantIn)
+		}
+	}
+}
+
 // TestTenantScopedTokens pins #104: a scoped token authenticates but is
 // authorized only for its tenant — 403 elsewhere — while global tokens stay
 // valid for every tenant.

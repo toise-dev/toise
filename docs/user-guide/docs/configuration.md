@@ -35,8 +35,10 @@ for the rationale.
 | `playground` | `TOISE_PLAYGROUND` | `--playground` | `true` | serve the GraphQL playground at `/playground` |
 | `debug_ui` | `TOISE_DEBUG_UI` | `--debug-ui` | `true` | serve the debug UI at `/` |
 | `allowed_origins` | `TOISE_ALLOWED_ORIGINS` | `--allowed-origins` | (empty) | comma-separated browser Origin allowlist (WebSocket/CORS); empty = same-origin only |
-| `auth_tokens` | `TOISE_AUTH_TOKENS` | *(none — secret)* | (empty) | comma-separated bearer tokens, valid for every tenant; empty = auth disabled |
-| `tenant_tokens` | `TOISE_TENANT_TOKENS` | *(none — secret)* | (empty) | comma-separated `tenant:token` pairs — the token is authorized only for its tenant (HTTP 403 / gRPC PermissionDenied elsewhere) |
+| `auth_tokens` | `TOISE_AUTH_TOKENS` | *(none — secret)* | (empty) | comma-separated bearer tokens, **full role** (read + ingest), valid for every tenant; empty = auth disabled |
+| `read_tokens` | `TOISE_READ_TOKENS` | *(none — secret)* | (empty) | bearer tokens valid only on the **read** surfaces (GraphQL, MCP, debug UI) — rejected on OTLP ingest |
+| `ingest_tokens` | `TOISE_INGEST_TOKENS` | *(none — secret)* | (empty) | bearer tokens valid only on **OTLP ingest** — rejected on the read surfaces |
+| `tenant_tokens` | `TOISE_TENANT_TOKENS` | *(none — secret)* | (empty) | comma-separated `tenant:token` pairs — full role, authorized only for its tenant (HTTP 403 / gRPC PermissionDenied elsewhere) |
 | `accept_unknown_types` | `TOISE_ACCEPT_UNKNOWN_TYPES` | `--accept-unknown-types` | `false` | accept entity/relation types outside the built-in registry (shape still validated; counted on /metrics) |
 | `tenant_auto_create` | `TOISE_TENANT_AUTO_CREATE` | `--tenant-auto-create` | `true` | allow a first write to a new tenant id to create its stack; off = only pre-existing tenants (and `default`) are served |
 | `tenant_allowlist` | `TOISE_TENANT_ALLOWLIST` | `--tenant-allowlist` | (empty) | comma-separated tenant ids allowed to be created; empty = any (subject to auto-create and the cap) |
@@ -97,6 +99,12 @@ network (private datacenter segment or VPN; ADR 0014). Exposing it to other host
   Clients then send `Authorization: Bearer <token>` on both HTTP and gRPC. The
   operational probes (`/healthz`, `/readyz`) and the metrics scrape (`/metrics`)
   stay public so a load balancer and Prometheus can reach them without a token.
+- **Token roles (least privilege).** `auth_tokens` are full (read + ingest). Use
+  `read_tokens` for a token that may query but never ingest (a dashboard, an
+  assistant), and `ingest_tokens` for a producer that may ingest but never read.
+  A read-only token is rejected on OTLP ingest; an ingest-only token is rejected
+  on GraphQL/MCP/debug. Roles are global; combine with `tenant_tokens` for
+  per-tenant scoping.
 - **TLS.** Point `tls_cert_file` and `tls_key_file` at a PEM cert/key pair to serve
   the HTTP surfaces and OTLP ingestion over TLS.
 
