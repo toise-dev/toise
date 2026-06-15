@@ -9,6 +9,11 @@ called out below with a migration path.
 
 ## Releases
 
+- [**0.7.0**](0.7.0.md) — 2026-06-15 — **the integration release**: operator
+  annotations (MCP tool + first GraphQL mutation, an overlay), MCP resources and
+  prompts, read-only / ingest-only token roles, verbosity tiers, the
+  `toise-conformance` CLI + producer directory, identity-stable resurrection,
+  and the audit P1/P2 lot.
 - [**0.6.0**](0.6.0.md) — 2026-06-12 — **the corrective release**: the entire
   P0 lot of the 0.5.0 audit in one pass — `emit.PartialError`, exact
   conformance claim, read-only `checkpoint`, maintenance-safe reads, liveness
