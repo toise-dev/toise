@@ -221,3 +221,26 @@ func TestTombstoneCacheBounded(t *testing.T) {
 		t.Errorf("e20 tombstone = ok %v deleted %v, want readable", ok, deleted)
 	}
 }
+
+// A delete whose create aged out of retention (a delete-without-create on
+// replay) leaves a phantom tombstone: an id in deleted but never in entities.
+// EntityCount must count live entities by membership, not len-len, or it
+// undercounts — here one live entity would read as zero (#166 P1).
+func TestEntityCountIgnoresPhantomTombstone(t *testing.T) {
+	g := New()
+	apply := func(ct model.ChangeType, e model.Entity) {
+		g.Apply(model.Event{Entity: &model.EntityEvent{
+			EventID: model.NewEventID(), ChangeType: ct, Entity: e, SchemaVersion: model.SchemaVersion,
+		}})
+	}
+	apply(model.EntityCreated, model.Entity{ID: "A", Type: model.TypeHost, Identity: []model.KeyValue{kv("host.id", "a")}})
+	// B's create aged out of retention; only its delete is replayed.
+	apply(model.EntityDeleted, model.Entity{ID: "B", Type: model.TypeHost, Identity: []model.KeyValue{kv("host.id", "b")}})
+
+	if _, ok := g.entities["B"]; ok {
+		t.Fatal("B must not be in entities (its create never replayed)")
+	}
+	if got := g.EntityCount(); got != 1 {
+		t.Fatalf("EntityCount = %d, want 1 (A is live; B is a phantom tombstone)", got)
+	}
+}

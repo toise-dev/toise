@@ -21,6 +21,14 @@ type EventScanner interface {
 // live graph (#140).
 const defaultTombstoneCap = 1024
 
+// defaultTombstoneTTL is the grace window during which a soft-deleted entity's
+// identity stays resurrectable: a producer that goes silent (crash, partition,
+// a heartbeat slower than its interval) and returns within it keeps its original
+// logical id and a continuous history, instead of being minted a fresh ULID
+// (#183). The cap still bounds memory; the TTL bounds how stale a resurrection
+// may be.
+const defaultTombstoneTTL = 15 * time.Minute
+
 // Graph is the in-memory projection of the event log. It is safe for concurrent
 // use.
 type Graph struct {
@@ -42,6 +50,15 @@ type Graph struct {
 	tombstones     []model.EntityID
 	tombstoneCap   int
 	liveTombstones int
+
+	// tombByHash keeps the identity->id mapping of soft-deleted entities so a
+	// re-asserted identity resurrects its original logical id (#183). It mirrors
+	// byHash but for tombstones; an id leaves it on resurrection or eviction.
+	tombByHash map[string]model.EntityID
+	// tombDeadline is when each tombstone leaves the resurrection grace window.
+	tombDeadline map[model.EntityID]time.Time
+	tombstoneTTL time.Duration
+	now          func() time.Time
 }
 
 // New returns an empty graph with the default tombstone bound.
@@ -64,7 +81,31 @@ func NewWithTombstoneCap(limit int) *Graph {
 		byHash:       make(map[string]model.EntityID),
 		byType:       make(map[string]map[model.EntityID]struct{}),
 		tombstoneCap: limit,
+		tombByHash:   make(map[string]model.EntityID),
+		tombDeadline: make(map[model.EntityID]time.Time),
+		tombstoneTTL: defaultTombstoneTTL,
+		now:          time.Now,
 	}
+}
+
+// SetClock overrides the clock backing the tombstone grace window (for tests
+// and for sharing the engine's clock). A nil clock is ignored.
+func (g *Graph) SetClock(now func() time.Time) {
+	if now == nil {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.now = now
+}
+
+// SetTombstoneTTL overrides the resurrection grace window. A non-positive ttl
+// disables the time bound (tombstones are then retained until the cap evicts
+// them).
+func (g *Graph) SetTombstoneTTL(ttl time.Duration) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.tombstoneTTL = ttl
 }
 
 // Replay rebuilds the graph by applying every event from the scanner in order.
@@ -106,7 +147,11 @@ func (g *Graph) applyEntity(ee *model.EntityEvent) {
 		g.putEntity(ee.Entity)
 	case model.EntityDeleted:
 		if e, ok := g.entities[id]; ok {
-			delete(g.byHash, e.IdentityHash())
+			// Retain the identity->id mapping as a tombstone so a re-asserted
+			// identity resurrects this id rather than minting a new one (#183).
+			h := e.IdentityHash()
+			delete(g.byHash, h)
+			g.tombByHash[h] = id
 			if set := g.byType[e.Type]; set != nil {
 				delete(set, id)
 			}
@@ -115,6 +160,23 @@ func (g *Graph) applyEntity(ee *model.EntityEvent) {
 			g.deleted[id] = true
 			g.tombstones = append(g.tombstones, id)
 			g.liveTombstones++
+			if g.tombstoneTTL > 0 {
+				// Anchor the grace window on the deletion event's recorded time,
+				// not the apply-time clock: replay on restart re-applies the
+				// event tail before the engine's clock is wired (registry
+				// openStack replays, then change.New calls SetClock), so g.now()
+				// would be boot time and revive the window for entities deleted
+				// long before the restart. RecordedAt is absolute and survives
+				// replay/snapshot; a window that elapsed during downtime then
+				// arrives already expired.
+				base := ee.RecordedAt
+				if base.IsZero() && g.now != nil {
+					base = g.now()
+				}
+				if !base.IsZero() {
+					g.tombDeadline[id] = base.Add(g.tombstoneTTL)
+				}
+			}
 			g.evictTombstones()
 		}
 	case model.EntityUnchanged:
@@ -136,19 +198,89 @@ func (g *Graph) evictTombstones() {
 		if !g.deleted[id] {
 			continue // stale entry; not a tombstone anymore
 		}
-		delete(g.entities, id)
-		delete(g.deleted, id)
-		g.liveTombstones--
+		g.dropTombstone(id)
 	}
+}
+
+// dropTombstone evicts one soft-deleted entity entirely: it stops being
+// readable by id and is no longer resurrectable by identity. The caller must
+// hold the write lock and have confirmed g.deleted[id].
+func (g *Graph) dropTombstone(id model.EntityID) {
+	if e, ok := g.entities[id]; ok {
+		h := e.IdentityHash()
+		if g.tombByHash[h] == id { // a newer incarnation may already own the hash
+			delete(g.tombByHash, h)
+		}
+	}
+	delete(g.entities, id)
+	delete(g.deleted, id)
+	delete(g.tombDeadline, id)
+	g.liveTombstones--
+}
+
+// PruneTombstones drops soft-deleted entities whose grace window has elapsed,
+// so the resurrection window is bounded in time, not only in count. Returns the
+// number pruned. Drive it from the same ticker as the engine's Sweep.
+func (g *Graph) PruneTombstones() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.now == nil || g.tombstoneTTL <= 0 {
+		return 0
+	}
+	now := g.now()
+	n := 0
+	for id, deadline := range g.tombDeadline {
+		if !now.After(deadline) {
+			continue
+		}
+		if g.deleted[id] {
+			g.dropTombstone(id) // leaves a stale entry in the tombstones queue; evict skips it
+			n++
+			continue
+		}
+		delete(g.tombDeadline, id) // resurrected since; deadline is moot
+	}
+	// The cap path (evictTombstones) is the only consumer that pops the queue,
+	// and under the default TTL window liveTombstones stays far below the cap, so
+	// the queue is never compacted there. Drop the stale entries left by TTL
+	// pruning and resurrection here, otherwise the backing slice grows without
+	// bound under steady delete churn — the cumulative growth #140 bounds for
+	// the cache must hold for the queue too.
+	if len(g.tombstones) > 2*g.liveTombstones {
+		g.compactTombstones()
+	}
+	return n
+}
+
+// compactTombstones rewrites the deletion-order queue in place, keeping only ids
+// still soft-deleted (one entry each, oldest position wins). The caller must hold
+// the write lock.
+func (g *Graph) compactTombstones() {
+	kept := g.tombstones[:0]
+	seen := make(map[model.EntityID]struct{}, g.liveTombstones)
+	for _, id := range g.tombstones {
+		if !g.deleted[id] {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		kept = append(kept, id)
+	}
+	g.tombstones = kept
 }
 
 func (g *Graph) putEntity(e model.Entity) {
 	g.entities[e.ID] = e
+	h := e.IdentityHash()
 	if g.deleted[e.ID] {
 		g.liveTombstones-- // resurrection un-tombstones; its queue entry goes stale
+		delete(g.tombDeadline, e.ID)
 	}
 	delete(g.deleted, e.ID)
-	g.byHash[e.IdentityHash()] = e.ID
+	delete(g.tombByHash, h) // identity is live again (or owned by this id now)
+	g.byHash[h] = e.ID
 	set := g.byType[e.Type]
 	if set == nil {
 		set = make(map[model.EntityID]struct{})
@@ -207,11 +339,21 @@ func (g *Graph) GetRelation(id model.RelationID) (model.Relation, bool) {
 	return r, ok
 }
 
-// EntityCount returns the number of live (non-deleted) entities.
+// EntityCount returns the number of live (non-deleted) entities. It counts live
+// entities by membership rather than len(entities)-len(deleted): a delete whose
+// create aged out of retention leaves a phantom tombstone (an id in deleted but
+// never in entities), and the subtraction would undercount — even go negative
+// when phantoms outnumber live entities, which a clamp alone would not fix.
 func (g *Graph) EntityCount() int {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	return len(g.entities) - len(g.deleted)
+	n := 0
+	for id := range g.entities {
+		if !g.deleted[id] {
+			n++
+		}
+	}
+	return n
 }
 
 // RelationCount returns the number of relations.
@@ -335,6 +477,28 @@ func (g *Graph) MatchIdentity(typ string, identity []model.KeyValue) (model.Enti
 		return id, true
 	}
 	return "", false
+}
+
+// MatchTombstone finds the logical id of a soft-deleted entity whose identity
+// matches exactly and whose resurrection grace window has not elapsed (#183).
+// The engine uses it, after MatchIdentity misses, to resurrect an entity's
+// original id instead of minting a new one — keeping entity_history continuous
+// across a producer outage. Identity matching is exact, as for live entities.
+func (g *Graph) MatchTombstone(typ string, identity []model.KeyValue) (model.EntityID, bool) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	hash := model.Entity{Type: typ, Identity: identity}.IdentityHash()
+	id, ok := g.tombByHash[hash]
+	if !ok || !g.deleted[id] {
+		return "", false
+	}
+	if g.now != nil && g.tombstoneTTL > 0 {
+		if deadline, ok := g.tombDeadline[id]; ok && g.now().After(deadline) {
+			return "", false // past the grace window: treat as genuinely gone
+		}
+	}
+	return id, true
 }
 
 // SnapshotEvents returns synthetic create/add events that, applied in order to a
