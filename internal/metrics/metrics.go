@@ -183,3 +183,37 @@ func NewQuarantinedTenants() prometheus.Gauge {
 		Help: "Tenants whose store failed to open at boot and were skipped rather than aborting the process.",
 	})
 }
+
+// QueryMetrics records per-tool MCP call counts and durations — the query-side
+// observability hung off the mcp.Observer seam (#166). One instance is shared
+// across tenants; register its Collectors via Handler's extras.
+type QueryMetrics struct {
+	calls    *prometheus.CounterVec
+	duration *prometheus.HistogramVec
+}
+
+// NewQueryMetrics builds the per-tool call counter and duration histogram.
+func NewQueryMetrics() *QueryMetrics {
+	return &QueryMetrics{
+		calls: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "toise_mcp_tool_calls_total",
+			Help: "MCP tool calls by tool and outcome (ok or error).",
+		}, []string{"tool", "outcome"}),
+		duration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "toise_mcp_tool_duration_seconds",
+			Help:    "MCP tool-call wall-clock duration by tool.",
+			Buckets: prometheus.DefBuckets,
+		}, []string{"tool"}),
+	}
+}
+
+// ObserveTool implements mcp.Observer: one finished tool call.
+func (m *QueryMetrics) ObserveTool(tool, outcome string, dur time.Duration) {
+	m.calls.WithLabelValues(tool, outcome).Inc()
+	m.duration.WithLabelValues(tool).Observe(dur.Seconds())
+}
+
+// Collectors exposes the metrics for registration via Handler's extras.
+func (m *QueryMetrics) Collectors() []prometheus.Collector {
+	return []prometheus.Collector{m.calls, m.duration}
+}

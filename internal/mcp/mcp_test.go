@@ -840,6 +840,40 @@ func (blockingStore) ScanByTimeRange(ctx context.Context, _, _ time.Time, _ func
 
 func (blockingStore) PruneHorizon() time.Time { return time.Time{} }
 
+type obsCall struct{ tool, outcome string }
+type fakeObserver struct{ calls []obsCall }
+
+func (o *fakeObserver) ObserveTool(tool, outcome string, _ time.Duration) {
+	o.calls = append(o.calls, obsCall{tool, outcome})
+}
+
+// TestObserveRecordsToolCall pins the query-observability seam (#166): the
+// per-tool wrapper records the tool name and an ok/error outcome.
+func TestObserveRecordsToolCall(t *testing.T) {
+	s := newTestServer()
+	rec := &fakeObserver{}
+	s.SetObserver(rec)
+
+	okHandler := observe(s, "find_entities", s.findEntities)
+	if _, _, err := okHandler(context.Background(), nil, FindEntitiesInput{Type: "host"}); err != nil {
+		t.Fatalf("ok call: %v", err)
+	}
+	errHandler := observe(s, "get_entity", s.getEntity)
+	if _, _, err := errHandler(context.Background(), nil, GetEntityInput{}); err == nil {
+		t.Fatal("expected an error for empty entity id")
+	}
+
+	want := []obsCall{{"find_entities", "ok"}, {"get_entity", "error"}}
+	if len(rec.calls) != len(want) {
+		t.Fatalf("recorded %d calls, want %d: %+v", len(rec.calls), len(want), rec.calls)
+	}
+	for i, w := range want {
+		if rec.calls[i] != w {
+			t.Errorf("call %d = %+v, want %+v", i, rec.calls[i], w)
+		}
+	}
+}
+
 // TestToolCallTimeout pins the per-call budget: a tool whose read outlives the
 // deadline returns a deadline error instead of hanging the transport (#115).
 func TestToolCallTimeout(t *testing.T) {
