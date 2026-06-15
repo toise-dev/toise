@@ -80,6 +80,10 @@ type Registry struct {
 	limits   Limits
 	logger   *slog.Logger
 
+	// quarantined lists tenants whose store failed to open at boot; set once
+	// during Open, read-only afterwards.
+	quarantined []string
+
 	mu      sync.Mutex
 	stacks  map[string]*Stack
 	opening map[string]*inflight
@@ -130,17 +134,34 @@ func OpenWithLimits(dataDir string, storeCfg store.Config, relBuf time.Duration,
 	}
 	for _, id := range existing {
 		if _, err := r.ensure(id); err != nil {
-			_ = r.Close()
-			return nil, err
+			// Quarantine, do not abort: one tenant's unreadable store (corrupt
+			// snapshot's own log, half-written pebble, bad perms) must not take
+			// the whole multi-tenant process down with it. Warn, skip, count, and
+			// keep its directory on disk for manual recovery; the healthy tenants
+			// still come up. The default tenant below is the one exception.
+			logger.Warn("quarantining tenant: its store failed to open at boot (left on disk for recovery)",
+				"tenant", id, "err", err)
+			r.quarantined = append(r.quarantined, id)
+			continue
 		}
 	}
 	// A default stack always exists, so a single-tenant deployment that never sets
-	// X-Scope-OrgID behaves exactly as a single-graph build did.
+	// X-Scope-OrgID behaves exactly as a single-graph build did. Its failure is
+	// fatal — there is no degraded mode without it.
 	if _, err := r.ensure(tenant.Default); err != nil {
 		_ = r.Close()
 		return nil, err
 	}
 	return r, nil
+}
+
+// Quarantined returns the ids of tenants whose store failed to open at boot and
+// were skipped rather than aborting the process. Their directories are left on
+// disk for recovery. Stable after Open returns.
+func (r *Registry) Quarantined() []string {
+	out := make([]string, len(r.quarantined))
+	copy(out, r.quarantined)
+	return out
 }
 
 // TenantStore pairs a tenant id with its event store, for the read-only path.

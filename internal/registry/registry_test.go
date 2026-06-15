@@ -85,6 +85,46 @@ func TestForIsolatesTenants(t *testing.T) {
 	}
 }
 
+// TestQuarantinesCorruptTenantAtBoot pins #166: one tenant whose store fails to
+// open must not abort the whole multi-tenant process — it is quarantined (warned,
+// skipped, listed, its dir left on disk), and the healthy tenants plus the default
+// still come up.
+func TestQuarantinesCorruptTenantAtBoot(t *testing.T) {
+	dataDir := t.TempDir()
+	seedStore(t, filepath.Join(dataDir, "good"), "h-good")
+	seedStore(t, filepath.Join(dataDir, "bad"), "h-bad")
+	// Corrupt the bad tenant's manifest so its store cannot open.
+	manifests, _ := filepath.Glob(filepath.Join(dataDir, "bad", "MANIFEST-*"))
+	if len(manifests) == 0 {
+		t.Fatal("test setup: no MANIFEST to corrupt")
+	}
+	if err := os.WriteFile(manifests[0], []byte("corrupt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	reg, err := Open(dataDir, store.DefaultConfig(), 0, discard())
+	if err != nil {
+		t.Fatalf("boot must succeed despite a corrupt tenant: %v", err)
+	}
+	t.Cleanup(func() { _ = reg.Close() })
+
+	if q := reg.Quarantined(); len(q) != 1 || q[0] != "bad" {
+		t.Fatalf("Quarantined() = %v, want [bad]", q)
+	}
+	// The healthy tenant and the default are served.
+	good, ferr := reg.For("good")
+	if ferr != nil || !hasHost(good.Graph, "h-good") {
+		t.Errorf("good tenant should be served: err=%v", ferr)
+	}
+	if _, ferr := reg.For(tenant.Default); ferr != nil {
+		t.Errorf("default must always open: %v", ferr)
+	}
+	// The corrupt dir is left on disk for recovery.
+	if _, statErr := os.Stat(filepath.Join(dataDir, "bad")); statErr != nil {
+		t.Errorf("quarantined tenant dir must be left on disk: %v", statErr)
+	}
+}
+
 func TestForCachesStack(t *testing.T) {
 	reg, err := Open(t.TempDir(), store.DefaultConfig(), 0, discard())
 	if err != nil {

@@ -238,7 +238,12 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		}
 		return nil
 	}))
-	metricsExtra := append(ingestMetrics.Collectors(), authFailures)
+	quarantined := metrics.NewQuarantinedTenants()
+	if q := reg.Quarantined(); len(q) > 0 {
+		quarantined.Set(float64(len(q)))
+		logger.Warn("tenants quarantined at boot (stores failed to open, left on disk for recovery)", "count", len(q), "tenants", q)
+	}
+	metricsExtra := append(ingestMetrics.Collectors(), authFailures, quarantined)
 	metricsExtra = append(metricsExtra, maint.Collectors()...)
 	mux.Handle("/metrics", metrics.Handler(metrics.NewCollector(
 		aggregateGraph{reg}, aggregateStore{reg}, version.Version, version.Commit), metricsExtra...))

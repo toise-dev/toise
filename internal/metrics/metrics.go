@@ -173,3 +173,13 @@ func NewAuthFailures() prometheus.Counter {
 		Help: "Rejected authentications on the HTTP and gRPC surfaces.",
 	})
 }
+
+// NewQuarantinedTenants returns the gauge for tenants whose store failed to open
+// at boot and were skipped (their directories are left on disk for recovery). Set
+// once after the registry opens and registered via Handler's extra collectors.
+func NewQuarantinedTenants() prometheus.Gauge {
+	return prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "toise_tenants_quarantined",
+		Help: "Tenants whose store failed to open at boot and were skipped rather than aborting the process.",
+	})
+}
