@@ -151,6 +151,24 @@ healthy tenants. The `default` tenant is the exception: it is required, so its
 failure is fatal. A quarantined tenant's directory is left on disk under
 `<data_dir>/<tenant>/` for recovery; restore or remove it and restart.
 
+**Deleting a tenant** is a cold, destructive operation — run it with the server
+stopped (it holds the pebble lock while serving):
+
+```sh
+toise-server delete-tenant --data-dir /var/lib/toise/data acme
+```
+
+It removes `<data_dir>/acme/` (event log and snapshot) entirely and frees a slot
+under `max_tenants`. The `default` tenant cannot be deleted.
+
+**Metrics and tenants:** the Toise gauges on `/metrics` (`toise_entities`,
+`toise_events_total`, `toise_store_disk_bytes`, …) are **aggregated across
+tenants** — a sum, except `toise_snapshot_seq` and `toise_store_prune_horizon_seconds`
+which report the high-water mark. They carry no per-tenant label, so the endpoint
+stays single-series and dashboards are unchanged. The maintenance metrics
+(`toise_maintenance_*`) are the exception: they label by `tenant` (and `op`,
+`outcome`) so a stuck sweep/prune can be traced to its tenant.
+
 !!! warning "Authentication is not yet bound to a tenant"
     A valid bearer token may set any `X-Scope-OrgID`. Isolation therefore relies on
     the upstream OTel Collector authenticating each client and stamping its tenant;

@@ -68,6 +68,14 @@ func main() {
 		return
 	}
 
+	if len(os.Args) > 1 && os.Args[1] == "delete-tenant" {
+		if err := runDeleteTenant(os.Args[2:], os.Getenv); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	cfg, err := config.Load(os.Args[1:], os.Getenv)
 	if errors.Is(err, config.ErrHelp) {
 		os.Exit(0)
@@ -552,6 +560,51 @@ func runDropSnapshot(args []string, getenv func(string) string) error {
 		}
 		fmt.Printf("dropped snapshot for tenant %s\n", ts.Tenant)
 	}
+	return nil
+}
+
+// runDeleteTenant removes a tenant's entire on-disk stack (event log + snapshot)
+// from the data dir — the operator-facing tenant-deletion procedure (#166). It is
+// destructive and a COLD tool: run it with toise-server stopped (a running server
+// holds the pebble lock and serves the tenant). The default tenant cannot be
+// deleted. MaxTenants then has room for a new one.
+func runDeleteTenant(args []string, getenv func(string) string) error {
+	fs := flag.NewFlagSet("toise-server delete-tenant", flag.ContinueOnError)
+	configPath := fs.String("config", "", "path to a YAML config file (env: TOISE_CONFIG)")
+	dataDir := fs.String("data-dir", "", "directory of the tenant event logs (env: TOISE_DATA_DIR)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return fmt.Errorf("usage: toise-server delete-tenant [--config file] [--data-dir dir] <tenant-id>")
+	}
+	id, ok := tenant.Sanitize(fs.Arg(0))
+	if !ok {
+		return fmt.Errorf("invalid tenant id %q", fs.Arg(0))
+	}
+	if id == tenant.Default {
+		return fmt.Errorf("the %q tenant cannot be deleted", tenant.Default)
+	}
+
+	var cfgArgs []string
+	if *configPath != "" {
+		cfgArgs = append(cfgArgs, "--config="+*configPath)
+	}
+	if *dataDir != "" {
+		cfgArgs = append(cfgArgs, "--data-dir="+*dataDir)
+	}
+	cfg, err := config.Load(cfgArgs, getenv)
+	if err != nil {
+		return fmt.Errorf("resolving configuration: %w", err)
+	}
+	dir := filepath.Join(cfg.DataDir, id)
+	if _, serr := os.Stat(dir); serr != nil {
+		return fmt.Errorf("tenant %q not found under %s: %w", id, cfg.DataDir, serr)
+	}
+	if rerr := os.RemoveAll(dir); rerr != nil {
+		return fmt.Errorf("removing tenant %q: %w", id, rerr)
+	}
+	fmt.Printf("deleted tenant %s (%s)\n", id, dir)
 	return nil
 }
 
