@@ -112,6 +112,18 @@ func TestBuildValidation(t *testing.T) {
 		Relationships: []Relationship{{Type: "runs_on"}}}}); err == nil {
 		t.Error("incomplete relationship must fail at build")
 	}
+	if _, err := c.Build("entity.bogus", []Entity{{Type: "host", ID: map[string]string{"host.id": "h"}}}); err == nil {
+		t.Error("unknown event name must fail at build")
+	}
+	if _, err := c.Build("entity.state", []Entity{{Type: "host", ID: map[string]string{"host.id": "h"},
+		Interval: 500 * time.Millisecond}}); err == nil {
+		t.Error("sub-second Interval must fail at build (would round report.interval to 0)")
+	}
+	// A whole-second interval is fine.
+	if _, err := c.Build("entity.state", []Entity{{Type: "host", ID: map[string]string{"host.id": "h"},
+		Interval: time.Second}}); err != nil {
+		t.Errorf("1s Interval must build: %v", err)
+	}
 }
 
 // TestSDKOutputIsConformant closes the loop SDK-side: everything the SDK
