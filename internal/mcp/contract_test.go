@@ -47,6 +47,29 @@ func TestToolContract(t *testing.T) {
 		fmt.Fprintf(&b, "  in:\n%s", fieldSig(reflect.TypeOf(tc.in), 2))
 		fmt.Fprintf(&b, "  out:\n%s", fieldSig(reflect.TypeOf(tc.out), 2))
 	}
+	// Resources, resource templates, and prompts are part of the same LLM-facing
+	// surface; pin their names, URIs/MIME, and prompt arguments too.
+	for _, r := range resourceCatalog {
+		fmt.Fprintf(&b, "resource %s %s %s\n", r.Name, r.URI, r.MIMEType)
+	}
+	for _, t := range resourceTemplates {
+		fmt.Fprintf(&b, "resource_template %s %s %s\n", t.Name, t.URITemplate, t.MIMEType)
+	}
+	for _, p := range promptCatalog {
+		fmt.Fprintf(&b, "prompt %s\n", p.prompt.Name)
+		args := make([]string, 0, len(p.prompt.Arguments))
+		for _, a := range p.prompt.Arguments {
+			req := "optional"
+			if a.Required {
+				req = "required"
+			}
+			args = append(args, fmt.Sprintf("  arg %s %s", a.Name, req))
+		}
+		sort.Strings(args)
+		for _, line := range args {
+			fmt.Fprintln(&b, line)
+		}
+	}
 	got := b.String()
 
 	const golden = "testdata/tool_contract.golden"

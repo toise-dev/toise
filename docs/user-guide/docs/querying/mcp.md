@@ -71,6 +71,37 @@ any caller may annotate.
 Errors are plain, user-friendly messages (e.g. "max_depth 7 exceeds the maximum
 of 5"), never stack traces.
 
+## Resources
+
+Beyond the tools, Toise exposes a few **resources** — read-only context a client
+can fetch by URI and pin into the conversation, under the `toise://` scheme:
+
+| Resource | What it is |
+| --- | --- |
+| `toise://schema` | the current graph schema (entity/relation types, counts, a natural-language summary) as JSON — the same data as `describe_schema`, but pinnable |
+| `toise://guide` | a short markdown orientation: what Toise models, the bi-temporal log, the tool catalog, a suggested first move |
+| `toise://entity/{id}` | a resource **template** — a single entity (identity, attributes, annotations) by its logical id, the same data as `get_entity` |
+
+Resources never diverge from their tool twins — the schema and entity resources
+call the same handlers as `describe_schema` and `get_entity`.
+
+## Prompts
+
+Toise also ships reusable **prompts** — user-invocable templates that seed a
+conversation with a well-shaped operator task and steer the assistant toward the
+right tools, so an analyst gets a good investigation without knowing the catalog:
+
+| Prompt | Arguments | Seeds |
+| --- | --- | --- |
+| `investigate_incident` | `entity` (required), `window` | triage a suspected cause: state, recent change, blast radius, telemetry |
+| `blast_radius` | `entity` (required) | what a failure of this entity takes down, and how |
+| `explain_entity` | `entity` (required) | a full briefing on one entity: what it is, how it connects, its history, its telemetry |
+| `whats_changed` | `window` | triage recent change across the graph (newest/most significant first) |
+
+The tool, resource, and prompt surface is pinned by the same golden contract
+(`internal/mcp`, `tool_contract.golden`): adding or renaming any of them is a
+deliberate change that fails the build until the golden is regenerated.
+
 ## Connect Claude Desktop (stdio)
 
 Add the `toise` entry to your `claude_desktop_config.json` under `mcpServers`,

@@ -436,3 +436,15 @@ tool annotate_entity
     author string
     updated_at string
     values map
+resource schema toise://schema application/json
+resource guide toise://guide text/markdown
+resource_template entity toise://entity/{id} application/json
+prompt investigate_incident
+  arg entity required
+  arg window optional
+prompt blast_radius
+  arg entity required
+prompt explain_entity
+  arg entity required
+prompt whats_changed
+  arg window optional

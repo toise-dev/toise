@@ -474,6 +474,40 @@ func TestMCPRoundTrip(t *testing.T) {
 		t.Fatalf("want 12 tools, got %d", len(tools.Tools))
 	}
 
+	// Resources and prompts are part of the same surface — exercise them over the
+	// real transport too.
+	rs, err := cs.ListResources(ctx, nil)
+	if err != nil {
+		t.Fatalf("list resources: %v", err)
+	}
+	if len(rs.Resources) != len(resourceCatalog) {
+		t.Fatalf("want %d resources, got %d", len(resourceCatalog), len(rs.Resources))
+	}
+	rr, err := cs.ReadResource(ctx, &mcpsdk.ReadResourceParams{URI: "toise://schema"})
+	if err != nil {
+		t.Fatalf("read schema resource: %v", err)
+	}
+	if len(rr.Contents) == 0 || rr.Contents[0].MIMEType != "application/json" {
+		t.Fatalf("unexpected schema resource: %+v", rr.Contents)
+	}
+	ps, err := cs.ListPrompts(ctx, nil)
+	if err != nil {
+		t.Fatalf("list prompts: %v", err)
+	}
+	if len(ps.Prompts) != len(promptCatalog) {
+		t.Fatalf("want %d prompts, got %d", len(promptCatalog), len(ps.Prompts))
+	}
+	gp, err := cs.GetPrompt(ctx, &mcpsdk.GetPromptParams{
+		Name:      "investigate_incident",
+		Arguments: map[string]string{"entity": "db-07"},
+	})
+	if err != nil {
+		t.Fatalf("get prompt: %v", err)
+	}
+	if len(gp.Messages) != 1 {
+		t.Fatalf("want one prompt message, got %d", len(gp.Messages))
+	}
+
 	res, err := cs.CallTool(ctx, &mcpsdk.CallToolParams{
 		Name:      "find_entities",
 		Arguments: map[string]any{"type": "host"},

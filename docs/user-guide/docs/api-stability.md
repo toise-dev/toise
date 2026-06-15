@@ -14,7 +14,7 @@ can build on.
 | Surface | What is covered | Pinned by |
 |---------|-----------------|-----------|
 | **Producer wire contract** (OTLP entity events) | `entity.state` / `entity.delete` records, the `entity.*` attributes, embedded `entity.relationships`, identity rules | byte-exact conformance fixture (`pkg/emit/conformance`, `fixture_v1.bin`) |
-| **MCP tools** | the set of tools, each tool's name and its input/output fields | a golden contract test (`internal/mcp`, `tool_contract.golden`) — any change fails the build until the golden is deliberately regenerated |
+| **MCP surface** | the set of tools (name + input/output fields), resources and resource templates (name, URI, MIME), and prompts (name, arguments) | a golden contract test (`internal/mcp`, `tool_contract.golden`) — any change fails the build until the golden is deliberately regenerated |
 | **GraphQL schema** | types, fields and arguments in `schema.graphql` | the schema is the hand-maintained source of truth; changes are reviewed in the PR diff |
 
 **Change rules for stable surfaces:**
