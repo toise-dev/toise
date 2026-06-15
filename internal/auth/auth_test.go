@@ -111,6 +111,45 @@ func TestTokenRoles(t *testing.T) {
 	}
 }
 
+// TestCanWrite pins the 0.7.0 write capability the middleware tags onto the
+// request context (annotate_entity gate): a full or tenant-scoped token may
+// write, a read-only token may not, and with auth disabled every caller may.
+func TestCanWrite(t *testing.T) {
+	probe := func(a *Authenticator, token, tenantID string) (writable, served bool) {
+		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			writable = CanWrite(r.Context())
+			served = true
+			w.WriteHeader(http.StatusOK)
+		})
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/graphql", nil)
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		if tenantID != "" {
+			req.Header.Set("X-Scope-OrgID", tenantID)
+		}
+		a.HTTPMiddleware(nil)(next).ServeHTTP(rec, req)
+		return writable, served
+	}
+
+	withRoles := NewWithRoles([]string{"full"}, []string{"reader"}, nil, map[string][]string{"acme": {"scoped"}})
+	if w, served := probe(withRoles, "full", ""); !served || !w {
+		t.Errorf("full token: writable=%v served=%v, want writable served", w, served)
+	}
+	if w, served := probe(withRoles, "scoped", "acme"); !served || !w {
+		t.Errorf("scoped token: writable=%v served=%v, want writable served", w, served)
+	}
+	if w, served := probe(withRoles, "reader", ""); !served || w {
+		t.Errorf("read-only token: writable=%v served=%v, want NOT writable but served", w, served)
+	}
+
+	// Auth disabled: no decision recorded, so every caller may write.
+	if CanWrite(context.Background()) != true {
+		t.Error("absent decision must default to writable (auth disabled)")
+	}
+}
+
 // TestTenantScopedTokens pins #104: a scoped token authenticates but is
 // authorized only for its tenant — 403 elsewhere — while global tokens stay
 // valid for every tenant.

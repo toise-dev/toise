@@ -20,7 +20,7 @@ and OTLP servers and just reads the given data directory.
 
 ## The tools
 
-The assistant sees eleven typed tools. Each carries a rich description and examples
+The assistant sees twelve typed tools. Each carries a rich description and examples
 so the model picks the right one, and each returns **structured, name-bearing**
 results — ids carry human labels and types — so a single call answers the
 question without a second lookup.
@@ -30,7 +30,8 @@ question without a second lookup.
 | `describe_schema()` | a natural-language description of the entity and relation types currently in the graph, to bootstrap the model's understanding |
 | `describe_type(type)` | zoom on one type: observed attribute keys with examples, empirical relation shapes and peers — or, for a relation type, endpoint shapes and failure-propagation direction |
 | `find_entities(type, match, limit, verbosity)` | entities matching a type / attribute filter, with `total`/`truncated` |
-| `get_entity(entity_id, verbosity)` | a full entity with its attributes |
+| `get_entity(entity_id, verbosity)` | a full entity with its attributes, plus any operator `annotations` |
+| `annotate_entity(entity_id, annotations)` | attach operator notes (an overlay, **not** producer truth) to an entity — merge key/values, an empty value removes a key; the one **write** tool, so it needs a write-capable token |
 | `get_neighbors(entity_id, relation_type, max_depth, limit, verbosity)` | traverse relations up to `max_depth` (**capped at 5**); each neighbor carries the relation type, direction, and hop distance that reached it, with `total`/`truncated` like the other list tools |
 | `find_path(from_id, to_id, relation_type, max_depth)` | the shortest relation path between two entities; `reachable: false` is a first-class answer, never an error |
 | `impact_of(entity_id, max_depth)` | the blast radius of a failure: everything the entity takes down, following each relation type's dependency direction, nearest first |
@@ -57,6 +58,15 @@ runs under a 30-second budget.
 type and label of each entity — cheap to scan a large set — and `full` (the
 default) adds the identity and descriptive attributes. Scan compact, then
 re-fetch the one entity you care about in full.
+
+**Annotations (the one write).** Eleven tools read; `annotate_entity` writes. It
+attaches operator notes — owner, runbook link, a remark — as an *overlay* kept in
+a per-tenant sidecar, **never** producer truth and never part of the event log, so
+it is not replayed and does not appear in history. Merge key/values; an empty value
+removes a key. They surface back on `get_entity` (and on `Entity.annotations` in
+GraphQL). Because it writes, it requires a write-capable bearer token (full or
+tenant-scoped); a read-only token is refused. With auth disabled (trusted network)
+any caller may annotate.
 
 Errors are plain, user-friendly messages (e.g. "max_depth 7 exceeds the maximum
 of 5"), never stack traces.

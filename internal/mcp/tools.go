@@ -67,9 +67,11 @@ type GetEntityInput struct {
 	Verbosity string `json:"verbosity,omitempty" jsonschema:"compact returns only id/type/label; full (default) adds identity and attributes"`
 }
 
-// GetEntityOutput carries the entity.
+// GetEntityOutput carries the entity and any operator annotations (an overlay,
+// not producer truth — see annotate_entity).
 type GetEntityOutput struct {
-	Entity Entity `json:"entity"`
+	Entity      Entity         `json:"entity"`
+	Annotations *AnnotationOut `json:"annotations,omitempty" jsonschema:"operator-added notes on this entity (not producer truth); absent when none"`
 }
 
 func (s *Server) getEntity(ctx context.Context, _ *mcpsdk.CallToolRequest, in GetEntityInput) (*mcpsdk.CallToolResult, GetEntityOutput, error) {
@@ -88,7 +90,7 @@ func (s *Server) getEntity(ctx context.Context, _ *mcpsdk.CallToolRequest, in Ge
 	if !ok {
 		return nil, GetEntityOutput{}, fmt.Errorf("no entity found with id %q; use find_entities to discover ids — if it was deleted a while ago its tombstone may have been evicted, but entity_history still has its past", in.EntityID)
 	}
-	return nil, GetEntityOutput{Entity: entityOutV(e, deleted, compact)}, nil
+	return nil, GetEntityOutput{Entity: entityOutV(e, deleted, compact), Annotations: s.annotationFor(in.EntityID)}, nil
 }
 
 // --- get_neighbors ---

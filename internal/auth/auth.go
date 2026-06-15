@@ -24,6 +24,20 @@ import (
 	"github.com/toise-dev/toise/internal/tenant"
 )
 
+// ctxKey is the private type for context values this package sets.
+type ctxKey int
+
+const writableKey ctxKey = iota
+
+// CanWrite reports whether the caller in ctx may perform a write (e.g. annotate
+// an entity). Writes require a full or tenant-scoped token; a read-only token
+// cannot. It defaults to true when no decision was recorded — with auth disabled
+// (trusted network) every caller may write.
+func CanWrite(ctx context.Context) bool {
+	v, ok := ctx.Value(writableKey).(bool)
+	return !ok || v
+}
+
 // surface is the data surface a token is being checked against.
 type surface int
 
@@ -172,6 +186,25 @@ func (a *Authenticator) headerAllowedForTenant(h, tenantID string, s surface) bo
 	return t != "" && a.allowedForTenant(t, tenantID, s)
 }
 
+// canWriteHeader reports whether the bearer is a write-capable token: a full
+// global token or any tenant-scoped token. Read-only tokens are not.
+func (a *Authenticator) canWriteHeader(h string) bool {
+	t := bearer(h)
+	if t == "" {
+		return false
+	}
+	got := []byte(t)
+	if matchAny(got, a.tokens) {
+		return true
+	}
+	for _, toks := range a.scoped {
+		if matchAny(got, toks) {
+			return true
+		}
+	}
+	return false
+}
+
 // AllowedForTenantGRPC reports whether the bearer carried in ctx's gRPC metadata
 // may ingest into tenantID. With auth disabled it always allows. The ingest
 // receiver calls it per resolved tenant — including the per-ResourceLogs
@@ -216,7 +249,10 @@ func (a *Authenticator) HTTPMiddleware(public map[string]bool) func(http.Handler
 				http.Error(w, "token not authorized for this tenant", http.StatusForbidden)
 				return
 			}
-			next.ServeHTTP(w, r)
+			// Tag the request so write handlers (annotate) can reject a read-only
+			// token: full/scoped tokens may write, read-only tokens may not.
+			ctx := context.WithValue(r.Context(), writableKey, a.canWriteHeader(h))
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }

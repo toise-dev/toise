@@ -33,6 +33,7 @@ can build on.
 - **Internal Go packages** (`internal/...`) — not an importable API. The producer SDK `pkg/emit` is the supported Go surface.
 - **Prometheus metric** names and labels — best-effort stability; dashboards should tolerate additions.
 - **Log line** wording and the on-disk store format (a format change is gated by the store's `format_version` marker, not by this policy).
+- The **operator-annotations sidecar** on-disk format. Annotations (`annotate_entity` / the `annotateEntity` mutation) are an overlay a human or assistant attaches to an entity — never producer truth, never part of the event log, and not replayed. The *tool and mutation shapes* are covered above; the sidecar storage is not.
 
 ## The open vocabulary
 

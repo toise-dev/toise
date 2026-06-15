@@ -137,7 +137,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		logger.Info("serving MCP over stdio", "data_dir", cfg.DataDir, "tenant", tenant.Default)
-		if serveErr := mcp.New(st.Graph, st.Store).ServeStdio(ctx); serveErr != nil && !errors.Is(serveErr, context.Canceled) {
+		if serveErr := mcp.New(st.Graph, st.Store).SetAnnotations(st.Annotations).ServeStdio(ctx); serveErr != nil && !errors.Is(serveErr, context.Canceled) {
 			return fmt.Errorf("mcp stdio: %w", serveErr)
 		}
 		return nil
@@ -225,14 +225,14 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	// one handler per tenant on first use, bound to that tenant's stack, and
 	// dispatches by the X-Scope-OrgID header (ADR 0025).
 	graphqlRouter := newTenantRouter(reg, logger, func(st *registry.Stack) (http.Handler, error) {
-		res := &resolvers.Resolver{Graph: st.Graph, Store: st.Store, Engine: st.Engine}
+		res := &resolvers.Resolver{Graph: st.Graph, Store: st.Store, Engine: st.Engine, Annotations: st.Annotations}
 		return graphql.NewHandler(res, graphql.Config{
 			AllowedOrigins:       cfg.AllowedOrigins,
 			DisableIntrospection: !cfg.GraphQLIntrospection,
 		}), nil
 	})
 	mcpRouter := newTenantRouter(reg, logger, func(st *registry.Stack) (http.Handler, error) {
-		return mcp.New(st.Graph, st.Store).SetObserver(queryMetrics).HTTPHandler(), nil
+		return mcp.New(st.Graph, st.Store).SetObserver(queryMetrics).SetAnnotations(st.Annotations).HTTPHandler(), nil
 	})
 
 	mux := http.NewServeMux()

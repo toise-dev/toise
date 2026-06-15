@@ -32,6 +32,7 @@ var toolContract = []struct {
 	{"describe_type", DescribeTypeInput{}, DescribeTypeOutput{}},
 	{"telemetry_keys", TelemetryKeysInput{}, TelemetryKeysOutput{}},
 	{"describe_schema", DescribeSchemaInput{}, DescribeSchemaOutput{}},
+	{"annotate_entity", AnnotateEntityInput{}, AnnotateEntityOutput{}},
 }
 
 // TestToolContract pins the MCP tool surface (#166 / 0.7.0 API contract pinning):

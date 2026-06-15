@@ -9,6 +9,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/toise-dev/toise/internal/annotations"
 	"github.com/toise-dev/toise/internal/change"
 	"github.com/toise-dev/toise/internal/graphql/generated"
 	"github.com/toise-dev/toise/internal/model"
@@ -37,10 +38,11 @@ type Graph interface {
 // Resolver wires the GraphQL API to the projection, the log, and the change
 // engine (for subscriptions).
 type Resolver struct {
-	Graph  Graph
-	Store  EventReader
-	Engine *change.Engine
-	Now    func() time.Time
+	Graph       Graph
+	Store       EventReader
+	Engine      *change.Engine
+	Annotations *annotations.Store
+	Now         func() time.Time
 }
 
 func (r *Resolver) now() time.Time {
