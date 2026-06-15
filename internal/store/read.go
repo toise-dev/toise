@@ -53,31 +53,44 @@ func (s *Store) ReadByType(ctx context.Context, ct model.ChangeType) ([]model.Ev
 
 // ReadByTimeRange returns events whose event_time is in [start, end), ordered by
 // event_time then sequence. The context cancels a long read.
-func (s *Store) ReadByTimeRange(ctx context.Context, start, end time.Time) ([]model.Event, error) {
+func (s *Store) ScanByTimeRange(ctx context.Context, start, end time.Time, fn func(model.Event) error) error {
 	lower := timeKeyBound(start.UnixNano())
 	upper := timeKeyBound(end.UnixNano())
 	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
 	if err != nil {
-		return nil, fmt.Errorf("opening time iterator: %w", err)
+		return fmt.Errorf("opening time iterator: %w", err)
 	}
 	defer func() { _ = iter.Close() }()
 
-	var out []model.Event
 	n := 0
 	for iter.First(); iter.Valid(); iter.Next() {
 		if err := checkEvery(ctx, n); err != nil {
-			return nil, err
+			return err
 		}
 		n++
 		ev, ok, err := s.resolveSeq(seqFromKeySuffix(iter.Key()))
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if ok {
-			out = append(out, ev)
+			if err := fn(ev); err != nil {
+				return err
+			}
 		}
 	}
-	if err := iter.Error(); err != nil {
+	return iter.Error()
+}
+
+// ReadByTimeRange returns, in event-time order, every event whose event_time is
+// in [start, end). It materializes the whole range; prefer ScanByTimeRange when
+// folding (it applies events as they stream, with no intermediate slice). Kept
+// for callers that genuinely need the full slice (recent_changes).
+func (s *Store) ReadByTimeRange(ctx context.Context, start, end time.Time) ([]model.Event, error) {
+	var out []model.Event
+	if err := s.ScanByTimeRange(ctx, start, end, func(ev model.Event) error {
+		out = append(out, ev)
+		return nil
+	}); err != nil {
 		return nil, err
 	}
 	return out, nil
