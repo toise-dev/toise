@@ -187,11 +187,46 @@ func TestRelationBufferReconcilesAndExpires(t *testing.T) {
 		t.Fatal(err)
 	}
 	now = now.Add(time.Minute)                                               // past the 30s TTL
-	mustObserve(t, e, model.TypeHost, []model.KeyValue{kv("host.id", "h2")}) // triggers the expiring flush
-	// even if its endpoint shows up afterwards, the dropped edge must not resurface
+	mustObserve(t, e, model.TypeHost, []model.KeyValue{kv("host.id", "h2")}) // unrelated to the ghost edge
+	// Its endpoint shows up after the TTL: the edge is past its deadline, so the
+	// flush this triggers drops it rather than reconciling it.
 	mustObserve(t, e, model.TypeProcess, []model.KeyValue{kv("process.executable.name", "ghost")})
 	if g.RelationCount() != 1 {
 		t.Errorf("expired edge must not reconcile later; count=%d, want 1", g.RelationCount())
+	}
+}
+
+// A parked edge is retried only when an entity it actually waits on arrives;
+// unrelated observations in between neither reconcile nor drop it, and the edge
+// still reconciles once its own endpoints show up (#166 P2 — flushPending
+// indexed by waited-on endpoint hash).
+func TestRelationBufferIgnoresUnrelatedEntity(t *testing.T) {
+	g := projection.New()
+	now := t0
+	e := New(g, &fakeAppender{},
+		WithClock(func() time.Time { return now }),
+		WithRelationBuffer(time.Minute),
+		WithLogger(slog.New(slog.DiscardHandler)))
+
+	procRef := EndpointRef{Type: model.TypeProcess, Identity: []model.KeyValue{kv("process.executable.name", "nginx")}}
+	hostRef := EndpointRef{Type: model.TypeHost, Identity: []model.KeyValue{kv("host.id", "h1")}}
+	edge := RelationObservation{Type: model.RelRunsOn, From: procRef, To: hostRef, EventTime: t0}
+	if _, _, err := e.ObserveRelation(edge); err != nil {
+		t.Fatal(err)
+	}
+
+	// Unrelated entities the edge does not wait on: still parked, not applied.
+	mustObserve(t, e, model.TypeHost, []model.KeyValue{kv("host.id", "other")})
+	mustObserve(t, e, model.TypeProcess, []model.KeyValue{kv("process.executable.name", "other")})
+	if g.RelationCount() != 0 {
+		t.Fatalf("edge should still be parked after unrelated observations; count=%d", g.RelationCount())
+	}
+
+	// Its own endpoints arrive within the TTL: it reconciles.
+	mustObserve(t, e, model.TypeProcess, procRef.Identity)
+	mustObserve(t, e, model.TypeHost, hostRef.Identity)
+	if g.RelationCount() != 1 {
+		t.Fatalf("edge should reconcile once its endpoints exist; count=%d", g.RelationCount())
 	}
 }
 

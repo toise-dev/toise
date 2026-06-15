@@ -46,6 +46,11 @@ type Engine struct {
 	// arrive, so out-of-order delivery does not drop edges. Guarded by obsMu.
 	bufferTTL time.Duration
 	pending   []pendingRelation
+	// pendingHashes is the set of endpoint identity hashes the parked edges are
+	// waiting on, so an entity observation can skip flushPending unless the
+	// arriving entity is one some edge actually waits on — instead of rescanning
+	// every parked edge on every observation. Rebuilt whenever pending changes.
+	pendingHashes map[string]struct{}
 
 	// liveness: per-entity reference counts keyed by producer (the agent's
 	// service.instance.id; "" for an anonymous/single producer), each with an
@@ -185,13 +190,14 @@ func WithRelationBuffer(ttl time.Duration) Option {
 // New returns an engine writing to appender and projecting into graph.
 func New(graph *projection.Graph, appender Appender, opts ...Option) *Engine {
 	e := &Engine{
-		graph:        graph,
-		appender:     appender,
-		now:          time.Now,
-		logger:       slog.Default(),
-		subs:         make(map[int]Subscriber),
-		refs:         make(map[model.EntityID]map[string]liveRef),
-		relDeadlines: make(map[model.RelationID]liveRef),
+		graph:         graph,
+		appender:      appender,
+		now:           time.Now,
+		logger:        slog.Default(),
+		subs:          make(map[int]Subscriber),
+		refs:          make(map[model.EntityID]map[string]liveRef),
+		relDeadlines:  make(map[model.RelationID]liveRef),
+		pendingHashes: make(map[string]struct{}),
 	}
 	for _, o := range opts {
 		o(e)
@@ -432,8 +438,15 @@ func (e *Engine) observeEntityLocked(obs EntityObservation) (model.Event, error)
 	} else {
 		producers[obs.Producer] = liveRef{}
 	}
-	// A new/updated entity may be the missing endpoint of a parked edge.
-	e.flushPending()
+	// A new/updated entity may be the missing endpoint of a parked edge — but
+	// only retry the buffer when this entity is one some edge actually waits on,
+	// rather than rescanning every parked edge on every observation.
+	if len(e.pending) > 0 {
+		h := (model.Entity{Type: obs.Type, Identity: obs.Identity}).IdentityHash()
+		if _, waited := e.pendingHashes[h]; waited {
+			e.flushPending()
+		}
+	}
 	return ev, nil
 }
 
@@ -564,6 +577,7 @@ func (e *Engine) Sweep() int {
 			kept = append(kept, e.pending[i])
 		}
 		e.pending = kept
+		e.rebuildPendingHashes()
 	}
 
 	var expiredRelations []model.RelationID
@@ -621,6 +635,7 @@ func (e *Engine) observeRelationBuffered(obs RelationObservation) (model.Event, 
 				"cap", maxPendingRelations)
 		}
 		e.pending = append(e.pending, pendingRelation{obs: obs, deadline: e.now().Add(e.bufferTTL)})
+		e.rebuildPendingHashes()
 		return model.Event{}, false, nil
 	}
 	return ev, emitted, err
@@ -673,18 +688,46 @@ func (e *Engine) flushPending() {
 	var kept []pendingRelation
 	for i := range e.pending {
 		obs := e.pending[i].obs
+		// Past the TTL the edge is given up on, even if it would now resolve: a
+		// late-arriving endpoint must not resurrect it (the producer's next
+		// re-assert re-parks it fresh). Checked before resolving so the outcome
+		// no longer depends on whether the triggering observation happens to be
+		// the one that completes the endpoints.
+		if now.After(e.pending[i].deadline) {
+			e.logger.Warn("dropping relation: endpoints did not arrive within the reconciliation TTL",
+				"relation_type", obs.Type, "from_type", obs.From.Type, "to_type", obs.To.Type)
+			continue
+		}
 		_, _, err := e.observeRelationLocked(obs)
 		switch {
 		case err == nil:
 			// resolved and committed; drop from the buffer
-		case errors.Is(err, errEndpointMissing) && now.After(e.pending[i].deadline):
-			e.logger.Warn("dropping relation: endpoints did not arrive within the reconciliation TTL",
-				"relation_type", obs.Type, "from_type", obs.From.Type, "to_type", obs.To.Type)
+		case errors.Is(err, errEndpointMissing):
+			kept = append(kept, e.pending[i]) // still waiting for an endpoint
 		default:
-			kept = append(kept, e.pending[i]) // still waiting, or a transient commit error to retry
+			kept = append(kept, e.pending[i]) // transient commit error to retry
 		}
 	}
 	e.pending = kept
+	e.rebuildPendingHashes()
+}
+
+// endpointHash is the identity hash of a relation endpoint — the same hash the
+// projection indexes entities by, so a parked edge's endpoint hash equals the
+// IdentityHash of the entity that would resolve it.
+func endpointHash(ref EndpointRef) string {
+	return (model.Entity{Type: ref.Type, Identity: ref.Identity}).IdentityHash()
+}
+
+// rebuildPendingHashes recomputes the waited-on endpoint hash set from the parked
+// edges. Called whenever e.pending changes (park, flush, sweep); the caller must
+// hold obsMu. The hot path (entity observation) only reads the set.
+func (e *Engine) rebuildPendingHashes() {
+	e.pendingHashes = make(map[string]struct{}, 2*len(e.pending))
+	for i := range e.pending {
+		e.pendingHashes[endpointHash(e.pending[i].obs.From)] = struct{}{}
+		e.pendingHashes[endpointHash(e.pending[i].obs.To)] = struct{}{}
+	}
 }
 
 // RemoveRelation emits relation.removed for an existing relation between the
