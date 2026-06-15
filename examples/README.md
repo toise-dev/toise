@@ -1,10 +1,33 @@
 # Examples
 
-Example **consumers** of the Toise API. None of this is part of `toise-server` —
-each example talks to Toise only over its public surfaces (GraphQL, MCP), the
-same way a third-party integration would. Nothing here is compiled into the
-server binary.
+Worked examples of integrating with Toise. None of this is part of
+`toise-server` — each example talks to Toise only over its public surfaces (OTLP
+ingest, GraphQL, MCP), the same way a third-party integration would. Nothing here
+is compiled into the server binary.
+
+## Consumers
+
+Read from Toise over GraphQL / MCP.
 
 | Example | What it shows |
 |---------|---------------|
 | [graph-viz](./graph-viz/) | A dependency-free browser page that draws the entity/relation graph and streams live changes over GraphQL subscriptions. |
+
+## Producers
+
+Feed your own data into Toise. They are built on the [`pkg/emit`](../pkg/emit)
+SDK; the wire contract and identity rules they follow are documented in
+[`docs/data-model/otel-mapping.md`](../docs/data-model/otel-mapping.md). Start
+with **producer-minimal** — it uses only the built-in vocabulary and runs against
+a stock server.
+
+| Example | Source it maps | Notes |
+|---------|----------------|-------|
+| [producer-minimal](./producer-minimal/) | A host and a service listener (static) | The smallest useful producer; built-in types, no flags. |
+| [producer-docker](./producer-docker/) | Local Docker containers | Needs `docker` + `--accept-unknown-types`. |
+| [producer-uptime](./producer-uptime/) | HTTP/website uptime of a URL list | Needs `--accept-unknown-types`. |
+| [producer-systemd](./producer-systemd/) | systemd service units (Linux) | Needs `systemctl` + `--accept-unknown-types`. |
+
+Examples beyond the minimal one emit entity types outside the built-in registry,
+so they run against a server started with `--accept-unknown-types` (the
+open-vocabulary posture) — each example's README spells this out.
