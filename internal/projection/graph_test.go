@@ -91,6 +91,38 @@ func TestRelationsAndNeighbors(t *testing.T) {
 	}
 }
 
+func TestRelationsTouching(t *testing.T) {
+	g := New()
+	a, b, c := model.NewEntityID(), model.NewEntityID(), model.NewEntityID()
+	g.Apply(entityCreated(a, model.TypeProcess, kv("pid", "1")))
+	g.Apply(entityCreated(b, model.TypeHost, kv("host.id", "h1")))
+	g.Apply(entityCreated(c, model.TypeHost, kv("host.id", "h2")))
+	runsOn := model.NewRelation(model.RelRunsOn, a, b)     // a -> b
+	monitors := model.NewRelation(model.RelMonitors, c, a) // c -> a
+	for _, r := range []model.Relation{runsOn, monitors} {
+		g.Apply(model.Event{Relation: &model.RelationEvent{ChangeType: model.RelationAdded, Relation: r}})
+	}
+
+	// a is touched by both edges (one outgoing, one incoming).
+	if got := g.RelationsTouching(a, ""); len(got) != 2 {
+		t.Fatalf("RelationsTouching(a) = %d, want 2", len(got))
+	}
+	// b only by runs_on.
+	if got := g.RelationsTouching(b, ""); len(got) != 1 || got[0].ID != runsOn.ID {
+		t.Fatalf("RelationsTouching(b) = %+v, want [runs_on]", got)
+	}
+	// type filter.
+	if got := g.RelationsTouching(a, model.RelMonitors); len(got) != 1 || got[0].ID != monitors.ID {
+		t.Fatalf("RelationsTouching(a, monitors) = %+v, want [monitors]", got)
+	}
+	// a self-loop appears exactly once (it is in both the out and in index).
+	loop := model.NewRelation(model.RelConnectedTo, b, b)
+	g.Apply(model.Event{Relation: &model.RelationEvent{ChangeType: model.RelationAdded, Relation: loop}})
+	if got := g.RelationsTouching(b, model.RelConnectedTo); len(got) != 1 || got[0].ID != loop.ID {
+		t.Fatalf("self-loop touching = %+v, want one entry", got)
+	}
+}
+
 func TestMatchIdentityExact(t *testing.T) {
 	g := New()
 	a := model.NewEntityID()

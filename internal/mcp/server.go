@@ -27,6 +27,7 @@ type Graph interface {
 	GetEntity(id model.EntityID) (model.Entity, bool, bool)
 	ListEntities(typ string) []model.Entity
 	ListRelations(typ string, from, to model.EntityID) []model.Relation
+	RelationsTouching(id model.EntityID, relType string) []model.Relation
 	CountByType() map[string]int
 	EntityCount() int
 	RelationCount() int

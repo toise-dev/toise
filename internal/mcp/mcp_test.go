@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -55,6 +56,20 @@ func (g *fakeGraph) ListRelations(typ string, from, to model.EntityID) []model.R
 		}
 		out = append(out, r)
 	}
+	return out
+}
+
+func (g *fakeGraph) RelationsTouching(id model.EntityID, relType string) []model.Relation {
+	var out []model.Relation
+	for _, r := range g.relations {
+		if relType != "" && r.Type != relType {
+			continue
+		}
+		if r.From == id || r.To == id {
+			out = append(out, r)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
 }
 
