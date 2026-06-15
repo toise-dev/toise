@@ -190,9 +190,10 @@ type Query {
   entity(id: ID!, asOf: String): Entity
 
   """
-  List entities (current state), newest-first, with Relay pagination. Use
-  `first` (default 50) and `after` (an `endCursor` from a previous page).
-  Provide `asOf` (RFC 3339) to list the graph as it was at that instant.
+  List entities (current state) in ascending id order (ULIDs are time-sortable,
+  so this is oldest-first), with Relay pagination. Use `first` (default 50) and
+  `after` (an `endCursor` from a previous page). Provide `asOf` (RFC 3339) to
+  list the graph as it was at that instant.
   """
   entities(filter: EntityFilter, first: Int = 50, after: String, asOf: String): EntityConnection!
 

@@ -32,7 +32,10 @@ type Entity struct {
 	// Type is the entity type, e.g. "host" or "service.listener".
 	Type string
 	// ID is the identifying attribute set. Exact-match identity: every key and
-	// value counts (ADR 0018 on the consumer side).
+	// value counts (ADR 0018 on the consumer side). Values are strings by
+	// deliberate choice — matching is byte-exact over strings, so a port is the
+	// string "443", not an int; typed identity values would only invite
+	// hash-mismatch ambiguity for no gain.
 	ID map[string]string
 	// Attributes are descriptive (non-identifying) attributes.
 	Attributes map[string]string
@@ -172,6 +175,9 @@ func (c *Client) export(ctx context.Context, eventName string, entities []Entity
 // Build constructs the wire payload without sending it — the conformance kit
 // and tests pin its exact byte form.
 func (c *Client) Build(eventName string, entities []Entity) (plog.Logs, error) {
+	if eventName != wire.EventEntityState && eventName != wire.EventEntityDelete {
+		return plog.Logs{}, fmt.Errorf("emit: unknown event name %q (want %q or %q)", eventName, wire.EventEntityState, wire.EventEntityDelete)
+	}
 	ld := plog.NewLogs()
 	rl := ld.ResourceLogs().AppendEmpty()
 	res := rl.Resource().Attributes()
@@ -193,6 +199,11 @@ func (c *Client) Build(eventName string, entities []Entity) (plog.Logs, error) {
 		}
 		if len(e.ID) == 0 {
 			return plog.Logs{}, fmt.Errorf("emit: entity %d (%s) has an empty ID — identity is required", i, e.Type)
+		}
+		if e.Interval > 0 && e.Interval < time.Second {
+			// report.interval is emitted in whole seconds; a sub-second interval
+			// would round to 0 and silently disarm the liveness backstop.
+			return plog.Logs{}, fmt.Errorf("emit: entity %d (%s) has Interval %s < 1s — it would round to report.interval=0 and disarm liveness; use >= 1s, or 0 for explicit-delete-only", i, e.Type, e.Interval)
 		}
 		lr := sl.LogRecords().AppendEmpty()
 		lr.SetTimestamp(when)
