@@ -98,6 +98,10 @@ type Neighbor struct {
 	ViaRelation string `json:"via_relation" jsonschema:"relation type of the edge that first reached this entity"`
 	Direction   string `json:"direction" jsonschema:"outgoing if that edge points from the previous hop to this entity, incoming otherwise"`
 	Depth       int    `json:"depth" jsonschema:"hop distance from the start entity"`
+	// ResolvedEntity is the read-time binding of an observed network.endpoint to
+	// the canonical host/service.listener it denotes (#184). The stored edge
+	// still targets the endpoint; this is a derived overlay, never persisted.
+	ResolvedEntity *Entity `json:"resolved_entity,omitempty" jsonschema:"for an observed network.endpoint, the canonical service.listener/host it resolves to; absent when the peer is external/off-fleet or unresolved"`
 }
 
 // GetNeighborsOutput carries the reachable entities with their edges.
@@ -142,12 +146,19 @@ func (s *Server) getNeighbors(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 				visited[e.other] = struct{}{}
 				next = append(next, e.other)
 				ent, _, _ := g.GetEntity(e.other)
-				out.Neighbors = append(out.Neighbors, Neighbor{
+				nb := Neighbor{
 					Entity:      entityOut(ent, false),
 					ViaRelation: e.rel.Type,
 					Direction:   e.direction,
 					Depth:       d,
-				})
+				}
+				if ent.Type == model.TypeNetworkEndpoint {
+					if resolved, ok := resolveEndpoint(g, ent); ok {
+						ro := entityOut(resolved, false)
+						nb.ResolvedEntity = &ro
+					}
+				}
+				out.Neighbors = append(out.Neighbors, nb)
 			}
 		}
 		frontier = next

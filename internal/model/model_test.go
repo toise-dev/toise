@@ -199,8 +199,12 @@ func TestRegistry(t *testing.T) {
 	if def, ok := RelationDef(RelListensOn); !ok || def.From != TypeServiceListener || def.To != TypeNetworkInterface {
 		t.Error("relation def wrong")
 	}
-	if len(EntityTypes()) != 9 || len(RelationTypes()) != 11 {
+	if len(EntityTypes()) != 10 || len(RelationTypes()) != 12 {
 		t.Errorf("registry counts: %d entity, %d relation", len(EntityTypes()), len(RelationTypes()))
+	}
+	// depends_on (connection topology, #184) targets an observable network.endpoint.
+	if def, ok := RelationDef(RelDependsOn); !ok || def.From != TypeServiceInstance || def.To != TypeNetworkEndpoint {
+		t.Error("depends_on relation def wrong")
 	}
 	// connected_to (topology-as-entities, ADR 0022) is registered as a bare
 	// interface<->interface edge.
