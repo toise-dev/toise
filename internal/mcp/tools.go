@@ -87,7 +87,8 @@ func (s *Server) getEntity(ctx context.Context, _ *mcpsdk.CallToolRequest, in Ge
 type GetNeighborsInput struct {
 	EntityID     string `json:"entity_id" jsonschema:"the entity to traverse outward from"`
 	RelationType string `json:"relation_type,omitempty" jsonschema:"only follow relations of this type (omit to follow any)"`
-	Depth        int    `json:"depth,omitempty" jsonschema:"how many relation hops to traverse, 1 to 5 (default 1)"`
+	MaxDepth     int    `json:"max_depth,omitempty" jsonschema:"how many relation hops to traverse, 1 to 5 (default 1); same name as find_path and impact_of"`
+	Limit        int    `json:"limit,omitempty" jsonschema:"maximum neighbors to return (default 50, max 200); the closest are kept and totals always cover everything"`
 	AsOf         string `json:"as_of,omitempty" jsonschema:"RFC 3339 instant: traverse the graph as it was then (event-time), instead of now"`
 }
 
@@ -107,20 +108,23 @@ type Neighbor struct {
 // GetNeighborsOutput carries the reachable entities with their edges.
 type GetNeighborsOutput struct {
 	Neighbors []Neighbor `json:"neighbors"`
-	Count     int        `json:"count"`
+	Count     int        `json:"count" jsonschema:"neighbors returned (after the limit)"`
+	Total     int        `json:"total" jsonschema:"neighbors reachable within max_depth before the limit was applied"`
+	Truncated bool       `json:"truncated" jsonschema:"true if more neighbors were reachable than returned; raise the limit or narrow relation_type"`
 }
 
 func (s *Server) getNeighbors(ctx context.Context, _ *mcpsdk.CallToolRequest, in GetNeighborsInput) (*mcpsdk.CallToolResult, GetNeighborsOutput, error) {
 	if in.EntityID == "" {
 		return nil, GetNeighborsOutput{}, fmt.Errorf("an entity_id is required")
 	}
-	depth := in.Depth
+	depth := in.MaxDepth
 	if depth <= 0 {
 		depth = 1
 	}
 	if depth > maxDepth {
-		return nil, GetNeighborsOutput{}, fmt.Errorf("depth %d exceeds the maximum of %d; try a smaller depth", in.Depth, maxDepth)
+		return nil, GetNeighborsOutput{}, fmt.Errorf("max_depth %d exceeds the maximum of %d; try a smaller depth", in.MaxDepth, maxDepth)
 	}
+	limit := clampLimit(in.Limit)
 	g, err := s.graphAt(ctx, in.AsOf)
 	if err != nil {
 		return nil, GetNeighborsOutput{}, err
@@ -162,6 +166,14 @@ func (s *Server) getNeighbors(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 			}
 		}
 		frontier = next
+	}
+	// Digest then cap: the full reachable set is counted, the closest `limit`
+	// (BFS order is shallowest-first) are returned — matching find_entities and
+	// impact_of, so get_neighbors is no longer the one list tool without a digest.
+	out.Total = len(out.Neighbors)
+	if len(out.Neighbors) > limit {
+		out.Neighbors = out.Neighbors[:limit]
+		out.Truncated = true
 	}
 	out.Count = len(out.Neighbors)
 	return nil, out, nil

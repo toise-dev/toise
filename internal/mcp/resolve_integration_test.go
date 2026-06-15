@@ -54,7 +54,7 @@ func TestGetNeighborsResolvesEndpointEndToEnd(t *testing.T) {
 
 	s := New(g, &fakeStore{})
 	_, out, err := s.getNeighbors(context.Background(), nil, GetNeighborsInput{
-		EntityID: "instA", RelationType: model.RelDependsOn, Depth: 1,
+		EntityID: "instA", RelationType: model.RelDependsOn, MaxDepth: 1,
 	})
 	if err != nil {
 		t.Fatal(err)

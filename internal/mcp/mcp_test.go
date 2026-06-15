@@ -230,10 +230,10 @@ func TestGetEntity(t *testing.T) {
 
 func TestGetNeighborsDepthCap(t *testing.T) {
 	s := newTestServer()
-	if _, _, err := s.getNeighbors(context.Background(), nil, GetNeighborsInput{EntityID: "01HOST_WEB", Depth: 7}); err == nil {
+	if _, _, err := s.getNeighbors(context.Background(), nil, GetNeighborsInput{EntityID: "01HOST_WEB", MaxDepth: 7}); err == nil {
 		t.Fatal("expected error exceeding maxDepth")
 	}
-	_, out, err := s.getNeighbors(context.Background(), nil, GetNeighborsInput{EntityID: "01HOST_WEB", Depth: 2})
+	_, out, err := s.getNeighbors(context.Background(), nil, GetNeighborsInput{EntityID: "01HOST_WEB", MaxDepth: 2})
 	if err != nil {
 		t.Fatalf("getNeighbors: %v", err)
 	}
@@ -242,6 +242,45 @@ func TestGetNeighborsDepthCap(t *testing.T) {
 	}
 	if _, _, err := s.getNeighbors(context.Background(), nil, GetNeighborsInput{EntityID: "ghost"}); err == nil {
 		t.Fatal("expected error for unknown entity")
+	}
+}
+
+// get_neighbors digests like the other list tools: Total counts everything
+// reachable within max_depth, the result is capped to the limit, and Truncated
+// flags the difference (#166 P1).
+func TestGetNeighborsLimitDigest(t *testing.T) {
+	g := &fakeGraph{
+		entities: map[model.EntityID]model.Entity{"h": {ID: "h", Type: model.TypeHost}},
+		deleted:  map[model.EntityID]bool{},
+	}
+	for i := 0; i < 60; i++ {
+		pid := model.EntityID(fmt.Sprintf("p%02d", i))
+		g.entities[pid] = model.Entity{ID: pid, Type: model.TypeProcess}
+		g.relations = append(g.relations, model.Relation{
+			ID: model.RelationID(fmt.Sprintf("r%02d", i)), Type: model.RelRunsOn, From: pid, To: "h",
+		})
+	}
+	s := New(g, &fakeStore{})
+	ctx := context.Background()
+
+	_, out, err := s.getNeighbors(ctx, nil, GetNeighborsInput{EntityID: "h", MaxDepth: 1, Limit: 10})
+	if err != nil {
+		t.Fatalf("getNeighbors: %v", err)
+	}
+	if out.Total != 60 || out.Count != 10 || len(out.Neighbors) != 10 || !out.Truncated {
+		t.Fatalf("limit=10: total=%d count=%d len=%d truncated=%v, want 60/10/10/true", out.Total, out.Count, len(out.Neighbors), out.Truncated)
+	}
+
+	// Default limit (50) still truncates 60.
+	_, out, _ = s.getNeighbors(ctx, nil, GetNeighborsInput{EntityID: "h", MaxDepth: 1})
+	if out.Total != 60 || out.Count != 50 || !out.Truncated {
+		t.Fatalf("default limit: total=%d count=%d truncated=%v, want 60/50/true", out.Total, out.Count, out.Truncated)
+	}
+
+	// A limit above the reachable set returns everything, not truncated.
+	_, out, _ = s.getNeighbors(ctx, nil, GetNeighborsInput{EntityID: "h", MaxDepth: 1, Limit: 200})
+	if out.Total != 60 || out.Count != 60 || out.Truncated {
+		t.Fatalf("limit=200: total=%d count=%d truncated=%v, want 60/60/false", out.Total, out.Count, out.Truncated)
 	}
 }
 
@@ -665,7 +704,7 @@ func TestFindPathAndNeighborEdges(t *testing.T) {
 	}
 
 	// get_neighbors carries the edge facts.
-	_, ns, err := s.getNeighbors(ctx, nil, GetNeighborsInput{EntityID: "01HOST_WEB", Depth: 2})
+	_, ns, err := s.getNeighbors(ctx, nil, GetNeighborsInput{EntityID: "01HOST_WEB", MaxDepth: 2})
 	if err != nil {
 		t.Fatal(err)
 	}

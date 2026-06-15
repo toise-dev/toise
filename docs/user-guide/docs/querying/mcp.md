@@ -31,7 +31,7 @@ question without a second lookup.
 | `describe_type(type)` | zoom on one type: observed attribute keys with examples, empirical relation shapes and peers — or, for a relation type, endpoint shapes and failure-propagation direction |
 | `find_entities(type, match, limit)` | entities matching a type / attribute filter, with `total`/`truncated` |
 | `get_entity(entity_id)` | a full entity with its attributes |
-| `get_neighbors(entity_id, relation_type, depth)` | traverse relations up to `depth` (**capped at 5**); each neighbor carries the relation type, direction, and hop distance that reached it |
+| `get_neighbors(entity_id, relation_type, max_depth, limit)` | traverse relations up to `max_depth` (**capped at 5**); each neighbor carries the relation type, direction, and hop distance that reached it, with `total`/`truncated` like the other list tools |
 | `find_path(from_id, to_id, relation_type, max_depth)` | the shortest relation path between two entities; `reachable: false` is a first-class answer, never an error |
 | `impact_of(entity_id, max_depth)` | the blast radius of a failure: everything the entity takes down, following each relation type's dependency direction, nearest first |
 | `entity_history(entity_id, since, until, ...)` | an entity's timeline from the event log (bi-temporal), heartbeats excluded by default, bounded by `limit`, with a per-type digest |
@@ -52,8 +52,8 @@ and report a digest — `total`, `truncated`, `heartbeats_excluded`, counts per
 change type — so the model can narrow instead of paging blind. Every tool call
 runs under a 30-second budget.
 
-Errors are plain, user-friendly messages (e.g. "depth 7 exceeds the maximum of
-5"), never stack traces.
+Errors are plain, user-friendly messages (e.g. "max_depth 7 exceeds the maximum
+of 5"), never stack traces.
 
 ## Connect Claude Desktop (stdio)
 
@@ -103,7 +103,7 @@ result:
 > databases, 6 network switches, and the agent observing them — connected by 320
 > relations. A small, well-wired 60-machine fleet.*
 
-> **"What is connected to host-0000?"** — `get_neighbors(entity_id, depth: 1)`
+> **"What is connected to host-0000?"** — `get_neighbors(entity_id, max_depth: 1)`
 >
 > *`host-0000` has 2 direct neighbours: its `eth0` interface (`oper_state=up`)
 > and the agent that `monitors` it. One hop further would surface its address,
