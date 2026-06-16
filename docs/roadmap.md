@@ -32,6 +32,12 @@ Through **0.7.0** (mid-2026), ahead of the original schedule:
   the first GraphQL mutation), MCP resources and prompts, read-only and
   ingest-only token roles, response verbosity tiers, a conformance CLI and a
   producer directory, and a pinned, documented API surface.
+- **Connection topology** — "who depends on whom": a producer asserts a durable
+  `depends_on` edge to an observable network endpoint, and the consumer resolves
+  that endpoint to the canonical remote listener/host at read time (a derived
+  overlay, never written back), so the graph answers both "what does this service
+  depend on?" and "who connects to it?". See
+  [the design note](./design/netstat-connection-topology.md).
 
 ## Now
 
