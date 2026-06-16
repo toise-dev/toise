@@ -1,8 +1,9 @@
 # Roadmap
 
-This roadmap describes the planned direction for Toise. It is intentionally
-high-level and will shift as the design firms up and as we learn from early
-deployments. Dates are targets, not commitments.
+High-level direction for Toise. The project has moved faster than its first
+calendar-based plan, so this roadmap is framed by **progress, not dates**: what
+has shipped, what is in flight now, and where we are heading. It will keep
+shifting as we learn from real deployments.
 
 Toise ingests OpenTelemetry entity events over OTLP. It runs no collectors of
 its own and speaks no device protocols directly: wherever this roadmap mentions
@@ -12,31 +13,43 @@ a new source of data, that data reaches Toise through an OpenTelemetry producer
 Broadening that producer ecosystem is a shared, open effort, not something
 Toise does by polling devices itself.
 
-## Q3 2026 — Foundations
+## Shipped
 
-- Core graph store backed by an append-only event log.
-- OpenTelemetry-aligned entity model (entities, relationships, attributes).
-- OTLP ingestion of entity events from any OpenTelemetry producer.
-- A GraphQL query API and a native MCP server, so AI assistants can read the
-  graph on an operator's behalf.
-- Real-time subscriptions over WebSocket.
+Through **0.7.0** (mid-2026), ahead of the original schedule:
 
-## Q4 2026 — Breadth and first demo
+- **Foundations** — an event-sourced graph store on an append-only log, an
+  OpenTelemetry-aligned entity model, OTLP ingestion from any producer, a
+  GraphQL API and a native MCP server, real-time subscriptions, a debug UI, and
+  a public demo scenario.
+- **Production-readiness & multi-tenancy** — bearer-token auth with per-tenant
+  authorization, TLS, isolated per-tenant graphs, operational endpoints and
+  Prometheus metrics, retention and snapshots, release binaries and a multi-arch
+  container image. **Running in production.**
+- **Time travel & the producer SDK** — as-of event-time queries across MCP and
+  GraphQL, impact analysis, and the first public producer SDK (`pkg/emit`) with
+  a byte-pinned conformance kit.
+- **Integration & stability** — operator annotations (a `get_entity` overlay and
+  the first GraphQL mutation), MCP resources and prompts, read-only and
+  ingest-only token roles, response verbosity tiers, a conformance CLI and a
+  producer directory, and a pinned, documented API surface.
 
-- A broader ecosystem of OpenTelemetry producers emitting entity events,
-  covering more infrastructure sources (network, virtualization, directory).
-- A minimal debug UI for inspecting the graph.
-- First public demo scenario.
+## Now
 
-## H1 2027 — Toward production
+- **A broader producer ecosystem** — more OpenTelemetry producers emitting
+  entity events across host, network, virtualization, directory and cloud
+  inventory sources. This is the shared, open effort that widens what the graph
+  can see.
+- **Stabilising the API and data model** toward 1.0, informed by what real
+  deployments exercise.
 
-- Production deployment with a pilot partner.
-- Wider producer coverage, including cloud-provider inventories.
-- Public release candidate.
+## Next — toward 1.0
+
+- A **release candidate** once the public surfaces (the wire contract, GraphQL,
+  the MCP tools/resources/prompts) have settled across real deployments.
+- Hardening and operability work surfaced by production use.
 
 ## Beyond
 
-Longer-term directions — federation across sites, richer graph query
-semantics, and a broader producer and integration ecosystem — will be captured
-as [Architecture Decision Records](./architecture/adr/) once the foundations
-are in place.
+Longer-term directions — federation across sites, richer graph-query semantics,
+and a wider producer and integration ecosystem — are captured as
+[Architecture Decision Records](./architecture/adr/) as the foundations settle.
