@@ -33,10 +33,24 @@ SDK has adopters, so they had to be settled before the first SDK release.
 **1. `pkg/emit` becomes its own Go module** (`github.com/toise-dev/toise/pkg/emit`),
 containing the SDK, the conformance kit, the new `wire` package, and the frozen
 testdata. Its dependency graph is the OTel pdata types and gRPC — nothing of the
-server. The root module consumes it through a `replace` directive pointing at
-the in-tree copy, so the server always builds against the SDK as it exists in
-the same commit, and the cross-module parity tests in `internal/ingest` keep
-pinning SDK-vs-ingest. The import path does not change for adopters.
+server. The root module consumes it as a normal dependency, **requiring the
+published `pkg/emit` tag** — the cross-module parity tests in `internal/ingest`
+pin SDK-vs-ingest against that released contract. The import path does not change
+for adopters.
+
+> **Amended 2026-06-17 (#212).** The root module originally consumed `pkg/emit`
+> through a local `replace` directive (`=> ./pkg/emit`) so the server always built
+> against the in-tree SDK. A local-path replace makes
+> `go install github.com/toise-dev/toise/cmd/toise-server@latest` **fail** for
+> users, which violates ADR 0030's zero-config/low-friction invariant. The replace
+> is removed; the root now `require`s the published `pkg/emit` tag. Cross-module
+> development (editing the SDK and the server together) uses a **developer-local,
+> uncommitted `go.work`** (`go work init . ./pkg/emit`) or a local replace — Go's
+> standard answer, and `go install pkg@version` ignores `go.work`, so the user
+> install path stays clean. A committed `go.work` was rejected: it surfaces a
+> pre-existing `genproto` monolith/split version skew in the transitive graph that
+> `go mod tidy` and the workspace repeatedly undo (a separate cleanup, not blocking
+> the install fix).
 
 **2. Server tags gain the `v` prefix from `v0.6.0`; the SDK is tagged
 `pkg/emit/vX.Y.Z` from `pkg/emit/v0.1.0`, on its own cadence.** The `v` prefix
