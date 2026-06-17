@@ -139,6 +139,19 @@ to create one. Note that `./...` from the repository root does not reach the
 nested SDK module: `make test` and `make lint` run both modules, and CI does
 the same.
 
+The root module **requires the published `pkg/emit` tag** (not a local replace),
+so `go install github.com/toise-dev/toise/cmd/toise-server@latest` works for
+users (#212). If you are changing the SDK and the server **together** and want the
+server to build against your in-tree SDK changes before tagging, add a local,
+**uncommitted** workspace:
+
+```bash
+go work init . ./pkg/emit   # creates go.work (gitignored); remove or `go work` off when done
+```
+
+`go install pkg@version` ignores `go.work`, so this never affects users. Do not
+commit `go.work`.
+
 ## Where to ask questions
 
 Open a GitHub Discussion once Discussions are enabled on the repository. Until

@@ -12,7 +12,7 @@ require (
 	github.com/oklog/ulid/v2 v2.1.1
 	github.com/prometheus/client_golang v1.15.0
 	github.com/prometheus/client_model v0.3.0
-	github.com/toise-dev/toise/pkg/emit v0.0.0-00010101000000-000000000000
+	github.com/toise-dev/toise/pkg/emit v0.2.0
 	github.com/vektah/gqlparser/v2 v2.5.33
 	go.opentelemetry.io/collector/pdata v1.59.0
 	google.golang.org/grpc v1.81.1
@@ -65,7 +65,3 @@ require (
 	golang.org/x/text v0.37.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 )
-
-// The SDK lives in this repo as a nested module (ADR 0027); the server always
-// builds and tests against the in-tree SDK, not a published tag.
-replace github.com/toise-dev/toise/pkg/emit => ./pkg/emit
