@@ -14,11 +14,17 @@ import (
 )
 
 // stateKeys are the descriptive attribute keys whose change is classified as a
-// state change rather than a plain attribute update. See ADR 0006.
+// state change rather than a plain attribute update. See ADR 0006. These are
+// operational-state keys: a change is causally interesting (surfaced via
+// changed_keys / graph_diff), unlike a plain descriptive update. replication.role
+// and read_only make a database failover or a read-only flip a first-class state
+// change rather than a silent attribute update.
 var stateKeys = map[string]struct{}{
-	"oper_state":  {},
-	"admin_state": {},
-	"status":      {},
+	"oper_state":       {},
+	"admin_state":      {},
+	"status":           {},
+	"replication.role": {},
+	"read_only":        {},
 }
 
 // Appender persists qualified events. The store satisfies it.

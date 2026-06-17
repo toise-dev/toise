@@ -86,6 +86,40 @@ func TestObserveEntityClassification(t *testing.T) {
 	}
 }
 
+func TestStateKeyClassification(t *testing.T) {
+	e, _, _ := newEngine(t)
+	ident := []model.KeyValue{kv("db.instance.id", "pg-1")}
+
+	if ev, err := e.ObserveEntity(EntityObservation{Type: model.TypeDatabase, Identity: ident,
+		Attributes: []model.KeyValue{kv("replication.role", "primary"), kv("read_only", "false")}, EventTime: t0}); err != nil || ev.Entity.ChangeType != model.EntityCreated {
+		t.Fatalf("create = %v, %s", err, ev.Entity.ChangeType)
+	}
+
+	// failover: replication.role primary -> replica is a STATE change (AT4)
+	ev, _ := e.ObserveEntity(EntityObservation{Type: model.TypeDatabase, Identity: ident,
+		Attributes: []model.KeyValue{kv("replication.role", "replica"), kv("read_only", "false")}, EventTime: t0})
+	if ev.Entity.ChangeType != model.EntityStateChanged {
+		t.Errorf("replication.role flip = %s, want entity.state_changed", ev.Entity.ChangeType)
+	}
+	if len(ev.Entity.ChangedKeys) != 1 || ev.Entity.ChangedKeys[0] != "replication.role" {
+		t.Errorf("changed keys = %v, want [replication.role]", ev.Entity.ChangedKeys)
+	}
+
+	// read_only flip is also a STATE change
+	ev, _ = e.ObserveEntity(EntityObservation{Type: model.TypeDatabase, Identity: ident,
+		Attributes: []model.KeyValue{kv("replication.role", "replica"), kv("read_only", "true")}, EventTime: t0})
+	if ev.Entity.ChangeType != model.EntityStateChanged {
+		t.Errorf("read_only flip = %s, want entity.state_changed", ev.Entity.ChangeType)
+	}
+
+	// a plain descriptive change (version, AT6) stays attribute_updated, not state
+	ev, _ = e.ObserveEntity(EntityObservation{Type: model.TypeDatabase, Identity: ident,
+		Attributes: []model.KeyValue{kv("replication.role", "replica"), kv("read_only", "true"), kv("db.system.version", "16.2")}, EventTime: t0})
+	if ev.Entity.ChangeType != model.EntityAttributeUpdated {
+		t.Errorf("version add = %s, want entity.attribute_updated", ev.Entity.ChangeType)
+	}
+}
+
 func TestObserveRelationLifecycle(t *testing.T) {
 	e, _, recs := newEngine(t)
 	procRef := EndpointRef{Type: model.TypeProcess, Identity: []model.KeyValue{kv("pid", "100")}}
