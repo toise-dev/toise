@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -466,7 +467,12 @@ func TestOpenStackFallsBackOnCorruptSnapshot(t *testing.T) {
 // storm on the first sweep after boot; only a sweep past boot+interval reaps.
 func TestOpenStackFloorsRestoredDeadlines(t *testing.T) {
 	dataDir := t.TempDir()
-	reg, err := Open(dataDir, store.DefaultConfig(), 0, discard())
+	const interval = 50 * time.Millisecond
+
+	// Write a memento with a producer ref whose deadline lapses long before reopen.
+	t1 := time.Unix(1_000_000_000, 0).UTC()
+	reg, err := openWithClock(dataDir, store.DefaultConfig(), 0, Limits{AutoCreate: true}, discard(),
+		func() time.Time { return t1 })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -477,7 +483,7 @@ func TestOpenStackFloorsRestoredDeadlines(t *testing.T) {
 	if _, oerr := st.Engine.ObserveEntity(change.EntityObservation{
 		Type:     model.TypeHost,
 		Identity: []model.KeyValue{{Key: "host.id", Value: model.StringValue("h-floor")}},
-		Interval: 50 * time.Millisecond, Producer: "p1", EventTime: time.Now(),
+		Interval: interval, Producer: "p1", EventTime: t1,
 	}); oerr != nil {
 		t.Fatal(oerr)
 	}
@@ -486,10 +492,14 @@ func TestOpenStackFloorsRestoredDeadlines(t *testing.T) {
 		t.Fatal(cerr)
 	}
 
-	// Downtime longer than the producer's interval: the stored deadline lapses.
-	time.Sleep(120 * time.Millisecond)
+	// Reopen far in the future on a controllable clock — no wall-clock, no sleeps.
+	// The stored deadline (t1) has lapsed, so it is floored to boot+interval.
+	boot := time.Unix(2_000_000_000, 0).UTC()
+	var clk atomic.Int64
+	clk.Store(boot.UnixNano())
+	now := func() time.Time { return time.Unix(0, clk.Load()).UTC() }
 
-	reg2, err := Open(dataDir, store.DefaultConfig(), 0, discard())
+	reg2, err := openWithClock(dataDir, store.DefaultConfig(), 0, Limits{AutoCreate: true}, discard(), now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -498,6 +508,8 @@ func TestOpenStackFloorsRestoredDeadlines(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	// At boot, now == boot < boot+interval (the floor): nothing reaped.
 	if n, _ := st2.Engine.Sweep(); n != 0 {
 		t.Fatalf("sweep right after boot expired %d, want 0 (deadline floored to boot+interval)", n)
 	}
@@ -505,8 +517,8 @@ func TestOpenStackFloorsRestoredDeadlines(t *testing.T) {
 		t.Fatal("entity reaped by the boot-time sweep despite the grace floor")
 	}
 
-	// Past the floored deadline the producer is genuinely silent: reap it.
-	time.Sleep(120 * time.Millisecond)
+	// Advance strictly past the floored deadline: the silent producer is reaped.
+	clk.Store(boot.Add(interval + time.Millisecond).UnixNano())
 	if n, _ := st2.Engine.Sweep(); n != 1 {
 		t.Fatalf("post-grace sweep expired %d, want 1", n)
 	}
