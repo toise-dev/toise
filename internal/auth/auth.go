@@ -56,7 +56,9 @@ type Authenticator struct {
 	tokens       [][]byte            // global, both surfaces, every tenant
 	readTokens   [][]byte            // global, read surface only
 	ingestTokens [][]byte            // global, ingest surface only
-	scoped       map[string][][]byte // tenant id -> tokens (both surfaces) valid only for that tenant
+	scoped       map[string][][]byte // tenant id -> full-role tokens (both surfaces) valid only for that tenant
+	scopedRead   map[string][][]byte // tenant id -> read-only tokens, that tenant's read surfaces only (per-tenant RBAC)
+	scopedIngest map[string][][]byte // tenant id -> ingest-only tokens, that tenant's ingest only (per-tenant RBAC)
 	onFailure    func()              // optional, observed on every rejected authentication
 	// deriveOnly is the ADR 0028 anti-spoofing mode: when set, a tenant-scoped
 	// token's tenant is derived from its binding and the client-supplied
@@ -82,14 +84,20 @@ func (a *Authenticator) TenantForBearer(h string) (string, bool) {
 	if matchAny(got, a.tokens) || matchAny(got, a.readTokens) || matchAny(got, a.ingestTokens) {
 		return "", false // a global/operator token is never derived
 	}
-	found, hits := "", 0
-	for tid, toks := range a.scoped {
-		if matchAny(got, toks) {
-			found, hits = tid, hits+1
+	// A scoped token of any role (full/read/ingest) derives its tenant; collect
+	// the distinct tenants it is bound to and derive only when there is exactly one.
+	seen := map[string]struct{}{}
+	for _, m := range []map[string][][]byte{a.scoped, a.scopedRead, a.scopedIngest} {
+		for tid, toks := range m {
+			if matchAny(got, toks) {
+				seen[tid] = struct{}{}
+			}
 		}
 	}
-	if hits == 1 {
-		return found, true
+	if len(seen) == 1 {
+		for tid := range seen {
+			return tid, true
+		}
 	}
 	return "", false // unknown, or ambiguous (bound to several tenants)
 }
@@ -163,18 +171,46 @@ func NewWithRoles(both, readOnly, ingestOnly []string, scoped map[string][]strin
 	a.tokens = toBytes(both)
 	a.readTokens = toBytes(readOnly)
 	a.ingestTokens = toBytes(ingestOnly)
-	for tenantID, toks := range scoped {
+	a.scoped = hashScopedMap(scoped)
+	return a
+}
+
+// WithScopedRoleTokens adds per-tenant role-scoped tokens — read-only and
+// ingest-only — authorized only for their tenant and matching surface
+// (per-tenant RBAC, ADR 0028). Full-role tenant tokens stay in scoped. Returns a
+// for chaining; call before serving.
+func (a *Authenticator) WithScopedRoleTokens(read, ingest map[string][]string) *Authenticator {
+	a.scopedRead = hashScopedMap(read)
+	a.scopedIngest = hashScopedMap(ingest)
+	return a
+}
+
+// hashScopedMap hashes a tenant -> tokens map into tenant -> token hashes,
+// dropping blanks. Returns nil when nothing is left (so Enabled stays accurate).
+func hashScopedMap(m map[string][]string) map[string][][]byte {
+	var out map[string][][]byte
+	for tenantID, toks := range m {
 		for _, t := range toks {
 			if t = strings.TrimSpace(t); t == "" {
 				continue
 			}
-			if a.scoped == nil {
-				a.scoped = make(map[string][][]byte)
+			if out == nil {
+				out = make(map[string][][]byte)
 			}
-			a.scoped[tenantID] = append(a.scoped[tenantID], hashToken(t))
+			out[tenantID] = append(out[tenantID], hashToken(t))
 		}
 	}
-	return a
+	return out
+}
+
+// scopedRoleSet returns the role-scoped token map that grants surface s — read
+// tokens for the read surface, ingest tokens for ingest. Full scoped tokens
+// (a.scoped) grant both surfaces and are checked separately.
+func (a *Authenticator) scopedRoleSet(s surface) map[string][][]byte {
+	if s == surfaceIngest {
+		return a.scopedIngest
+	}
+	return a.scopedRead
 }
 
 func toBytes(toks []string) [][]byte {
@@ -199,7 +235,8 @@ func hashToken(t string) []byte {
 
 // Enabled reports whether any token is configured (i.e. auth is enforced).
 func (a *Authenticator) Enabled() bool {
-	return len(a.tokens) > 0 || len(a.readTokens) > 0 || len(a.ingestTokens) > 0 || len(a.scoped) > 0
+	return len(a.tokens) > 0 || len(a.readTokens) > 0 || len(a.ingestTokens) > 0 ||
+		len(a.scoped) > 0 || len(a.scopedRead) > 0 || len(a.scopedIngest) > 0
 }
 
 // matchAny reports, in constant time per candidate, whether token equals any of
@@ -235,17 +272,24 @@ func (a *Authenticator) valid(token string, s surface) bool {
 			scoped = true
 		}
 	}
+	// A role-scoped token grants only its matching surface.
+	for _, toks := range a.scopedRoleSet(s) {
+		if matchAny(got, toks) {
+			scoped = true
+		}
+	}
 	return full || role || scoped
 }
 
 // allowedForTenant reports whether token may touch tenantID on the surface:
 // global tokens (full, or role matching the surface) may touch every tenant; a
-// scoped token only its own.
+// full scoped token only its own; a role-scoped token only its own and only on
+// the matching surface (per-tenant RBAC, ADR 0028).
 func (a *Authenticator) allowedForTenant(token, tenantID string, s surface) bool {
 	got := hashToken(token)
 	full := matchAny(got, a.tokens)
 	role := matchAny(got, a.roleSet(s))
-	scoped := matchAny(got, a.scoped[tenantID])
+	scoped := matchAny(got, a.scoped[tenantID]) || matchAny(got, a.scopedRoleSet(s)[tenantID])
 	return full || role || scoped
 }
 

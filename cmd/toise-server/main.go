@@ -158,7 +158,16 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	authn := auth.NewWithRoles(cfg.AuthTokens, cfg.ReadTokens, cfg.IngestTokens, scopedTokens)
+	scopedRead, err := cfg.TenantReadTokensMap()
+	if err != nil {
+		return err
+	}
+	scopedIngest, err := cfg.TenantIngestTokensMap()
+	if err != nil {
+		return err
+	}
+	authn := auth.NewWithRoles(cfg.AuthTokens, cfg.ReadTokens, cfg.IngestTokens, scopedTokens).
+		WithScopedRoleTokens(scopedRead, scopedIngest) // per-tenant RBAC (ADR 0028)
 	authn.SetTenantTrustMode(cfg.DeriveOnlyTenancy()) // ADR 0028 anti-spoofing; off by default
 	var grpcOpts []grpc.ServerOption
 	if authn.Enabled() {
