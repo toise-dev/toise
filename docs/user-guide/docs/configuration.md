@@ -100,6 +100,11 @@ network (private datacenter segment or VPN; ADR 0014). Exposing it to other host
   Clients then send `Authorization: Bearer <token>` on both HTTP and gRPC. The
   operational probes (`/healthz`, `/readyz`) and the metrics scrape (`/metrics`)
   stay public so a load balancer and Prometheus can reach them without a token.
+  Configured tokens are **hashed at rest** (SHA-256): the server holds only the
+  hashes, never the plaintext, so a heap dump never yields a usable token
+  (ADR 0028). Matching is constant-time. Rotation is operational — add the new
+  token alongside the old, then drop the old one; revocation is removing a token
+  and reloading.
 - **Token roles (least privilege).** `auth_tokens` are full (read + ingest). Use
   `read_tokens` for a token that may query but never ingest (a dashboard, an
   assistant), and `ingest_tokens` for a producer that may ingest but never read.

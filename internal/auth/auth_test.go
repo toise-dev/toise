@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"crypto/sha256"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -10,6 +11,35 @@ import (
 
 	"github.com/toise-dev/toise/internal/tenant"
 )
+
+func TestTokensHashedAtRest(t *testing.T) {
+	const full, reader, scopedTok = "super-secret-token", "reader-token", "acme-token"
+	a := NewWithRoles([]string{full}, []string{reader}, nil, map[string][]string{"acme": {scopedTok}})
+
+	// Configured tokens still authenticate (behaviour preserved).
+	if !a.valid(full, surfaceRead) || !a.valid(reader, surfaceRead) || !a.valid(scopedTok, surfaceRead) {
+		t.Fatal("configured tokens must still authenticate after hashing at rest")
+	}
+
+	// Every stored entry is a 32-byte SHA-256, never the plaintext token.
+	plaintext := map[string]bool{full: true, reader: true, scopedTok: true}
+	check := func(sets ...[][]byte) {
+		for _, set := range sets {
+			for _, b := range set {
+				if len(b) != sha256.Size {
+					t.Errorf("stored token is %d bytes, want a %d-byte hash", len(b), sha256.Size)
+				}
+				if plaintext[string(b)] {
+					t.Error("a plaintext token was retained at rest")
+				}
+			}
+		}
+	}
+	check(a.tokens, a.readTokens)
+	for _, toks := range a.scoped {
+		check(toks)
+	}
+}
 
 func okHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
