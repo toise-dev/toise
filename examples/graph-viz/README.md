@@ -83,6 +83,21 @@ you read the server's `default` tenant.
 
 [adr25]: ../../docs/architecture/adr/0025-multi-tenancy.md
 
+## Inferred links
+
+The engine stores facts only and never merges entities by heuristic, so an IP that a
+producer emits as a plain attribute — a `service.listener`'s bind address, a
+`network.endpoint`'s `server.address`, a `network.route`'s next hop — is **not**
+linked to the `network.address` entity for that IP. The same address then appears
+smeared across several disconnected nodes.
+
+The header **`inferred`** toggle (off by default) overlays **dashed, derived edges**
+from each IP-bearing entity to the matching `network.address` node, so the graph
+reads as connected. These edges are a **consumer-side reading aid, not stored
+relations** — the right fix is for the producer to assert the relationship. Wildcard
+and loopback addresses (`0.0.0.0`, `127.0.0.0/8`, `::`) are skipped, as they are not
+meaningful join points.
+
 ## Notes
 
 - `toise-server` has no authentication by default; enable its native bearer-token

@@ -17,6 +17,12 @@
   (host.name, service.name, interface.name, the listener's process, …) and the raw
   technical identities. The choice is remembered (localStorage).
 
+  Inferred links (off by default): an optional overlay of dashed, derived edges that
+  link each IP-bearing entity (a listener's bind address, an endpoint's
+  server.address, a route's next hop) to the network.address node for that IP. The
+  engine stores facts only and never merges by heuristic, so these are NOT stored
+  relations — they are a consumer-side reading aid. Wildcard/loopback are skipped.
+
   Multi-tenancy (ADR 0025): pick a tenant with ?tenant=<id>. It is sent as the
   X-Scope-OrgID header on queries; for the live subscription (a browser can't set a
   header on a WebSocket) it is appended as ?tenant=, which a translating proxy maps
@@ -75,6 +81,7 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
     <span><b id="nEdges">0</b> relations</span>
     <label class="muted" for="tn">tenant<input id="tn" spellcheck="false" autocomplete="off" placeholder="default" title="X-Scope-OrgID — sent as a header on queries and as ?tenant= on the subscription" style="background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;padding:.1rem .35rem;width:8rem;margin-left:.3rem;"></label>
     <button id="labels" title="Toggle node labels: human-readable names vs technical ids">labels: names</button>
+    <button id="inferred" title="Overlay derived (not stored) edges linking IP-bearing entities to their network.address hub">inferred: off</button>
     <button id="resync">resync</button>
     <button id="fit">fit</button>
   </div>
@@ -125,6 +132,35 @@ const attrsOf=n=>Object.fromEntries((n.attributes||[]).map(a=>[a.key,a.value]));
 const identOf=n=>Object.fromEntries((n.identity||[]).map(a=>[a.key,a.value]));
 function hostNameById(hid){ for(const e of Object.values(ENT)){ if(e.type==='host' && identOf(e)['host.id']===hid) return attrsOf(e)['host.name']; } return null; }
 
+// --- inferred links (an optional, derived overlay; OFF by default) ----------
+// The engine stores facts only and never merges by heuristic, so an IP carried as
+// a plain attribute (a listener's bind address, an endpoint's server.address, a
+// route's next hop) is NOT linked to the network.address entity for that IP — the
+// same address ends up smeared across disconnected nodes. This overlay draws a
+// dashed edge from each IP-bearing entity to the matching network.address node, so
+// the graph reads as connected. These edges are DERIVED, not stored relations.
+let inferred=localStorage.getItem('toise_viz_inferred')==='1';
+const IPV4=/(?:^|[^0-9.])(\d{1,3}(?:\.\d{1,3}){3})(?![0-9.])/g;
+// Wildcard / loopback are per-host or "any" — not meaningful global join points.
+const notJoinable=ip=> !ip || ip==='0.0.0.0' || ip.startsWith('127.') || ip==='::' || ip==='::1';
+function inferredEdges(visible){
+  const addrByIp={};
+  for(const n of Object.values(ENT)){ if(n.type==='network.address'){ const ip=identOf(n)['network.address']; if(ip) addrByIp[ip]=n.id; } }
+  const real=new Set(); for(const r of Object.values(REL)){ real.add(r.fromId+'|'+r.toId); real.add(r.toId+'|'+r.fromId); }
+  const out=[], seen=new Set();
+  for(const n of Object.values(ENT)){
+    if(n.type==='network.address' || !visible.has(n.id)) continue;
+    const blob=[...(n.identity||[]),...(n.attributes||[])].map(a=>a.value).join(' ');
+    const ips=new Set(); let m; IPV4.lastIndex=0; while((m=IPV4.exec(blob))) ips.add(m[1]);
+    for(const ip of ips){ if(notJoinable(ip)) continue; const aid=addrByIp[ip];
+      if(!aid || aid===n.id || !visible.has(aid) || real.has(n.id+'|'+aid)) continue;
+      const id='inf:'+n.id+'~'+aid; if(seen.has(id)) continue; seen.add(id);
+      out.push({id,from:n.id,to:aid,label:'≈',dashes:true,arrows:'',
+                color:{color:'#d29922',opacity:0.65},font:{color:'#d29922',size:9},smooth:false}); }
+  }
+  return out;
+}
+
 function idLabel(n){
   const id=(n.identity||[]);
   if(id.length){ const named=id.find(a=>/(^|\.)(name|id|endpoint|address)$/i.test(a.key));
@@ -165,11 +201,16 @@ function rebuild(){
   const edgeIds=new Set(), eUp=[];
   Object.values(REL).forEach(r=>{ if(nodeIds.has(r.fromId)&&nodeIds.has(r.toId)){ edgeIds.add(r.id);
     eUp.push({id:r.id,from:r.fromId,to:r.toId,label:r.type}); } });
+  const realCount=edgeIds.size;
+  if(inferred) inferredEdges(nodeIds).forEach(e=>{ if(!edgeIds.has(e.id)){ edgeIds.add(e.id); eUp.push(e); } });
   edges.update(eUp);
   edges.getIds().forEach(id=>{ if(!edgeIds.has(id)) edges.remove(id); });
   document.getElementById('nNodes').textContent=nodeIds.size;
-  document.getElementById('nEdges').textContent=edgeIds.size;
+  document.getElementById('nEdges').textContent=realCount+(inferred?' +'+(edgeIds.size-realCount)+' inferred':'');
   const leg=document.getElementById('legend'); leg.innerHTML='';
+  if(inferred){ const s=document.createElement('span'); s.style.cursor='default'; s.style.opacity='.85';
+    s.innerHTML='<i style="background:none;border-top:2px dashed #d29922;border-radius:0;height:0;width:14px"></i>inferred (derived, not stored)';
+    leg.appendChild(s); }
   [...allTypes].sort().forEach(t=>{ const s=document.createElement('span'); s.className=hidden.has(t)?'off':'';
     s.innerHTML='<i style="background:'+colorFor(t)+'"></i>'+esc(t);
     s.onclick=()=>{ hidden.has(t)?hidden.delete(t):hidden.add(t); rebuild(); }; leg.appendChild(s); });
@@ -265,6 +306,10 @@ const labelsBtn=document.getElementById('labels');
 function syncLabelsBtn(){ labelsBtn.textContent='labels: '+(labelMode==='name'?'names':'ids'); }
 syncLabelsBtn();
 labelsBtn.onclick=()=>{ labelMode=(labelMode==='name'?'id':'name'); localStorage.setItem('toise_viz_labels',labelMode); syncLabelsBtn(); rebuild(); };
+const inferredBtn=document.getElementById('inferred');
+function syncInferredBtn(){ inferredBtn.textContent='inferred: '+(inferred?'on':'off'); inferredBtn.style.color=inferred?'#d29922':''; }
+syncInferredBtn();
+inferredBtn.onclick=()=>{ inferred=!inferred; localStorage.setItem('toise_viz_inferred',inferred?'1':'0'); syncInferredBtn(); rebuild(); };
 const tnInput=document.getElementById('tn'); tnInput.value=TENANT;
 tnInput.addEventListener('change',()=>{ const v=tnInput.value.trim(); const p=new URLSearchParams(location.search);
   if(v) p.set('tenant',v); else p.delete('tenant'); location.search=p.toString(); });
