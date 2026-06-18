@@ -113,7 +113,7 @@ type Config struct {
 	// off by default):
 	//   "trust-header" (default) — the tenant comes from the X-Scope-OrgID header /
 	//     tenant.id resource attribute; the network/edge is trusted. Unchanged
-	//     behaviour, so the zero-config and self-hosted postures are untouched.
+	//     behavior, so the zero-config and self-hosted postures are untouched.
 	//   "derive-only" — for a tenant-scoped token the tenant is derived from the
 	//     token's binding and any client-supplied X-Scope-OrgID / tenant.id is
 	//     ignored (anti-spoofing for SaaS). Global (operator) tokens keep
