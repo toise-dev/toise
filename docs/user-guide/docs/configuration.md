@@ -39,6 +39,8 @@ for the rationale.
 | `read_tokens` | `TOISE_READ_TOKENS` | *(none — secret)* | (empty) | bearer tokens valid only on the **read** surfaces (GraphQL, MCP, debug UI) — rejected on OTLP ingest |
 | `ingest_tokens` | `TOISE_INGEST_TOKENS` | *(none — secret)* | (empty) | bearer tokens valid only on **OTLP ingest** — rejected on the read surfaces |
 | `tenant_tokens` | `TOISE_TENANT_TOKENS` | *(none — secret)* | (empty) | comma-separated `tenant:token` pairs — full role, authorized only for its tenant (HTTP 403 / gRPC PermissionDenied elsewhere) |
+| `tenant_read_tokens` | `TOISE_TENANT_READ_TOKENS` | *(none — secret)* | (empty) | `tenant:token` pairs — **read-only** role, that tenant's read surfaces only (per-tenant RBAC, ADR 0028) |
+| `tenant_ingest_tokens` | `TOISE_TENANT_INGEST_TOKENS` | *(none — secret)* | (empty) | `tenant:token` pairs — **ingest-only** role, that tenant's OTLP ingest only |
 | `accept_unknown_types` | `TOISE_ACCEPT_UNKNOWN_TYPES` | `--accept-unknown-types` | `false` | accept entity/relation types outside the built-in registry (shape still validated; counted on /metrics) |
 | `tenant_auto_create` | `TOISE_TENANT_AUTO_CREATE` | `--tenant-auto-create` | `true` | allow a first write to a new tenant id to create its stack; off = only pre-existing tenants (and `default`) are served |
 | `tenant_allowlist` | `TOISE_TENANT_ALLOWLIST` | `--tenant-allowlist` | (empty) | comma-separated tenant ids allowed to be created; empty = any (subject to auto-create and the cap) |
@@ -110,8 +112,10 @@ network (private datacenter segment or VPN; ADR 0014). Exposing it to other host
   `read_tokens` for a token that may query but never ingest (a dashboard, an
   assistant), and `ingest_tokens` for a producer that may ingest but never read.
   A read-only token is rejected on OTLP ingest; an ingest-only token is rejected
-  on GraphQL/MCP/debug. Roles are global; combine with `tenant_tokens` for
-  per-tenant scoping.
+  on GraphQL/MCP/debug. These roles are global (every tenant). For **per-tenant
+  RBAC**, the same roles exist scoped to one tenant: `tenant_tokens` (full),
+  `tenant_read_tokens` (read-only), `tenant_ingest_tokens` (ingest-only) — each a
+  `tenant:token` pair authorized only for its tenant and surface (ADR 0028).
 - **TLS.** Point `tls_cert_file` and `tls_key_file` at a PEM cert/key pair to serve
   the HTTP surfaces and OTLP ingestion over TLS.
 - **Audit log.** Set `audit_log` to a file path to record an append-only JSON-line

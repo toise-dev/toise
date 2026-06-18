@@ -303,3 +303,54 @@ func TestTenantScopedTokens(t *testing.T) {
 		t.Error("disabled auth must allow")
 	}
 }
+
+func TestPerTenantRBAC(t *testing.T) {
+	a := NewWithRoles(nil, nil, nil, map[string][]string{"acme": {"acme-full"}}).
+		WithScopedRoleTokens(
+			map[string][]string{"acme": {"acme-read"}},
+			map[string][]string{"acme": {"acme-ingest"}},
+		)
+
+	// Read-only scoped token: reads its tenant only, never ingests, never another tenant, never writes.
+	if !a.allowedForTenant("acme-read", "acme", surfaceRead) {
+		t.Error("read-scoped token must be allowed to read its tenant")
+	}
+	if a.allowedForTenant("acme-read", "acme", surfaceIngest) {
+		t.Error("read-scoped token must NOT ingest")
+	}
+	if a.allowedForTenant("acme-read", "other", surfaceRead) {
+		t.Error("read-scoped token must NOT touch another tenant")
+	}
+	if a.canWriteHeader("Bearer acme-read") {
+		t.Error("read-scoped token must not be write-capable")
+	}
+
+	// Ingest-only scoped token: ingests its tenant only, never reads.
+	if !a.allowedForTenant("acme-ingest", "acme", surfaceIngest) {
+		t.Error("ingest-scoped token must be allowed to ingest its tenant")
+	}
+	if a.allowedForTenant("acme-ingest", "acme", surfaceRead) {
+		t.Error("ingest-scoped token must NOT read")
+	}
+
+	// Full scoped token: both surfaces of its tenant, and write-capable.
+	if !a.allowedForTenant("acme-full", "acme", surfaceRead) || !a.allowedForTenant("acme-full", "acme", surfaceIngest) {
+		t.Error("full scoped token must read and ingest its tenant")
+	}
+	if !a.canWriteHeader("Bearer acme-full") {
+		t.Error("full scoped token must be write-capable")
+	}
+
+	// derive-only: a scoped token of any role derives its tenant.
+	a.SetTenantTrustMode(true)
+	for _, tok := range []string{"acme-read", "acme-ingest", "acme-full"} {
+		if id, ok := a.TenantForBearer("Bearer " + tok); !ok || id != "acme" {
+			t.Errorf("TenantForBearer(%s) = %q,%v; want acme,true", tok, id, ok)
+		}
+	}
+
+	// A role-scoped-only configuration still enforces auth.
+	if !NewWithRoles(nil, nil, nil, nil).WithScopedRoleTokens(map[string][]string{"acme": {"r"}}, nil).Enabled() {
+		t.Error("a role-scoped-only config must enable auth")
+	}
+}

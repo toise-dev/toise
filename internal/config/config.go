@@ -109,6 +109,13 @@ type Config struct {
 	// token authenticates like any other but is authorized only for its tenant
 	// (#104). Same secret rules: TOISE_TENANT_TOKENS (env), never a flag.
 	TenantTokens []string `yaml:"tenant_tokens"`
+	// TenantReadTokens / TenantIngestTokens are tenant-scoped bearer tokens with a
+	// role: read-only or ingest-only, authorized only for their tenant (per-tenant
+	// RBAC, ADR 0028). Same "tenant:token" format and secret rules as TenantTokens
+	// (TOISE_TENANT_READ_TOKENS / TOISE_TENANT_INGEST_TOKENS, env only). Tokens in
+	// TenantTokens stay full (both surfaces) for their tenant.
+	TenantReadTokens   []string `yaml:"tenant_read_tokens"`
+	TenantIngestTokens []string `yaml:"tenant_ingest_tokens"`
 	// TenantTrustMode selects how a request's tenant is decided (ADR 0028, tier-2,
 	// off by default):
 	//   "trust-header" (default) — the tenant comes from the X-Scope-OrgID header /
@@ -157,6 +164,12 @@ func (c Config) Validate() error {
 	if _, err := c.TenantTokensMap(); err != nil {
 		return err
 	}
+	if _, err := c.TenantReadTokensMap(); err != nil {
+		return err
+	}
+	if _, err := c.TenantIngestTokensMap(); err != nil {
+		return err
+	}
 	if c.MaxTenants < 0 {
 		return fmt.Errorf("max_tenants must be >= 0 (0 = unbounded), got %d", c.MaxTenants)
 	}
@@ -176,19 +189,34 @@ func (c Config) Validate() error {
 	return nil
 }
 
-// TenantTokensMap parses the "tenant:token" pairs into tenant -> tokens. The
-// tenant part must be a canonical tenant id; a malformed pair is a hard error
-// (a typo here must not silently widen or narrow access).
+// TenantTokensMap parses the full-role "tenant:token" pairs into tenant -> tokens.
 func (c Config) TenantTokensMap() (map[string][]string, error) {
-	if len(c.TenantTokens) == 0 {
+	return parseTenantTokens(c.TenantTokens, "tenant_tokens")
+}
+
+// TenantReadTokensMap / TenantIngestTokensMap parse the role-scoped tenant tokens
+// (per-tenant RBAC, ADR 0028): tenant -> read-only / ingest-only tokens.
+func (c Config) TenantReadTokensMap() (map[string][]string, error) {
+	return parseTenantTokens(c.TenantReadTokens, "tenant_read_tokens")
+}
+func (c Config) TenantIngestTokensMap() (map[string][]string, error) {
+	return parseTenantTokens(c.TenantIngestTokens, "tenant_ingest_tokens")
+}
+
+// parseTenantTokens parses "tenant:token" pairs into tenant -> tokens. The tenant
+// part must be a canonical tenant id; a malformed pair is a hard error (a typo
+// here must not silently widen or narrow access). label names the source field
+// in the error.
+func parseTenantTokens(pairs []string, label string) (map[string][]string, error) {
+	if len(pairs) == 0 {
 		return nil, nil
 	}
-	out := make(map[string][]string, len(c.TenantTokens))
-	for _, pair := range c.TenantTokens {
+	out := make(map[string][]string, len(pairs))
+	for _, pair := range pairs {
 		id, token, found := strings.Cut(pair, ":")
 		san, ok := tenant.Sanitize(id)
 		if !found || !ok || san != id || strings.TrimSpace(token) == "" {
-			return nil, fmt.Errorf("invalid tenant_tokens entry: want \"<tenant>:<token>\" with a canonical tenant id and a non-empty token")
+			return nil, fmt.Errorf("invalid %s entry: want \"<tenant>:<token>\" with a canonical tenant id and a non-empty token", label)
 		}
 		out[id] = append(out[id], token)
 	}
@@ -261,6 +289,12 @@ func (c *Config) applyEnv(getenv func(string) string) error {
 	}
 	if v := getenv("TOISE_TENANT_TOKENS"); v != "" {
 		c.TenantTokens = splitOrigins(v)
+	}
+	if v := getenv("TOISE_TENANT_READ_TOKENS"); v != "" {
+		c.TenantReadTokens = splitOrigins(v)
+	}
+	if v := getenv("TOISE_TENANT_INGEST_TOKENS"); v != "" {
+		c.TenantIngestTokens = splitOrigins(v)
 	}
 	if v := getenv("TOISE_ACCEPT_UNKNOWN_TYPES"); v != "" {
 		b, err := strconv.ParseBool(v)
