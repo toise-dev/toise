@@ -7,10 +7,78 @@ import (
 	"testing"
 
 	"google.golang.org/grpc/metadata"
+
+	"github.com/toise-dev/toise/internal/tenant"
 )
 
 func okHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+}
+
+func TestDeriveOnlyTenancy(t *testing.T) {
+	scoped := map[string][]string{"acme": {"acme-tok"}}
+
+	// TenantForBearer derives a scoped token's tenant, never a global/unknown one.
+	a := NewWithRoles([]string{"op"}, nil, nil, scoped)
+	if id, ok := a.TenantForBearer("Bearer acme-tok"); !ok || id != "acme" {
+		t.Errorf("scoped derive = %q,%v; want acme,true", id, ok)
+	}
+	if _, ok := a.TenantForBearer("Bearer op"); ok {
+		t.Error("a global/operator token must not derive a tenant")
+	}
+	if _, ok := a.TenantForBearer("Bearer nope"); ok {
+		t.Error("an unknown token must not derive a tenant")
+	}
+
+	// EffectiveTenantHTTP: trust-header honors the client header; derive-only
+	// ignores it for a scoped token and uses the binding.
+	reqScoped := func(org string) *http.Request {
+		r := httptest.NewRequest(http.MethodGet, "/graphql", nil)
+		r.Header.Set("Authorization", "Bearer acme-tok")
+		r.Header.Set(tenant.HeaderOrgID, org)
+		return r
+	}
+	if id, _ := a.EffectiveTenantHTTP(reqScoped("evil")); id != "evil" {
+		t.Errorf("trust-header effective tenant = %q, want the header 'evil'", id)
+	}
+	a.SetTenantTrustMode(true)
+	if id, _ := a.EffectiveTenantHTTP(reqScoped("evil")); id != "acme" {
+		t.Errorf("derive-only effective tenant = %q, want derived 'acme' (header ignored)", id)
+	}
+	// A global/operator token still selects the tenant by header in derive-only.
+	rOp := httptest.NewRequest(http.MethodGet, "/graphql", nil)
+	rOp.Header.Set("Authorization", "Bearer op")
+	rOp.Header.Set(tenant.HeaderOrgID, "other")
+	if id, _ := a.EffectiveTenantHTTP(rOp); id != "other" {
+		t.Errorf("derive-only operator token = %q, want header 'other' (cross-tenant)", id)
+	}
+
+	// EffectiveTenantGRPC: derive-only locks a scoped token's tenant.
+	md := metadata.Pairs("authorization", "Bearer acme-tok", tenant.HeaderOrgID, "evil")
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+	if id, locked, ok := a.EffectiveTenantGRPC(ctx); !ok || !locked || id != "acme" {
+		t.Errorf("derive-only gRPC = %q,locked=%v,ok=%v; want acme,true,true", id, locked, ok)
+	}
+
+	// Anti-spoofing through the middleware: a scoped token presenting a spoofed
+	// X-Scope-OrgID for a tenant it is not bound to is forbidden under
+	// trust-header but routed to its own tenant (200) under derive-only.
+	spoof := func(deriveOnly bool) int {
+		x := NewWithRoles(nil, nil, nil, scoped)
+		x.SetTenantTrustMode(deriveOnly)
+		r := httptest.NewRequest(http.MethodGet, "/graphql", nil)
+		r.Header.Set("Authorization", "Bearer acme-tok")
+		r.Header.Set(tenant.HeaderOrgID, "victim")
+		rec := httptest.NewRecorder()
+		x.HTTPMiddleware(nil)(okHandler()).ServeHTTP(rec, r)
+		return rec.Code
+	}
+	if code := spoof(false); code != http.StatusForbidden {
+		t.Errorf("trust-header: spoofed header should be 403, got %d", code)
+	}
+	if code := spoof(true); code != http.StatusOK {
+		t.Errorf("derive-only: spoofed header ignored, should be 200, got %d", code)
+	}
 }
 
 func TestDisabledPassesThrough(t *testing.T) {
