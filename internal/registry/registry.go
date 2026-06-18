@@ -81,6 +81,10 @@ type Registry struct {
 	relBuf   time.Duration
 	limits   Limits
 	logger   *slog.Logger
+	// now is the clock each tenant engine uses (liveness floor at boot, Sweep).
+	// time.Now in production; injectable so tests drive deadlines deterministically
+	// instead of racing the wall clock.
+	now func() time.Time
 
 	// quarantined lists tenants whose store failed to open at boot; set once
 	// during Open, read-only afterwards.
@@ -110,8 +114,18 @@ func Open(dataDir string, storeCfg store.Config, relBuf time.Duration, logger *s
 
 // OpenWithLimits is Open with runtime tenant-creation bounds (#115).
 func OpenWithLimits(dataDir string, storeCfg store.Config, relBuf time.Duration, limits Limits, logger *slog.Logger) (*Registry, error) {
+	return openWithClock(dataDir, storeCfg, relBuf, limits, logger, time.Now)
+}
+
+// openWithClock is OpenWithLimits with an injectable clock — the test seam for
+// liveness/boot-grace behavior, which is otherwise wall-clock-dependent.
+// Production always passes time.Now.
+func openWithClock(dataDir string, storeCfg store.Config, relBuf time.Duration, limits Limits, logger *slog.Logger, now func() time.Time) (*Registry, error) {
 	if logger == nil {
 		logger = slog.Default()
+	}
+	if now == nil {
+		now = time.Now
 	}
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return nil, fmt.Errorf("creating data dir %s: %w", dataDir, err)
@@ -119,7 +133,7 @@ func OpenWithLimits(dataDir string, storeCfg store.Config, relBuf time.Duration,
 	if err := migrateLegacy(dataDir, logger); err != nil {
 		return nil, err
 	}
-	r := &Registry{dataDir: dataDir, storeCfg: storeCfg, relBuf: relBuf, limits: limits, logger: logger,
+	r := &Registry{dataDir: dataDir, storeCfg: storeCfg, relBuf: relBuf, limits: limits, logger: logger, now: now,
 		stacks: make(map[string]*Stack), opening: make(map[string]*inflight)}
 
 	// Boot opens what already exists (plus the default) regardless of limits:
@@ -371,7 +385,12 @@ func (r *Registry) openStack(id string) (*Stack, error) {
 		_ = st.Close()
 		return nil, fmt.Errorf("replaying event tail for tenant %q: %w", id, err)
 	}
+	clock := r.now
+	if clock == nil {
+		clock = time.Now
+	}
 	engine := change.New(graph, st,
+		change.WithClock(clock),
 		change.WithLogger(r.logger.With("tenant", id)),
 		change.WithRelationBuffer(r.relBuf))
 	// Restore the liveness Memento (#139): absolute deadlines, so a producer
