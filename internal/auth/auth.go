@@ -12,6 +12,7 @@ package auth
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"net/http"
 	"strings"
@@ -77,7 +78,7 @@ func (a *Authenticator) TenantForBearer(h string) (string, bool) {
 	if t == "" {
 		return "", false
 	}
-	got := []byte(t)
+	got := hashToken(t)
 	if matchAny(got, a.tokens) || matchAny(got, a.readTokens) || matchAny(got, a.ingestTokens) {
 		return "", false // a global/operator token is never derived
 	}
@@ -170,7 +171,7 @@ func NewWithRoles(both, readOnly, ingestOnly []string, scoped map[string][]strin
 			if a.scoped == nil {
 				a.scoped = make(map[string][][]byte)
 			}
-			a.scoped[tenantID] = append(a.scoped[tenantID], []byte(t))
+			a.scoped[tenantID] = append(a.scoped[tenantID], hashToken(t))
 		}
 	}
 	return a
@@ -180,10 +181,20 @@ func toBytes(toks []string) [][]byte {
 	var out [][]byte
 	for _, t := range toks {
 		if t = strings.TrimSpace(t); t != "" {
-			out = append(out, []byte(t))
+			out = append(out, hashToken(t))
 		}
 	}
 	return out
+}
+
+// hashToken returns the SHA-256 of a token. Configured tokens are stored as
+// hashes, never plaintext (ADR 0028): a heap dump never yields a usable token,
+// and each request hashes the presented bearer and matches in constant time.
+// SHA-256 (unsalted) fits high-entropy random tokens — unlike a low-entropy
+// password there is no precomputation advantage to defend against.
+func hashToken(t string) []byte {
+	sum := sha256.Sum256([]byte(t))
+	return sum[:]
 }
 
 // Enabled reports whether any token is configured (i.e. auth is enforced).
@@ -215,7 +226,7 @@ func (a *Authenticator) roleSet(s surface) [][]byte {
 // a full token, or a role token matching the surface, or any tenant-scoped
 // token. Per-tenant authorization is allowedForTenant.
 func (a *Authenticator) valid(token string, s surface) bool {
-	got := []byte(token)
+	got := hashToken(token)
 	full := matchAny(got, a.tokens)
 	role := matchAny(got, a.roleSet(s))
 	scoped := false
@@ -231,7 +242,7 @@ func (a *Authenticator) valid(token string, s surface) bool {
 // global tokens (full, or role matching the surface) may touch every tenant; a
 // scoped token only its own.
 func (a *Authenticator) allowedForTenant(token, tenantID string, s surface) bool {
-	got := []byte(token)
+	got := hashToken(token)
 	full := matchAny(got, a.tokens)
 	role := matchAny(got, a.roleSet(s))
 	scoped := matchAny(got, a.scoped[tenantID])
@@ -265,7 +276,7 @@ func (a *Authenticator) canWriteHeader(h string) bool {
 	if t == "" {
 		return false
 	}
-	got := []byte(t)
+	got := hashToken(t)
 	if matchAny(got, a.tokens) {
 		return true
 	}
