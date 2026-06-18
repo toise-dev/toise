@@ -97,7 +97,49 @@ leased IP) in the identity — those are descriptive attributes. Agreed identiti
 | `db` | `{db.instance.id}` — a **stable source identifier**: PostgreSQL `system_identifier`, MySQL `server_uuid`, else an operator-configured logical instance name | **never network-derived** — `server.address`/`server.port` are mutable (DHCP/failover/VIP) so they stay descriptive attributes |
 | `network.device` | `{network.device.id}` — a single subtype-prefixed value by **precedence**: `serial:` (ENTITY-MIB `entPhysicalSerialNum`) > `engine:` (`snmpEngineID`) > `mac:` (LLDP chassis-id) > `name:` (`sysName`) > `mgmt:` (mgmt IP) | **anchored on SNMP-immutable facts, not LLDP** (often disabled); `mgmt:` is mutable last-resort. Producer canonicalizes (Toise is byte-exact); raw parts descriptive. Endpoints resolved to the canonical id via `ifPhysAddress` before emitting edges. Frozen for Lot 5 — see [`otel-mapping.md`](./otel-mapping.md#networkdevice-identity--snmp-topology-lot-5-frozen). |
 | `compute.vm` | `{host.id, vmid}` — the **hypervisor node's** `host.id` plus the hypervisor's vm id | a VM seen **from the hypervisor**, where the guest machine-id is unavailable. **Not** a `host` (a vmid is not a machine-id). `runs_on` the hypervisor `host`. The in-guest `host` (machine-id) is a separate facet, reconciled later by a `same_as` overlay (ADR 0020), never merged. |
-| `container` | `{container.id}` | an OCI/Docker container — a compute resource, not a `service.instance`. `image`/`name`/`state` descriptive; `runs_on` its `host`. |
+| `container` | `{container.id}` | an OCI/Docker container — a compute resource, not a `service.instance`. `image`/`name` descriptive; `status` is a **state key** (see below); `runs_on` its `host`. |
+
+### Descriptive attributes — vocabulary & state semantics (toise#216)
+
+Identity is settled above; this fixes the **descriptive** attribute vocabulary and
+which attributes carry **state** semantics. Decided on toise#216 (AT1–AT7), grounded
+in the change taxonomy (`stateKeys` → `entity.state_changed` vs
+`entity.attribute_updated`, ADR 0006) and OTel semconv.
+
+| Entity | Descriptive | State-bearing (`stateKeys`) |
+| --- | --- | --- |
+| `db` | `db.system.name`, `db.system.version`, `server.address`, `server.port`, `deployment.environment.name`, hosting platform (`cloud.provider`/`cloud.platform` or `db.deployment.platform`) | `replication.role` (`primary`/`replica`/`standby`), `read_only` |
+| `service.instance` | `service.name`, `service.version`, `service.namespace` | — |
+| `host` | `host.name`, `host.arch`, `os.type`, `os.version`, `os.description` | — |
+| `container` | `container.name`, `container.image.name`, `container.image.tag`, `container.image.digest`, `container.runtime` | `status` (`running`/`stopped`/`paused`) |
+
+- **AT1 — version key.** `service.version` (semconv) for services; `db.system.version`
+  for databases (consistent with the `db.system.*` namespace). The technology name is a
+  descriptive attribute (`db.system.name` / `service.name`), **never** an identity key.
+- **AT2 — replication role.** One key `replication.role`, values `primary` / `replica`
+  / `standby`. No bare `role`.
+- **AT3 — environment vs platform — two axes, do not conflate.** Deployment tier →
+  `deployment.environment.name` (semconv, free-form values, do not over-enumerate).
+  Hosting platform (self_hosted / rds / aurora / cloudsql) → a **separate** key
+  (`cloud.provider` / `cloud.platform`, or `db.deployment.platform`).
+- **AT4 — stateKeys.** Toise's `stateKeys` gains `replication.role` and `read_only`, so
+  a failover or a read-only flip classifies as `entity.state_changed` while the
+  attribute stays distinct (a db can be `status=up` **and** `role=replica`). The agent
+  emits them as plain descriptive attributes; Toise owns the state classification.
+- **AT5 — container state.** Emit `status` (the existing stateKey: `running` /
+  `stopped` / `paused`); no dedicated `container.state`.
+- **AT6 — version change.** No dedicated lifecycle change type — `entity.attribute_updated`
+  on `*.version` is enough; the LLM reads the before→after in `changed_keys`. Version
+  stays descriptive (not a stateKey).
+- **AT7 — attribute vs metric boundary.** On the entity: descriptive facts that change
+  rarely and whose change explains an incident (version, role, environment, image
+  tag/digest). On the metric rail: anything moving at scrape cadence (utilization,
+  rates, lag). `replica_count` is **not** an attribute — model replicas as
+  entities/relations (the count is derivable) or a metric.
+
+**Follow-ups:** AT4 is **done** — `replication.role` + `read_only` are in Toise's
+`stateKeys` (#217). Agent-side rollout starts with AT1 (redis `db.version` →
+`db.system.version`; thread the captured version onto the mysql/postgres/oracle entity).
 
 ### Time & liveness — explicit delete + interval backstop
 
