@@ -158,6 +158,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		return err
 	}
 	authn := auth.NewWithRoles(cfg.AuthTokens, cfg.ReadTokens, cfg.IngestTokens, scopedTokens)
+	authn.SetTenantTrustMode(cfg.DeriveOnlyTenancy()) // ADR 0028 anti-spoofing; off by default
 	var grpcOpts []grpc.ServerOption
 	if authn.Enabled() {
 		grpcOpts = append(grpcOpts,
@@ -210,6 +211,11 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	errc := make(chan error, 2)
 
 	receiver := ingest.NewRoutedReceiver(engineFor, authn.AllowedForTenantGRPC, ingestMetrics, cfg.AcceptUnknownTypes, logger, grpcOpts...)
+	if cfg.DeriveOnlyTenancy() {
+		// derive-only: a scoped token's tenant is derived and locked, ignoring a
+		// client X-Scope-OrgID / tenant.id resource attribute (ADR 0028).
+		receiver.SetTenantResolver(authn.EffectiveTenantGRPC)
+	}
 	lis, err := net.Listen("tcp", cfg.OTLPListen)
 	if err != nil {
 		return fmt.Errorf("otlp listen on %s: %w", cfg.OTLPListen, err)
@@ -234,6 +240,13 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	mcpRouter := newTenantRouter(reg, logger, func(st *registry.Stack) (http.Handler, error) {
 		return mcp.New(st.Graph, st.Store).SetObserver(queryMetrics).SetAnnotations(st.Annotations).HTTPHandler(), nil
 	})
+	if cfg.DeriveOnlyTenancy() {
+		// derive-only: route a scoped token to its own tenant, ignoring the
+		// client X-Scope-OrgID (ADR 0028). The auth middleware authorizes against
+		// the same effective tenant.
+		graphqlRouter.resolve = authn.EffectiveTenantHTTP
+		mcpRouter.resolve = authn.EffectiveTenantHTTP
+	}
 
 	mux := http.NewServeMux()
 	mux.Handle("/graphql", graphqlRouter)
@@ -264,6 +277,9 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		debugRouter := newTenantRouter(reg, logger, func(st *registry.Stack) (http.Handler, error) {
 			return debugui.New(st.Graph, st.Store)
 		})
+		if cfg.DeriveOnlyTenancy() {
+			debugRouter.resolve = authn.EffectiveTenantHTTP
+		}
 		mux.Handle("/", debugRouter)
 	}
 	// Auth wraps the data surfaces; the operational probes/scrape stay public.

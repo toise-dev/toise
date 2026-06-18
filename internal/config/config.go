@@ -109,6 +109,16 @@ type Config struct {
 	// token authenticates like any other but is authorized only for its tenant
 	// (#104). Same secret rules: TOISE_TENANT_TOKENS (env), never a flag.
 	TenantTokens []string `yaml:"tenant_tokens"`
+	// TenantTrustMode selects how a request's tenant is decided (ADR 0028, tier-2,
+	// off by default):
+	//   "trust-header" (default) — the tenant comes from the X-Scope-OrgID header /
+	//     tenant.id resource attribute; the network/edge is trusted. Unchanged
+	//     behaviour, so the zero-config and self-hosted postures are untouched.
+	//   "derive-only" — for a tenant-scoped token the tenant is derived from the
+	//     token's binding and any client-supplied X-Scope-OrgID / tenant.id is
+	//     ignored (anti-spoofing for SaaS). Global (operator) tokens keep
+	//     header-based, cross-tenant selection.
+	TenantTrustMode string `yaml:"tenant_trust_mode"`
 	// TLSCertFile/TLSKeyFile enable native TLS on the HTTP and OTLP listeners when
 	// both are set.
 	TLSCertFile string `yaml:"tls_cert_file"`
@@ -146,6 +156,11 @@ func (c Config) Validate() error {
 	if c.MaxTenants < 0 {
 		return fmt.Errorf("max_tenants must be >= 0 (0 = unbounded), got %d", c.MaxTenants)
 	}
+	switch c.TenantTrustMode {
+	case "", "trust-header", "derive-only":
+	default:
+		return fmt.Errorf("unknown tenant_trust_mode %q: use trust-header or derive-only", c.TenantTrustMode)
+	}
 	// Tenant ids become X-Scope-OrgID header values and on-disk stack directory
 	// names; an empty or whitespace-bearing allowlist entry can never match a
 	// real tenant and signals a malformed config rather than a deliberate rule.
@@ -176,6 +191,12 @@ func (c Config) TenantTokensMap() (map[string][]string, error) {
 	return out, nil
 }
 
+// DeriveOnlyTenancy reports whether the derive-only tenant trust mode is in
+// effect (ADR 0028): a scoped token's tenant is derived from its binding and a
+// client-supplied X-Scope-OrgID / tenant.id is ignored. The empty value is
+// trust-header (the default).
+func (c Config) DeriveOnlyTenancy() bool { return c.TenantTrustMode == "derive-only" }
+
 // Default returns the built-in configuration (the lowest-precedence layer). These
 // mirror the historical flag defaults: loopback listeners, no retention cap.
 func Default() Config {
@@ -191,6 +212,7 @@ func Default() Config {
 		SnapshotInterval:      Duration(5 * time.Minute),
 		LogFormat:             "text",
 		LogLevel:              "info",
+		TenantTrustMode:       "trust-header",
 		Production:            false,
 		GraphQLIntrospection:  true,
 		Playground:            true,
@@ -252,6 +274,9 @@ func (c *Config) applyEnv(getenv func(string) string) error {
 	}
 	if v := getenv("TOISE_TENANT_ALLOWLIST"); v != "" {
 		c.TenantAllowlist = splitOrigins(v)
+	}
+	if v := getenv("TOISE_TENANT_TRUST_MODE"); v != "" {
+		c.TenantTrustMode = v
 	}
 	if v := getenv("TOISE_MAX_TENANTS"); v != "" {
 		n, err := strconv.Atoi(v)
@@ -391,6 +416,7 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	tenantAutoCreate := fs.Bool("tenant-auto-create", cfg.TenantAutoCreate, "allow a first write to a new tenant id to create its stack")
 	tenantAllowlist := fs.String("tenant-allowlist", strings.Join(cfg.TenantAllowlist, ","), "comma-separated tenant ids allowed to be created (empty: any)")
 	maxTenants := fs.Int("max-tenants", cfg.MaxTenants, "cap on open tenants, 0 = unbounded")
+	tenantTrustMode := fs.String("tenant-trust-mode", cfg.TenantTrustMode, "how a request's tenant is decided: trust-header (default) or derive-only (derive a scoped token's tenant, ignore the client header)")
 	tlsCertFile := fs.String("tls-cert-file", cfg.TLSCertFile, "PEM certificate file; with --tls-key-file, serves HTTP and OTLP over TLS")
 	tlsKeyFile := fs.String("tls-key-file", cfg.TLSKeyFile, "PEM private key file (pairs with --tls-cert-file)")
 	if err := fs.Parse(args); err != nil {
@@ -416,6 +442,7 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	cfg.TenantAutoCreate = *tenantAutoCreate
 	cfg.TenantAllowlist = splitOrigins(*tenantAllowlist)
 	cfg.MaxTenants = *maxTenants
+	cfg.TenantTrustMode = *tenantTrustMode
 	cfg.TLSCertFile = *tlsCertFile
 	cfg.TLSKeyFile = *tlsKeyFile
 	cfg.LogFormat = *logFormat

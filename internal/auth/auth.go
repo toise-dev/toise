@@ -57,6 +57,78 @@ type Authenticator struct {
 	ingestTokens [][]byte            // global, ingest surface only
 	scoped       map[string][][]byte // tenant id -> tokens (both surfaces) valid only for that tenant
 	onFailure    func()              // optional, observed on every rejected authentication
+	// deriveOnly is the ADR 0028 anti-spoofing mode: when set, a tenant-scoped
+	// token's tenant is derived from its binding and the client-supplied
+	// X-Scope-OrgID / tenant.id is ignored. Off by default (trust-header).
+	deriveOnly bool
+}
+
+// SetTenantTrustMode switches the ADR 0028 anti-spoofing derivation on
+// (derive-only) or off (trust-header, the default). Set before serving; it is
+// not synchronized against concurrent use.
+func (a *Authenticator) SetTenantTrustMode(deriveOnly bool) { a.deriveOnly = deriveOnly }
+
+// TenantForBearer returns the single tenant a scoped bearer is bound to, and
+// true, when the token is a per-client tenant-scoped token. A global (operator)
+// token, an unknown token, or one bound to multiple tenants returns ("", false)
+// — those keep header-based tenant selection even in derive-only mode.
+func (a *Authenticator) TenantForBearer(h string) (string, bool) {
+	t := bearer(h)
+	if t == "" {
+		return "", false
+	}
+	got := []byte(t)
+	if matchAny(got, a.tokens) || matchAny(got, a.readTokens) || matchAny(got, a.ingestTokens) {
+		return "", false // a global/operator token is never derived
+	}
+	found, hits := "", 0
+	for tid, toks := range a.scoped {
+		if matchAny(got, toks) {
+			found, hits = tid, hits+1
+		}
+	}
+	if hits == 1 {
+		return found, true
+	}
+	return "", false // unknown, or ambiguous (bound to several tenants)
+}
+
+// TenantForBearerGRPC is TenantForBearer for the gRPC ingest metadata.
+func (a *Authenticator) TenantForBearerGRPC(ctx context.Context) (string, bool) {
+	md, _ := metadata.FromIncomingContext(ctx)
+	vals := md.Get("authorization")
+	if len(vals) == 0 {
+		return "", false
+	}
+	return a.TenantForBearer(vals[0])
+}
+
+// EffectiveTenantHTTP resolves the tenant an HTTP request targets, honoring the
+// trust mode. In derive-only a scoped token's tenant is derived from its binding
+// (the client X-Scope-OrgID is ignored); a global token, or trust-header mode,
+// falls back to the header. ok mirrors tenant.FromHTTP (false = invalid header).
+func (a *Authenticator) EffectiveTenantHTTP(r *http.Request) (string, bool) {
+	if a.deriveOnly && a.Enabled() {
+		if id, ok := a.TenantForBearer(r.Header.Get("Authorization")); ok {
+			return id, true
+		}
+	}
+	return tenant.FromHTTP(r)
+}
+
+// EffectiveTenantGRPC resolves the ingest tenant from the gRPC metadata, honoring
+// the trust mode. In derive-only a scoped token's tenant is derived and locked
+// — the caller MUST then ignore any per-ResourceLogs tenant.id override, else
+// that override is a spoofing channel. locked is false in trust-header mode or
+// for a global token; ok mirrors tenant.FromGRPC.
+func (a *Authenticator) EffectiveTenantGRPC(ctx context.Context) (id string, locked, ok bool) {
+	if a.deriveOnly && a.Enabled() {
+		if t, found := a.TenantForBearerGRPC(ctx); found {
+			return t, true, true
+		}
+	}
+	id, ok = tenant.FromGRPC(ctx)
+	return id, false, ok
 }
 
 // OnFailure registers fn to run on every rejected authentication, HTTP or
@@ -242,9 +314,11 @@ func (a *Authenticator) HTTPMiddleware(public map[string]bool) func(http.Handler
 				return
 			}
 			// Authenticated for reads; now authorize the token for the request's
-			// tenant. An invalid tenant header passes through — the tenant router
+			// EFFECTIVE tenant — in derive-only that is the scoped token's own
+			// tenant (so a scoped token is always allowed for it), not the client
+			// header. An invalid tenant header passes through — the tenant router
 			// rejects it with a 400 and better context.
-			if id, ok := tenant.FromHTTP(r); ok && !a.headerAllowedForTenant(h, id, surfaceRead) {
+			if id, ok := a.EffectiveTenantHTTP(r); ok && !a.allowedForTenant(bearer(h), id, surfaceRead) {
 				a.failed()
 				http.Error(w, "token not authorized for this tenant", http.StatusForbidden)
 				return

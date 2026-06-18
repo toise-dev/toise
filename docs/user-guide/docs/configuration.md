@@ -43,6 +43,7 @@ for the rationale.
 | `tenant_auto_create` | `TOISE_TENANT_AUTO_CREATE` | `--tenant-auto-create` | `true` | allow a first write to a new tenant id to create its stack; off = only pre-existing tenants (and `default`) are served |
 | `tenant_allowlist` | `TOISE_TENANT_ALLOWLIST` | `--tenant-allowlist` | (empty) | comma-separated tenant ids allowed to be created; empty = any (subject to auto-create and the cap) |
 | `max_tenants` | `TOISE_MAX_TENANTS` | `--max-tenants` | `0` | cap on open tenants; `0` = unbounded. Reading an unknown tenant never creates it (404) |
+| `tenant_trust_mode` | `TOISE_TENANT_TRUST_MODE` | `--tenant-trust-mode` | `trust-header` | how a request's tenant is decided. `trust-header`: from `X-Scope-OrgID` / `tenant.id` (the edge is trusted). `derive-only`: a tenant-scoped token's tenant is **derived from its binding** and any client-supplied `X-Scope-OrgID` / `tenant.id` is **ignored** (anti-spoofing for multi-tenant SaaS, ADR 0028); global (operator) tokens keep header-based cross-tenant selection |
 | `tls_cert_file` | `TOISE_TLS_CERT_FILE` | `--tls-cert-file` | (empty) | PEM certificate; with the key, serves HTTP + OTLP over TLS |
 | `tls_key_file` | `TOISE_TLS_KEY_FILE` | `--tls-key-file` | (empty) | PEM private key (pairs with the cert) |
 

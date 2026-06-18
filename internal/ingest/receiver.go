@@ -53,8 +53,26 @@ func NewRoutedReceiver(engineFor func(tenantID string) (*change.Engine, error), 
 	}
 	srv := grpc.NewServer(opts...)
 	ls := &logsServer{engineFor: engineFor, authorize: authorize, metrics: m, acceptUnknown: acceptUnknownTypes, logger: logger, reconcilers: make(map[string]*embeddedReconciler)}
+	// Default tenant resolution = the X-Scope-OrgID metadata, never locked (the
+	// per-ResourceLogs tenant.id override applies). derive-only swaps this via
+	// SetTenantResolver (ADR 0028).
+	ls.resolveTenant = func(ctx context.Context) (string, bool, bool) {
+		id, ok := tenant.FromGRPC(ctx)
+		return id, false, ok
+	}
 	plogotlp.RegisterGRPCServer(srv, ls)
 	return &Receiver{srv: srv, logs: ls, logger: logger}
+}
+
+// SetTenantResolver overrides how each Export resolves its base tenant. The
+// resolver returns (tenantID, locked, ok); when locked, the per-ResourceLogs
+// tenant.id override is ignored — used by derive-only so a scoped token's tenant
+// cannot be overridden by a client-supplied resource attribute (ADR 0028). Set
+// before serving.
+func (r *Receiver) SetTenantResolver(fn func(ctx context.Context) (string, bool, bool)) {
+	if fn != nil {
+		r.logs.resolveTenant = fn
+	}
 }
 
 // Serve accepts connections on lis until Stop is called. It blocks.
@@ -79,6 +97,10 @@ type logsServer struct {
 	// unknown entity types pass shape validation and are counted, not rejected.
 	acceptUnknown bool
 	logger        *slog.Logger
+	// resolveTenant returns the base tenant for an Export, plus whether it is
+	// locked (the per-ResourceLogs tenant.id override must then be ignored).
+	// Defaults to tenant.FromGRPC (not locked); derive-only swaps it (ADR 0028).
+	resolveTenant func(ctx context.Context) (string, bool, bool)
 
 	// reconcilers holds the embedded-relationship state per tenant. It must be
 	// per-tenant: two tenants may assert the same source entity key, and a shared
@@ -111,7 +133,10 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (re
 
 	// An invalid X-Scope-OrgID is rejected rather than silently folded into the
 	// default tenant — a tenant id that cannot be honored is a caller error.
-	baseTenant, ok := tenant.FromGRPC(ctx)
+	// tenantLocked (derive-only, ADR 0028) means the tenant was derived from a
+	// scoped token; the per-ResourceLogs tenant.id override is then ignored, so
+	// the override cannot be used to write into another tenant.
+	baseTenant, tenantLocked, ok := s.resolveTenant(ctx)
 	if !ok {
 		// Permanent caller error: InvalidArgument tells a spec-compliant
 		// exporter not to retry (#111).
@@ -126,7 +151,7 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (re
 		res := rls.At(i).Resource()
 		producer, _ := strAttr(res.Attributes(), resAttrProducer)
 		tenantID := baseTenant
-		if rt, ok := strAttr(res.Attributes(), tenant.ResourceAttr); ok {
+		if rt, ok := strAttr(res.Attributes(), tenant.ResourceAttr); ok && !tenantLocked {
 			san, ok := tenant.Sanitize(rt)
 			if !ok {
 				s.metrics.tenantRejected()

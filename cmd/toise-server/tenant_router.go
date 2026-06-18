@@ -18,6 +18,10 @@ type tenantRouter struct {
 	reg    *registry.Registry
 	build  func(*registry.Stack) (http.Handler, error)
 	logger *slog.Logger
+	// resolve decides a request's tenant. Defaults to tenant.FromHTTP (the
+	// X-Scope-OrgID header); the server swaps in auth.EffectiveTenantHTTP under
+	// derive-only so a scoped token routes to its own tenant (ADR 0028).
+	resolve func(*http.Request) (string, bool)
 
 	mu       sync.Mutex
 	handlers map[string]http.Handler
@@ -27,11 +31,11 @@ func newTenantRouter(reg *registry.Registry, logger *slog.Logger, build func(*re
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &tenantRouter{reg: reg, build: build, logger: logger, handlers: make(map[string]http.Handler)}
+	return &tenantRouter{reg: reg, build: build, logger: logger, resolve: tenant.FromHTTP, handlers: make(map[string]http.Handler)}
 }
 
 func (tr *tenantRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	id, ok := tenant.FromHTTP(r)
+	id, ok := tr.resolve(r)
 	if !ok {
 		http.Error(w, "invalid "+tenant.HeaderOrgID+" header", http.StatusBadRequest)
 		return
