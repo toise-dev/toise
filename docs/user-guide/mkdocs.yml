@@ -87,12 +87,15 @@ nav:
   - Installation: installation.md
   - Configuration: configuration.md
   - Ingesting data (OTLP): ingestion.md
+  - Write a producer: write-a-producer.md
+  - Producer directory: producers.md
   - Querying the graph:
       - Overview: querying/index.md
       - GraphQL API: querying/graphql.md
       - MCP for AI assistants: querying/mcp.md
       - Debug UI: querying/debug-ui.md
   - Data model: data-model.md
+  - API stability: api-stability.md
   - Operations:
       - Backups: operations/backups.md
       - Performance: operations/performance.md
@@ -100,6 +103,8 @@ nav:
   - Troubleshooting: troubleshooting.md
   - What's new:
       - Overview: whats-new/index.md
+      - 0.7.0: whats-new/0.7.0.md
+      - 0.6.0: whats-new/0.6.0.md
       - 0.5.0: whats-new/0.5.0.md
       - 0.4.0: whats-new/0.4.0.md
       - 0.3.0: whats-new/0.3.0.md

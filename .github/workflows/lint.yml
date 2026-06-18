@@ -39,3 +39,13 @@ jobs:
           # Keep the version pinned for reproducibility.
           version: v2.12.2
           install-mode: goinstall
+
+      # pkg/emit is a nested module (ADR 0027): the root run does not reach
+      # it, so the SDK gets its own pass. Same version/install-mode rationale
+      # as above.
+      - name: Run golangci-lint (pkg/emit module)
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.12.2
+          install-mode: goinstall
+          working-directory: pkg/emit

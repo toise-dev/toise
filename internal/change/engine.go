@@ -14,11 +14,17 @@ import (
 )
 
 // stateKeys are the descriptive attribute keys whose change is classified as a
-// state change rather than a plain attribute update. See ADR 0006.
+// state change rather than a plain attribute update. See ADR 0006. These are
+// operational-state keys: a change is causally interesting (surfaced via
+// changed_keys / graph_diff), unlike a plain descriptive update. replication.role
+// and read_only make a database failover or a read-only flip a first-class state
+// change rather than a silent attribute update.
 var stateKeys = map[string]struct{}{
-	"oper_state":  {},
-	"admin_state": {},
-	"status":      {},
+	"oper_state":       {},
+	"admin_state":      {},
+	"status":           {},
+	"replication.role": {},
+	"read_only":        {},
 }
 
 // Appender persists qualified events. The store satisfies it.
@@ -46,6 +52,11 @@ type Engine struct {
 	// arrive, so out-of-order delivery does not drop edges. Guarded by obsMu.
 	bufferTTL time.Duration
 	pending   []pendingRelation
+	// pendingHashes is the set of endpoint identity hashes the parked edges are
+	// waiting on, so an entity observation can skip flushPending unless the
+	// arriving entity is one some edge actually waits on — instead of rescanning
+	// every parked edge on every observation. Rebuilt whenever pending changes.
+	pendingHashes map[string]struct{}
 
 	// liveness: per-entity reference counts keyed by producer (the agent's
 	// service.instance.id; "" for an anonymous/single producer), each with an
@@ -53,8 +64,8 @@ type Engine struct {
 	// any producer references it; it is deleted only when the last reference is
 	// released (explicit delete or interval expiry). See ADR 0019. Per-relation
 	// edge deadlines for the optional per-edge TTL. Guarded by obsMu.
-	refs         map[model.EntityID]map[string]time.Time
-	relDeadlines map[model.RelationID]time.Time
+	refs         map[model.EntityID]map[string]liveRef
+	relDeadlines map[model.RelationID]liveRef
 
 	// batch staging: while a Batch runs, commit stages each event and its
 	// projection effects here instead of applying them; the durable append, the
@@ -71,6 +82,15 @@ type Engine struct {
 type pendingRelation struct {
 	obs      RelationObservation
 	deadline time.Time
+}
+
+// liveRef is one armed liveness backstop: the absolute expiry deadline and the
+// producer-declared heartbeat interval that armed it. The interval is kept so
+// a deadline restored from a snapshot can be re-floored after downtime (see
+// RestoreLiveness). A zero deadline means explicit-only (no interval).
+type liveRef struct {
+	deadline time.Time
+	interval time.Duration
 }
 
 // staged is a batch's uncommitted unit of work: the events to flush plus an
@@ -176,17 +196,22 @@ func WithRelationBuffer(ttl time.Duration) Option {
 // New returns an engine writing to appender and projecting into graph.
 func New(graph *projection.Graph, appender Appender, opts ...Option) *Engine {
 	e := &Engine{
-		graph:        graph,
-		appender:     appender,
-		now:          time.Now,
-		logger:       slog.Default(),
-		subs:         make(map[int]Subscriber),
-		refs:         make(map[model.EntityID]map[string]time.Time),
-		relDeadlines: make(map[model.RelationID]time.Time),
+		graph:         graph,
+		appender:      appender,
+		now:           time.Now,
+		logger:        slog.Default(),
+		subs:          make(map[int]Subscriber),
+		refs:          make(map[model.EntityID]map[string]liveRef),
+		relDeadlines:  make(map[model.RelationID]liveRef),
+		pendingHashes: make(map[string]struct{}),
 	}
 	for _, o := range opts {
 		o(e)
 	}
+	// The projection's tombstone grace window must judge "expired" on the same
+	// clock the engine stamps events with, so tests with a fake clock stay
+	// deterministic (#183).
+	graph.SetClock(e.now)
 	return e
 }
 
@@ -241,6 +266,21 @@ func (e *Engine) matchIdentity(typ string, identity []model.KeyValue) (model.Ent
 		return id, true
 	}
 	return "", false
+}
+
+// matchTombstone resolves a soft-deleted entity's id for resurrection, layering
+// the batch's staged effects over the projection like matchIdentity: an id
+// deleted earlier in this same batch must not be resurrected by a later
+// observation in it.
+func (e *Engine) matchTombstone(typ string, identity []model.KeyValue) (model.EntityID, bool) {
+	id, ok := e.graph.MatchTombstone(typ, identity)
+	if !ok {
+		return "", false
+	}
+	if st := e.staged; st != nil && st.deleted[id] {
+		return "", false
+	}
+	return id, true
 }
 
 func (e *Engine) getEntity(id model.EntityID) (model.Entity, bool, bool) {
@@ -351,7 +391,14 @@ func (e *Engine) observeEntityLocked(obs EntityObservation) (model.Event, error)
 	)
 	switch {
 	case !found:
-		ct, entityID = model.EntityCreated, model.NewEntityID()
+		// Resurrection: a re-asserted identity within the tombstone grace window
+		// reclaims its original logical id, so entity_history stays continuous
+		// across a producer outage instead of fragmenting across ULIDs (#183).
+		if rid, ok := e.matchTombstone(obs.Type, obs.Identity); ok {
+			ct, entityID = model.EntityCreated, rid
+		} else {
+			ct, entityID = model.EntityCreated, model.NewEntityID()
+		}
 	default:
 		entityID = id
 		existing, _, _ := e.getEntity(id)
@@ -389,16 +436,23 @@ func (e *Engine) observeEntityLocked(obs EntityObservation) (model.Event, error)
 	// interval, released only by an explicit delete). See ADR 0019.
 	producers := e.refs[entityID]
 	if producers == nil {
-		producers = make(map[string]time.Time)
+		producers = make(map[string]liveRef)
 		e.refs[entityID] = producers
 	}
 	if obs.Interval > 0 {
-		producers[obs.Producer] = e.now().Add(obs.Interval)
+		producers[obs.Producer] = liveRef{deadline: e.now().Add(obs.Interval), interval: obs.Interval}
 	} else {
-		producers[obs.Producer] = time.Time{}
+		producers[obs.Producer] = liveRef{}
 	}
-	// A new/updated entity may be the missing endpoint of a parked edge.
-	e.flushPending()
+	// A new/updated entity may be the missing endpoint of a parked edge — but
+	// only retry the buffer when this entity is one some edge actually waits on,
+	// rather than rescanning every parked edge on every observation.
+	if len(e.pending) > 0 {
+		h := (model.Entity{Type: obs.Type, Identity: obs.Identity}).IdentityHash()
+		if _, waited := e.pendingHashes[h]; waited {
+			e.flushPending()
+		}
+	}
 	return ev, nil
 }
 
@@ -444,45 +498,53 @@ func (e *Engine) deleteEntityLocked(obs EntityObservation) (ev model.Event, emit
 	if err := e.commit(ev, false); err != nil {
 		return model.Event{}, false, err
 	}
-	e.removeIncidentRelations(id, obs.EventTime)
-	return ev, true, nil
+	// The delete emitted; surface any cascade error so a failed edge removal is
+	// retried (idempotent) rather than silently dropped.
+	_, rerr := e.removeIncidentRelations(id, obs.EventTime)
+	return ev, true, rerr
 }
 
 // removeIncidentRelations emits relation.removed for every edge touching id: an
 // edge to a deleted entity is meaningless, so edge liveness is derived from its
 // endpoints (a deleted node takes its edges with it). The caller must hold obsMu.
-func (e *Engine) removeIncidentRelations(id model.EntityID, when time.Time) int {
+func (e *Engine) removeIncidentRelations(id model.EntityID, when time.Time) (int, error) {
 	n := 0
+	var errs []error
 	for _, rel := range e.listRelationsTouching(id) {
 		ev := e.relationEvent(model.RelationRemoved, rel, when)
 		if err := e.commit(ev, rel.Structural); err != nil {
 			e.logger.Error("failed to remove edge of deleted entity", "relation_id", rel.ID, "err", err)
+			errs = append(errs, fmt.Errorf("removing edge %s of deleted %s: %w", rel.ID, id, err))
 			continue
 		}
 		delete(e.relDeadlines, rel.ID)
 		n++
 	}
-	return n
+	return n, errors.Join(errs...)
 }
 
 // Sweep expires entities whose liveness backstop has lapsed: an entity observed
 // or edge with an interval that has not been re-asserted within it is soft-deleted
 // (entity.deleted / relation.removed), as a safety net for missed explicit deletes
 // (crash, host off, network partition). It returns the number of entities and
-// edges expired. Drive it from a periodic ticker.
-func (e *Engine) Sweep() int {
+// edges expired, and any commit errors joined: a failed commit is logged and
+// skipped (the pass stays resilient and retries next tick) but also returned, so
+// the maintenance metric's error outcome is reachable instead of structurally
+// impossible. Drive it from a periodic ticker.
+func (e *Engine) Sweep() (int, error) {
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()
 
 	now := e.now()
 	n := 0
+	var errs []error
 
 	// Drop each producer reference whose interval has lapsed; an entity with no
 	// surviving reference is expired (ADR 0019).
 	var orphaned []model.EntityID
 	for id, producers := range e.refs {
-		for p, deadline := range producers {
-			if !deadline.IsZero() && now.After(deadline) {
+		for p, ref := range producers {
+			if !ref.deadline.IsZero() && now.After(ref.deadline) {
 				delete(producers, p)
 			}
 		}
@@ -506,13 +568,18 @@ func (e *Engine) Sweep() int {
 		}}
 		if err := e.commit(ev, false); err != nil {
 			e.logger.Error("failed to expire stale entity", "id", id, "err", err)
+			errs = append(errs, fmt.Errorf("expiring stale entity %s: %w", id, err))
 			continue // leave the (empty) ref set to retry next sweep
 		}
 		delete(e.refs, id)
 		e.logger.Warn("expired stale entity: no producer heartbeat within its interval",
 			"entity_type", ent.Type, "entity_id", id)
 		n++
-		n += e.removeIncidentRelations(id, now) // edges die with their node
+		rn, rerr := e.removeIncidentRelations(id, now) // edges die with their node
+		n += rn
+		if rerr != nil {
+			errs = append(errs, rerr)
+		}
 	}
 
 	// Expire parked out-of-order edges past their TTL: flushPending only runs on
@@ -529,11 +596,12 @@ func (e *Engine) Sweep() int {
 			kept = append(kept, e.pending[i])
 		}
 		e.pending = kept
+		e.rebuildPendingHashes()
 	}
 
 	var expiredRelations []model.RelationID
-	for id, deadline := range e.relDeadlines {
-		if now.After(deadline) {
+	for id, ref := range e.relDeadlines {
+		if now.After(ref.deadline) {
 			expiredRelations = append(expiredRelations, id)
 		}
 	}
@@ -546,6 +614,7 @@ func (e *Engine) Sweep() int {
 		ev := e.relationEvent(model.RelationRemoved, rel, now)
 		if err := e.commit(ev, rel.Structural); err != nil {
 			e.logger.Error("failed to expire stale relation", "id", id, "err", err)
+			errs = append(errs, fmt.Errorf("expiring stale relation %s: %w", id, err))
 			continue
 		}
 		delete(e.relDeadlines, id)
@@ -553,7 +622,12 @@ func (e *Engine) Sweep() int {
 			"relation_type", rel.Type, "relation_id", id)
 		n++
 	}
-	return n
+
+	// Bound the resurrection grace window in time: drop tombstones a producer
+	// did not return to claim (#183). Not counted in n (no event is emitted —
+	// the entity was already soft-deleted).
+	e.graph.PruneTombstones()
+	return n, errors.Join(errs...)
 }
 
 // ObserveRelation classifies an observed relation. It emits relation.added for a
@@ -581,6 +655,7 @@ func (e *Engine) observeRelationBuffered(obs RelationObservation) (model.Event, 
 				"cap", maxPendingRelations)
 		}
 		e.pending = append(e.pending, pendingRelation{obs: obs, deadline: e.now().Add(e.bufferTTL)})
+		e.rebuildPendingHashes()
 		return model.Event{}, false, nil
 	}
 	return ev, emitted, err
@@ -598,7 +673,7 @@ func (e *Engine) observeRelationLocked(obs RelationObservation) (model.Event, bo
 	// Arm (or clear) the edge liveness backstop, even when the observation is
 	// otherwise unchanged — re-asserting an edge resets its deadline.
 	if obs.Interval > 0 {
-		e.relDeadlines[rel.ID] = e.now().Add(obs.Interval)
+		e.relDeadlines[rel.ID] = liveRef{deadline: e.now().Add(obs.Interval), interval: obs.Interval}
 	} else {
 		delete(e.relDeadlines, rel.ID)
 	}
@@ -633,18 +708,46 @@ func (e *Engine) flushPending() {
 	var kept []pendingRelation
 	for i := range e.pending {
 		obs := e.pending[i].obs
+		// Past the TTL the edge is given up on, even if it would now resolve: a
+		// late-arriving endpoint must not resurrect it (the producer's next
+		// re-assert re-parks it fresh). Checked before resolving so the outcome
+		// no longer depends on whether the triggering observation happens to be
+		// the one that completes the endpoints.
+		if now.After(e.pending[i].deadline) {
+			e.logger.Warn("dropping relation: endpoints did not arrive within the reconciliation TTL",
+				"relation_type", obs.Type, "from_type", obs.From.Type, "to_type", obs.To.Type)
+			continue
+		}
 		_, _, err := e.observeRelationLocked(obs)
 		switch {
 		case err == nil:
 			// resolved and committed; drop from the buffer
-		case errors.Is(err, errEndpointMissing) && now.After(e.pending[i].deadline):
-			e.logger.Warn("dropping relation: endpoints did not arrive within the reconciliation TTL",
-				"relation_type", obs.Type, "from_type", obs.From.Type, "to_type", obs.To.Type)
+		case errors.Is(err, errEndpointMissing):
+			kept = append(kept, e.pending[i]) // still waiting for an endpoint
 		default:
-			kept = append(kept, e.pending[i]) // still waiting, or a transient commit error to retry
+			kept = append(kept, e.pending[i]) // transient commit error to retry
 		}
 	}
 	e.pending = kept
+	e.rebuildPendingHashes()
+}
+
+// endpointHash is the identity hash of a relation endpoint — the same hash the
+// projection indexes entities by, so a parked edge's endpoint hash equals the
+// IdentityHash of the entity that would resolve it.
+func endpointHash(ref EndpointRef) string {
+	return (model.Entity{Type: ref.Type, Identity: ref.Identity}).IdentityHash()
+}
+
+// rebuildPendingHashes recomputes the waited-on endpoint hash set from the parked
+// edges. Called whenever e.pending changes (park, flush, sweep); the caller must
+// hold obsMu. The hot path (entity observation) only reads the set.
+func (e *Engine) rebuildPendingHashes() {
+	e.pendingHashes = make(map[string]struct{}, 2*len(e.pending))
+	for i := range e.pending {
+		e.pendingHashes[endpointHash(e.pending[i].obs.From)] = struct{}{}
+		e.pendingHashes[endpointHash(e.pending[i].obs.To)] = struct{}{}
+	}
 }
 
 // RemoveRelation emits relation.removed for an existing relation between the
@@ -839,11 +942,16 @@ func canonMap(kvs []model.KeyValue) map[string]string {
 // livenessSnapshot is the serialized form of the engine's liveness bookkeeping
 // (the Memento, #139): producer references with their absolute expiry
 // deadlines, and per-relation deadlines. Absolute times mean downtime counts
-// against them — a producer that died while the server was down is swept on
-// the first tick after restart instead of leaving zombies forever.
+// against them; the parallel interval maps let RestoreLiveness re-floor lapsed
+// deadlines so a restart after long downtime does not mass-delete entities of
+// producers that are alive but have not re-exported yet. Blobs written before
+// the interval maps existed decode with zero intervals and keep their stored
+// deadlines as-is.
 type livenessSnapshot struct {
-	Refs         map[string]map[string]time.Time `json:"refs"`
-	RelDeadlines map[string]time.Time            `json:"rel_deadlines"`
+	Refs         map[string]map[string]time.Time     `json:"refs"`
+	RelDeadlines map[string]time.Time                `json:"rel_deadlines"`
+	RefIntervals map[string]map[string]time.Duration `json:"ref_intervals,omitempty"`
+	RelIntervals map[string]time.Duration            `json:"rel_intervals,omitempty"`
 }
 
 // LivenessBlob serializes the current liveness bookkeeping for inclusion in
@@ -853,16 +961,22 @@ func (e *Engine) LivenessBlob() ([]byte, error) {
 	snap := livenessSnapshot{
 		Refs:         make(map[string]map[string]time.Time, len(e.refs)),
 		RelDeadlines: make(map[string]time.Time, len(e.relDeadlines)),
+		RefIntervals: make(map[string]map[string]time.Duration, len(e.refs)),
+		RelIntervals: make(map[string]time.Duration, len(e.relDeadlines)),
 	}
 	for id, producers := range e.refs {
-		ps := make(map[string]time.Time, len(producers))
-		for p, deadline := range producers {
-			ps[p] = deadline
+		ds := make(map[string]time.Time, len(producers))
+		is := make(map[string]time.Duration, len(producers))
+		for p, ref := range producers {
+			ds[p] = ref.deadline
+			is[p] = ref.interval
 		}
-		snap.Refs[string(id)] = ps
+		snap.Refs[string(id)] = ds
+		snap.RefIntervals[string(id)] = is
 	}
-	for id, deadline := range e.relDeadlines {
-		snap.RelDeadlines[string(id)] = deadline
+	for id, ref := range e.relDeadlines {
+		snap.RelDeadlines[string(id)] = ref.deadline
+		snap.RelIntervals[string(id)] = ref.interval
 	}
 	e.obsMu.Unlock()
 	b, err := json.Marshal(snap)
@@ -884,17 +998,38 @@ func (e *Engine) RestoreLiveness(blob []byte) error {
 	if err := json.Unmarshal(blob, &snap); err != nil {
 		return fmt.Errorf("unmarshaling liveness snapshot: %w", err)
 	}
+	now := e.now()
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()
 	for id, producers := range snap.Refs {
-		ps := make(map[string]time.Time, len(producers))
+		ps := make(map[string]liveRef, len(producers))
 		for p, deadline := range producers {
-			ps[p] = deadline
+			interval := snap.RefIntervals[id][p]
+			ps[p] = liveRef{deadline: floorDeadline(deadline, interval, now), interval: interval}
 		}
 		e.refs[model.EntityID(id)] = ps
 	}
 	for id, deadline := range snap.RelDeadlines {
-		e.relDeadlines[model.RelationID(id)] = deadline
+		interval := snap.RelIntervals[id]
+		e.relDeadlines[model.RelationID(id)] = liveRef{deadline: floorDeadline(deadline, interval, now), interval: interval}
 	}
 	return nil
+}
+
+// floorDeadline raises a restored deadline to now+interval: after downtime
+// longer than a producer's heartbeat interval every stored deadline has
+// lapsed, and without the floor the first sweep would mass-delete entities of
+// producers that are alive but have not re-exported yet, only for them to be
+// re-created moments later. The trade-off: an entity of a producer that truly
+// died during the downtime lingers at most one extra interval before the
+// sweep reaps it. Zero deadlines (explicit-only) and entries without a known
+// interval (pre-interval blobs) are returned unchanged.
+func floorDeadline(deadline time.Time, interval time.Duration, now time.Time) time.Time {
+	if deadline.IsZero() || interval <= 0 {
+		return deadline
+	}
+	if floor := now.Add(interval); deadline.Before(floor) {
+		return floor
+	}
+	return deadline
 }

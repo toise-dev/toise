@@ -1,10 +1,14 @@
 name: Release
 
-# Fires on a version tag (no "v" prefix, e.g. 0.2.0). The tag/release is cut by
-# the release-manager flow; this workflow attaches the build artifacts.
+# Fires on a server version tag (v-prefixed from v0.6.0, e.g. v0.6.0; see
+# ADR 0027). The tag/release is cut by the release-manager flow; this workflow
+# attaches the build artifacts. SDK tags (pkg/emit/vX.Y.Z) do NOT trigger it:
+# GitHub's "*" glob does not cross "/", so only top-level server tags match.
+# Asset and image names carry the ref name verbatim (toise_v0.6.0_..., ghcr
+# tag v0.6.0), matching what `git describe` stamps into the binary.
 on:
   push:
-    tags: ["*.*.*"]
+    tags: ["v*.*.*"]
 
 permissions:
   contents: read
@@ -80,15 +84,30 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Compute image tags
+        id: tags
+        run: |
+          set -euo pipefail
+          tags="ghcr.io/toise-dev/toise:${GITHUB_REF_NAME}"
+          # Only move :latest for a stable release; a prerelease tag (with a
+          # "-" suffix, e.g. v0.6.0-rc1) still matches v*.*.* and would
+          # otherwise repoint :latest at a prerelease image.
+          if [[ "${GITHUB_REF_NAME}" != *-* ]]; then
+            tags="${tags}"$'\n'"ghcr.io/toise-dev/toise:latest"
+          fi
+          {
+            echo "tags<<EOF"
+            echo "${tags}"
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+
       - name: Build and push (multi-arch)
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/toise-dev/toise:${{ github.ref_name }}
-            ghcr.io/toise-dev/toise:latest
+          tags: ${{ steps.tags.outputs.tags }}
           build-args: |
             VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}

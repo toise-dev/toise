@@ -92,10 +92,12 @@ leased IP) in the identity — those are descriptive attributes. Agreed identiti
 | Entity | Identity (`entity.id`) | Notes |
 | ------ | --------------------------- | ----- |
 | `host` | `{host.id}` (machine-id) | `host.name` descriptive |
-| `service.instance` | `{service.instance.id}` (agent key) | the agent |
+| `service.instance` | `{service.instance.id}` | the agent itself, or a monitored non-DB service (Kafka, RabbitMQ, NATS, Nginx, HAProxy, …). The id is a **stable** technology-reported identifier, else `<service.name>@<host.id>` — **never** `scheme://host:port`. `service.name` is descriptive. Datastores are `db`, not this; per the boundary rule, anything OTel semconv gives a `db.system.name` is a `db`. |
 | `process` | `{process.pid, process.creation.time}` — the OTel semconv identity (the creation time disambiguates PID reuse) | a restart = a new process (delete + create), not an update; `process.executable.name` is descriptive |
 | `db` | `{db.instance.id}` — a **stable source identifier**: PostgreSQL `system_identifier`, MySQL `server_uuid`, else an operator-configured logical instance name | **never network-derived** — `server.address`/`server.port` are mutable (DHCP/failover/VIP) so they stay descriptive attributes |
 | `network.device` | `{network.device.id}` — a single subtype-prefixed value by **precedence**: `serial:` (ENTITY-MIB `entPhysicalSerialNum`) > `engine:` (`snmpEngineID`) > `mac:` (LLDP chassis-id) > `name:` (`sysName`) > `mgmt:` (mgmt IP) | **anchored on SNMP-immutable facts, not LLDP** (often disabled); `mgmt:` is mutable last-resort. Producer canonicalizes (Toise is byte-exact); raw parts descriptive. Endpoints resolved to the canonical id via `ifPhysAddress` before emitting edges. Frozen for Lot 5 — see [`otel-mapping.md`](./otel-mapping.md#networkdevice-identity--snmp-topology-lot-5-frozen). |
+| `compute.vm` | `{host.id, vmid}` — the **hypervisor node's** `host.id` plus the hypervisor's vm id | a VM seen **from the hypervisor**, where the guest machine-id is unavailable. **Not** a `host` (a vmid is not a machine-id). `runs_on` the hypervisor `host`. The in-guest `host` (machine-id) is a separate facet, reconciled later by a `same_as` overlay (ADR 0020), never merged. |
+| `container` | `{container.id}` | an OCI/Docker container — a compute resource, not a `service.instance`. `image`/`name`/`state` descriptive; `runs_on` its `host`. |
 
 ### Descriptive attributes — vocabulary & state semantics (toise#216)
 
@@ -173,9 +175,10 @@ never an entity attribute (which would flap last-writer-wins).
 ### Vocabulary & rollout lots
 
 The registry holds the agreed vocabulary: entities `service.instance`, `db`,
-`network.device`, `network.interface`, `network.route`; relations `monitors`,
-`has_interface`, `has_route`, `connected_to`. **`runs_on`** is the foundational edge:
-`service.instance --runs_on--> host`. `monitors` source is the `service.instance`
+`network.device`, `network.interface`, `network.route`, `compute.vm`, `container`;
+relations `monitors`, `has_interface`, `has_route`, `connected_to`. **`runs_on`**
+is the foundational edge: `service.instance`, `compute.vm`, and `container` each
+`--runs_on--> host`. `monitors` source is the `service.instance`
 (the agent); targets are the monitored entity — `host`, `db`, and later `netscaler`,
 `veeam`, `redfish`, `citrix`, `ibmi`, `network.device` (registered when their lot
 lands).

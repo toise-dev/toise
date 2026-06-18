@@ -10,7 +10,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -27,6 +29,7 @@ import (
 	"github.com/toise-dev/toise/internal/projection"
 	"github.com/toise-dev/toise/internal/registry"
 	"github.com/toise-dev/toise/internal/store"
+	"github.com/toise-dev/toise/internal/tenant"
 )
 
 const bootToken = "boot-test-token"
@@ -301,6 +304,159 @@ func TestCheckpointSubcommand(t *testing.T) {
 	}
 }
 
+// TestCheckpointRefusesMissingDataDir pins #162: a typo'd --data-dir (or a
+// wrong cwd) must be a hard error, not a freshly minted empty store backed up
+// with exit 0.
+func TestCheckpointRefusesMissingDataDir(t *testing.T) {
+	dataDir := filepath.Join(t.TempDir(), "no-such-dir")
+	dst := filepath.Join(t.TempDir(), "backup")
+	if err := runCheckpoint([]string{"--data-dir", dataDir, dst}, func(string) string { return "" }); err == nil {
+		t.Fatal("checkpoint of a missing data dir must error")
+	}
+	if _, err := os.Stat(dataDir); !os.IsNotExist(err) {
+		t.Errorf("checkpoint created the data dir %s (stat err = %v)", dataDir, err)
+	}
+	if _, err := os.Stat(dst); !os.IsNotExist(err) {
+		t.Errorf("checkpoint created the destination %s (stat err = %v)", dst, err)
+	}
+}
+
+// TestCheckpointRefusesEmptyDataDir pins #162: a data dir holding no tenant
+// stores means the operator pointed at the wrong place — backing up nothing
+// must not look like success.
+func TestCheckpointRefusesEmptyDataDir(t *testing.T) {
+	dataDir := t.TempDir()
+	dst := filepath.Join(t.TempDir(), "backup")
+	err := runCheckpoint([]string{"--data-dir", dataDir, dst}, func(string) string { return "" })
+	if err == nil || !strings.Contains(err.Error(), "no tenant stores") {
+		t.Fatalf("err = %v, want a no-tenant-stores refusal", err)
+	}
+	ents, rerr := os.ReadDir(dataDir)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	if len(ents) != 0 {
+		t.Errorf("checkpoint left %d entries in the data dir", len(ents))
+	}
+}
+
+// TestCheckpointLeavesSourceUntouched pins the read-only contract of #162:
+// checkpointing must not mint a default tenant in the source nor write to it
+// (the format stamp included) — the source listing is identical before and
+// after, and only the persisted tenant is backed up.
+func TestCheckpointLeavesSourceUntouched(t *testing.T) {
+	dataDir := t.TempDir()
+	st, err := store.Open(filepath.Join(dataDir, "acme"), store.DefaultConfig())
+	if err != nil {
+		t.Fatalf("seed store: %v", err)
+	}
+	when := time.Unix(1_700_000_000, 0).UTC()
+	ev := model.Event{Entity: &model.EntityEvent{
+		EventID: model.NewEventID(), ChangeType: model.EntityCreated,
+		Entity: model.Entity{ID: "e1", Type: model.TypeHost,
+			Identity: []model.KeyValue{{Key: "host.id", Value: model.StringValue("h1")}}},
+		EventTime: when, RecordedAt: when, SchemaVersion: model.SchemaVersion,
+	}}
+	if aerr := st.Append(ev); aerr != nil {
+		t.Fatal(aerr)
+	}
+	if cerr := st.Close(); cerr != nil {
+		t.Fatal(cerr)
+	}
+	before := dirListing(t, dataDir)
+
+	dst := filepath.Join(t.TempDir(), "backup")
+	if rerr := runCheckpoint([]string{"--data-dir", dataDir, dst}, func(string) string { return "" }); rerr != nil {
+		t.Fatalf("runCheckpoint: %v", rerr)
+	}
+
+	if after := dirListing(t, dataDir); before != after {
+		t.Errorf("source modified by checkpoint:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+	if _, serr := os.Stat(filepath.Join(dataDir, "default")); !os.IsNotExist(serr) {
+		t.Errorf("checkpoint minted a default tenant in the source (stat err = %v)", serr)
+	}
+
+	restored, err := store.Open(filepath.Join(dst, "acme"), store.DefaultConfig())
+	if err != nil {
+		t.Fatalf("open checkpoint: %v", err)
+	}
+	t.Cleanup(func() { _ = restored.Close() })
+	g := projection.New()
+	if err := g.Replay(restored); err != nil {
+		t.Fatalf("replay checkpoint: %v", err)
+	}
+	if g.EntityCount() != 1 {
+		t.Errorf("restored EntityCount = %d, want 1", g.EntityCount())
+	}
+}
+
+// TestCheckpointHonorsConfigFile pins #162's second aggravator: the shipped
+// systemd setup puts data_dir in the YAML config, so the subcommand must
+// resolve it through the same layers as the server.
+func TestCheckpointHonorsConfigFile(t *testing.T) {
+	dataDir := t.TempDir()
+	st, err := store.Open(filepath.Join(dataDir, "acme"), store.DefaultConfig())
+	if err != nil {
+		t.Fatalf("seed store: %v", err)
+	}
+	if cerr := st.Close(); cerr != nil {
+		t.Fatal(cerr)
+	}
+	cfgPath := filepath.Join(t.TempDir(), "toise-server.yaml")
+	if werr := os.WriteFile(cfgPath, []byte("data_dir: "+dataDir+"\n"), 0o644); werr != nil {
+		t.Fatal(werr)
+	}
+
+	dst := filepath.Join(t.TempDir(), "backup")
+	if rerr := runCheckpoint([]string{"--config", cfgPath, dst}, func(string) string { return "" }); rerr != nil {
+		t.Fatalf("runCheckpoint with --config: %v", rerr)
+	}
+	if _, serr := os.Stat(filepath.Join(dst, "acme")); serr != nil {
+		t.Errorf("config-file data dir not honored: %v", serr)
+	}
+
+	env := func(k string) string {
+		if k == "TOISE_CONFIG" {
+			return cfgPath
+		}
+		return ""
+	}
+	dst2 := filepath.Join(t.TempDir(), "backup-env")
+	if rerr := runCheckpoint([]string{dst2}, env); rerr != nil {
+		t.Fatalf("runCheckpoint with TOISE_CONFIG: %v", rerr)
+	}
+	if _, serr := os.Stat(filepath.Join(dst2, "acme")); serr != nil {
+		t.Errorf("TOISE_CONFIG data dir not honored: %v", serr)
+	}
+}
+
+// dirListing returns a recursive name+size listing of dir, to assert a
+// directory was not modified.
+func dirListing(t *testing.T, dir string) string {
+	t.Helper()
+	var b strings.Builder
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, werr error) error {
+		if werr != nil {
+			return werr
+		}
+		rel, rerr := filepath.Rel(dir, path)
+		if rerr != nil {
+			return rerr
+		}
+		if info.IsDir() {
+			b.WriteString(rel + "/\n")
+			return nil
+		}
+		b.WriteString(rel + " " + strconv.FormatInt(info.Size(), 10) + "\n")
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking %s: %v", dir, err)
+	}
+	return b.String()
+}
+
 // TestShutdownWithOpenStream pins #130: a deploy with a connected streaming
 // client (the MCP SSE listening stream here) must still exit clean — before
 // the fix, Shutdown waited its full grace for streams that never drain and
@@ -361,5 +517,114 @@ func TestShutdownWithOpenStream(t *testing.T) {
 		}
 	case <-time.After(15 * time.Second):
 		t.Fatal("run() did not return within 15s of SIGTERM")
+	}
+}
+
+// syncWriter is a goroutine-safe log sink: run()'s servers log concurrently.
+type syncWriter struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (w *syncWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.Write(p)
+}
+
+func (w *syncWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.String()
+}
+
+// TestShutdownWritesFinalSnapshot pins #164: producer references acquired
+// since the last periodic snapshot must survive a graceful SIGTERM. With the
+// ticker at 1h it never fires inside the test, so the only possible snapshot
+// is the one the shutdown path writes.
+func TestShutdownWritesFinalSnapshot(t *testing.T) {
+	dataDir := t.TempDir()
+	httpAddr, otlpAddr := freeAddr(t), freeAddr(t)
+	cfg, err := config.Load([]string{
+		"--listen", httpAddr,
+		"--otlp-listen", otlpAddr,
+		"--data-dir", dataDir,
+		"--snapshot-interval", "1h",
+	}, func(string) string { return "" })
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- run(cfg, store.DefaultConfig(), slog.New(slog.DiscardHandler)) }()
+	waitReady(t, "http://"+httpAddr+"/readyz")
+	exportEntity(t, otlpAddr, "", "h-final")
+
+	if kerr := syscall.Kill(os.Getpid(), syscall.SIGTERM); kerr != nil {
+		t.Fatal(kerr)
+	}
+	select {
+	case rerr := <-done:
+		if rerr != nil {
+			t.Fatalf("run() returned %v after SIGTERM, want nil", rerr)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("run() did not return within 10s of SIGTERM")
+	}
+
+	st, err := store.Open(filepath.Join(dataDir, tenant.Default), store.DefaultConfig())
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	_, events, liveness, ok, err := st.ReadSnapshot()
+	if err != nil {
+		t.Fatalf("read snapshot: %v", err)
+	}
+	if !ok {
+		t.Fatal("no snapshot after graceful shutdown: refs since the last periodic snapshot are lost")
+	}
+	if len(events) != 1 {
+		t.Errorf("snapshot events = %d, want 1", len(events))
+	}
+	if len(liveness) == 0 {
+		t.Error("final snapshot carries no liveness memento")
+	}
+}
+
+// TestWarnsWhenSweepingWithoutSnapshots pins #164: sweeping without snapshots
+// means the liveness backstop silently forgets every producer at each
+// restart — the combination deserves a loud startup line.
+func TestWarnsWhenSweepingWithoutSnapshots(t *testing.T) {
+	httpAddr, otlpAddr := freeAddr(t), freeAddr(t)
+	cfg, err := config.Load([]string{
+		"--listen", httpAddr,
+		"--otlp-listen", otlpAddr,
+		"--data-dir", t.TempDir(),
+		"--snapshot-interval", "0",
+	}, func(string) string { return "" })
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	if cfg.LivenessSweepInterval.D() <= 0 {
+		t.Fatal("precondition: sweeping must be on by default")
+	}
+	logs := &syncWriter{}
+	done := make(chan error, 1)
+	go func() { done <- run(cfg, store.DefaultConfig(), slog.New(slog.NewTextHandler(logs, nil))) }()
+	waitReady(t, "http://"+httpAddr+"/readyz")
+
+	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run() returned %v after SIGTERM, want nil", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("run() did not return within 10s of SIGTERM")
+	}
+	if !strings.Contains(logs.String(), "snapshots are disabled") {
+		t.Error("no startup warning for sweeping-on/snapshots-off")
 	}
 }

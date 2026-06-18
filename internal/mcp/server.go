@@ -7,6 +7,7 @@ import (
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/toise-dev/toise/internal/annotations"
 	"github.com/toise-dev/toise/internal/model"
 	"github.com/toise-dev/toise/internal/version"
 )
@@ -27,6 +28,7 @@ type Graph interface {
 	GetEntity(id model.EntityID) (model.Entity, bool, bool)
 	ListEntities(typ string) []model.Entity
 	ListRelations(typ string, from, to model.EntityID) []model.Relation
+	RelationsTouching(id model.EntityID, relType string) []model.Relation
 	CountByType() map[string]int
 	EntityCount() int
 	RelationCount() int
@@ -38,6 +40,9 @@ type Graph interface {
 type EventReader interface {
 	ReadByEntity(ctx context.Context, id model.EntityID) ([]model.Event, error)
 	ReadByTimeRange(ctx context.Context, start, end time.Time) ([]model.Event, error)
+	// ScanByTimeRange streams the range to fn (no intermediate slice), backing
+	// the as-of fold (projection.At).
+	ScanByTimeRange(ctx context.Context, start, end time.Time, fn func(model.Event) error) error
 	// PruneHorizon is the latest retention cutoff ever applied (zero = never
 	// pruned): the oldest instant an as-of read can answer completely.
 	PruneHorizon() time.Time
@@ -57,6 +62,33 @@ func withTimeout[I, O any](timeout func() time.Duration, fn func(context.Context
 	}
 }
 
+// Observer records one finished tool call: the tool name, "ok" or "error", and
+// the wall-clock duration. It is the query-side observability seam (#166) — the
+// metrics collector implements it, and the future query audit log can hang off
+// the same hook. nil disables recording.
+type Observer interface {
+	ObserveTool(tool, outcome string, dur time.Duration)
+}
+
+// observe wraps a tool handler with the per-call deadline and, when an Observer
+// is set, records the call's name, outcome and wall-clock duration. s.obs is
+// read at call time, so SetObserver after New takes effect.
+func observe[I, O any](s *Server, tool string, fn func(context.Context, *mcpsdk.CallToolRequest, I) (*mcpsdk.CallToolResult, O, error)) func(context.Context, *mcpsdk.CallToolRequest, I) (*mcpsdk.CallToolResult, O, error) {
+	timed := withTimeout(s.budget, fn)
+	return func(ctx context.Context, req *mcpsdk.CallToolRequest, in I) (*mcpsdk.CallToolResult, O, error) {
+		start := time.Now()
+		res, out, err := timed(ctx, req, in)
+		if s.obs != nil {
+			outcome := "ok"
+			if err != nil {
+				outcome = "error"
+			}
+			s.obs.ObserveTool(tool, outcome, time.Since(start))
+		}
+		return res, out, err
+	}
+}
+
 // Server exposes Toise's read model as MCP tools over stdio and Streamable HTTP.
 type Server struct {
 	graph   Graph
@@ -64,6 +96,23 @@ type Server struct {
 	now     func() time.Time
 	timeout time.Duration // per-tool-call budget
 	srv     *mcpsdk.Server
+	obs     Observer
+	ann     *annotations.Store // per-tenant annotation sidecar; nil disables annotate_entity
+}
+
+// SetAnnotations attaches the per-tenant annotation sidecar, enabling
+// annotate_entity and the annotations block on get_entity; returns s for
+// chaining. nil leaves annotations disabled.
+func (s *Server) SetAnnotations(a *annotations.Store) *Server {
+	s.ann = a
+	return s
+}
+
+// SetObserver attaches a query-observability recorder; returns s for chaining.
+// Set it before serving (the per-tool wrappers read it at call time).
+func (s *Server) SetObserver(o Observer) *Server {
+	s.obs = o
+	return s
 }
 
 // New builds an MCP server reading from the given projection and event log. The
@@ -106,14 +155,14 @@ func (s *Server) register(srv *mcpsdk.Server) {
 			"human-readable label, ids, types, and attributes. Use describe_schema first " +
 			"if you are unsure which entity types or attribute keys exist. Set as_of " +
 			"(RFC 3339) to query the graph as it was at that instant.",
-	}, withTimeout(s.budget, s.findEntities))
+	}, observe(s, "find_entities", s.findEntities))
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name: "get_entity",
 		Description: "Fetch a single entity by its logical id, with all of its identifying " +
 			"and descriptive attributes. Use the id returned by find_entities, get_neighbors, " +
 			"or recent_changes. Set as_of (RFC 3339) to read it as it was at that instant.",
-	}, withTimeout(s.budget, s.getEntity))
+	}, observe(s, "get_entity", s.getEntity))
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name: "get_neighbors",
@@ -123,7 +172,7 @@ func (s *Server) register(srv *mcpsdk.Server) {
 			"hop distance that first reached it. Use this to answer questions about what an " +
 			"entity is connected to, runs on, or depends on. Set as_of (RFC 3339) to traverse " +
 			"the graph as it was at that instant.",
-	}, withTimeout(s.budget, s.getNeighbors))
+	}, observe(s, "get_neighbors", s.getNeighbors))
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name: "find_path",
@@ -132,7 +181,7 @@ func (s *Server) register(srv *mcpsdk.Server) {
 			"reachable=false is a first-class answer meaning no path exists within the cap — " +
 			"use it to answer 'does A depend on B?' or 'how are these connected?'. Set as_of " +
 			"(RFC 3339) to search the graph as it was at that instant.",
-	}, withTimeout(s.budget, s.findPath))
+	}, observe(s, "find_path", s.findPath))
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name: "impact_of",
@@ -142,7 +191,7 @@ func (s *Server) register(srv *mcpsdk.Server) {
 			"failing takes down what runs_on it and its interfaces, connectivity breaks both " +
 			"ways. Use it to answer 'if X goes down, what is affected?'. Set as_of (RFC 3339) " +
 			"to ask it of the graph as it was at that instant.",
-	}, withTimeout(s.budget, s.impactOf))
+	}, observe(s, "impact_of", s.impactOf))
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name: "entity_history",
@@ -152,7 +201,7 @@ func (s *Server) register(srv *mcpsdk.Server) {
 			"Heartbeats (entity.unchanged) are excluded and the result is bounded by limit " +
 			"(newest kept) unless asked otherwise; the digest reports totals per change type. " +
 			"Use this to explain how an entity reached its current state.",
-	}, withTimeout(s.budget, s.entityHistory))
+	}, observe(s, "entity_history", s.entityHistory))
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name: "recent_changes",
@@ -162,7 +211,7 @@ func (s *Server) register(srv *mcpsdk.Server) {
 			"appearances/disappearances), or to one change_type. Heartbeats (entity.unchanged) " +
 			"are excluded and the result is bounded by limit unless asked otherwise; the " +
 			"digest reports totals per change type. Use this to answer 'what changed recently?'.",
-	}, withTimeout(s.budget, s.recentChanges))
+	}, observe(s, "recent_changes", s.recentChanges))
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name: "graph_diff",
@@ -173,7 +222,7 @@ func (s *Server) register(srv *mcpsdk.Server) {
 			"truncated by limit. Give a window (e.g. 24h) or from/to instants (RFC 3339). " +
 			"Use this instead of paging recent_changes when you want 'what is different now " +
 			"compared to then?'.",
-	}, withTimeout(s.budget, s.graphDiff))
+	}, observe(s, "graph_diff", s.graphDiff))
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name: "describe_type",
@@ -183,7 +232,7 @@ func (s *Server) register(srv *mcpsdk.Server) {
 			"empirically), example labels — or, for a relation type, its observed " +
 			"endpoint-type shapes, structural flag, and failure-propagation direction. Use it " +
 			"after describe_schema to learn what a type looks like HERE before querying it.",
-	}, withTimeout(s.budget, s.describeType))
+	}, observe(s, "describe_type", s.describeType))
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name: "telemetry_keys",
@@ -193,7 +242,7 @@ func (s *Server) register(srv *mcpsdk.Server) {
 			"key comes with its Prometheus-style flattened label form and usage caveats " +
 			"(ephemeral pids, name-vs-identity). Use this to pivot from the graph to " +
 			"observability data.",
-	}, withTimeout(s.budget, s.telemetryKeys))
+	}, observe(s, "telemetry_keys", s.telemetryKeys))
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name: "describe_schema",
@@ -201,5 +250,17 @@ func (s *Server) register(srv *mcpsdk.Server) {
 			"with counts, in natural language. Call this first to bootstrap your understanding " +
 			"of what this Toise instance knows about before issuing other tools. Set as_of " +
 			"(RFC 3339) to describe the graph as it was at that instant.",
-	}, withTimeout(s.budget, s.describeSchema))
+	}, observe(s, "describe_schema", s.describeSchema))
+
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
+		Name: "annotate_entity",
+		Description: "Attach operator annotations (free-form key/value notes — owner, runbook " +
+			"link, ticket, a remark) to an entity. These are an OVERLAY, not producer truth: " +
+			"stored separately and surfaced on get_entity, never mixed into the entity's " +
+			"identifying or descriptive attributes. Merges onto existing annotations; an empty " +
+			"value removes a key. Requires a write-capable (full or tenant-scoped) token.",
+	}, observe(s, "annotate_entity", s.annotateEntity))
+
+	s.registerResources(srv)
+	s.registerPrompts(srv)
 }

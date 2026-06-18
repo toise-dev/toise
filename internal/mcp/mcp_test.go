@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -58,6 +59,20 @@ func (g *fakeGraph) ListRelations(typ string, from, to model.EntityID) []model.R
 	return out
 }
 
+func (g *fakeGraph) RelationsTouching(id model.EntityID, relType string) []model.Relation {
+	var out []model.Relation
+	for _, r := range g.relations {
+		if relType != "" && r.Type != relType {
+			continue
+		}
+		if r.From == id || r.To == id {
+			out = append(out, r)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
 func (g *fakeGraph) Neighbors(id model.EntityID, _ string, _ int) []model.Entity {
 	return g.neighbors[id]
 }
@@ -105,6 +120,18 @@ func (s *fakeStore) ReadByTimeRange(_ context.Context, start, end time.Time) ([]
 		}
 	}
 	return out, nil
+}
+
+func (s *fakeStore) ScanByTimeRange(_ context.Context, start, end time.Time, fn func(model.Event) error) error {
+	for _, ev := range s.byTime {
+		et, _ := ev.Times()
+		if !et.Before(start) && !et.After(end) {
+			if err := fn(ev); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // --- fixture -----------------------------------------------------------------
@@ -210,6 +237,48 @@ func TestFindEntitiesLimitTruncates(t *testing.T) {
 	}
 }
 
+// TestVerbosityCompact pins the 0.7.0 verbosity tiers: compact drops identity
+// and attributes (cheap to scan), full (default) keeps them, unknown errors.
+func TestVerbosityCompact(t *testing.T) {
+	s := newTestServer()
+	ctx := context.Background()
+
+	_, full, err := s.findEntities(ctx, nil, FindEntitiesInput{Type: "host"})
+	if err != nil || len(full.Entities) == 0 {
+		t.Fatalf("full find_entities: %v", err)
+	}
+	if len(full.Entities[0].Identity) == 0 || len(full.Entities[0].Attributes) == 0 {
+		t.Fatal("full must carry identity and attributes")
+	}
+
+	_, comp, err := s.findEntities(ctx, nil, FindEntitiesInput{Type: "host", Verbosity: "compact"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := comp.Entities[0]
+	if len(e.Identity) != 0 || len(e.Attributes) != 0 {
+		t.Errorf("compact must omit identity/attributes, got %+v", e)
+	}
+	if e.ID == "" || e.Type == "" || e.Label == "" {
+		t.Errorf("compact must keep id/type/label, got %+v", e)
+	}
+
+	if _, _, err := s.findEntities(ctx, nil, FindEntitiesInput{Verbosity: "verbose"}); err == nil {
+		t.Error("unknown verbosity must error")
+	}
+
+	_, ge, _ := s.getEntity(ctx, nil, GetEntityInput{EntityID: "01HOST_WEB", Verbosity: "compact"})
+	if len(ge.Entity.Identity) != 0 {
+		t.Error("get_entity compact must omit identity")
+	}
+	_, gn, _ := s.getNeighbors(ctx, nil, GetNeighborsInput{EntityID: "01HOST_WEB", MaxDepth: 1, Verbosity: "compact"})
+	for _, nb := range gn.Neighbors {
+		if len(nb.Identity) != 0 {
+			t.Error("get_neighbors compact must omit neighbor identity")
+		}
+	}
+}
+
 func TestGetEntity(t *testing.T) {
 	s := newTestServer()
 	_, out, err := s.getEntity(context.Background(), nil, GetEntityInput{EntityID: "01HOST_WEB"})
@@ -230,10 +299,10 @@ func TestGetEntity(t *testing.T) {
 
 func TestGetNeighborsDepthCap(t *testing.T) {
 	s := newTestServer()
-	if _, _, err := s.getNeighbors(context.Background(), nil, GetNeighborsInput{EntityID: "01HOST_WEB", Depth: 7}); err == nil {
+	if _, _, err := s.getNeighbors(context.Background(), nil, GetNeighborsInput{EntityID: "01HOST_WEB", MaxDepth: 7}); err == nil {
 		t.Fatal("expected error exceeding maxDepth")
 	}
-	_, out, err := s.getNeighbors(context.Background(), nil, GetNeighborsInput{EntityID: "01HOST_WEB", Depth: 2})
+	_, out, err := s.getNeighbors(context.Background(), nil, GetNeighborsInput{EntityID: "01HOST_WEB", MaxDepth: 2})
 	if err != nil {
 		t.Fatalf("getNeighbors: %v", err)
 	}
@@ -242,6 +311,45 @@ func TestGetNeighborsDepthCap(t *testing.T) {
 	}
 	if _, _, err := s.getNeighbors(context.Background(), nil, GetNeighborsInput{EntityID: "ghost"}); err == nil {
 		t.Fatal("expected error for unknown entity")
+	}
+}
+
+// get_neighbors digests like the other list tools: Total counts everything
+// reachable within max_depth, the result is capped to the limit, and Truncated
+// flags the difference (#166 P1).
+func TestGetNeighborsLimitDigest(t *testing.T) {
+	g := &fakeGraph{
+		entities: map[model.EntityID]model.Entity{"h": {ID: "h", Type: model.TypeHost}},
+		deleted:  map[model.EntityID]bool{},
+	}
+	for i := 0; i < 60; i++ {
+		pid := model.EntityID(fmt.Sprintf("p%02d", i))
+		g.entities[pid] = model.Entity{ID: pid, Type: model.TypeProcess}
+		g.relations = append(g.relations, model.Relation{
+			ID: model.RelationID(fmt.Sprintf("r%02d", i)), Type: model.RelRunsOn, From: pid, To: "h",
+		})
+	}
+	s := New(g, &fakeStore{})
+	ctx := context.Background()
+
+	_, out, err := s.getNeighbors(ctx, nil, GetNeighborsInput{EntityID: "h", MaxDepth: 1, Limit: 10})
+	if err != nil {
+		t.Fatalf("getNeighbors: %v", err)
+	}
+	if out.Total != 60 || out.Count != 10 || len(out.Neighbors) != 10 || !out.Truncated {
+		t.Fatalf("limit=10: total=%d count=%d len=%d truncated=%v, want 60/10/10/true", out.Total, out.Count, len(out.Neighbors), out.Truncated)
+	}
+
+	// Default limit (50) still truncates 60.
+	_, out, _ = s.getNeighbors(ctx, nil, GetNeighborsInput{EntityID: "h", MaxDepth: 1})
+	if out.Total != 60 || out.Count != 50 || !out.Truncated {
+		t.Fatalf("default limit: total=%d count=%d truncated=%v, want 60/50/true", out.Total, out.Count, out.Truncated)
+	}
+
+	// A limit above the reachable set returns everything, not truncated.
+	_, out, _ = s.getNeighbors(ctx, nil, GetNeighborsInput{EntityID: "h", MaxDepth: 1, Limit: 200})
+	if out.Total != 60 || out.Count != 60 || out.Truncated {
+		t.Fatalf("limit=200: total=%d count=%d truncated=%v, want 60/60/false", out.Total, out.Count, out.Truncated)
 	}
 }
 
@@ -362,8 +470,42 @@ func TestMCPRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	if len(tools.Tools) != 11 {
-		t.Fatalf("want 11 tools, got %d", len(tools.Tools))
+	if len(tools.Tools) != 12 {
+		t.Fatalf("want 12 tools, got %d", len(tools.Tools))
+	}
+
+	// Resources and prompts are part of the same surface — exercise them over the
+	// real transport too.
+	rs, err := cs.ListResources(ctx, nil)
+	if err != nil {
+		t.Fatalf("list resources: %v", err)
+	}
+	if len(rs.Resources) != len(resourceCatalog) {
+		t.Fatalf("want %d resources, got %d", len(resourceCatalog), len(rs.Resources))
+	}
+	rr, err := cs.ReadResource(ctx, &mcpsdk.ReadResourceParams{URI: "toise://schema"})
+	if err != nil {
+		t.Fatalf("read schema resource: %v", err)
+	}
+	if len(rr.Contents) == 0 || rr.Contents[0].MIMEType != "application/json" {
+		t.Fatalf("unexpected schema resource: %+v", rr.Contents)
+	}
+	ps, err := cs.ListPrompts(ctx, nil)
+	if err != nil {
+		t.Fatalf("list prompts: %v", err)
+	}
+	if len(ps.Prompts) != len(promptCatalog) {
+		t.Fatalf("want %d prompts, got %d", len(promptCatalog), len(ps.Prompts))
+	}
+	gp, err := cs.GetPrompt(ctx, &mcpsdk.GetPromptParams{
+		Name:      "investigate_incident",
+		Arguments: map[string]string{"entity": "db-07"},
+	})
+	if err != nil {
+		t.Fatalf("get prompt: %v", err)
+	}
+	if len(gp.Messages) != 1 {
+		t.Fatalf("want one prompt message, got %d", len(gp.Messages))
 	}
 
 	res, err := cs.CallTool(ctx, &mcpsdk.CallToolParams{
@@ -665,7 +807,7 @@ func TestFindPathAndNeighborEdges(t *testing.T) {
 	}
 
 	// get_neighbors carries the edge facts.
-	_, ns, err := s.getNeighbors(ctx, nil, GetNeighborsInput{EntityID: "01HOST_WEB", Depth: 2})
+	_, ns, err := s.getNeighbors(ctx, nil, GetNeighborsInput{EntityID: "01HOST_WEB", MaxDepth: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -767,7 +909,46 @@ func (blockingStore) ReadByTimeRange(ctx context.Context, _, _ time.Time) ([]mod
 	return nil, ctx.Err()
 }
 
+func (blockingStore) ScanByTimeRange(ctx context.Context, _, _ time.Time, _ func(model.Event) error) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
 func (blockingStore) PruneHorizon() time.Time { return time.Time{} }
+
+type obsCall struct{ tool, outcome string }
+type fakeObserver struct{ calls []obsCall }
+
+func (o *fakeObserver) ObserveTool(tool, outcome string, _ time.Duration) {
+	o.calls = append(o.calls, obsCall{tool, outcome})
+}
+
+// TestObserveRecordsToolCall pins the query-observability seam (#166): the
+// per-tool wrapper records the tool name and an ok/error outcome.
+func TestObserveRecordsToolCall(t *testing.T) {
+	s := newTestServer()
+	rec := &fakeObserver{}
+	s.SetObserver(rec)
+
+	okHandler := observe(s, "find_entities", s.findEntities)
+	if _, _, err := okHandler(context.Background(), nil, FindEntitiesInput{Type: "host"}); err != nil {
+		t.Fatalf("ok call: %v", err)
+	}
+	errHandler := observe(s, "get_entity", s.getEntity)
+	if _, _, err := errHandler(context.Background(), nil, GetEntityInput{}); err == nil {
+		t.Fatal("expected an error for empty entity id")
+	}
+
+	want := []obsCall{{"find_entities", "ok"}, {"get_entity", "error"}}
+	if len(rec.calls) != len(want) {
+		t.Fatalf("recorded %d calls, want %d: %+v", len(rec.calls), len(want), rec.calls)
+	}
+	for i, w := range want {
+		if rec.calls[i] != w {
+			t.Errorf("call %d = %+v, want %+v", i, rec.calls[i], w)
+		}
+	}
+}
 
 // TestToolCallTimeout pins the per-call budget: a tool whose read outlives the
 // deadline returns a deadline error instead of hanging the transport (#115).
@@ -908,6 +1089,37 @@ func TestAsOfReads(t *testing.T) {
 	if out.Total != 0 {
 		t.Fatalf("live graph read = %d, want 0", out.Total)
 	}
+}
+
+// TestPreEpochTimestampsRejected pins #165: the time index encodes event_time
+// as unsigned nanoseconds, so a pre-1970 instant wraps above every real key —
+// as_of would fold the full current graph and graph_diff would silently come
+// back empty. Every event-time input must be refused at the parse boundary.
+func TestPreEpochTimestampsRejected(t *testing.T) {
+	s := newTestServer()
+	ctx := context.Background()
+	const preEpoch = "1950-01-01T00:00:00Z"
+	wantRejected := func(tool string, err error) {
+		t.Helper()
+		if err == nil || !strings.Contains(err.Error(), "1970") {
+			t.Fatalf("%s with a 1950 instant = %v, want a pre-1970 rejection", tool, err)
+		}
+	}
+
+	_, _, err := s.findEntities(ctx, nil, FindEntitiesInput{AsOf: preEpoch})
+	wantRejected("find_entities as_of", err)
+	_, _, err = s.getEntity(ctx, nil, GetEntityInput{EntityID: "01HOST_WEB", AsOf: preEpoch})
+	wantRejected("get_entity as_of", err)
+	_, _, err = s.graphDiff(ctx, nil, GraphDiffInput{From: preEpoch})
+	wantRejected("graph_diff from", err)
+	_, _, err = s.graphDiff(ctx, nil, GraphDiffInput{From: preEpoch, To: "2026-05-29T12:00:00Z"})
+	wantRejected("graph_diff from/to", err)
+	_, _, err = s.entityHistory(ctx, nil, EntityHistoryInput{EntityID: "01HOST_WEB", Since: preEpoch})
+	wantRejected("entity_history since", err)
+	_, _, err = s.entityHistory(ctx, nil, EntityHistoryInput{EntityID: "01HOST_WEB", Until: preEpoch})
+	wantRejected("entity_history until", err)
+	_, _, err = s.entityHistory(ctx, nil, EntityHistoryInput{EntityID: "01HOST_WEB", AsKnownAt: preEpoch})
+	wantRejected("entity_history as_known_at", err)
 }
 
 // TestImpactOf pins the #136 blast-radius semantics on the fixture topology

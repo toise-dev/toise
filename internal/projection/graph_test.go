@@ -91,6 +91,38 @@ func TestRelationsAndNeighbors(t *testing.T) {
 	}
 }
 
+func TestRelationsTouching(t *testing.T) {
+	g := New()
+	a, b, c := model.NewEntityID(), model.NewEntityID(), model.NewEntityID()
+	g.Apply(entityCreated(a, model.TypeProcess, kv("pid", "1")))
+	g.Apply(entityCreated(b, model.TypeHost, kv("host.id", "h1")))
+	g.Apply(entityCreated(c, model.TypeHost, kv("host.id", "h2")))
+	runsOn := model.NewRelation(model.RelRunsOn, a, b)     // a -> b
+	monitors := model.NewRelation(model.RelMonitors, c, a) // c -> a
+	for _, r := range []model.Relation{runsOn, monitors} {
+		g.Apply(model.Event{Relation: &model.RelationEvent{ChangeType: model.RelationAdded, Relation: r}})
+	}
+
+	// a is touched by both edges (one outgoing, one incoming).
+	if got := g.RelationsTouching(a, ""); len(got) != 2 {
+		t.Fatalf("RelationsTouching(a) = %d, want 2", len(got))
+	}
+	// b only by runs_on.
+	if got := g.RelationsTouching(b, ""); len(got) != 1 || got[0].ID != runsOn.ID {
+		t.Fatalf("RelationsTouching(b) = %+v, want [runs_on]", got)
+	}
+	// type filter.
+	if got := g.RelationsTouching(a, model.RelMonitors); len(got) != 1 || got[0].ID != monitors.ID {
+		t.Fatalf("RelationsTouching(a, monitors) = %+v, want [monitors]", got)
+	}
+	// a self-loop appears exactly once (it is in both the out and in index).
+	loop := model.NewRelation(model.RelConnectedTo, b, b)
+	g.Apply(model.Event{Relation: &model.RelationEvent{ChangeType: model.RelationAdded, Relation: loop}})
+	if got := g.RelationsTouching(b, model.RelConnectedTo); len(got) != 1 || got[0].ID != loop.ID {
+		t.Fatalf("self-loop touching = %+v, want one entry", got)
+	}
+}
+
 func TestMatchIdentityExact(t *testing.T) {
 	g := New()
 	a := model.NewEntityID()
@@ -219,5 +251,28 @@ func TestTombstoneCacheBounded(t *testing.T) {
 	apply(model.EntityDeleted, mk(20))
 	if _, ok, deleted := g.GetEntity("e20"); !ok || !deleted {
 		t.Errorf("e20 tombstone = ok %v deleted %v, want readable", ok, deleted)
+	}
+}
+
+// A delete whose create aged out of retention (a delete-without-create on
+// replay) leaves a phantom tombstone: an id in deleted but never in entities.
+// EntityCount must count live entities by membership, not len-len, or it
+// undercounts — here one live entity would read as zero (#166 P1).
+func TestEntityCountIgnoresPhantomTombstone(t *testing.T) {
+	g := New()
+	apply := func(ct model.ChangeType, e model.Entity) {
+		g.Apply(model.Event{Entity: &model.EntityEvent{
+			EventID: model.NewEventID(), ChangeType: ct, Entity: e, SchemaVersion: model.SchemaVersion,
+		}})
+	}
+	apply(model.EntityCreated, model.Entity{ID: "A", Type: model.TypeHost, Identity: []model.KeyValue{kv("host.id", "a")}})
+	// B's create aged out of retention; only its delete is replayed.
+	apply(model.EntityDeleted, model.Entity{ID: "B", Type: model.TypeHost, Identity: []model.KeyValue{kv("host.id", "b")}})
+
+	if _, ok := g.entities["B"]; ok {
+		t.Fatal("B must not be in entities (its create never replayed)")
+	}
+	if got := g.EntityCount(); got != 1 {
+		t.Fatalf("EntityCount = %d, want 1 (A is live; B is a phantom tombstone)", got)
 	}
 }

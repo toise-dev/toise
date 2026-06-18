@@ -60,6 +60,22 @@ func main() {
 		return
 	}
 
+	if len(os.Args) > 1 && os.Args[1] == "drop-snapshot" {
+		if err := runDropSnapshot(os.Args[2:], os.Getenv); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	if len(os.Args) > 1 && os.Args[1] == "delete-tenant" {
+		if err := runDeleteTenant(os.Args[2:], os.Getenv); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	cfg, err := config.Load(os.Args[1:], os.Getenv)
 	if errors.Is(err, config.ErrHelp) {
 		os.Exit(0)
@@ -95,6 +111,22 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	}
 	defer func() { _ = reg.Close() }()
 
+	// Final snapshot at graceful shutdown, declared right after the close so it
+	// runs just before it (after the maintenance loops have joined and ingest
+	// has stopped): producer references acquired since the last periodic
+	// snapshot would otherwise be lost, leaving permanent zombies for producers
+	// that die during the downtime (#139). Per-tenant failures are logged, never
+	// allowed to abort the shutdown.
+	if cfg.SnapshotInterval.D() > 0 {
+		defer func() {
+			for _, st := range reg.Stacks() {
+				if serr := writeTenantSnapshot(st, logger); serr != nil {
+					logger.Error("final snapshot at shutdown failed", "tenant", st.Tenant, "err", serr)
+				}
+			}
+		}()
+	}
+
 	if cfg.MCPStdio {
 		// stdio carries no per-request tenant metadata, so it serves the default
 		// tenant only (ADR 0025).
@@ -105,7 +137,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		logger.Info("serving MCP over stdio", "data_dir", cfg.DataDir, "tenant", tenant.Default)
-		if serveErr := mcp.New(st.Graph, st.Store).ServeStdio(ctx); serveErr != nil && !errors.Is(serveErr, context.Canceled) {
+		if serveErr := mcp.New(st.Graph, st.Store).SetAnnotations(st.Annotations).ServeStdio(ctx); serveErr != nil && !errors.Is(serveErr, context.Canceled) {
 			return fmt.Errorf("mcp stdio: %w", serveErr)
 		}
 		return nil
@@ -125,7 +157,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	authn := auth.NewWithTenantTokens(cfg.AuthTokens, scopedTokens)
+	authn := auth.NewWithRoles(cfg.AuthTokens, cfg.ReadTokens, cfg.IngestTokens, scopedTokens)
 	var grpcOpts []grpc.ServerOption
 	if authn.Enabled() {
 		grpcOpts = append(grpcOpts,
@@ -157,6 +189,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	maint := metrics.NewMaintenance()
 	authFailures := metrics.NewAuthFailures()
 	authn.OnFailure(authFailures.Inc)
+	queryMetrics := metrics.NewQueryMetrics() // per-MCP-tool call/duration, shared across tenants
 
 	// An exposed listener without auth or TLS deserves a loud line at startup:
 	// the trusted-network defaults are loopback, and leaving them is a choice
@@ -192,14 +225,14 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	// one handler per tenant on first use, bound to that tenant's stack, and
 	// dispatches by the X-Scope-OrgID header (ADR 0025).
 	graphqlRouter := newTenantRouter(reg, logger, func(st *registry.Stack) (http.Handler, error) {
-		res := &resolvers.Resolver{Graph: st.Graph, Store: st.Store, Engine: st.Engine}
+		res := &resolvers.Resolver{Graph: st.Graph, Store: st.Store, Engine: st.Engine, Annotations: st.Annotations}
 		return graphql.NewHandler(res, graphql.Config{
 			AllowedOrigins:       cfg.AllowedOrigins,
 			DisableIntrospection: !cfg.GraphQLIntrospection,
 		}), nil
 	})
 	mcpRouter := newTenantRouter(reg, logger, func(st *registry.Stack) (http.Handler, error) {
-		return mcp.New(st.Graph, st.Store).HTTPHandler(), nil
+		return mcp.New(st.Graph, st.Store).SetObserver(queryMetrics).SetAnnotations(st.Annotations).HTTPHandler(), nil
 	})
 
 	mux := http.NewServeMux()
@@ -214,8 +247,14 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		}
 		return nil
 	}))
-	metricsExtra := append(ingestMetrics.Collectors(), authFailures)
+	quarantined := metrics.NewQuarantinedTenants()
+	if q := reg.Quarantined(); len(q) > 0 {
+		quarantined.Set(float64(len(q)))
+		logger.Warn("tenants quarantined at boot (stores failed to open, left on disk for recovery)", "count", len(q), "tenants", q)
+	}
+	metricsExtra := append(ingestMetrics.Collectors(), authFailures, quarantined)
 	metricsExtra = append(metricsExtra, maint.Collectors()...)
+	metricsExtra = append(metricsExtra, queryMetrics.Collectors()...)
 	mux.Handle("/metrics", metrics.Handler(metrics.NewCollector(
 		aggregateGraph{reg}, aggregateStore{reg}, version.Version, version.Commit), metricsExtra...))
 	if cfg.Playground {
@@ -261,10 +300,11 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 				case <-ticker.C:
 					for _, st := range reg.Stacks() {
 						_ = maint.Observe("sweep", st.Tenant, func() error {
-							if n := st.Engine.Sweep(); n > 0 {
+							n, err := st.Engine.Sweep()
+							if n > 0 {
 								logger.Info("liveness sweep expired stale entities", "tenant", st.Tenant, "count", n)
 							}
-							return nil
+							return err
 						})
 					}
 				}
@@ -327,6 +367,9 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	// Periodic projection snapshot for fast restart: replay only the tail since the
 	// snapshot on the next start. The reference sequence is read before sampling the
 	// graph, so the replayed tail overlaps idempotently rather than skips (#49).
+	// The snapshot also carries the liveness memento (#139): with sweeping on but
+	// snapshots off, producer refs die with every restart and a producer that was
+	// merely quiet across the restart leaves zombies — worth a loud line.
 	if snap := cfg.SnapshotInterval.D(); snap > 0 {
 		wg.Add(1)
 		go func() {
@@ -340,17 +383,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 				case <-ticker.C:
 					for _, st := range reg.Stacks() {
 						if err := maint.Observe("snapshot", st.Tenant, func() error {
-							seq := st.Store.Sequence()
-							events := st.Graph.SnapshotEvents(time.Now())
-							liveness, lerr := st.Engine.LivenessBlob()
-							if lerr != nil {
-								logger.Error("liveness snapshot failed; writing snapshot without it", "tenant", st.Tenant, "err", lerr)
-							}
-							if werr := st.Store.WriteSnapshot(seq, events, liveness); werr != nil {
-								return werr
-							}
-							logger.Info("wrote projection snapshot", "tenant", st.Tenant, "snapshot_seq", seq, "events", len(events))
-							return nil
+							return writeTenantSnapshot(st, logger)
 						}); err != nil {
 							logger.Error("snapshot write failed", "tenant", st.Tenant, "err", err)
 						}
@@ -358,6 +391,8 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 				}
 			}
 		}()
+	} else if cfg.LivenessSweepInterval.D() > 0 {
+		logger.Warn("liveness sweeping is on but snapshots are disabled: producer references will NOT survive restarts, so entities of producers that die while the server is down are never expired — set snapshot_interval (default 5m)")
 	}
 
 	fmt.Printf("Toise %s — the living map of your infrastructure\n", version.String())
@@ -411,38 +446,165 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	}
 }
 
+// writeTenantSnapshot writes one projection snapshot for st: the reference
+// sequence is read before sampling the graph so the replayed tail overlaps
+// idempotently (#49), and the liveness memento rides along (#139). A failed
+// liveness blob degrades to a snapshot without it rather than no snapshot.
+func writeTenantSnapshot(st *registry.Stack, logger *slog.Logger) error {
+	seq := st.Store.Sequence()
+	events := st.Graph.SnapshotEvents(time.Now())
+	liveness, lerr := st.Engine.LivenessBlob()
+	if lerr != nil {
+		logger.Error("liveness snapshot failed; writing snapshot without it", "tenant", st.Tenant, "err", lerr)
+	}
+	if werr := st.Store.WriteSnapshot(seq, events, liveness); werr != nil {
+		return werr
+	}
+	logger.Info("wrote projection snapshot", "tenant", st.Tenant, "snapshot_seq", seq, "events", len(events))
+	return nil
+}
+
 // runCheckpoint takes a consistent Pebble checkpoint of every tenant store
 // into <dst>/<tenant> — the operator-facing trigger for Store.Checkpoint the
-// docs promise (#115). It opens the data dir directly, so it is a cold-backup
-// tool: run it while toise-server is stopped (a running server holds the
-// pebble lock, and the open fails cleanly).
+// docs promise (#115). The data dir resolves with the server's precedence
+// (defaults < config file < TOISE_* env < flags), and the stores are opened
+// strictly read-only: a backup must never mint or alter what it backs up, so
+// a missing data dir or one holding no tenant stores is a hard error instead
+// of an empty "success" (#162). It is a cold-backup tool: run it while
+// toise-server is stopped (a running server holds the pebble lock, and the
+// open fails cleanly).
 func runCheckpoint(args []string, getenv func(string) string) error {
-	defaultDir := "toise-data"
-	if v := getenv("TOISE_DATA_DIR"); v != "" {
-		defaultDir = v
-	}
 	fs := flag.NewFlagSet("toise-server checkpoint", flag.ContinueOnError)
-	dataDir := fs.String("data-dir", defaultDir, "directory of the tenant event logs (env: TOISE_DATA_DIR)")
+	configPath := fs.String("config", "", "path to a YAML config file (env: TOISE_CONFIG)")
+	dataDir := fs.String("data-dir", "", "directory of the tenant event logs (env: TOISE_DATA_DIR)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return fmt.Errorf("usage: toise-server checkpoint [--data-dir dir] <destination-dir>")
+		return fmt.Errorf("usage: toise-server checkpoint [--config file] [--data-dir dir] <destination-dir>")
 	}
 	dst := fs.Arg(0)
 
-	reg, err := registry.Open(*dataDir, store.DefaultConfig(), 0, slog.Default())
+	var cfgArgs []string
+	if *configPath != "" {
+		cfgArgs = append(cfgArgs, "--config="+*configPath)
+	}
+	if *dataDir != "" {
+		cfgArgs = append(cfgArgs, "--data-dir="+*dataDir)
+	}
+	cfg, err := config.Load(cfgArgs, getenv)
 	if err != nil {
-		return fmt.Errorf("opening tenant registry (is toise-server still running?): %w", err)
+		return fmt.Errorf("resolving configuration: %w", err)
 	}
-	defer func() { _ = reg.Close() }()
-	for _, st := range reg.Stacks() {
-		out := filepath.Join(dst, st.Tenant)
-		if err := st.Store.Checkpoint(out); err != nil {
-			return fmt.Errorf("tenant %s: %w", st.Tenant, err)
+
+	stores, err := registry.OpenExisting(cfg.DataDir, store.DefaultConfig(), slog.Default())
+	if err != nil {
+		return fmt.Errorf("opening tenant stores: %w", err)
+	}
+	defer func() {
+		for _, ts := range stores {
+			_ = ts.Store.Close()
 		}
-		fmt.Printf("checkpointed tenant %s -> %s\n", st.Tenant, out)
+	}()
+	for _, ts := range stores {
+		out := filepath.Join(dst, ts.Tenant)
+		if cerr := ts.Store.Checkpoint(out); cerr != nil {
+			return fmt.Errorf("tenant %s: %w", ts.Tenant, cerr)
+		}
+		fmt.Printf("checkpointed tenant %s -> %s\n", ts.Tenant, out)
 	}
+	return nil
+}
+
+// runDropSnapshot deletes the persisted projection snapshot of every tenant
+// store so the next start replays the full log — the recovery path for a corrupt
+// snapshot that fails to read (the server falls back to full replay and warns;
+// dropping it stops the warning and lets a fresh snapshot be written). The event
+// log is untouched. Cold tool: run it while toise-server is stopped (a running
+// server holds the pebble lock and the open fails cleanly).
+func runDropSnapshot(args []string, getenv func(string) string) error {
+	fs := flag.NewFlagSet("toise-server drop-snapshot", flag.ContinueOnError)
+	configPath := fs.String("config", "", "path to a YAML config file (env: TOISE_CONFIG)")
+	dataDir := fs.String("data-dir", "", "directory of the tenant event logs (env: TOISE_DATA_DIR)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("usage: toise-server drop-snapshot [--config file] [--data-dir dir]")
+	}
+
+	var cfgArgs []string
+	if *configPath != "" {
+		cfgArgs = append(cfgArgs, "--config="+*configPath)
+	}
+	if *dataDir != "" {
+		cfgArgs = append(cfgArgs, "--data-dir="+*dataDir)
+	}
+	cfg, err := config.Load(cfgArgs, getenv)
+	if err != nil {
+		return fmt.Errorf("resolving configuration: %w", err)
+	}
+
+	stores, err := registry.OpenExistingWritable(cfg.DataDir, store.DefaultConfig(), slog.Default())
+	if err != nil {
+		return fmt.Errorf("opening tenant stores: %w", err)
+	}
+	defer func() {
+		for _, ts := range stores {
+			_ = ts.Store.Close()
+		}
+	}()
+	for _, ts := range stores {
+		if derr := ts.Store.DropSnapshot(); derr != nil {
+			return fmt.Errorf("tenant %s: %w", ts.Tenant, derr)
+		}
+		fmt.Printf("dropped snapshot for tenant %s\n", ts.Tenant)
+	}
+	return nil
+}
+
+// runDeleteTenant removes a tenant's entire on-disk stack (event log + snapshot)
+// from the data dir — the operator-facing tenant-deletion procedure (#166). It is
+// destructive and a COLD tool: run it with toise-server stopped (a running server
+// holds the pebble lock and serves the tenant). The default tenant cannot be
+// deleted. MaxTenants then has room for a new one.
+func runDeleteTenant(args []string, getenv func(string) string) error {
+	fs := flag.NewFlagSet("toise-server delete-tenant", flag.ContinueOnError)
+	configPath := fs.String("config", "", "path to a YAML config file (env: TOISE_CONFIG)")
+	dataDir := fs.String("data-dir", "", "directory of the tenant event logs (env: TOISE_DATA_DIR)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return fmt.Errorf("usage: toise-server delete-tenant [--config file] [--data-dir dir] <tenant-id>")
+	}
+	id, ok := tenant.Sanitize(fs.Arg(0))
+	if !ok {
+		return fmt.Errorf("invalid tenant id %q", fs.Arg(0))
+	}
+	if id == tenant.Default {
+		return fmt.Errorf("the %q tenant cannot be deleted", tenant.Default)
+	}
+
+	var cfgArgs []string
+	if *configPath != "" {
+		cfgArgs = append(cfgArgs, "--config="+*configPath)
+	}
+	if *dataDir != "" {
+		cfgArgs = append(cfgArgs, "--data-dir="+*dataDir)
+	}
+	cfg, err := config.Load(cfgArgs, getenv)
+	if err != nil {
+		return fmt.Errorf("resolving configuration: %w", err)
+	}
+	dir := filepath.Join(cfg.DataDir, id)
+	if _, serr := os.Stat(dir); serr != nil {
+		return fmt.Errorf("tenant %q not found under %s: %w", id, cfg.DataDir, serr)
+	}
+	if rerr := os.RemoveAll(dir); rerr != nil {
+		return fmt.Errorf("removing tenant %q: %w", id, rerr)
+	}
+	fmt.Printf("deleted tenant %s (%s)\n", id, dir)
 	return nil
 }
 

@@ -185,9 +185,20 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (re
 					}
 					// Embedded relationships ride on entity-state events (spec PR
 					// #4836); reconcile them additively alongside routeRecord.
-					edrop, eerr := reconciler.handle(b, lr)
+					edrop, eerr := reconciler.handleVocab(b, lr, !s.acceptUnknown)
 					dropped = append(dropped, edrop...)
 					if eerr != nil {
+						// Same per-record split as above: an unregistered
+						// relationship.type can never become valid, so the record
+						// is rejected via partial success — its valid descriptors
+						// and sibling records were already applied and stay.
+						if errors.Is(eerr, errInvalidRecord) {
+							rejected++
+							if rejectMsg == "" {
+								rejectMsg = eerr.Error()
+							}
+							continue
+						}
 						routeErr = eerr
 						break
 					}

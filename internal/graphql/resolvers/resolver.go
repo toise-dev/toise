@@ -9,6 +9,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/toise-dev/toise/internal/annotations"
 	"github.com/toise-dev/toise/internal/change"
 	"github.com/toise-dev/toise/internal/graphql/generated"
 	"github.com/toise-dev/toise/internal/model"
@@ -19,6 +20,9 @@ import (
 type EventReader interface {
 	ReadByEntity(ctx context.Context, id model.EntityID) ([]model.Event, error)
 	ReadByTimeRange(ctx context.Context, start, end time.Time) ([]model.Event, error)
+	// ScanByTimeRange streams the range to fn (no intermediate slice), backing
+	// the as-of fold (projection.At).
+	ScanByTimeRange(ctx context.Context, start, end time.Time, fn func(model.Event) error) error
 	// PruneHorizon is the latest retention cutoff ever applied (zero = never
 	// pruned): the oldest instant an as-of read can answer completely.
 	PruneHorizon() time.Time
@@ -34,10 +38,11 @@ type Graph interface {
 // Resolver wires the GraphQL API to the projection, the log, and the change
 // engine (for subscriptions).
 type Resolver struct {
-	Graph  Graph
-	Store  EventReader
-	Engine *change.Engine
-	Now    func() time.Time
+	Graph       Graph
+	Store       EventReader
+	Engine      *change.Engine
+	Annotations *annotations.Store
+	Now         func() time.Time
 }
 
 func (r *Resolver) now() time.Time {
@@ -48,10 +53,10 @@ func (r *Resolver) now() time.Time {
 }
 
 // graphAt resolves which graph a query reads: the live projection when asOf is
-// nil/empty, otherwise a projection folded from the event log up to asOf —
-// the event-time reading ("the world as it was"), mirroring the MCP tools'
-// as_of (#135). An asOf older than the retention horizon is rejected: those
-// events are pruned and a silent partial graph would be worse than an error.
+// nil/empty, otherwise the projection folded from the event log up to asOf via
+// the shared as-of service (projection.At) — the same streaming, horizon-checked,
+// concurrency-bounded fold the MCP as_of path uses (#135, #166). The reading is
+// event-time ("the world as it was at T").
 func (r *Resolver) graphAt(ctx context.Context, asOf *string) (Graph, error) {
 	if asOf == nil || *asOf == "" {
 		return r.Graph, nil
@@ -60,19 +65,7 @@ func (r *Resolver) graphAt(ctx context.Context, asOf *string) (Graph, error) {
 	if err != nil {
 		return nil, err
 	}
-	if h := r.Store.PruneHorizon(); !h.IsZero() && t.Before(h) {
-		return nil, fmt.Errorf("asOf %s is before the retention horizon %s: events that old have been pruned",
-			t.UTC().Format(time.RFC3339), h.Format(time.RFC3339))
-	}
-	evs, err := r.Store.ReadByTimeRange(ctx, time.Unix(0, 0), t.Add(time.Nanosecond))
-	if err != nil {
-		return nil, fmt.Errorf("reading events up to %s: %w", t.UTC().Format(time.RFC3339), err)
-	}
-	g := projection.New()
-	for i := range evs {
-		g.Apply(evs[i])
-	}
-	return g, nil
+	return projection.At(ctx, r.Store, t)
 }
 
 // Query returns the query resolver.
@@ -304,6 +297,12 @@ func parseOptTime(s *string, field string) (time.Time, error) {
 	t, err := time.Parse(time.RFC3339, *s)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("invalid %s %q: use an RFC 3339 timestamp like 2026-05-29T14:00:00Z", field, *s)
+	}
+	// The persisted time index encodes event_time as unsigned nanoseconds, so
+	// a pre-epoch instant would wrap above every real key and read the whole
+	// log; reject it here instead of migrating the on-disk encoding.
+	if t.Before(time.Unix(0, 0)) {
+		return time.Time{}, fmt.Errorf("invalid %s %q: RFC 3339 timestamps before 1970-01-01T00:00:00Z are not supported", field, *s)
 	}
 	return t, nil
 }

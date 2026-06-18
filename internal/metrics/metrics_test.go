@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -24,6 +25,7 @@ func (fakeStore) PrunedEvents() uint64     { return 0 }
 func (fakeStore) PrunedBytes() uint64      { return 0 }
 func (fakeStore) SnapshotSeq() uint64      { return 0 }
 func (fakeStore) SnapshotsWritten() uint64 { return 0 }
+func (fakeStore) PruneHorizon() time.Time  { return time.Unix(1700000000, 0) }
 
 func TestCollector(t *testing.T) {
 	c := NewCollector(fakeGraph{}, fakeStore{}, "1.2.3", "abc123")
@@ -55,6 +57,15 @@ toise_build_info{commit="abc123",version="1.2.3"} 1
 
 	if n := testutil.CollectAndCount(c, "toise_entities_by_type"); n != 2 {
 		t.Errorf("entities_by_type series = %d, want 2 (host, db)", n)
+	}
+
+	horizon := `
+# HELP toise_store_prune_horizon_seconds Unix time of the latest retention cutoff applied (0 if never pruned); the oldest instant an as-of read can answer completely.
+# TYPE toise_store_prune_horizon_seconds gauge
+toise_store_prune_horizon_seconds 1.7e+09
+`
+	if err := testutil.CollectAndCompare(c, strings.NewReader(horizon), "toise_store_prune_horizon_seconds"); err != nil {
+		t.Errorf("prune_horizon mismatch: %v", err)
 	}
 }
 

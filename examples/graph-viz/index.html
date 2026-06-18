@@ -176,16 +176,32 @@ function rebuild(){
   if(!fitted && nodeIds.size){ fitted=true; setTimeout(()=>net.fit({animation:false}),300); }
 }
 
-const FULL=`{ entities(first:2000){ edges{ node{ id type deleted identity{key value} attributes{key value} } } }
-             relations(first:4000){ edges{ node{ id type fromId toId } } } }`;
+// The server caps every connection page at 200 items, so a single
+// entities(first:N) returns at most 200 — loading one page renders a
+// truncated, inconsistent graph above ~200 entities (orphan nodes whose
+// host lives on a later page). Follow pageInfo.hasNextPage / endCursor to
+// fetch the whole connection before rebuilding (#209).
+const ENT_FIELDS='id type deleted identity{key value} attributes{key value}';
+const REL_FIELDS='id type fromId toId';
+async function fetchAll(conn,fields){
+  const nodes=[]; let after=null, guard=0;
+  do{
+    const q=`{ ${conn}(first:200${after?`, after:${JSON.stringify(after)}`:''}){ edges{ node{ ${fields} } } pageInfo{ hasNextPage endCursor } } }`;
+    const r=await fetch(withTenant(API),{method:'POST',headers:gqlHeaders(),credentials:'same-origin',body:JSON.stringify({query:q})});
+    const j=await r.json(); if(j.errors) throw new Error(j.errors[0].message);
+    const c=j.data[conn];
+    c.edges.forEach(e=>nodes.push(e.node));
+    after=c.pageInfo.hasNextPage?c.pageInfo.endCursor:null;
+  }while(after && ++guard<1000);
+  return nodes;
+}
 async function loadFull(){
   const err=document.getElementById('err'); err.textContent='';
   try{
-    const r=await fetch(withTenant(API),{method:'POST',headers:gqlHeaders(),credentials:'same-origin',body:JSON.stringify({query:FULL})});
-    const j=await r.json(); if(j.errors) throw new Error(j.errors[0].message);
+    const [ents,rels]=await Promise.all([fetchAll('entities',ENT_FIELDS),fetchAll('relations',REL_FIELDS)]);
     for(const k in ENT) delete ENT[k]; for(const k in REL) delete REL[k];
-    j.data.entities.edges.forEach(e=>ENT[e.node.id]=e.node);
-    j.data.relations.edges.forEach(e=>REL[e.node.id]=e.node);
+    ents.forEach(n=>ENT[n.id]=n);
+    rels.forEach(n=>REL[n.id]=n);
     rebuild();
   }catch(e){ err.textContent='⚠ '+e.message; }
 }

@@ -8,6 +8,19 @@ and contributions from the broader community are welcome.
 This document explains how to get set up, how we work, and what we expect from
 a contribution.
 
+## Ways to contribute
+
+- **Write a producer.** The highest-leverage contribution: a program that emits
+  entity events from a source you care about (a cloud, a device, an app). It is
+  self-contained — no engine internals needed — and widens what the graph can
+  see. Start with the [Write a producer guide](https://toise.dev/docs/latest/write-a-producer/)
+  and the `pkg/emit` SDK.
+- **Pick a [good first issue](https://github.com/toise-dev/toise/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22).**
+  Several are scoped producer examples.
+- **Improve the docs**, report a bug, or open a
+  [discussion](https://github.com/toise-dev/toise/discussions) to ask a question
+  or float an idea before writing code.
+
 ## Philosophy
 
 Toise favors clarity over cleverness, small reviewable changes over large ones,
@@ -100,6 +113,44 @@ merge it.
 
 Please keep pull requests focused. A smaller, single-purpose pull request is
 reviewed and merged far faster than a large one that mixes concerns.
+
+## Releases and tags
+
+Toise carries two release lines out of one repository (see
+[ADR 0027](./docs/architecture/adr/0027-sdk-module-and-versioning.md)):
+
+- **The server** is tagged `vX.Y.Z` at the repository root, starting at
+  `v0.6.0`. The `v` prefix is what Go module tooling requires of an
+  installable version; releases `0.1.0`–`0.5.0` predate it and are **not**
+  retro-tagged — pushing a `v0.x.y` twin of an old release would re-trigger
+  the release workflow and duplicate artifacts. The release workflow, the
+  docs deployment (which strips the `v` for the published docs version, so
+  URLs stay `/docs/0.6.0` style), and the Makefile all key on the v-prefixed
+  tag.
+- **The `toise-emit` SDK** (`pkg/emit`) is its own Go module, versioned
+  independently of the server and tagged `pkg/emit/vX.Y.Z`, starting at
+  `pkg/emit/v0.1.0`. Go resolves the nested path automatically: once the tag
+  `pkg/emit/v0.1.0` exists,
+  `go get github.com/toise-dev/toise/pkg/emit@v0.1.0` installs that exact
+  version. SDK tags do not trigger the server release workflow.
+
+Tags are cut by maintainers through the release flow; contributors never need
+to create one. Note that `./...` from the repository root does not reach the
+nested SDK module: `make test` and `make lint` run both modules, and CI does
+the same.
+
+The root module **requires the published `pkg/emit` tag** (not a local replace),
+so `go install github.com/toise-dev/toise/cmd/toise-server@latest` works for
+users (#212). If you are changing the SDK and the server **together** and want the
+server to build against your in-tree SDK changes before tagging, add a local,
+**uncommitted** workspace:
+
+```bash
+go work init . ./pkg/emit   # creates go.work (gitignored); remove or `go work` off when done
+```
+
+`go install pkg@version` ignores `go.work`, so this never affects users. Do not
+commit `go.work`.
 
 ## Where to ask questions
 

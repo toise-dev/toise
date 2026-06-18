@@ -130,13 +130,37 @@ Hand-rolling the wire contract is how producers drift. Two tools replace it:
   (type, identity map, attributes, heartbeat interval, embedded relationships)
   and call `State` / `Delete`; the SDK builds the spec-correct OTLP payload
   (deterministically — sorted keys, stable bytes) and exports it over gRPC
-  with your auth headers and tenant.
+  with your auth headers and tenant. When Toise accepts the export but rejects
+  some records (OTLP partial success), `State`/`Delete` return a typed
+  `emit.PartialError` carrying the rejected count and the server's first
+  rejection reason — do not retry it; fix the producer.
 - **`pkg/emit/conformance`** — contract validation without a running Toise:
-  `conformance.Check(logs)` returns every violation (missing identity,
-  mis-typed interval, incomplete relationship descriptor, non-scalar values)
-  with its location. Run it in your producer's CI; output that passes is never
-  rejected per-record by Toise.
+  `conformance.Check(logs)` returns every violation (missing identity, empty
+  attribute keys, mis-typed interval, incomplete relationship descriptor,
+  non-scalar values) with its location. Run it in your producer's CI; output
+  that passes is never rejected per-record by Toise **for shape reasons**.
+  Type-registry membership is enforced separately: under the default strict
+  vocabulary an `entity.type` outside the registry is still rejected per
+  record, unless the deployment sets `accept_unknown_types`. `Check` also
+  returns *advisory* problems (`Problem.Advisory`, not rejections) for
+  misconfigurations such as a missing `service.instance.id` resource
+  attribute, which collapses multi-producer liveness reference counting.
 
 The checked-in fixture (`pkg/emit/testdata/fixture_v1.bin`) is the published
 contract v1: the SDK reproduces it byte for byte and Toise's own ingest tests
 accept it with zero rejections — one artifact pins both sides.
+
+The SDK is its own Go module
+([ADR 0027](https://github.com/toise-dev/toise/blob/main/docs/architecture/adr/0027-sdk-module-and-versioning.md)),
+versioned independently of the server and dependency-light: importing it pulls
+in the OTel pdata types and gRPC, none of the server's storage or query stack.
+It is installable at a tagged version once the first SDK tag
+(`pkg/emit/v0.1.0`) is cut — Go resolves the nested module path from the tag
+automatically:
+
+```bash
+go get github.com/toise-dev/toise/pkg/emit@v0.1.0
+```
+
+Until then, `go get github.com/toise-dev/toise/pkg/emit@main` resolves a
+pseudo-version of the latest main.

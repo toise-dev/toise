@@ -25,7 +25,7 @@ override one value with an env var or a flag for a one-off run. See
 | `liveness_sweep_interval` | `TOISE_LIVENESS_SWEEP_INTERVAL` | `--liveness-sweep-interval` | `30s` | how often to expire entities past their heartbeat interval (`0` = disabled) |
 | `retention_max_age` | `TOISE_RETENTION_MAX_AGE` | `--retention-max-age` | `0` | max age of retained events (`0` = unlimited) |
 | `retention_compaction_interval` | `TOISE_RETENTION_COMPACTION_INTERVAL` | `--retention-compaction-interval` | `1h` | heartbeat-coalescing compaction cadence |
-| `snapshot_interval` | `TOISE_SNAPSHOT_INTERVAL` | `--snapshot-interval` | `0` | projection snapshot cadence for fast restart (`0` = disabled) |
+| `snapshot_interval` | `TOISE_SNAPSHOT_INTERVAL` | `--snapshot-interval` | `5m` | projection snapshot cadence for fast restart and liveness survival across restarts (`0` = disabled) |
 | `log_format` | `TOISE_LOG_FORMAT` | `--log-format` | `text` | log output format: `text` or `json` |
 | `log_level` | `TOISE_LOG_LEVEL` | `--log-level` | `info` | `debug`, `info`, `warn`, or `error` |
 | `production` | `TOISE_PRODUCTION` | `--production` | `false` | hardening profile — forces the three below off |
@@ -159,12 +159,16 @@ recorded old fact is not pruned the instant it lands.
 ## Fast restart — projection snapshots
 
 On start, the in-memory projection is rebuilt by replaying the event log. With
-`snapshot_interval` set (e.g. `5m`), the server periodically writes a **projection
+`snapshot_interval` set (default `5m`), the server periodically writes a **projection
 snapshot** into the store; on the next start it loads the snapshot and replays only
 the events recorded **since** it — so **restart time is bounded by snapshot age, not
-by total history** (#49). The snapshot lives inside the Pebble store, so a backup
-includes it. The metrics `toise_snapshot_seq` and `toise_snapshots_written_total`
-track it. Disabled by default (`0` = full replay on start).
+by total history** (#49). A final snapshot is also written at graceful shutdown. The
+snapshot lives inside the Pebble store, so a backup includes it. The metrics
+`toise_snapshot_seq` and `toise_snapshots_written_total` track it. Set `0` to disable
+(full replay on start) — note the snapshot also carries the liveness bookkeeping
+(producer references and their deadlines), so with sweeping on and snapshots off,
+entities of producers that die while the server is down are never expired; the
+server warns about that combination at startup.
 
 > **`asKnownAt` over pruned windows.** Pruning removes historical events, so an
 > `asKnownAt` audit query (or an `entityHistory` window) reaching **before the

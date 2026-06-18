@@ -5,6 +5,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 
 	"github.com/cockroachdb/pebble"
 	"google.golang.org/protobuf/proto"
@@ -61,6 +64,19 @@ func (s *Store) WriteSnapshot(seq uint64, events []model.Event, liveness []byte)
 	return nil
 }
 
+// DropSnapshot removes the persisted projection snapshot, so the next start
+// replays the full log. The recovery path for a corrupt snapshot: it discards
+// the snapshot without touching the event log (the source of truth).
+func (s *Store) DropSnapshot() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.db.Delete(snapshotKey, pebble.Sync); err != nil {
+		return fmt.Errorf("dropping snapshot: %w", err)
+	}
+	s.snapshotSeq = 0
+	return nil
+}
+
 // ReadSnapshot returns the stored snapshot's reference sequence and events. ok is
 // false when no snapshot exists yet.
 func (s *Store) ReadSnapshot() (seq uint64, events []model.Event, liveness []byte, ok bool, err error) {
@@ -89,13 +105,23 @@ func (s *Store) ReadSnapshot() (seq uint64, events []model.Event, liveness []byt
 		if n == livenessSentinel {
 			// The liveness section: one length-delimited opaque blob, owned by
 			// the change engine (#139). Pre-section snapshots never reach here.
+			// A truncated section must not fail the read — the projection
+			// events before it are intact, and the blob is only a liveness
+			// hint the engine's sweep self-heals without. Returning whatever
+			// bytes remain lets the engine's own decoder reject (and the
+			// caller warn about) the partial blob, the same path as JSON-level
+			// corruption.
 			if len(rest) < 4 {
-				return 0, nil, nil, false, errors.New("snapshot truncated (liveness length)")
+				liveness = rest
+				rest = nil
+				continue
 			}
 			ln := binary.BigEndian.Uint32(rest[:4])
 			rest = rest[4:]
 			if uint32(len(rest)) < ln {
-				return 0, nil, nil, false, errors.New("snapshot truncated (liveness body)")
+				liveness = rest
+				rest = nil
+				continue
 			}
 			liveness = rest[:ln]
 			rest = rest[ln:]
@@ -142,8 +168,81 @@ func (s *Store) ScanFrom(afterSeq uint64, fn func(seq uint64, ev model.Event) er
 // exist) using Pebble's checkpoint — a live, lock-free snapshot suitable for
 // backup. Restore by pointing --data-dir at a copy of destDir. (#49)
 func (s *Store) Checkpoint(destDir string) error {
+	if s.readOnly {
+		// Pebble's Checkpoint cannot run on a read-only DB (it hard-links the
+		// OPTIONS file a read-only open never writes). A read-only open holds
+		// the exclusive directory lock and performs no flush, compaction, or
+		// WAL write, so the store directory is frozen: a plain file copy is an
+		// equally consistent backup.
+		if err := s.copyDir(destDir); err != nil {
+			return fmt.Errorf("checkpointing read-only store to %s: %w", destDir, err)
+		}
+		return nil
+	}
 	if err := s.db.Checkpoint(destDir); err != nil {
 		return fmt.Errorf("checkpointing store to %s: %w", destDir, err)
+	}
+	return nil
+}
+
+// copyDir copies every regular file of the (frozen, read-only) store directory
+// into destDir, which must not exist — the same contract as Pebble's
+// Checkpoint. The LOCK file is skipped so the copy is openable while the
+// source is still held.
+func (s *Store) copyDir(destDir string) error {
+	if _, err := os.Stat(destDir); err == nil {
+		return fmt.Errorf("destination %s already exists", destDir)
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("checking destination: %w", err)
+	}
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return fmt.Errorf("creating destination: %w", err)
+	}
+	ents, err := os.ReadDir(s.dir)
+	if err != nil {
+		return fmt.Errorf("listing store dir: %w", err)
+	}
+	for _, e := range ents {
+		if !e.Type().IsRegular() || e.Name() == "LOCK" {
+			continue
+		}
+		if cerr := copyFileSync(filepath.Join(s.dir, e.Name()), filepath.Join(destDir, e.Name())); cerr != nil {
+			return cerr
+		}
+	}
+	d, err := os.Open(destDir)
+	if err != nil {
+		return fmt.Errorf("opening destination for sync: %w", err)
+	}
+	defer func() { _ = d.Close() }()
+	if err := d.Sync(); err != nil {
+		return fmt.Errorf("syncing destination: %w", err)
+	}
+	return nil
+}
+
+// copyFileSync copies src to dst and fsyncs the copy — a backup that vanishes
+// on the next power cut is no backup.
+func copyFileSync(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("opening %s: %w", src, err)
+	}
+	defer func() { _ = in.Close() }()
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return fmt.Errorf("creating %s: %w", dst, err)
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return fmt.Errorf("copying %s: %w", src, err)
+	}
+	if err := out.Sync(); err != nil {
+		_ = out.Close()
+		return fmt.Errorf("syncing %s: %w", dst, err)
+	}
+	if err := out.Close(); err != nil {
+		return fmt.Errorf("closing %s: %w", dst, err)
 	}
 	return nil
 }

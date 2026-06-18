@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -23,8 +24,8 @@ type Entity struct {
 	ID         string      `json:"id" jsonschema:"the stable logical entity id (a ULID), stable across identity changes"`
 	Type       string      `json:"type" jsonschema:"the entity type, e.g. host, process, network_interface"`
 	Label      string      `json:"label" jsonschema:"a short human-readable label derived from the identifying attributes"`
-	Identity   []Attribute `json:"identity" jsonschema:"the identifying attributes that together identify this entity"`
-	Attributes []Attribute `json:"attributes" jsonschema:"descriptive, non-identifying attributes"`
+	Identity   []Attribute `json:"identity,omitempty" jsonschema:"the identifying attributes that together identify this entity; omitted in compact verbosity"`
+	Attributes []Attribute `json:"attributes,omitempty" jsonschema:"descriptive, non-identifying attributes; omitted in compact verbosity"`
 	Deleted    bool        `json:"deleted" jsonschema:"true if the entity has been observed deleted"`
 }
 
@@ -89,13 +90,43 @@ func label(e model.Entity) string {
 }
 
 func entityOut(e model.Entity, deleted bool) Entity {
-	return Entity{
-		ID:         string(e.ID),
-		Type:       e.Type,
-		Label:      label(e),
-		Identity:   attrsOut(e.Identity),
-		Attributes: attrsOut(e.Attributes),
-		Deleted:    deleted,
+	return entityOutV(e, deleted, false)
+}
+
+// entityOutV renders an entity at the requested verbosity. Compact drops the
+// identity and descriptive attribute lists, keeping the id, type, label and
+// deleted flag — the slim shape an LLM asks for to scan many entities cheaply,
+// then re-fetches one in full. Full is the default and unchanged.
+func entityOutV(e model.Entity, deleted, compact bool) Entity {
+	out := Entity{
+		ID:      string(e.ID),
+		Type:    e.Type,
+		Label:   label(e),
+		Deleted: deleted,
+	}
+	if !compact {
+		out.Identity = attrsOut(e.Identity)
+		out.Attributes = attrsOut(e.Attributes)
+	}
+	return out
+}
+
+// verbosity values for the read tools' optional `verbosity` input.
+const (
+	verbosityFull    = "full"
+	verbosityCompact = "compact"
+)
+
+// parseVerbosity reads the optional verbosity input. Empty defaults to full
+// (backward-compatible); an unknown value is a friendly error.
+func parseVerbosity(v string) (compact bool, err error) {
+	switch v {
+	case "", verbosityFull:
+		return false, nil
+	case verbosityCompact:
+		return true, nil
+	default:
+		return false, fmt.Errorf("unknown verbosity %q: use %q or %q", v, verbosityFull, verbosityCompact)
 	}
 }
 

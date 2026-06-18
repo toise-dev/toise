@@ -199,8 +199,17 @@ func TestRegistry(t *testing.T) {
 	if def, ok := RelationDef(RelListensOn); !ok || def.From != TypeServiceListener || def.To != TypeNetworkInterface {
 		t.Error("relation def wrong")
 	}
-	if len(EntityTypes()) != 9 || len(RelationTypes()) != 11 {
+	if len(EntityTypes()) != 12 || len(RelationTypes()) != 12 {
 		t.Errorf("registry counts: %d entity, %d relation", len(EntityTypes()), len(RelationTypes()))
+	}
+	// compute.vm (hypervisor-discovered VM) and container are registered compute
+	// resources, accepted under the strict vocabulary without --accept-unknown-types.
+	if !IsKnownEntityType(TypeComputeVM) || !IsKnownEntityType(TypeContainer) {
+		t.Error("compute.vm and container must be known entity types")
+	}
+	// depends_on (connection topology, #184) targets an observable network.endpoint.
+	if def, ok := RelationDef(RelDependsOn); !ok || def.From != TypeServiceInstance || def.To != TypeNetworkEndpoint {
+		t.Error("depends_on relation def wrong")
 	}
 	// connected_to (topology-as-entities, ADR 0022) is registered as a bare
 	// interface<->interface edge.

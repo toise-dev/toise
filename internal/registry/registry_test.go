@@ -5,9 +5,12 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/cockroachdb/pebble"
 
 	"github.com/toise-dev/toise/internal/change"
 	"github.com/toise-dev/toise/internal/model"
@@ -79,6 +82,46 @@ func TestForIsolatesTenants(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(stackDir(reg, id))); err != nil {
 			t.Errorf("tenant %s store dir missing: %v", id, err)
 		}
+	}
+}
+
+// TestQuarantinesCorruptTenantAtBoot pins #166: one tenant whose store fails to
+// open must not abort the whole multi-tenant process — it is quarantined (warned,
+// skipped, listed, its dir left on disk), and the healthy tenants plus the default
+// still come up.
+func TestQuarantinesCorruptTenantAtBoot(t *testing.T) {
+	dataDir := t.TempDir()
+	seedStore(t, filepath.Join(dataDir, "good"), "h-good")
+	seedStore(t, filepath.Join(dataDir, "bad"), "h-bad")
+	// Corrupt the bad tenant's manifest so its store cannot open.
+	manifests, _ := filepath.Glob(filepath.Join(dataDir, "bad", "MANIFEST-*"))
+	if len(manifests) == 0 {
+		t.Fatal("test setup: no MANIFEST to corrupt")
+	}
+	if err := os.WriteFile(manifests[0], []byte("corrupt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	reg, err := Open(dataDir, store.DefaultConfig(), 0, discard())
+	if err != nil {
+		t.Fatalf("boot must succeed despite a corrupt tenant: %v", err)
+	}
+	t.Cleanup(func() { _ = reg.Close() })
+
+	if q := reg.Quarantined(); len(q) != 1 || q[0] != "bad" {
+		t.Fatalf("Quarantined() = %v, want [bad]", q)
+	}
+	// The healthy tenant and the default are served.
+	good, ferr := reg.For("good")
+	if ferr != nil || !hasHost(good.Graph, "h-good") {
+		t.Errorf("good tenant should be served: err=%v", ferr)
+	}
+	if _, ferr := reg.For(tenant.Default); ferr != nil {
+		t.Errorf("default must always open: %v", ferr)
+	}
+	// The corrupt dir is left on disk for recovery.
+	if _, statErr := os.Stat(filepath.Join(dataDir, "bad")); statErr != nil {
+		t.Errorf("quarantined tenant dir must be left on disk: %v", statErr)
 	}
 }
 
@@ -293,4 +336,276 @@ func TestConcurrentForOpensOnce(t *testing.T) {
 			t.Fatalf("caller %d got a different stack instance", i)
 		}
 	}
+}
+
+// snapshotStack mirrors the server's snapshot body (sequence first, then the
+// graph sample, then the liveness memento) so the boot path under test sees
+// exactly what production writes.
+func snapshotStack(t *testing.T, st *Stack) {
+	t.Helper()
+	seq := st.Store.Sequence()
+	events := st.Graph.SnapshotEvents(time.Now())
+	liveness, err := st.Engine.LivenessBlob()
+	if err != nil {
+		t.Fatalf("liveness blob: %v", err)
+	}
+	if err := st.Store.WriteSnapshot(seq, events, liveness); err != nil {
+		t.Fatalf("write snapshot: %v", err)
+	}
+}
+
+// TestOpenStackRestoresLivenessMemento drives the production boot wiring
+// (openStack): a snapshot carrying the memento boots with producer references
+// live — the first sweep does not reap a fresh producer's entity, and a
+// release by a different producer is silent because the original reference
+// survived the restart (ADR 0019).
+func TestOpenStackRestoresLivenessMemento(t *testing.T) {
+	dataDir := t.TempDir()
+	reg, err := Open(dataDir, store.DefaultConfig(), 0, discard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := reg.For(tenant.Default)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ident := []model.KeyValue{{Key: "host.id", Value: model.StringValue("h-memento")}}
+	if _, oerr := st.Engine.ObserveEntity(change.EntityObservation{
+		Type: model.TypeHost, Identity: ident,
+		Interval: time.Hour, Producer: "p1", EventTime: time.Now(),
+	}); oerr != nil {
+		t.Fatal(oerr)
+	}
+	snapshotStack(t, st)
+	if cerr := reg.Close(); cerr != nil {
+		t.Fatal(cerr)
+	}
+
+	reg2, err := Open(dataDir, store.DefaultConfig(), 0, discard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reg2.Close() })
+	st2, err := reg2.For(tenant.Default)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasHost(st2.Graph, "h-memento") {
+		t.Fatal("snapshot did not restore the entity")
+	}
+	if n, _ := st2.Engine.Sweep(); n != 0 {
+		t.Fatalf("first sweep after boot expired %d, want 0 (producer is fresh)", n)
+	}
+	_, emitted, derr := st2.Engine.DeleteEntity(change.EntityObservation{
+		Type: model.TypeHost, Identity: ident, Producer: "p2", EventTime: time.Now(),
+	})
+	if derr != nil {
+		t.Fatal(derr)
+	}
+	if emitted {
+		t.Error("release by another producer emitted a delete: p1's restored reference should keep the entity live")
+	}
+	if !hasHost(st2.Graph, "h-memento") {
+		t.Error("entity gone after a foreign producer's release")
+	}
+}
+
+// TestOpenStackFallsBackOnCorruptSnapshot: an unreadable projection snapshot must
+// not block boot — the log is the source of truth, so openStack falls back to a
+// full replay and rebuilds the graph intact (#166 P1).
+func TestOpenStackFallsBackOnCorruptSnapshot(t *testing.T) {
+	dataDir := t.TempDir()
+	reg, err := Open(dataDir, store.DefaultConfig(), 0, discard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := reg.For(tenant.Default)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ident := []model.KeyValue{{Key: "host.id", Value: model.StringValue("h-corrupt")}}
+	if _, oerr := st.Engine.ObserveEntity(change.EntityObservation{
+		Type: model.TypeHost, Identity: ident, EventTime: time.Now(),
+	}); oerr != nil {
+		t.Fatal(oerr)
+	}
+	snapshotStack(t, st)
+	if cerr := reg.Close(); cerr != nil {
+		t.Fatal(cerr)
+	}
+
+	// Corrupt the persisted snapshot (too short to hold the 8-byte reference
+	// sequence). "meta/snapshot" is the store's stable on-disk snapshot key.
+	db, err := pebble.Open(stackDir(reg, tenant.Default), &pebble.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if serr := db.Set([]byte("meta/snapshot"), []byte{0x01}, pebble.Sync); serr != nil {
+		t.Fatal(serr)
+	}
+	if cerr := db.Close(); cerr != nil {
+		t.Fatal(cerr)
+	}
+
+	reg2, err := Open(dataDir, store.DefaultConfig(), 0, discard())
+	if err != nil {
+		t.Fatalf("boot must succeed despite a corrupt snapshot: %v", err)
+	}
+	t.Cleanup(func() { _ = reg2.Close() })
+	st2, err := reg2.For(tenant.Default)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasHost(st2.Graph, "h-corrupt") {
+		t.Fatal("full-replay fallback did not rebuild the entity")
+	}
+}
+
+// TestOpenStackFloorsRestoredDeadlines pins the #164 boot grace end-to-end:
+// a memento whose deadlines lapsed during downtime must not feed a delete
+// storm on the first sweep after boot; only a sweep past boot+interval reaps.
+func TestOpenStackFloorsRestoredDeadlines(t *testing.T) {
+	dataDir := t.TempDir()
+	reg, err := Open(dataDir, store.DefaultConfig(), 0, discard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := reg.For(tenant.Default)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, oerr := st.Engine.ObserveEntity(change.EntityObservation{
+		Type:     model.TypeHost,
+		Identity: []model.KeyValue{{Key: "host.id", Value: model.StringValue("h-floor")}},
+		Interval: 50 * time.Millisecond, Producer: "p1", EventTime: time.Now(),
+	}); oerr != nil {
+		t.Fatal(oerr)
+	}
+	snapshotStack(t, st)
+	if cerr := reg.Close(); cerr != nil {
+		t.Fatal(cerr)
+	}
+
+	// Downtime longer than the producer's interval: the stored deadline lapses.
+	time.Sleep(120 * time.Millisecond)
+
+	reg2, err := Open(dataDir, store.DefaultConfig(), 0, discard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reg2.Close() })
+	st2, err := reg2.For(tenant.Default)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := st2.Engine.Sweep(); n != 0 {
+		t.Fatalf("sweep right after boot expired %d, want 0 (deadline floored to boot+interval)", n)
+	}
+	if !hasHost(st2.Graph, "h-floor") {
+		t.Fatal("entity reaped by the boot-time sweep despite the grace floor")
+	}
+
+	// Past the floored deadline the producer is genuinely silent: reap it.
+	time.Sleep(120 * time.Millisecond)
+	if n, _ := st2.Engine.Sweep(); n != 1 {
+		t.Fatalf("post-grace sweep expired %d, want 1", n)
+	}
+	if hasHost(st2.Graph, "h-floor") {
+		t.Error("silent producer's entity survived past the floored deadline")
+	}
+}
+
+// TestOpenStackToleratesBrokenLivenessSection: neither JSON-level corruption
+// nor a physically truncated liveness section may fail the tenant boot — the
+// projection is intact and the sweep backstop re-arms on the next
+// observations (#164).
+func TestOpenStackToleratesBrokenLivenessSection(t *testing.T) {
+	t.Run("corrupt json", func(t *testing.T) {
+		dataDir := t.TempDir()
+		reg, err := Open(dataDir, store.DefaultConfig(), 0, discard())
+		if err != nil {
+			t.Fatal(err)
+		}
+		st, err := reg.For(tenant.Default)
+		if err != nil {
+			t.Fatal(err)
+		}
+		observeHost(t, st.Engine, "h-corrupt")
+		seq := st.Store.Sequence()
+		if werr := st.Store.WriteSnapshot(seq, st.Graph.SnapshotEvents(time.Now()), []byte(`{"refs": broken`)); werr != nil {
+			t.Fatal(werr)
+		}
+		if cerr := reg.Close(); cerr != nil {
+			t.Fatal(cerr)
+		}
+
+		var logs strings.Builder
+		reg2, err := Open(dataDir, store.DefaultConfig(), 0, slog.New(slog.NewTextHandler(&logs, nil)))
+		if err != nil {
+			t.Fatalf("boot with corrupt liveness section failed: %v", err)
+		}
+		t.Cleanup(func() { _ = reg2.Close() })
+		st2, err := reg2.For(tenant.Default)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !hasHost(st2.Graph, "h-corrupt") {
+			t.Error("projection lost despite intact snapshot events")
+		}
+		if !strings.Contains(logs.String(), "liveness") {
+			t.Error("no warning logged for the unreadable liveness section")
+		}
+	})
+
+	t.Run("truncated section", func(t *testing.T) {
+		dataDir := t.TempDir()
+		reg, err := Open(dataDir, store.DefaultConfig(), 0, discard())
+		if err != nil {
+			t.Fatal(err)
+		}
+		st, err := reg.For(tenant.Default)
+		if err != nil {
+			t.Fatal(err)
+		}
+		observeHost(t, st.Engine, "h-truncated")
+		if cerr := reg.Close(); cerr != nil {
+			t.Fatal(cerr)
+		}
+
+		// Plant a snapshot whose liveness section declares more bytes than
+		// follow — the torn-write shape that used to fail ReadSnapshot and
+		// with it the whole tenant.
+		db, err := pebble.Open(filepath.Join(dataDir, tenant.Default), &pebble.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		torn := make([]byte, 0, 24)
+		torn = append(torn, make([]byte, 8)...)       // seq 0: replay everything
+		torn = append(torn, 0xFF, 0xFF, 0xFF, 0xFF)   // liveness sentinel
+		torn = append(torn, 0x00, 0x00, 0x04, 0x00)   // declares 1024 bytes...
+		torn = append(torn, []byte(`{"refs":{"x`)...) // ...but the write tore here
+		if serr := db.Set([]byte("meta/snapshot"), torn, pebble.Sync); serr != nil {
+			t.Fatal(serr)
+		}
+		if cerr := db.Close(); cerr != nil {
+			t.Fatal(cerr)
+		}
+
+		var logs strings.Builder
+		reg2, err := Open(dataDir, store.DefaultConfig(), 0, slog.New(slog.NewTextHandler(&logs, nil)))
+		if err != nil {
+			t.Fatalf("boot with truncated liveness section failed: %v", err)
+		}
+		t.Cleanup(func() { _ = reg2.Close() })
+		st2, err := reg2.For(tenant.Default)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !hasHost(st2.Graph, "h-truncated") {
+			t.Error("projection lost despite a replayable event log")
+		}
+		if !strings.Contains(logs.String(), "liveness") {
+			t.Error("no warning logged for the truncated liveness section")
+		}
+	})
 }

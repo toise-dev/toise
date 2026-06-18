@@ -85,9 +85,13 @@ deployments (native auth and TLS, `--production` lockdown,
 `/healthz`·`/readyz`·Prometheus `/metrics`, retention, snapshots, multi-tenant
 isolation); 0.4.0 hardened correctness under failure and made the MCP surface a precise,
 budget-aware query layer; **0.5.0 makes the bi-temporal log queryable in the
-past tense (`as_of` everywhere), adds the `impact_of` blast radius — eleven
-tools total — and ships the `toise-emit` producer SDK with a byte-pinned
-published contract.** Expect breaking changes between minor releases (each
-with a migration guide).
+past tense (`as_of` everywhere), adds the `impact_of` blast radius, and ships
+the `toise-emit` producer SDK with a byte-pinned published contract; 0.6.0
+closes the follow-up audit's entire P0 lot and moves to standard Go versioning
+(v-prefixed tags, independently versioned SDK module); 0.7.0 is the integration
+release — operator annotations (a `get_entity` overlay + the first GraphQL
+mutation), MCP resources and prompts, read-only / ingest-only token roles,
+verbosity tiers, and the `toise-conformance` CLI — twelve MCP tools total.**
+Expect breaking changes between minor releases (each with a migration guide).
 
 Next: [install and run toise-server](installation.md).

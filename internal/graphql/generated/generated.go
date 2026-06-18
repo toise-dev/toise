@@ -27,6 +27,8 @@ func NewExecutableSchema(cfg Config) graphql.ExecutableSchema {
 type Config = graphql.Config[ResolverRoot, DirectiveRoot, ComplexityRoot]
 
 type ResolverRoot interface {
+	Entity() EntityResolver
+	Mutation() MutationResolver
 	Query() QueryResolver
 	Subscription() SubscriptionResolver
 }
@@ -35,6 +37,17 @@ type DirectiveRoot struct {
 }
 
 type ComplexityRoot struct {
+	Annotation struct {
+		Author    func(childComplexity int) int
+		UpdatedAt func(childComplexity int) int
+		Values    func(childComplexity int) int
+	}
+
+	AnnotationEntry struct {
+		Key   func(childComplexity int) int
+		Value func(childComplexity int) int
+	}
+
 	Attribute struct {
 		Key   func(childComplexity int) int
 		Type  func(childComplexity int) int
@@ -65,12 +78,13 @@ type ComplexityRoot struct {
 	}
 
 	Entity struct {
-		Attributes func(childComplexity int) int
-		Deleted    func(childComplexity int) int
-		ID         func(childComplexity int) int
-		Identity   func(childComplexity int) int
-		SchemaURL  func(childComplexity int) int
-		Type       func(childComplexity int) int
+		Annotations func(childComplexity int) int
+		Attributes  func(childComplexity int) int
+		Deleted     func(childComplexity int) int
+		ID          func(childComplexity int) int
+		Identity    func(childComplexity int) int
+		SchemaURL   func(childComplexity int) int
+		Type        func(childComplexity int) int
 	}
 
 	EntityConnection struct {
@@ -82,6 +96,10 @@ type ComplexityRoot struct {
 	EntityEdge struct {
 		Cursor func(childComplexity int) int
 		Node   func(childComplexity int) int
+	}
+
+	Mutation struct {
+		AnnotateEntity func(childComplexity int, id string, annotations []AnnotationInput) int
 	}
 
 	PageInfo struct {
@@ -123,6 +141,12 @@ type ComplexityRoot struct {
 	}
 }
 
+type EntityResolver interface {
+	Annotations(ctx context.Context, obj *Entity) (*Annotation, error)
+}
+type MutationResolver interface {
+	AnnotateEntity(ctx context.Context, id string, annotations []AnnotationInput) (*Annotation, error)
+}
 type QueryResolver interface {
 	Entity(ctx context.Context, id string, asOf *string) (*Entity, error)
 	Entities(ctx context.Context, filter *EntityFilter, first *int, after *string, asOf *string) (*EntityConnection, error)
@@ -148,6 +172,38 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 	ec := newExecutionContext(nil, e, nil)
 	_ = ec
 	switch typeName + "." + field {
+
+	case "Annotation.author":
+		if e.ComplexityRoot.Annotation.Author == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Annotation.Author(childComplexity), true
+	case "Annotation.updatedAt":
+		if e.ComplexityRoot.Annotation.UpdatedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Annotation.UpdatedAt(childComplexity), true
+	case "Annotation.values":
+		if e.ComplexityRoot.Annotation.Values == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Annotation.Values(childComplexity), true
+
+	case "AnnotationEntry.key":
+		if e.ComplexityRoot.AnnotationEntry.Key == nil {
+			break
+		}
+
+		return e.ComplexityRoot.AnnotationEntry.Key(childComplexity), true
+	case "AnnotationEntry.value":
+		if e.ComplexityRoot.AnnotationEntry.Value == nil {
+			break
+		}
+
+		return e.ComplexityRoot.AnnotationEntry.Value(childComplexity), true
 
 	case "Attribute.key":
 		if e.ComplexityRoot.Attribute.Key == nil {
@@ -255,6 +311,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.ChangeEvent.SchemaVersion(childComplexity), true
 
+	case "Entity.annotations":
+		if e.ComplexityRoot.Entity.Annotations == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Entity.Annotations(childComplexity), true
 	case "Entity.attributes":
 		if e.ComplexityRoot.Entity.Attributes == nil {
 			break
@@ -323,6 +385,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.EntityEdge.Node(childComplexity), true
+
+	case "Mutation.annotateEntity":
+		if e.ComplexityRoot.Mutation.AnnotateEntity == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_annotateEntity_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.AnnotateEntity(childComplexity, args["id"].(string), args["annotations"].([]AnnotationInput)), true
 
 	case "PageInfo.endCursor":
 		if e.ComplexityRoot.PageInfo.EndCursor == nil {
@@ -494,6 +568,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 	opCtx := graphql.GetOperationContext(ctx)
 	ec := newExecutionContext(opCtx, e, make(chan graphql.DeferredResult))
 	inputUnmarshalMap := graphql.BuildUnmarshalerMap(
+		ec.unmarshalInputAnnotationInput,
 		ec.unmarshalInputChangeFilter,
 		ec.unmarshalInputEntityFilter,
 		ec.unmarshalInputRelationFilter,
@@ -530,6 +605,21 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 			}
 
 			return &response
+		}
+	case ast.Mutation:
+		return func(ctx context.Context) *graphql.Response {
+			if !first {
+				return nil
+			}
+			first = false
+			ctx = graphql.WithUnmarshalerMap(ctx, inputUnmarshalMap)
+			data := ec._Mutation(ctx, opCtx.Operation.SelectionSet)
+			var buf bytes.Buffer
+			data.MarshalGQL(&buf)
+
+			return &graphql.Response{
+				Data: buf.Bytes(),
+			}
 		}
 	case ast.Subscription:
 		next := ec._Subscription(ctx, opCtx.Operation.SelectionSet)
@@ -574,7 +664,13 @@ func newExecutionContext(
 }
 
 var sources = []*ast.Source{
-	{Name: "../schema.graphql", Input: `"""
+	{Name: "../schema.graphql", Input: `directive @goField(
+  forceResolver: Boolean
+  name: String
+  omittable: Boolean
+) on INPUT_FIELD_DEFINITION | FIELD_DEFINITION
+
+"""
 The kind of a typed attribute value. Toise attribute values are scalars: a
 string, a 64-bit integer, a double, or a boolean.
 """
@@ -644,6 +740,36 @@ type Entity {
   schemaUrl: String!
   "True if the entity has been soft-deleted (its history is retained)."
   deleted: Boolean!
+  """
+  Operator annotations attached out-of-band, or null if the entity has none.
+  These are an overlay kept in a per-tenant sidecar — never producer truth and
+  never part of the event log.
+  """
+  annotations: Annotation @goField(forceResolver: true)
+}
+
+"""
+A single operator annotation: a key paired with a free-text value. Unlike an
+` + "`" + `Attribute` + "`" + `, an annotation value is always a string and carries no ` + "`" + `ValueType` + "`" + `.
+"""
+type AnnotationEntry {
+  "The annotation key, e.g. ` + "`" + `owner` + "`" + ` or ` + "`" + `runbook` + "`" + `."
+  key: String!
+  "The free-text value."
+  value: String!
+}
+
+"""
+The operator annotations on an entity: out-of-band notes an operator attached,
+kept in a per-tenant sidecar and never mixed into producer truth or the log.
+"""
+type Annotation {
+  "The annotation entries, sorted by key."
+  values: [AnnotationEntry!]!
+  "Who set them, if recorded (may be empty)."
+  author: String
+  "When they were last updated (RFC 3339), or empty if never set."
+  updatedAt: String
 }
 
 """
@@ -766,9 +892,10 @@ type Query {
   entity(id: ID!, asOf: String): Entity
 
   """
-  List entities (current state), newest-first, with Relay pagination. Use
-  ` + "`" + `first` + "`" + ` (default 50) and ` + "`" + `after` + "`" + ` (an ` + "`" + `endCursor` + "`" + ` from a previous page).
-  Provide ` + "`" + `asOf` + "`" + ` (RFC 3339) to list the graph as it was at that instant.
+  List entities (current state) in ascending id order (ULIDs are time-sortable,
+  so this is oldest-first), with Relay pagination. Use ` + "`" + `first` + "`" + ` (default 50) and
+  ` + "`" + `after` + "`" + ` (an ` + "`" + `endCursor` + "`" + ` from a previous page). Provide ` + "`" + `asOf` + "`" + ` (RFC 3339) to
+  list the graph as it was at that instant.
   """
   entities(filter: EntityFilter, first: Int = 50, after: String, asOf: String): EntityConnection!
 
@@ -807,6 +934,25 @@ input ChangeFilter {
   structuralOnly: Boolean
 }
 
+"A single annotation to merge: an empty ` + "`" + `value` + "`" + ` removes that key."
+input AnnotationInput {
+  "The annotation key."
+  key: String!
+  "The free-text value; empty removes the key."
+  value: String!
+}
+
+type Mutation {
+  """
+  Attach operator annotations to an entity, merging onto any existing ones (an
+  empty value removes that key). Annotations are an overlay kept in a per-tenant
+  sidecar — never producer truth and never part of the event log. Requires a
+  write-capable bearer token (full or tenant-scoped); a read-only token is
+  refused. Returns the merged annotation.
+  """
+  annotateEntity(id: ID!, annotations: [AnnotationInput!]!): Annotation!
+}
+
 type Subscription {
   "Stream entity change events as they are classified."
   entityChanged(filter: ChangeFilter): ChangeEvent!
@@ -820,6 +966,28 @@ var parsedSchema = gqlparser.MustLoadSchema(sources...)
 // childFields_* functions provide shared child field context lookups.
 // Each function is generated once per unique object type, deduplicating the
 // switch statements that were previously inlined in every fieldContext_* function.
+
+func (ec *executionContext) childFields_Annotation(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "values":
+		return ec.fieldContext_Annotation_values(ctx, field)
+	case "author":
+		return ec.fieldContext_Annotation_author(ctx, field)
+	case "updatedAt":
+		return ec.fieldContext_Annotation_updatedAt(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type Annotation", field.Name)
+}
+
+func (ec *executionContext) childFields_AnnotationEntry(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "key":
+		return ec.fieldContext_AnnotationEntry_key(ctx, field)
+	case "value":
+		return ec.fieldContext_AnnotationEntry_value(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type AnnotationEntry", field.Name)
+}
 
 func (ec *executionContext) childFields_Attribute(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
@@ -893,6 +1061,8 @@ func (ec *executionContext) childFields_Entity(ctx context.Context, field graphq
 		return ec.fieldContext_Entity_schemaUrl(ctx, field)
 	case "deleted":
 		return ec.fieldContext_Entity_deleted(ctx, field)
+	case "annotations":
+		return ec.fieldContext_Entity_annotations(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type Entity", field.Name)
 }
@@ -1084,6 +1254,28 @@ func (ec *executionContext) childFields___Type(ctx context.Context, field graphq
 // endregion ************************** generated!.gotpl **************************
 
 // region    ***************************** args.gotpl *****************************
+
+func (ec *executionContext) field_Mutation_annotateEntity_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "id",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNID2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["id"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "annotations",
+		func(ctx context.Context, v any) ([]AnnotationInput, error) {
+			return ec.unmarshalNAnnotationInput2ᚕgithubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐAnnotationInputᚄ(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["annotations"] = arg1
+	return args, nil
+}
 
 func (ec *executionContext) field_Query___type_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
@@ -1372,6 +1564,130 @@ func (ec *executionContext) field___Type_fields_args(ctx context.Context, rawArg
 // endregion ************************** directives.gotpl **************************
 
 // region    **************************** field.gotpl *****************************
+
+func (ec *executionContext) _Annotation_values(ctx context.Context, field graphql.CollectedField, obj *Annotation) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Annotation_values(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Values, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []AnnotationEntry) graphql.Marshaler {
+			return ec.marshalNAnnotationEntry2ᚕgithubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐAnnotationEntryᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Annotation_values(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Annotation",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_AnnotationEntry(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Annotation_author(ctx context.Context, field graphql.CollectedField, obj *Annotation) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Annotation_author(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Author, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_Annotation_author(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("Annotation", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _Annotation_updatedAt(ctx context.Context, field graphql.CollectedField, obj *Annotation) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Annotation_updatedAt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.UpdatedAt, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_Annotation_updatedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("Annotation", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _AnnotationEntry_key(ctx context.Context, field graphql.CollectedField, obj *AnnotationEntry) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_AnnotationEntry_key(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Key, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_AnnotationEntry_key(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("AnnotationEntry", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _AnnotationEntry_value(ctx context.Context, field graphql.CollectedField, obj *AnnotationEntry) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_AnnotationEntry_value(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Value, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_AnnotationEntry_value(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("AnnotationEntry", field, false, false, errors.New("field of type String does not have child fields"))
+}
 
 func (ec *executionContext) _Attribute_key(ctx context.Context, field graphql.CollectedField, obj *Attribute) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
@@ -1965,6 +2281,38 @@ func (ec *executionContext) fieldContext_Entity_deleted(_ context.Context, field
 	return graphql.NewScalarFieldContext("Entity", field, false, false, errors.New("field of type Boolean does not have child fields"))
 }
 
+func (ec *executionContext) _Entity_annotations(ctx context.Context, field graphql.CollectedField, obj *Entity) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Entity_annotations(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Entity().Annotations(ctx, obj)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *Annotation) graphql.Marshaler {
+			return ec.marshalOAnnotation2ᚖgithubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐAnnotation(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_Entity_annotations(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Entity",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Annotation(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _EntityConnection_edges(ctx context.Context, field graphql.CollectedField, obj *EntityConnection) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -2103,6 +2451,50 @@ func (ec *executionContext) fieldContext_EntityEdge_node(_ context.Context, fiel
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return ec.childFields_Entity(ctx, field)
 		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_annotateEntity(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_annotateEntity(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().AnnotateEntity(ctx, fc.Args["id"].(string), fc.Args["annotations"].([]AnnotationInput))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *Annotation) graphql.Marshaler {
+			return ec.marshalNAnnotation2ᚖgithubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐAnnotation(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_annotateEntity(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Annotation(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_annotateEntity_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
 	}
 	return fc, nil
 }
@@ -3885,6 +4277,43 @@ func (ec *executionContext) fieldContext___Type_isOneOf(_ context.Context, field
 
 // region    **************************** input.gotpl *****************************
 
+func (ec *executionContext) unmarshalInputAnnotationInput(ctx context.Context, obj any) (AnnotationInput, error) {
+	var it AnnotationInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"key", "value"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "key":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("key"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Key = data
+		case "value":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("value"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Value = data
+		}
+	}
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputChangeFilter(ctx context.Context, obj any) (ChangeFilter, error) {
 	var it ChangeFilter
 	if obj == nil {
@@ -4017,6 +4446,93 @@ func (ec *executionContext) unmarshalInputRelationFilter(ctx context.Context, ob
 // endregion ************************** interface.gotpl ***************************
 
 // region    **************************** object.gotpl ****************************
+
+var annotationImplementors = []string{"Annotation"}
+
+func (ec *executionContext) _Annotation(ctx context.Context, sel ast.SelectionSet, obj *Annotation) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, annotationImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("Annotation")
+		case "values":
+			out.Values[i] = ec._Annotation_values(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "author":
+			out.Values[i] = ec._Annotation_author(ctx, field, obj)
+		case "updatedAt":
+			out.Values[i] = ec._Annotation_updatedAt(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var annotationEntryImplementors = []string{"AnnotationEntry"}
+
+func (ec *executionContext) _AnnotationEntry(ctx context.Context, sel ast.SelectionSet, obj *AnnotationEntry) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, annotationEntryImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("AnnotationEntry")
+		case "key":
+			out.Values[i] = ec._AnnotationEntry_key(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "value":
+			out.Values[i] = ec._AnnotationEntry_value(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
 
 var attributeImplementors = []string{"Attribute"}
 
@@ -4247,33 +4763,66 @@ func (ec *executionContext) _Entity(ctx context.Context, sel ast.SelectionSet, o
 		case "id":
 			out.Values[i] = ec._Entity_id(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "type":
 			out.Values[i] = ec._Entity_type(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "identity":
 			out.Values[i] = ec._Entity_identity(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "attributes":
 			out.Values[i] = ec._Entity_attributes(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "schemaUrl":
 			out.Values[i] = ec._Entity_schemaUrl(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "deleted":
 			out.Values[i] = ec._Entity_deleted(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
+		case "annotations":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Entity_annotations(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -4364,6 +4913,55 @@ func (ec *executionContext) _EntityEdge(ctx context.Context, sel ast.SelectionSe
 			}
 		case "node":
 			out.Values[i] = ec._EntityEdge_node(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var mutationImplementors = []string{"Mutation"}
+
+func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, mutationImplementors)
+	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
+		Object: "Mutation",
+	})
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		innerCtx := graphql.WithRootFieldContext(ctx, &graphql.RootFieldContext{
+			Object: field.Name,
+			Field:  field,
+		})
+
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("Mutation")
+		case "annotateEntity":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_annotateEntity(ctx, field)
+			})
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -5102,6 +5700,60 @@ func (ec *executionContext) ___Type(ctx context.Context, sel ast.SelectionSet, o
 
 // region    ***************************** type.gotpl *****************************
 
+func (ec *executionContext) marshalNAnnotation2githubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐAnnotation(ctx context.Context, sel ast.SelectionSet, v Annotation) graphql.Marshaler {
+	return ec._Annotation(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNAnnotation2ᚖgithubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐAnnotation(ctx context.Context, sel ast.SelectionSet, v *Annotation) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._Annotation(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNAnnotationEntry2githubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐAnnotationEntry(ctx context.Context, sel ast.SelectionSet, v AnnotationEntry) graphql.Marshaler {
+	return ec._AnnotationEntry(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNAnnotationEntry2ᚕgithubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐAnnotationEntryᚄ(ctx context.Context, sel ast.SelectionSet, v []AnnotationEntry) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNAnnotationEntry2githubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐAnnotationEntry(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) unmarshalNAnnotationInput2githubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐAnnotationInput(ctx context.Context, v any) (AnnotationInput, error) {
+	res, err := ec.unmarshalInputAnnotationInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalNAnnotationInput2ᚕgithubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐAnnotationInputᚄ(ctx context.Context, v any) ([]AnnotationInput, error) {
+	var vSlice []any
+	vSlice = graphql.CoerceList(v)
+	var err error
+	res := make([]AnnotationInput, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNAnnotationInput2githubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐAnnotationInput(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
 func (ec *executionContext) marshalNAttribute2githubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐAttribute(ctx context.Context, sel ast.SelectionSet, v Attribute) graphql.Marshaler {
 	return ec._Attribute(ctx, sel, &v)
 }
@@ -5521,6 +6173,13 @@ func (ec *executionContext) marshalN__TypeKind2string(ctx context.Context, sel a
 		}
 	}
 	return res
+}
+
+func (ec *executionContext) marshalOAnnotation2ᚖgithubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐAnnotation(ctx context.Context, sel ast.SelectionSet, v *Annotation) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._Annotation(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalOBoolean2bool(ctx context.Context, v any) (bool, error) {

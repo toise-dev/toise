@@ -27,7 +27,7 @@ for the rationale.
 | `liveness_sweep_interval` | `TOISE_LIVENESS_SWEEP_INTERVAL` | `--liveness-sweep-interval` | `30s` | how often to expire entities past their heartbeat interval (`0` = disabled) |
 | `retention_max_age` | `TOISE_RETENTION_MAX_AGE` | `--retention-max-age` | `0` | max age of retained events (`0` = unlimited) |
 | `retention_compaction_interval` | `TOISE_RETENTION_COMPACTION_INTERVAL` | `--retention-compaction-interval` | `1h` | heartbeat-coalescing compaction cadence |
-| `snapshot_interval` | `TOISE_SNAPSHOT_INTERVAL` | `--snapshot-interval` | `0` | projection snapshot cadence for fast restart (`0` = disabled) |
+| `snapshot_interval` | `TOISE_SNAPSHOT_INTERVAL` | `--snapshot-interval` | `5m` | projection snapshot cadence for fast restart and liveness survival across restarts (`0` = disabled) |
 | `log_format` | `TOISE_LOG_FORMAT` | `--log-format` | `text` | log output format: `text` or `json` |
 | `log_level` | `TOISE_LOG_LEVEL` | `--log-level` | `info` | `debug`, `info`, `warn`, or `error` |
 | `production` | `TOISE_PRODUCTION` | `--production` | `false` | hardening profile — forces the three below off |
@@ -35,8 +35,10 @@ for the rationale.
 | `playground` | `TOISE_PLAYGROUND` | `--playground` | `true` | serve the GraphQL playground at `/playground` |
 | `debug_ui` | `TOISE_DEBUG_UI` | `--debug-ui` | `true` | serve the debug UI at `/` |
 | `allowed_origins` | `TOISE_ALLOWED_ORIGINS` | `--allowed-origins` | (empty) | comma-separated browser Origin allowlist (WebSocket/CORS); empty = same-origin only |
-| `auth_tokens` | `TOISE_AUTH_TOKENS` | *(none — secret)* | (empty) | comma-separated bearer tokens, valid for every tenant; empty = auth disabled |
-| `tenant_tokens` | `TOISE_TENANT_TOKENS` | *(none — secret)* | (empty) | comma-separated `tenant:token` pairs — the token is authorized only for its tenant (HTTP 403 / gRPC PermissionDenied elsewhere) |
+| `auth_tokens` | `TOISE_AUTH_TOKENS` | *(none — secret)* | (empty) | comma-separated bearer tokens, **full role** (read + ingest), valid for every tenant; empty = auth disabled |
+| `read_tokens` | `TOISE_READ_TOKENS` | *(none — secret)* | (empty) | bearer tokens valid only on the **read** surfaces (GraphQL, MCP, debug UI) — rejected on OTLP ingest |
+| `ingest_tokens` | `TOISE_INGEST_TOKENS` | *(none — secret)* | (empty) | bearer tokens valid only on **OTLP ingest** — rejected on the read surfaces |
+| `tenant_tokens` | `TOISE_TENANT_TOKENS` | *(none — secret)* | (empty) | comma-separated `tenant:token` pairs — full role, authorized only for its tenant (HTTP 403 / gRPC PermissionDenied elsewhere) |
 | `accept_unknown_types` | `TOISE_ACCEPT_UNKNOWN_TYPES` | `--accept-unknown-types` | `false` | accept entity/relation types outside the built-in registry (shape still validated; counted on /metrics) |
 | `tenant_auto_create` | `TOISE_TENANT_AUTO_CREATE` | `--tenant-auto-create` | `true` | allow a first write to a new tenant id to create its stack; off = only pre-existing tenants (and `default`) are served |
 | `tenant_allowlist` | `TOISE_TENANT_ALLOWLIST` | `--tenant-allowlist` | (empty) | comma-separated tenant ids allowed to be created; empty = any (subject to auto-create and the cap) |
@@ -97,6 +99,12 @@ network (private datacenter segment or VPN; ADR 0014). Exposing it to other host
   Clients then send `Authorization: Bearer <token>` on both HTTP and gRPC. The
   operational probes (`/healthz`, `/readyz`) and the metrics scrape (`/metrics`)
   stay public so a load balancer and Prometheus can reach them without a token.
+- **Token roles (least privilege).** `auth_tokens` are full (read + ingest). Use
+  `read_tokens` for a token that may query but never ingest (a dashboard, an
+  assistant), and `ingest_tokens` for a producer that may ingest but never read.
+  A read-only token is rejected on OTLP ingest; an ingest-only token is rejected
+  on GraphQL/MCP/debug. Roles are global; combine with `tenant_tokens` for
+  per-tenant scoping.
 - **TLS.** Point `tls_cert_file` and `tls_key_file` at a PEM cert/key pair to serve
   the HTTP surfaces and OTLP ingestion over TLS.
 
@@ -143,6 +151,31 @@ everything lives under `default` and behaves as a single-graph build. A
 pre-existing data directory is migrated to `<data_dir>/default/` automatically on
 first start (take a backup first, as with any upgrade). `/metrics` reports the sum
 across tenants, so existing dashboards are unchanged.
+
+**Boot quarantine:** if a tenant's store cannot be opened at startup (a corrupt
+or half-written store), the server **does not abort** — it logs a warning, skips
+that tenant, counts it in the `toise_tenants_quarantined` gauge, and serves the
+healthy tenants. The `default` tenant is the exception: it is required, so its
+failure is fatal. A quarantined tenant's directory is left on disk under
+`<data_dir>/<tenant>/` for recovery; restore or remove it and restart.
+
+**Deleting a tenant** is a cold, destructive operation — run it with the server
+stopped (it holds the pebble lock while serving):
+
+```sh
+toise-server delete-tenant --data-dir /var/lib/toise/data acme
+```
+
+It removes `<data_dir>/acme/` (event log and snapshot) entirely and frees a slot
+under `max_tenants`. The `default` tenant cannot be deleted.
+
+**Metrics and tenants:** the Toise gauges on `/metrics` (`toise_entities`,
+`toise_events_total`, `toise_store_disk_bytes`, …) are **aggregated across
+tenants** — a sum, except `toise_snapshot_seq` and `toise_store_prune_horizon_seconds`
+which report the high-water mark. They carry no per-tenant label, so the endpoint
+stays single-series and dashboards are unchanged. The maintenance metrics
+(`toise_maintenance_*`) are the exception: they label by `tenant` (and `op`,
+`outcome`) so a stuck sweep/prune can be traced to its tenant.
 
 !!! warning "Authentication is not yet bound to a tenant"
     A valid bearer token may set any `X-Scope-OrgID`. Isolation therefore relies on

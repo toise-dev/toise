@@ -12,8 +12,10 @@ COVERAGE    := coverage.out
 COVERAGE_HTML := coverage.html
 
 # Version stamped into the binaries. Defaults derive from git: on a tagged
-# commit, VERSION is the tag (e.g. 0.1.0, no "v" prefix); otherwise the short
-# commit. Override with `make build VERSION=0.1.0`.
+# commit, VERSION is the tag verbatim — server tags are v-prefixed from v0.6.0
+# (e.g. v0.6.0; 0.1.0-0.5.0 predate the prefix, see ADR 0027) — otherwise the
+# short commit. `git describe` returns the v-prefixed tag and it is stamped
+# as-is. Override with `make build VERSION=v0.6.0`.
 VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 0.0.0-dev)
 COMMIT      ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 VERSION_PKG := github.com/toise-dev/toise/internal/version
@@ -35,8 +37,11 @@ build: ## Build the toise-server, toise-demo and toise-probe binaries into bin/
 	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(DEMO_BINARY) $(DEMO_PKG)
 	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(PROBE_BINARY) $(PROBE_PKG)
 
-test: ## Run all tests
+# pkg/emit is a nested module (ADR 0027): ./... from the root does not reach
+# it, so the SDK gets its own sub-invocation wherever the root runs ./...
+test: ## Run all tests (root module + the pkg/emit SDK module)
 	go test ./...
+	cd pkg/emit && go test ./...
 
 test-coverage: ## Run tests and produce an HTML coverage report
 	go test -coverprofile=$(COVERAGE) ./...
@@ -46,15 +51,17 @@ test-coverage: ## Run tests and produce an HTML coverage report
 bench: ## Run all benchmarks
 	go test -run '^$$' -bench=. -benchmem ./...
 
-lint: ## Run golangci-lint
+lint: ## Run golangci-lint (root module + the pkg/emit SDK module)
 	golangci-lint run ./...
+	cd pkg/emit && golangci-lint run ./...
 
 fmt: ## Format the code (gofmt -s + goimports)
 	gofmt -s -w .
 	goimports -w -local github.com/toise-dev/toise .
 
-tidy: ## Tidy go.mod / go.sum
+tidy: ## Tidy go.mod / go.sum (both modules)
 	go mod tidy
+	cd pkg/emit && go mod tidy
 
 proto: ## Generate Go code from proto/ definitions (requires buf)
 	buf generate

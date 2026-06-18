@@ -24,6 +24,26 @@ const (
 	TypeDatabase = "db"
 	// TypeNetworkDevice is a discovered network asset (switch, router, …).
 	TypeNetworkDevice = "network.device"
+	// TypeNetworkEndpoint is a remote network endpoint observed by a producer
+	// (e.g. the foreign end of an outbound TCP connection) but not canonically
+	// identifiable by the observer. Identity is what the observer can see:
+	// server.address + server.port + network.transport. The consumer resolves it
+	// to the canonical host/service.listener at read time (#184), per the OTel
+	// data-model rule "emit a different entity type keyed on what you can
+	// reliably obtain" — see docs/design/netstat-connection-topology.md.
+	TypeNetworkEndpoint = "network.endpoint"
+	// TypeComputeVM is a virtual machine as seen FROM its hypervisor, where only
+	// the hypervisor's vmid is available, not the guest's machine-id. Identity:
+	// {host.id (the hypervisor node), vmid}. It is deliberately NOT a `host`: a
+	// host is keyed by machine-id, so a vmid in host.id would be a wrong,
+	// permanent identity and would duplicate the in-guest host. The in-guest view
+	// (an agent inside the VM) is the `host` {machine-id}; the two are distinct
+	// facets reconciled later by a same_as overlay, never merged.
+	TypeComputeVM = "compute.vm"
+	// TypeContainer is an OCI/Docker container: a compute resource, not a service
+	// instance (it may run a service, but the container is the thing). Identity: a
+	// single container.id.
+	TypeContainer = "container"
 )
 
 // Phase-1 relation types. See ADR 0004.
@@ -38,9 +58,11 @@ const (
 // Producer-vocabulary relation types (senhub-agent integration). The From/To
 // entity types are the canonical pairing and are advisory — they are not
 // enforced at runtime, so a relation may legitimately connect other registered
-// types: `monitors`' target may be a host, db, or network.device, and
-// `routes_via`/`adjacent_to` may be sourced from a `host` (Lot 4: a host's own
-// routing/ARP tables link it to discovered network.devices).
+// types: `monitors`' target may be a host, db, network.device, compute.vm, or
+// container; `runs_on`'s source may be a process, service.instance, compute.vm,
+// or container (all `runs_on` a host); and `routes_via`/`adjacent_to` may be
+// sourced from a `host` (Lot 4: a host's own routing/ARP tables link it to
+// discovered network.devices).
 const (
 	RelMonitors = "monitors" // a service.instance monitors a target entity
 	// RelHasRoute attaches a routing-table entry to the device that holds it,
@@ -54,6 +76,14 @@ const (
 	// embeddable form that supersedes adjacent_to + port attributes; device-level
 	// adjacency is derived from it at read time, not stored.
 	RelConnectedTo = "connected_to"
+
+	// RelDependsOn is a durable dependency a producer asserts from one of its own
+	// entities to a remote endpoint it depends on (the foreign end of a
+	// persistent outbound connection). Source-carried per the embedded-relationship
+	// model; the target is a network.endpoint the consumer resolves. "depends_on"
+	// is a sanctioned example type in the merged OTel entity spec but has no
+	// normative semantics yet — treat as transitional (#184).
+	RelDependsOn = "depends_on"
 
 	// Legacy device-level edges — superseded under topology-as-entities (ADR 0022)
 	// and NOT to be emitted by producers: routes_via is replaced by network.route +
@@ -107,10 +137,16 @@ var entityTypes = map[string]struct{}{
 	TypeServiceInstance: {},
 	TypeDatabase:        {},
 	TypeNetworkDevice:   {},
+	TypeNetworkEndpoint: {},
+	TypeComputeVM:       {},
+	TypeContainer:       {},
 }
 
 var relationTypes = map[string]RelationTypeDef{
-	// "X runs_on Y": the host failing takes the process down, not the reverse.
+	// "X runs_on Y": the host failing takes what runs on it down, not the reverse.
+	// From is the canonical process; service.instance, compute.vm, and container
+	// also runs_on a host (From/To advisory). Impact To->From: the host failing
+	// takes the VM/container/process down.
 	RelRunsOn: {Type: RelRunsOn, From: TypeProcess, To: TypeHost, Structural: true, Impact: ImpactToFrom},
 	// "X has_interface Y": the host/device failing takes its interface down.
 	RelHasInterface: {Type: RelHasInterface, From: TypeHost, To: TypeNetworkInterface, Structural: true, Impact: ImpactFromTo},
@@ -129,6 +165,8 @@ var relationTypes = map[string]RelationTypeDef{
 	RelHasRoute: {Type: RelHasRoute, From: TypeNetworkDevice, To: TypeNetworkRoute, Structural: true, Impact: ImpactFromTo},
 	// connectivity is symmetric: either side failing breaks the link.
 	RelConnectedTo: {Type: RelConnectedTo, From: TypeNetworkInterface, To: TypeNetworkInterface, Structural: true, Impact: ImpactBoth},
+	// "X depends_on Y": the dependency target failing affects the dependent.
+	RelDependsOn: {Type: RelDependsOn, From: TypeServiceInstance, To: TypeNetworkEndpoint, Structural: true, Impact: ImpactToFrom},
 	// legacy device-level edges (superseded; not emitted — see the const block)
 	RelRoutesVia:  {Type: RelRoutesVia, From: TypeNetworkDevice, To: TypeNetworkDevice, Structural: true, Impact: ImpactToFrom},
 	RelForwardsTo: {Type: RelForwardsTo, From: TypeNetworkDevice, To: TypeNetworkDevice, Structural: true, Impact: ImpactBoth},

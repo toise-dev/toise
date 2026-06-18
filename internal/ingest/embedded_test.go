@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -135,6 +136,39 @@ func TestEmbeddedReconcilerDropsMalformedDescriptor(t *testing.T) {
 	}
 	if f.relAdds != 0 {
 		t.Errorf("malformed descriptor produced %d adds, want 0", f.relAdds)
+	}
+}
+
+// TestEmbeddedReconcilerUnknownRelationTypeVocabulary pins the #163 boundary
+// check: in strict mode a descriptor with an unregistered relationship.type
+// invalidates the record (errInvalidRecord, naming the type) while its valid
+// sibling descriptors are still observed; with the open vocabulary (#141) the
+// unknown type passes.
+func TestEmbeddedReconcilerUnknownRelationTypeVocabulary(t *testing.T) {
+	svc := map[string]string{"service.instance.id": "s1"}
+	rels := []relDesc{
+		{relType: "acme.made.up", toType: model.TypeHost, toID: map[string]string{"host.id": "h1"}},
+		{relType: model.RelRunsOn, toType: model.TypeHost, toID: map[string]string{"host.id": "h1"}},
+	}
+
+	f := &fakeEngine{}
+	_, err := newEmbeddedReconciler().handle(f, embeddedRecord(model.TypeServiceInstance, svc, rels))
+	if !errors.Is(err, errInvalidRecord) {
+		t.Fatalf("strict mode: err = %v, want errInvalidRecord", err)
+	}
+	if !strings.Contains(err.Error(), "acme.made.up") {
+		t.Errorf("error must name the unknown type, got %q", err)
+	}
+	if f.relAdds != 1 || f.lastRelation.Type != model.RelRunsOn {
+		t.Errorf("valid sibling descriptor: relAdds=%d last=%q, want 1 runs_on", f.relAdds, f.lastRelation.Type)
+	}
+
+	open := &fakeEngine{}
+	if _, err := newEmbeddedReconciler().handleVocab(open, embeddedRecord(model.TypeServiceInstance, svc, rels), false); err != nil {
+		t.Fatalf("open vocabulary: %v", err)
+	}
+	if open.relAdds != 2 {
+		t.Errorf("open vocabulary relAdds = %d, want 2", open.relAdds)
 	}
 }
 

@@ -28,7 +28,8 @@ retention_max_age: 0                  # max age of retained events; 0 = unlimite
                                       #   env: TOISE_RETENTION_MAX_AGE
 retention_compaction_interval: 1h     # heartbeat-coalescing compaction cadence
                                       #   env: TOISE_RETENTION_COMPACTION_INTERVAL
-snapshot_interval: 0                  # projection snapshot cadence for fast restart;
+snapshot_interval: 5m                 # projection snapshot cadence for fast restart;
+                                      #   also persists liveness refs across restarts;
                                       #   0 = disabled  (env: TOISE_SNAPSHOT_INTERVAL)
 
 # --- Logging -----------------------------------------------------------------

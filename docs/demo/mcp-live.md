@@ -57,7 +57,7 @@ without a second lookup.
 > even if the IP moves.
 
 > **👤 "What is connected to that host?"**
-> *→ `get_neighbors(entity_id: "<host-0000 id>", depth: 1)`*
+> *→ `get_neighbors(entity_id: "<host-0000 id>", max_depth: 1)`*
 > **🤖** `host-0000` has **2 direct neighbours**: its **eth0** interface
 > (`oper_state=up`) and **the agent** that `monitors` it. One hop further would
 > surface its address, route, and listener.

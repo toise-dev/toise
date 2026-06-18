@@ -42,5 +42,8 @@ projection and event log, so they always report the same world.
 | a script, dashboard, or another service | **GraphQL** — introspectable, paginated |
 | an operator wanting a quick look | **Debug UI** — open a browser, no setup |
 
-There are **no mutations**. Toise is a read model; state enters only through the
-[OTLP ingestion boundary](../ingestion.md).
+Toise is a **read model for producer truth**: graph state enters only through the
+[OTLP ingestion boundary](../ingestion.md). The one write either surface exposes is
+`annotate_entity` (MCP) / `annotateEntity` (GraphQL) — operator notes kept as an
+*overlay* in a per-tenant sidecar, never mixed into the event log. It needs a
+write-capable token; a read-only token is refused.

@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/toise-dev/toise/internal/annotations"
 	"github.com/toise-dev/toise/internal/change"
 	"github.com/toise-dev/toise/internal/model"
 	"github.com/toise-dev/toise/internal/projection"
@@ -26,10 +27,11 @@ import (
 // Stack is one tenant's isolated graph: its event store, the in-memory projection
 // rebuilt from it, and the change engine that appends to it.
 type Stack struct {
-	Tenant string
-	Store  *store.Store
-	Graph  *projection.Graph
-	Engine *change.Engine
+	Tenant      string
+	Store       *store.Store
+	Graph       *projection.Graph
+	Engine      *change.Engine
+	Annotations *annotations.Store
 }
 
 // Limits bounds runtime tenant creation (#115). Tenants whose directory
@@ -79,6 +81,10 @@ type Registry struct {
 	relBuf   time.Duration
 	limits   Limits
 	logger   *slog.Logger
+
+	// quarantined lists tenants whose store failed to open at boot; set once
+	// during Open, read-only afterwards.
+	quarantined []string
 
 	mu      sync.Mutex
 	stacks  map[string]*Stack
@@ -130,17 +136,103 @@ func OpenWithLimits(dataDir string, storeCfg store.Config, relBuf time.Duration,
 	}
 	for _, id := range existing {
 		if _, err := r.ensure(id); err != nil {
-			_ = r.Close()
-			return nil, err
+			// Quarantine, do not abort: one tenant's unreadable store (corrupt
+			// snapshot's own log, half-written pebble, bad perms) must not take
+			// the whole multi-tenant process down with it. Warn, skip, count, and
+			// keep its directory on disk for manual recovery; the healthy tenants
+			// still come up. The default tenant below is the one exception.
+			logger.Warn("quarantining tenant: its store failed to open at boot (left on disk for recovery)",
+				"tenant", id, "err", err)
+			r.quarantined = append(r.quarantined, id)
+			continue
 		}
 	}
 	// A default stack always exists, so a single-tenant deployment that never sets
-	// X-Scope-OrgID behaves exactly as a single-graph build did.
+	// X-Scope-OrgID behaves exactly as a single-graph build did. Its failure is
+	// fatal — there is no degraded mode without it.
 	if _, err := r.ensure(tenant.Default); err != nil {
 		_ = r.Close()
 		return nil, err
 	}
 	return r, nil
+}
+
+// Quarantined returns the ids of tenants whose store failed to open at boot and
+// were skipped rather than aborting the process. Their directories are left on
+// disk for recovery. Stable after Open returns.
+func (r *Registry) Quarantined() []string {
+	out := make([]string, len(r.quarantined))
+	copy(out, r.quarantined)
+	return out
+}
+
+// TenantStore pairs a tenant id with its event store, for the read-only path.
+type TenantStore struct {
+	Tenant string
+	Store  *store.Store
+}
+
+// OpenExisting opens, read-only, the event store of every tenant already
+// persisted under dataDir — the no-mint counterpart to Open, for offline
+// tooling such as the checkpoint subcommand. The registry is the only place
+// that mints tenant stores, so the guarantee that this path creates nothing
+// lives here too: a missing data dir, an unmigrated legacy layout, or a dir
+// holding no tenant stores are errors rather than an empty registry, and
+// each store is opened with store.OpenReadOnly so even the format stamp is
+// skipped. Callers own closing the returned stores.
+func OpenExisting(dataDir string, storeCfg store.Config, logger *slog.Logger) ([]TenantStore, error) {
+	return openExistingStores(dataDir, storeCfg, logger, true)
+}
+
+// OpenExistingWritable is OpenExisting but opens the stores read-write, for cold
+// maintenance tools that must mutate them (the drop-snapshot subcommand). Same
+// lock semantics: run with the server stopped, as a running server holds the
+// pebble lock and the open fails cleanly.
+func OpenExistingWritable(dataDir string, storeCfg store.Config, logger *slog.Logger) ([]TenantStore, error) {
+	return openExistingStores(dataDir, storeCfg, logger, false)
+}
+
+func openExistingStores(dataDir string, storeCfg store.Config, logger *slog.Logger, readOnly bool) ([]TenantStore, error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if _, err := os.Stat(dataDir); err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("data dir %s does not exist", dataDir)
+		}
+		return nil, fmt.Errorf("checking data dir %s: %w", dataDir, err)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, legacyMarker)); err == nil {
+		return nil, fmt.Errorf("data dir %s holds a legacy single-tenant store: start toise-server against it once to migrate to the per-tenant layout", dataDir)
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("checking for legacy data layout: %w", err)
+	}
+	existing, skipped, err := tenantDirs(dataDir)
+	if err != nil {
+		return nil, err
+	}
+	if len(skipped) > 0 {
+		logger.Warn("skipping non-tenant directories in the data dir", "data_dir", dataDir, "skipped", skipped)
+	}
+	if len(existing) == 0 {
+		return nil, fmt.Errorf("no tenant stores found in %s", dataDir)
+	}
+	open := store.OpenReadOnly
+	if !readOnly {
+		open = store.Open
+	}
+	out := make([]TenantStore, 0, len(existing))
+	for _, id := range existing {
+		st, oerr := open(filepath.Join(dataDir, id), storeCfg)
+		if oerr != nil {
+			for _, ts := range out {
+				_ = ts.Store.Close()
+			}
+			return nil, fmt.Errorf("opening event log for tenant %q (is toise-server still running?): %w", id, oerr)
+		}
+		out = append(out, TenantStore{Tenant: id, Store: st})
+	}
+	return out, nil
 }
 
 // For returns the stack for a (raw) tenant id, opening and caching it on first
@@ -237,6 +329,11 @@ func (r *Registry) Close() error {
 		if err := s.Store.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
+		if s.Annotations != nil {
+			if err := s.Annotations.Close(); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
 	}
 	return firstErr
 }
@@ -254,8 +351,12 @@ func (r *Registry) openStack(id string) (*Stack, error) {
 	restoredFrom := uint64(0)
 	var liveness []byte
 	if seq, snapEvents, blob, ok, rerr := st.ReadSnapshot(); rerr != nil {
-		_ = st.Close()
-		return nil, fmt.Errorf("reading snapshot for tenant %q: %w", id, rerr)
+		// A corrupt/unreadable snapshot must not block boot: the log is the
+		// source of truth, so fall back to a full replay from the start instead
+		// of failing. Clear it with `toise-server drop-snapshot` to stop the
+		// warning and let a fresh snapshot be written.
+		r.logger.Warn("ignoring unreadable projection snapshot; falling back to full replay",
+			"tenant", id, "err", rerr)
 	} else if ok {
 		for i := range snapEvents {
 			graph.Apply(snapEvents[i])
@@ -280,10 +381,17 @@ func (r *Registry) openStack(id string) (*Stack, error) {
 		// intact, only the backstop re-arms lazily on the next observations.
 		r.logger.Warn("ignoring unreadable liveness snapshot section", "tenant", id, "err", err)
 	}
+	// Annotations live in a per-tenant Pebble sidecar inside the tenant dir,
+	// separate from the event log: never replayed, never in the projection (0.7.0).
+	annStore, aerr := annotations.Open(filepath.Join(dir, "annotations"))
+	if aerr != nil {
+		_ = st.Close()
+		return nil, fmt.Errorf("opening annotations for tenant %q: %w", id, aerr)
+	}
 	r.logger.Info("tenant stack ready", "tenant", id,
 		"entities", graph.EntityCount(), "relations", graph.RelationCount(),
 		"from_snapshot_seq", restoredFrom)
-	return &Stack{Tenant: id, Store: st, Graph: graph, Engine: engine}, nil
+	return &Stack{Tenant: id, Store: st, Graph: graph, Engine: engine, Annotations: annStore}, nil
 }
 
 // tenantDirs lists the tenant subdirectories under dataDir — directories whose

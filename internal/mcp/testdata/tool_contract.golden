@@ -1,0 +1,450 @@
+tool find_entities
+  in:
+  as_of string
+  limit int
+  match map
+  type string
+  verbosity string
+  out:
+  entities []object
+    attributes []object
+      key string
+      type string
+      value string
+    deleted bool
+    id string
+    identity []object
+      key string
+      type string
+      value string
+    label string
+    type string
+  total int
+  truncated bool
+tool get_entity
+  in:
+  as_of string
+  entity_id string
+  verbosity string
+  out:
+  annotations object
+    author string
+    updated_at string
+    values map
+  entity object
+    attributes []object
+      key string
+      type string
+      value string
+    deleted bool
+    id string
+    identity []object
+      key string
+      type string
+      value string
+    label string
+    type string
+tool get_neighbors
+  in:
+  as_of string
+  entity_id string
+  limit int
+  max_depth int
+  relation_type string
+  verbosity string
+  out:
+  count int
+  neighbors []object
+    attributes []object
+      key string
+      type string
+      value string
+    deleted bool
+    id string
+    identity []object
+      key string
+      type string
+      value string
+    label string
+    type string
+    depth int
+    direction string
+    resolved_entity object
+      attributes []object
+        key string
+        type string
+        value string
+      deleted bool
+      id string
+      identity []object
+        key string
+        type string
+        value string
+      label string
+      type string
+    via_relation string
+  total int
+  truncated bool
+tool find_path
+  in:
+  as_of string
+  from_id string
+  max_depth int
+  relation_type string
+  to_id string
+  out:
+  hops int
+  max_depth int
+  path []object
+    direction string
+    entity object
+      attributes []object
+        key string
+        type string
+        value string
+      deleted bool
+      id string
+      identity []object
+        key string
+        type string
+        value string
+      label string
+      type string
+    via_relation string
+  reachable bool
+tool impact_of
+  in:
+  as_of string
+  entity_id string
+  limit int
+  max_depth int
+  out:
+  by_type []object
+    count int
+    type string
+  impacted []object
+    attributes []object
+      key string
+      type string
+      value string
+    deleted bool
+    id string
+    identity []object
+      key string
+      type string
+      value string
+    label string
+    type string
+    depth int
+    via string
+  root object
+    attributes []object
+      key string
+      type string
+      value string
+    deleted bool
+    id string
+    identity []object
+      key string
+      type string
+      value string
+    label string
+    type string
+  summary string
+  total int
+  truncated bool
+tool entity_history
+  in:
+  as_known_at string
+  change_type string
+  entity_id string
+  include_heartbeats bool
+  limit int
+  since string
+  until string
+  out:
+  by_change_type []object
+    count int
+    type string
+  heartbeats_excluded int
+  total int
+  truncated bool
+  changes []object
+    change_type string
+    changed_keys []string
+    entity object
+      attributes []object
+        key string
+        type string
+        value string
+      deleted bool
+      id string
+      identity []object
+        key string
+        type string
+        value string
+      label string
+      type string
+    event_id string
+    event_time string
+    recorded_at string
+    relation object
+      attributes []object
+        key string
+        type string
+        value string
+      from_id string
+      id string
+      structural bool
+      to_id string
+      type string
+  count int
+tool recent_changes
+  in:
+  change_type string
+  include_heartbeats bool
+  kind string
+  limit int
+  window string
+  out:
+  by_change_type []object
+    count int
+    type string
+  heartbeats_excluded int
+  total int
+  truncated bool
+  changes []object
+    change_type string
+    changed_keys []string
+    entity object
+      attributes []object
+        key string
+        type string
+        value string
+      deleted bool
+      id string
+      identity []object
+        key string
+        type string
+        value string
+      label string
+      type string
+    event_id string
+    event_time string
+    recorded_at string
+    relation object
+      attributes []object
+        key string
+        type string
+        value string
+      from_id string
+      id string
+      structural bool
+      to_id string
+      type string
+  count int
+tool graph_diff
+  in:
+  from string
+  limit int
+  to string
+  window string
+  out:
+  entities_changed []object
+    attributes []object
+      key string
+      type string
+      value string
+    deleted bool
+    id string
+    identity []object
+      key string
+      type string
+      value string
+    label string
+    type string
+    changed_keys []string
+    state_changed bool
+  entities_created []object
+    attributes []object
+      key string
+      type string
+      value string
+    deleted bool
+    id string
+    identity []object
+      key string
+      type string
+      value string
+    label string
+    type string
+  entities_deleted []object
+    attributes []object
+      key string
+      type string
+      value string
+    deleted bool
+    id string
+    identity []object
+      key string
+      type string
+      value string
+    label string
+    type string
+  entities_transient []object
+    attributes []object
+      key string
+      type string
+      value string
+    deleted bool
+    id string
+    identity []object
+      key string
+      type string
+      value string
+    label string
+    type string
+  from string
+  relations_added []object
+    attributes []object
+      key string
+      type string
+      value string
+    from_id string
+    id string
+    structural bool
+    to_id string
+    type string
+  relations_changed []object
+    attributes []object
+      key string
+      type string
+      value string
+    from_id string
+    id string
+    structural bool
+    to_id string
+    type string
+  relations_removed []object
+    attributes []object
+      key string
+      type string
+      value string
+    from_id string
+    id string
+    structural bool
+    to_id string
+    type string
+  relations_transient []object
+    attributes []object
+      key string
+      type string
+      value string
+    from_id string
+    id string
+    structural bool
+    to_id string
+    type string
+  summary string
+  to string
+  totals object
+    entities_changed int
+    entities_created int
+    entities_deleted int
+    entities_transient int
+    relations_added int
+    relations_changed int
+    relations_removed int
+    relations_transient int
+  truncated bool
+tool describe_type
+  in:
+  as_of string
+  type string
+  out:
+  attribute_keys []object
+    example string
+    key string
+    seen int
+  count int
+  description string
+  endpoint_shapes []object
+    count int
+    from_type string
+    to_type string
+  identity_keys []object
+    example string
+    key string
+    seen int
+  impact_flow string
+  kind string
+  registered bool
+  relations []object
+    count int
+    direction string
+    peer_types []object
+      count int
+      type string
+    relation_type string
+  samples []string
+  structural bool
+  type string
+tool telemetry_keys
+  in:
+  as_of string
+  entity_id string
+  out:
+  entity object
+    attributes []object
+      key string
+      type string
+      value string
+    deleted bool
+    id string
+    identity []object
+      key string
+      type string
+      value string
+    label string
+    type string
+  guidance string
+  keys []object
+    key string
+    metric_label string
+    note string
+    source string
+    value string
+tool describe_schema
+  in:
+  as_of string
+  out:
+  description string
+  entity_types []object
+    count int
+    type string
+  relation_types []object
+    count int
+    type string
+  total_entities int
+  total_relations int
+tool annotate_entity
+  in:
+  annotations map
+  entity_id string
+  out:
+  annotation object
+    author string
+    updated_at string
+    values map
+resource schema toise://schema application/json
+resource guide toise://guide text/markdown
+resource_template entity toise://entity/{id} application/json
+prompt investigate_incident
+  arg entity required
+  arg window optional
+prompt blast_radius
+  arg entity required
+prompt explain_entity
+  arg entity required
+prompt whats_changed
+  arg window optional

@@ -16,10 +16,11 @@ import (
 
 // FindEntitiesInput filters the entity set.
 type FindEntitiesInput struct {
-	Type  string            `json:"type,omitempty" jsonschema:"restrict to this entity type (omit for all types)"`
-	Match map[string]string `json:"match,omitempty" jsonschema:"attribute key/value pairs every result must have (string comparison, against identity and attributes)"`
-	Limit int               `json:"limit,omitempty" jsonschema:"maximum entities to return (default 50, max 200)"`
-	AsOf  string            `json:"as_of,omitempty" jsonschema:"RFC 3339 instant: read the graph as it was then (event-time), instead of now"`
+	Type      string            `json:"type,omitempty" jsonschema:"restrict to this entity type (omit for all types)"`
+	Match     map[string]string `json:"match,omitempty" jsonschema:"attribute key/value pairs every result must have (string comparison, against identity and attributes)"`
+	Limit     int               `json:"limit,omitempty" jsonschema:"maximum entities to return (default 50, max 200)"`
+	AsOf      string            `json:"as_of,omitempty" jsonschema:"RFC 3339 instant: read the graph as it was then (event-time), instead of now"`
+	Verbosity string            `json:"verbosity,omitempty" jsonschema:"compact returns only id/type/label (cheap to scan many); full (default) adds identity and attributes"`
 }
 
 // FindEntitiesOutput carries the matching entities.
@@ -30,6 +31,10 @@ type FindEntitiesOutput struct {
 }
 
 func (s *Server) findEntities(ctx context.Context, _ *mcpsdk.CallToolRequest, in FindEntitiesInput) (*mcpsdk.CallToolResult, FindEntitiesOutput, error) {
+	compact, err := parseVerbosity(in.Verbosity)
+	if err != nil {
+		return nil, FindEntitiesOutput{}, err
+	}
 	g, err := s.graphAt(ctx, in.AsOf)
 	if err != nil {
 		return nil, FindEntitiesOutput{}, err
@@ -48,7 +53,7 @@ func (s *Server) findEntities(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 	}
 	out.Entities = make([]Entity, len(matched))
 	for i, e := range matched {
-		out.Entities[i] = entityOut(e, false)
+		out.Entities[i] = entityOutV(e, false, compact)
 	}
 	return nil, out, nil
 }
@@ -57,18 +62,25 @@ func (s *Server) findEntities(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 
 // GetEntityInput names the entity to fetch.
 type GetEntityInput struct {
-	EntityID string `json:"entity_id" jsonschema:"the logical entity id to fetch"`
-	AsOf     string `json:"as_of,omitempty" jsonschema:"RFC 3339 instant: read the entity as it was then (event-time), instead of now"`
+	EntityID  string `json:"entity_id" jsonschema:"the logical entity id to fetch"`
+	AsOf      string `json:"as_of,omitempty" jsonschema:"RFC 3339 instant: read the entity as it was then (event-time), instead of now"`
+	Verbosity string `json:"verbosity,omitempty" jsonschema:"compact returns only id/type/label; full (default) adds identity and attributes"`
 }
 
-// GetEntityOutput carries the entity.
+// GetEntityOutput carries the entity and any operator annotations (an overlay,
+// not producer truth — see annotate_entity).
 type GetEntityOutput struct {
-	Entity Entity `json:"entity"`
+	Entity      Entity         `json:"entity"`
+	Annotations *AnnotationOut `json:"annotations,omitempty" jsonschema:"operator-added notes on this entity (not producer truth); absent when none"`
 }
 
 func (s *Server) getEntity(ctx context.Context, _ *mcpsdk.CallToolRequest, in GetEntityInput) (*mcpsdk.CallToolResult, GetEntityOutput, error) {
 	if in.EntityID == "" {
 		return nil, GetEntityOutput{}, fmt.Errorf("an entity id is required")
+	}
+	compact, err := parseVerbosity(in.Verbosity)
+	if err != nil {
+		return nil, GetEntityOutput{}, err
 	}
 	g, err := s.graphAt(ctx, in.AsOf)
 	if err != nil {
@@ -78,7 +90,7 @@ func (s *Server) getEntity(ctx context.Context, _ *mcpsdk.CallToolRequest, in Ge
 	if !ok {
 		return nil, GetEntityOutput{}, fmt.Errorf("no entity found with id %q; use find_entities to discover ids — if it was deleted a while ago its tombstone may have been evicted, but entity_history still has its past", in.EntityID)
 	}
-	return nil, GetEntityOutput{Entity: entityOut(e, deleted)}, nil
+	return nil, GetEntityOutput{Entity: entityOutV(e, deleted, compact), Annotations: s.annotationFor(in.EntityID)}, nil
 }
 
 // --- get_neighbors ---
@@ -87,8 +99,10 @@ func (s *Server) getEntity(ctx context.Context, _ *mcpsdk.CallToolRequest, in Ge
 type GetNeighborsInput struct {
 	EntityID     string `json:"entity_id" jsonschema:"the entity to traverse outward from"`
 	RelationType string `json:"relation_type,omitempty" jsonschema:"only follow relations of this type (omit to follow any)"`
-	Depth        int    `json:"depth,omitempty" jsonschema:"how many relation hops to traverse, 1 to 5 (default 1)"`
+	MaxDepth     int    `json:"max_depth,omitempty" jsonschema:"how many relation hops to traverse, 1 to 5 (default 1); same name as find_path and impact_of"`
+	Limit        int    `json:"limit,omitempty" jsonschema:"maximum neighbors to return (default 50, max 200); the closest are kept and totals always cover everything"`
 	AsOf         string `json:"as_of,omitempty" jsonschema:"RFC 3339 instant: traverse the graph as it was then (event-time), instead of now"`
+	Verbosity    string `json:"verbosity,omitempty" jsonschema:"compact returns only id/type/label per neighbor; full (default) adds identity and attributes"`
 }
 
 // Neighbor is a reachable entity plus the edge facts that reached it: the
@@ -98,25 +112,36 @@ type Neighbor struct {
 	ViaRelation string `json:"via_relation" jsonschema:"relation type of the edge that first reached this entity"`
 	Direction   string `json:"direction" jsonschema:"outgoing if that edge points from the previous hop to this entity, incoming otherwise"`
 	Depth       int    `json:"depth" jsonschema:"hop distance from the start entity"`
+	// ResolvedEntity is the read-time binding of an observed network.endpoint to
+	// the canonical host/service.listener it denotes (#184). The stored edge
+	// still targets the endpoint; this is a derived overlay, never persisted.
+	ResolvedEntity *Entity `json:"resolved_entity,omitempty" jsonschema:"for an observed network.endpoint, the canonical service.listener/host it resolves to; absent when the peer is external/off-fleet or unresolved"`
 }
 
 // GetNeighborsOutput carries the reachable entities with their edges.
 type GetNeighborsOutput struct {
 	Neighbors []Neighbor `json:"neighbors"`
-	Count     int        `json:"count"`
+	Count     int        `json:"count" jsonschema:"neighbors returned (after the limit)"`
+	Total     int        `json:"total" jsonschema:"neighbors reachable within max_depth before the limit was applied"`
+	Truncated bool       `json:"truncated" jsonschema:"true if more neighbors were reachable than returned; raise the limit or narrow relation_type"`
 }
 
 func (s *Server) getNeighbors(ctx context.Context, _ *mcpsdk.CallToolRequest, in GetNeighborsInput) (*mcpsdk.CallToolResult, GetNeighborsOutput, error) {
 	if in.EntityID == "" {
 		return nil, GetNeighborsOutput{}, fmt.Errorf("an entity_id is required")
 	}
-	depth := in.Depth
+	compact, err := parseVerbosity(in.Verbosity)
+	if err != nil {
+		return nil, GetNeighborsOutput{}, err
+	}
+	depth := in.MaxDepth
 	if depth <= 0 {
 		depth = 1
 	}
 	if depth > maxDepth {
-		return nil, GetNeighborsOutput{}, fmt.Errorf("depth %d exceeds the maximum of %d; try a smaller depth", in.Depth, maxDepth)
+		return nil, GetNeighborsOutput{}, fmt.Errorf("max_depth %d exceeds the maximum of %d; try a smaller depth", in.MaxDepth, maxDepth)
 	}
+	limit := clampLimit(in.Limit)
 	g, err := s.graphAt(ctx, in.AsOf)
 	if err != nil {
 		return nil, GetNeighborsOutput{}, err
@@ -142,15 +167,30 @@ func (s *Server) getNeighbors(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 				visited[e.other] = struct{}{}
 				next = append(next, e.other)
 				ent, _, _ := g.GetEntity(e.other)
-				out.Neighbors = append(out.Neighbors, Neighbor{
-					Entity:      entityOut(ent, false),
+				nb := Neighbor{
+					Entity:      entityOutV(ent, false, compact),
 					ViaRelation: e.rel.Type,
 					Direction:   e.direction,
 					Depth:       d,
-				})
+				}
+				if ent.Type == model.TypeNetworkEndpoint {
+					if resolved, ok := resolveEndpoint(g, ent); ok {
+						ro := entityOutV(resolved, false, compact)
+						nb.ResolvedEntity = &ro
+					}
+				}
+				out.Neighbors = append(out.Neighbors, nb)
 			}
 		}
 		frontier = next
+	}
+	// Digest then cap: the full reachable set is counted, the closest `limit`
+	// (BFS order is shallowest-first) are returned — matching find_entities and
+	// impact_of, so get_neighbors is no longer the one list tool without a digest.
+	out.Total = len(out.Neighbors)
+	if len(out.Neighbors) > limit {
+		out.Neighbors = out.Neighbors[:limit]
+		out.Truncated = true
 	}
 	out.Count = len(out.Neighbors)
 	return nil, out, nil
@@ -521,6 +561,12 @@ func parseOptTime(s, field string) (time.Time, error) {
 	t, err := time.Parse(time.RFC3339, s)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("invalid %s %q: use an RFC 3339 timestamp like 2026-05-29T14:00:00Z", field, s)
+	}
+	// The persisted time index encodes event_time as unsigned nanoseconds, so
+	// a pre-epoch instant would wrap above every real key and read the whole
+	// log; reject it here instead of migrating the on-disk encoding.
+	if t.Before(time.Unix(0, 0)) {
+		return time.Time{}, fmt.Errorf("invalid %s %q: RFC 3339 timestamps before 1970-01-01T00:00:00Z are not supported", field, s)
 	}
 	return t, nil
 }

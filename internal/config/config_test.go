@@ -18,6 +18,15 @@ func TestHardeningDefaults(t *testing.T) {
 	}
 }
 
+// TestSnapshotOnByDefault pins #164: snapshots default to 5m so the liveness
+// memento survives restarts out of the box; a 0 default left the sweeper
+// backstop silently restart-amnesiac.
+func TestSnapshotOnByDefault(t *testing.T) {
+	if d := Default(); d.SnapshotInterval.D() != 5*time.Minute {
+		t.Errorf("default snapshot_interval = %v, want 5m", d.SnapshotInterval.D())
+	}
+}
+
 func TestProductionLockdownWinsOverToggles(t *testing.T) {
 	// --production forces all three off, even if a toggle tries to re-enable.
 	cfg, err := Load([]string{"--production", "--playground=true"}, env(nil))
@@ -209,6 +218,9 @@ func TestValidateRejectsSilentMisconfigurations(t *testing.T) {
 		{"retention without compaction", func(c *Config) { c.RetentionMaxAge = Duration(time.Hour); c.CompactionInterval = 0 }},
 		{"unknown log level", func(c *Config) { c.LogLevel = "verbose" }},
 		{"unknown log format", func(c *Config) { c.LogFormat = "logfmt" }},
+		{"negative max_tenants", func(c *Config) { c.MaxTenants = -1 }},
+		{"empty allowlist entry", func(c *Config) { c.TenantAllowlist = []string{""} }},
+		{"whitespace allowlist entry", func(c *Config) { c.TenantAllowlist = []string{"ten ant"} }},
 	}
 	for _, tc := range cases {
 		cfg := base
@@ -219,6 +231,13 @@ func TestValidateRejectsSilentMisconfigurations(t *testing.T) {
 	}
 	if err := base.Validate(); err != nil {
 		t.Errorf("default config must validate: %v", err)
+	}
+	// "warning" is a valid level (alias for warn): SlogLevel maps it, so Validate
+	// must not reject it.
+	warn := base
+	warn.LogLevel = "warning"
+	if err := warn.Validate(); err != nil {
+		t.Errorf("log_level \"warning\" must validate (SlogLevel maps it): %v", err)
 	}
 }
 

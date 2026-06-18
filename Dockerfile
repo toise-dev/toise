@@ -4,7 +4,8 @@
 FROM golang:1.26 AS build
 WORKDIR /src
 
-# Cache modules first.
+# Cache modules first. The main module requires the published pkg/emit tag
+# (no local replace; #212), so go.mod/go.sum alone resolve and download it.
 COPY go.mod go.sum ./
 RUN go mod download
 

@@ -10,6 +10,7 @@ package metrics
 import (
 	"net/http"
 	"sort"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
@@ -31,6 +32,7 @@ type Storer interface {
 	PrunedBytes() uint64
 	SnapshotSeq() uint64
 	SnapshotsWritten() uint64
+	PruneHorizon() time.Time
 }
 
 // Collector samples the live graph and store on each Prometheus scrape.
@@ -50,6 +52,7 @@ type Collector struct {
 	prunedBytes    *prometheus.Desc
 	snapshotSeq    *prometheus.Desc
 	snapshots      *prometheus.Desc
+	pruneHorizon   *prometheus.Desc
 }
 
 // NewCollector builds a collector over the graph and store, stamping build info
@@ -80,6 +83,8 @@ func NewCollector(g Grapher, s Storer, version, commit string) *Collector {
 			"Reference sequence of the last projection snapshot written (0 if none).", nil, nil),
 		snapshots: prometheus.NewDesc("toise_snapshots_written_total",
 			"Total projection snapshots written.", nil, nil),
+		pruneHorizon: prometheus.NewDesc("toise_store_prune_horizon_seconds",
+			"Unix time of the latest retention cutoff applied (0 if never pruned); the oldest instant an as-of read can answer completely.", nil, nil),
 	}
 }
 
@@ -95,6 +100,7 @@ func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.prunedBytes
 	ch <- c.snapshotSeq
 	ch <- c.snapshots
+	ch <- c.pruneHorizon
 }
 
 // Collect implements prometheus.Collector, sampling the live state.
@@ -108,6 +114,11 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	ch <- prometheus.MustNewConstMetric(c.prunedBytes, prometheus.CounterValue, float64(c.store.PrunedBytes()))
 	ch <- prometheus.MustNewConstMetric(c.snapshotSeq, prometheus.GaugeValue, float64(c.store.SnapshotSeq()))
 	ch <- prometheus.MustNewConstMetric(c.snapshots, prometheus.CounterValue, float64(c.store.SnapshotsWritten()))
+	horizon := float64(0)
+	if h := c.store.PruneHorizon(); !h.IsZero() {
+		horizon = float64(h.Unix())
+	}
+	ch <- prometheus.MustNewConstMetric(c.pruneHorizon, prometheus.GaugeValue, horizon)
 	emitByType(ch, c.entitiesByType, c.graph.CountByType())
 }
 
@@ -161,4 +172,48 @@ func NewAuthFailures() prometheus.Counter {
 		Name: "toise_auth_failures_total",
 		Help: "Rejected authentications on the HTTP and gRPC surfaces.",
 	})
+}
+
+// NewQuarantinedTenants returns the gauge for tenants whose store failed to open
+// at boot and were skipped (their directories are left on disk for recovery). Set
+// once after the registry opens and registered via Handler's extra collectors.
+func NewQuarantinedTenants() prometheus.Gauge {
+	return prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "toise_tenants_quarantined",
+		Help: "Tenants whose store failed to open at boot and were skipped rather than aborting the process.",
+	})
+}
+
+// QueryMetrics records per-tool MCP call counts and durations — the query-side
+// observability hung off the mcp.Observer seam (#166). One instance is shared
+// across tenants; register its Collectors via Handler's extras.
+type QueryMetrics struct {
+	calls    *prometheus.CounterVec
+	duration *prometheus.HistogramVec
+}
+
+// NewQueryMetrics builds the per-tool call counter and duration histogram.
+func NewQueryMetrics() *QueryMetrics {
+	return &QueryMetrics{
+		calls: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "toise_mcp_tool_calls_total",
+			Help: "MCP tool calls by tool and outcome (ok or error).",
+		}, []string{"tool", "outcome"}),
+		duration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "toise_mcp_tool_duration_seconds",
+			Help:    "MCP tool-call wall-clock duration by tool.",
+			Buckets: prometheus.DefBuckets,
+		}, []string{"tool"}),
+	}
+}
+
+// ObserveTool implements mcp.Observer: one finished tool call.
+func (m *QueryMetrics) ObserveTool(tool, outcome string, dur time.Duration) {
+	m.calls.WithLabelValues(tool, outcome).Inc()
+	m.duration.WithLabelValues(tool).Observe(dur.Seconds())
+}
+
+// Collectors exposes the metrics for registration via Handler's extras.
+func (m *QueryMetrics) Collectors() []prometheus.Collector {
+	return []prometheus.Collector{m.calls, m.duration}
 }

@@ -42,8 +42,10 @@ const formatVersion = uint64(1)
 // Store is the append-only event log backed by Pebble. It is safe for
 // concurrent use; appends are serialized.
 type Store struct {
-	db  *pebble.DB
-	cfg Config
+	db       *pebble.DB
+	cfg      Config
+	dir      string
+	readOnly bool
 
 	mu               sync.Mutex // guards seq/counters and serializes appends
 	maintMu          sync.Mutex // serializes maintenance (coalesce/prune) against itself, NOT against appends
@@ -57,11 +59,23 @@ type Store struct {
 
 // Open opens (creating if needed) the event log at dir.
 func Open(dir string, cfg Config) (*Store, error) {
-	db, err := pebble.Open(dir, &pebble.Options{})
+	return open(dir, cfg, false)
+}
+
+// OpenReadOnly opens an existing event log at dir without ever writing to it:
+// no directory creation, no format-version stamp, and every mutation fails
+// with pebble's read-only error. It is the open for offline tooling — taking a
+// backup must not be able to alter or mint the store it backs up.
+func OpenReadOnly(dir string, cfg Config) (*Store, error) {
+	return open(dir, cfg, true)
+}
+
+func open(dir string, cfg Config, readOnly bool) (*Store, error) {
+	db, err := pebble.Open(dir, &pebble.Options{ReadOnly: readOnly})
 	if err != nil {
 		return nil, fmt.Errorf("opening pebble at %s: %w", dir, err)
 	}
-	s := &Store{db: db, cfg: cfg}
+	s := &Store{db: db, cfg: cfg, dir: dir, readOnly: readOnly}
 	if err := s.checkFormat(); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -79,16 +93,22 @@ func Open(dir string, cfg Config) (*Store, error) {
 func (s *Store) checkFormat() error {
 	v, closer, err := s.db.Get(metaFormatKey)
 	if errors.Is(err, pebble.ErrNotFound) {
+		if s.readOnly {
+			// A pre-marker store is format 1 by definition; a read-only open
+			// reads it as such instead of stamping it.
+			return nil
+		}
 		return s.db.Set(metaFormatKey, encodeU64(formatVersion), pebble.Sync)
 	}
 	if err != nil {
 		return fmt.Errorf("reading format version: %w", err)
 	}
 	defer func() { _ = closer.Close() }()
-	if len(v) == 8 {
-		if got := binary.BigEndian.Uint64(v); got > formatVersion {
-			return fmt.Errorf("store format version %d is newer than this binary supports (%d): upgrade toise-server before opening this data dir", got, formatVersion)
-		}
+	if len(v) != 8 {
+		return fmt.Errorf("corrupt format-version marker: %d bytes, want 8", len(v))
+	}
+	if got := binary.BigEndian.Uint64(v); got > formatVersion {
+		return fmt.Errorf("store format version %d is newer than this binary supports (%d): upgrade toise-server before opening this data dir", got, formatVersion)
 	}
 	return nil
 }
@@ -129,17 +149,40 @@ func (s *Store) recoverSeq() error {
 	if err != nil {
 		return fmt.Errorf("reading sequence: %w", err)
 	}
-	defer func() { _ = closer.Close() }()
-	if len(v) == 8 {
+	n := len(v)
+	if n == 8 {
 		s.seq = binary.BigEndian.Uint64(v)
 	}
+	_ = closer.Close()
+	// A present-but-malformed marker is corruption, not a fresh store: silently
+	// resetting the sequence to 0 would re-issue sequences and clobber the log.
+	if n != 8 {
+		return fmt.Errorf("corrupt sequence marker: %d bytes, want 8", n)
+	}
+
 	if hv, hcloser, herr := s.db.Get(metaPruneHorizonKey); herr == nil {
-		if len(hv) == 8 {
+		hn := len(hv)
+		if hn == 8 {
 			s.pruneHorizon = int64(binary.BigEndian.Uint64(hv))
 		}
 		_ = hcloser.Close()
+		if hn != 8 {
+			return fmt.Errorf("corrupt prune-horizon marker: %d bytes, want 8", hn)
+		}
 	} else if !errors.Is(herr, pebble.ErrNotFound) {
 		return fmt.Errorf("reading prune horizon: %w", herr)
+	}
+
+	// Seed snapshotSeq from the persisted snapshot (its 8-byte sequence prefix)
+	// so the snapshot_seq metric reflects reality immediately after a restart,
+	// not only once the next snapshot is written.
+	if sv, scloser, serr := s.db.Get(snapshotKey); serr == nil {
+		if len(sv) >= 8 {
+			s.snapshotSeq = binary.BigEndian.Uint64(sv[:8])
+		}
+		_ = scloser.Close()
+	} else if !errors.Is(serr, pebble.ErrNotFound) {
+		return fmt.Errorf("reading snapshot reference: %w", serr)
 	}
 	return nil
 }

@@ -2,12 +2,13 @@ name: Deploy Documentation
 
 # Versioned by tag (not rolling): each release tag publishes a frozen version of
 # the docs as they were at that tag, and stable tags move the `latest` alias.
-# Tags follow the project convention — no `v` prefix (e.g. 0.2.0, 0.3.0-beta1).
+# Server tags are v-prefixed from v0.6.0 (ADR 0027); the docs version label
+# strips the v so URLs stay /docs/0.6.0 style, consistent with 0.2.0-0.5.0.
 on:
   push:
     tags:
-      - '[0-9]+.[0-9]+.[0-9]+'      # stable    -> publish + move `latest`
-      - '[0-9]+.[0-9]+.[0-9]+-*'    # pre-release -> publish version only
+      - 'v[0-9]+.[0-9]+.[0-9]+'      # stable    -> publish + move `latest`
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'    # pre-release -> publish version only
   workflow_dispatch:
     inputs:
       version:
@@ -75,7 +76,7 @@ jobs:
             VERSION="$INPUT_VERSION"
             SET_LATEST="$INPUT_SET_LATEST"
           elif [ "$REF_TYPE" = "tag" ]; then
-            VERSION="$REF_NAME"
+            VERSION="${REF_NAME#v}"  # tag v0.6.0 -> docs version 0.6.0
             case "$VERSION" in
               *-*) SET_LATEST="false" ;;   # pre-release: publish, don't move latest
               *)   SET_LATEST="true"  ;;    # stable: move latest

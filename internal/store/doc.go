@@ -9,6 +9,8 @@
 // with Sync.
 //
 // Retention (ADR 0013): meaningful events are kept; runs of consecutive
-// entity.unchanged heartbeats can be coalesced via CoalesceHeartbeats. Snapshot
-// generation and archival are phase-2 work; only a stub interface exists here.
+// entity.unchanged heartbeats can be coalesced via CoalesceHeartbeats, and
+// events past the configured horizon are pruned by compaction. Snapshots
+// persist the projection (see SnapshotStore) so a restart replays only the tail
+// rather than the whole log.
 package store
