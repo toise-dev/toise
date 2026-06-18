@@ -53,26 +53,47 @@ all from a single Go binary with no external runtime dependencies. 0.3.0 adds th
 operational surface for real deployments: native bearer-token auth and TLS, a
 `--production` lockdown, `/healthz`·`/readyz`·Prometheus `/metrics`, retention
 pruning, projection snapshots, packaged release artifacts, and multi-tenant
-isolation. Expect breaking changes between minor releases (each with a migration
-guide).
+isolation.
+
+Pre-1.0, the surfaces can still evolve — but since 0.7.0 the **public contracts**
+(the OTLP wire contract, the MCP tools/resources/prompts, and the GraphQL schema)
+are **pinned** by a byte-exact conformance fixture and a golden contract test, and
+governed by a published [API stability policy](docs/user-guide/docs/api-stability.md):
+changes are additive within a release series, and a breaking change ships only with
+a deprecation notice in the preceding release plus a migration guide. After 1.0 the
+surfaces follow semantic versioning.
 
 ## Quickstart
 
+**No build needed — a live graph in under a minute.** Grab the release tarball for
+your platform from the [releases page](https://github.com/toise-dev/toise/releases)
+(it ships `toise-server` + `toise-probe`), then run the server and point a probe at
+it — `toise-probe` is a real OTLP/gRPC producer that heartbeats an evolving
+topology (process restarts, an interface flap, a container crash, multi-agent
+reference counting):
+
 ```bash
-make build                                  # builds bin/toise-server, toise-demo, toise-probe
-./bin/toise-demo --data-dir ./demo-data     # seed the "day in the life of web-server-1" demo
-./bin/toise-server --data-dir ./demo-data   # then open http://127.0.0.1:8080/
+./toise-server --data-dir ./toise-data &        # GraphQL + MCP + debug UI on :8080
+./toise-probe  --producer agent-a               # in another terminal
+./toise-probe  --producer agent-b               # a second agent sharing the host/db
+# open http://127.0.0.1:8080/
 ```
 
-For a **live** demo over the real OTLP path, run a fresh server and point one or
-more `toise-probe` agents at it — a real OTLP/gRPC producer that heartbeats an
-evolving infrastructure topology (process restarts, an interface flap, a
-container crash, multi-agent reference counting):
+Prefer a container? The server image is on GHCR — then point any OTLP entity-event
+producer at `:4317`:
 
 ```bash
-./bin/toise-server --data-dir ./live-data &
-./bin/toise-probe --producer agent-a            # in another terminal
-./bin/toise-probe --producer agent-b            # a second agent sharing the host/db
+docker run --rm -p 8080:8080 -p 4317:4317 ghcr.io/toise-dev/toise:latest
+```
+
+**From source** (for contributors) also builds `toise-demo`, which seeds a
+self-contained "day in the life of web-server-1" scenario — an instant graph with
+no producer:
+
+```bash
+make build                                  # bin/toise-server, toise-demo, toise-probe
+./bin/toise-demo   --data-dir ./demo-data   # seed the demo event log
+./bin/toise-server --data-dir ./demo-data   # then open http://127.0.0.1:8080/
 ```
 
 The demo scenario and a set of example LLM prompts (with the MCP tool calls they
