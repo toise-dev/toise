@@ -123,6 +123,10 @@ type Config struct {
 	// both are set.
 	TLSCertFile string `yaml:"tls_cert_file"`
 	TLSKeyFile  string `yaml:"tls_key_file"`
+	// AuditLog is a file path that, when set, receives an append-only JSON-line
+	// audit record for every operator write (annotate_entity) — distinct from the
+	// event log (ADR 0028). Empty = auditing off (the default). Not a secret.
+	AuditLog string `yaml:"audit_log"`
 }
 
 // TLSEnabled reports whether both a certificate and key are configured.
@@ -339,6 +343,9 @@ func (c *Config) applyEnv(getenv func(string) string) error {
 	if v := getenv("TOISE_INGEST_TOKENS"); v != "" {
 		c.IngestTokens = splitOrigins(v)
 	}
+	if v := getenv("TOISE_AUDIT_LOG"); v != "" {
+		c.AuditLog = v
+	}
 	if v := getenv("TOISE_TLS_CERT_FILE"); v != "" {
 		c.TLSCertFile = v
 	}
@@ -417,6 +424,7 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	tenantAllowlist := fs.String("tenant-allowlist", strings.Join(cfg.TenantAllowlist, ","), "comma-separated tenant ids allowed to be created (empty: any)")
 	maxTenants := fs.Int("max-tenants", cfg.MaxTenants, "cap on open tenants, 0 = unbounded")
 	tenantTrustMode := fs.String("tenant-trust-mode", cfg.TenantTrustMode, "how a request's tenant is decided: trust-header (default) or derive-only (derive a scoped token's tenant, ignore the client header)")
+	auditLog := fs.String("audit-log", cfg.AuditLog, "append-only JSON-line audit file for operator writes (annotate_entity); empty = off")
 	tlsCertFile := fs.String("tls-cert-file", cfg.TLSCertFile, "PEM certificate file; with --tls-key-file, serves HTTP and OTLP over TLS")
 	tlsKeyFile := fs.String("tls-key-file", cfg.TLSKeyFile, "PEM private key file (pairs with --tls-cert-file)")
 	if err := fs.Parse(args); err != nil {
@@ -443,6 +451,7 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	cfg.TenantAllowlist = splitOrigins(*tenantAllowlist)
 	cfg.MaxTenants = *maxTenants
 	cfg.TenantTrustMode = *tenantTrustMode
+	cfg.AuditLog = *auditLog
 	cfg.TLSCertFile = *tlsCertFile
 	cfg.TLSKeyFile = *tlsKeyFile
 	cfg.LogFormat = *logFormat

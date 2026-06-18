@@ -8,6 +8,7 @@ import (
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/toise-dev/toise/internal/annotations"
+	"github.com/toise-dev/toise/internal/audit"
 	"github.com/toise-dev/toise/internal/model"
 	"github.com/toise-dev/toise/internal/version"
 )
@@ -98,6 +99,7 @@ type Server struct {
 	srv     *mcpsdk.Server
 	obs     Observer
 	ann     *annotations.Store // per-tenant annotation sidecar; nil disables annotate_entity
+	audit   *audit.Auditor     // nil/disabled = no audit records (ADR 0028)
 }
 
 // SetAnnotations attaches the per-tenant annotation sidecar, enabling
@@ -105,6 +107,13 @@ type Server struct {
 // chaining. nil leaves annotations disabled.
 func (s *Server) SetAnnotations(a *annotations.Store) *Server {
 	s.ann = a
+	return s
+}
+
+// SetAuditor attaches the audit sink for operator writes (ADR 0028); returns s
+// for chaining. nil (the default) records nothing.
+func (s *Server) SetAuditor(a *audit.Auditor) *Server {
+	s.audit = a
 	return s
 }
 
