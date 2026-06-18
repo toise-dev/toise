@@ -1,6 +1,6 @@
 # 28. Access security for multi-tenant / external SaaS (extends ADR 0024, 0025)
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-17
 - Extends: ADR 0024 (native auth + TLS), ADR 0025 (multi-tenancy)
 - Governed by: ADR 0030 (deployment tiers — every decision here is tier-2, off by default)

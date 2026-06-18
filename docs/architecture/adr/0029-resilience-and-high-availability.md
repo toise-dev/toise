@@ -1,6 +1,6 @@
 # 29. Resilience and high availability
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-17
 - Governed by: ADR 0030 (deployment tiers — HA is opt-in; tier-0/1 stay single-node)
 - Relates to: ADR 0002 (event sourcing), ADR 0007 (Pebble), ADR 0008 (in-memory

@@ -1,6 +1,6 @@
 # 30. Deployment tiers — the zero-config single binary stays sacred
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-06-17
 - Governs: ADR 0028 (access security), ADR 0029 (resilience)
 - Relates to: ADR 0014/0024 (auth off by default), ADR 0021 (human interfaces at
