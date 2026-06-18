@@ -118,7 +118,7 @@ func OpenWithLimits(dataDir string, storeCfg store.Config, relBuf time.Duration,
 }
 
 // openWithClock is OpenWithLimits with an injectable clock — the test seam for
-// liveness/boot-grace behaviour, which is otherwise wall-clock-dependent.
+// liveness/boot-grace behavior, which is otherwise wall-clock-dependent.
 // Production always passes time.Now.
 func openWithClock(dataDir string, storeCfg store.Config, relBuf time.Duration, limits Limits, logger *slog.Logger, now func() time.Time) (*Registry, error) {
 	if logger == nil {
