@@ -16,7 +16,7 @@ func TestTokensHashedAtRest(t *testing.T) {
 	const full, reader, scopedTok = "super-secret-token", "reader-token", "acme-token"
 	a := NewWithRoles([]string{full}, []string{reader}, nil, map[string][]string{"acme": {scopedTok}})
 
-	// Configured tokens still authenticate (behaviour preserved).
+	// Configured tokens still authenticate (behavior preserved).
 	if !a.valid(full, surfaceRead) || !a.valid(reader, surfaceRead) || !a.valid(scopedTok, surfaceRead) {
 		t.Fatal("configured tokens must still authenticate after hashing at rest")
 	}
