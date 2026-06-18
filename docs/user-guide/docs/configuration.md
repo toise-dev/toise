@@ -46,6 +46,7 @@ for the rationale.
 | `tenant_trust_mode` | `TOISE_TENANT_TRUST_MODE` | `--tenant-trust-mode` | `trust-header` | how a request's tenant is decided. `trust-header`: from `X-Scope-OrgID` / `tenant.id` (the edge is trusted). `derive-only`: a tenant-scoped token's tenant is **derived from its binding** and any client-supplied `X-Scope-OrgID` / `tenant.id` is **ignored** (anti-spoofing for multi-tenant SaaS, ADR 0028); global (operator) tokens keep header-based cross-tenant selection |
 | `tls_cert_file` | `TOISE_TLS_CERT_FILE` | `--tls-cert-file` | (empty) | PEM certificate; with the key, serves HTTP + OTLP over TLS |
 | `tls_key_file` | `TOISE_TLS_KEY_FILE` | `--tls-key-file` | (empty) | PEM private key (pairs with the cert) |
+| `audit_log` | `TOISE_AUDIT_LOG` | `--audit-log` | (empty) | path to an append-only JSON-line audit file for operator writes (`annotate_entity`), per tenant; empty = off (ADR 0028) |
 
 Durations are Go-duration strings (`"30s"`, `"5m"`, `"1h30m"`). **Unknown YAML
 keys are rejected** — a typo fails at startup rather than being silently ignored.
@@ -113,8 +114,14 @@ network (private datacenter segment or VPN; ADR 0014). Exposing it to other host
   per-tenant scoping.
 - **TLS.** Point `tls_cert_file` and `tls_key_file` at a PEM cert/key pair to serve
   the HTTP surfaces and OTLP ingestion over TLS.
+- **Audit log.** Set `audit_log` to a file path to record an append-only JSON-line
+  entry for every operator write (`annotate_entity`, on MCP and GraphQL) — the time,
+  tenant, surface, and target entity. It is distinct from the producer event log,
+  exportable, and off by default. A write failure is logged (never silent), and
+  never fails the audited operation (ADR 0028).
 
-See [ADR 0024](https://github.com/toise-dev/toise/blob/main/docs/architecture/adr/0024-native-auth-and-tls.md).
+See [ADR 0024](https://github.com/toise-dev/toise/blob/main/docs/architecture/adr/0024-native-auth-and-tls.md)
+and [ADR 0028](https://github.com/toise-dev/toise/blob/main/docs/architecture/adr/0028-access-security-for-multi-tenant-saas.md).
 
 ## Hardening for production
 

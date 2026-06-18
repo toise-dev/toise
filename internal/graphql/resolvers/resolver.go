@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/toise-dev/toise/internal/annotations"
+	"github.com/toise-dev/toise/internal/audit"
 	"github.com/toise-dev/toise/internal/change"
 	"github.com/toise-dev/toise/internal/graphql/generated"
 	"github.com/toise-dev/toise/internal/model"
@@ -42,6 +43,7 @@ type Resolver struct {
 	Store       EventReader
 	Engine      *change.Engine
 	Annotations *annotations.Store
+	Audit       *audit.Auditor // nil/disabled = no audit records (ADR 0028)
 	Now         func() time.Time
 }
 

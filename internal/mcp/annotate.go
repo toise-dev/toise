@@ -7,8 +7,10 @@ import (
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/toise-dev/toise/internal/annotations"
+	"github.com/toise-dev/toise/internal/audit"
 	"github.com/toise-dev/toise/internal/auth"
 	"github.com/toise-dev/toise/internal/model"
+	"github.com/toise-dev/toise/internal/tenant"
 )
 
 // AnnotateEntityInput sets operator annotations on an entity.
@@ -57,6 +59,10 @@ func (s *Server) annotateEntity(ctx context.Context, _ *mcpsdk.CallToolRequest, 
 	if err != nil {
 		return nil, AnnotateEntityOutput{}, err
 	}
+	s.audit.Record(audit.Event{
+		Time: s.now(), Tenant: tenant.FromContext(ctx), Surface: "mcp",
+		Action: "annotate_entity", Target: in.EntityID,
+	})
 	return nil, AnnotateEntityOutput{Annotation: annotationOut(a)}, nil
 }
 

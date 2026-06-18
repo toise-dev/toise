@@ -7,9 +7,11 @@ import (
 	"time"
 
 	"github.com/toise-dev/toise/internal/annotations"
+	"github.com/toise-dev/toise/internal/audit"
 	"github.com/toise-dev/toise/internal/auth"
 	"github.com/toise-dev/toise/internal/graphql/generated"
 	"github.com/toise-dev/toise/internal/model"
+	"github.com/toise-dev/toise/internal/tenant"
 )
 
 // Mutation returns the mutation resolver.
@@ -46,6 +48,10 @@ func (r *mutationResolver) AnnotateEntity(ctx context.Context, id string, in []g
 	if err != nil {
 		return nil, err
 	}
+	r.Audit.Record(audit.Event{
+		Time: r.now(), Tenant: tenant.FromContext(ctx), Surface: "graphql",
+		Action: "annotate_entity", Target: id,
+	})
 	return annotationToGQL(a), nil
 }
 

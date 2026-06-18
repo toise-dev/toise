@@ -35,6 +35,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
+	"github.com/toise-dev/toise/internal/audit"
 	"github.com/toise-dev/toise/internal/auth"
 	"github.com/toise-dev/toise/internal/change"
 	"github.com/toise-dev/toise/internal/config"
@@ -227,18 +228,31 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	}()
 	defer receiver.Stop()
 
+	// Audit sink for operator writes (ADR 0028): an append-only JSON-line file,
+	// off unless configured. One sink, shared across the per-tenant handlers.
+	var auditor *audit.Auditor
+	if cfg.AuditLog != "" {
+		f, ferr := os.OpenFile(cfg.AuditLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		if ferr != nil {
+			return fmt.Errorf("opening audit log %s: %w", cfg.AuditLog, ferr)
+		}
+		defer f.Close()
+		auditor = audit.New(f, logger)
+		logger.Info("audit log enabled", "path", cfg.AuditLog)
+	}
+
 	// The GraphQL, MCP and debug-UI surfaces are scoped per tenant: a router builds
 	// one handler per tenant on first use, bound to that tenant's stack, and
 	// dispatches by the X-Scope-OrgID header (ADR 0025).
 	graphqlRouter := newTenantRouter(reg, logger, func(st *registry.Stack) (http.Handler, error) {
-		res := &resolvers.Resolver{Graph: st.Graph, Store: st.Store, Engine: st.Engine, Annotations: st.Annotations}
+		res := &resolvers.Resolver{Graph: st.Graph, Store: st.Store, Engine: st.Engine, Annotations: st.Annotations, Audit: auditor}
 		return graphql.NewHandler(res, graphql.Config{
 			AllowedOrigins:       cfg.AllowedOrigins,
 			DisableIntrospection: !cfg.GraphQLIntrospection,
 		}), nil
 	})
 	mcpRouter := newTenantRouter(reg, logger, func(st *registry.Stack) (http.Handler, error) {
-		return mcp.New(st.Graph, st.Store).SetObserver(queryMetrics).SetAnnotations(st.Annotations).HTTPHandler(), nil
+		return mcp.New(st.Graph, st.Store).SetObserver(queryMetrics).SetAnnotations(st.Annotations).SetAuditor(auditor).HTTPHandler(), nil
 	})
 	if cfg.DeriveOnlyTenancy() {
 		// derive-only: route a scoped token to its own tenant, ignoring the
