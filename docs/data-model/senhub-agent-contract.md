@@ -97,7 +97,7 @@ leased IP) in the identity — those are descriptive attributes. Agreed identiti
 | `db` | `{db.instance.id}` — a **stable source identifier**: PostgreSQL `system_identifier`, MySQL `server_uuid`, else an operator-configured logical instance name | **never network-derived** — `server.address`/`server.port` are mutable (DHCP/failover/VIP) so they stay descriptive attributes |
 | `network.device` | `{network.device.id}` — a single subtype-prefixed value by **precedence**: `serial:` (ENTITY-MIB `entPhysicalSerialNum`) > `engine:` (`snmpEngineID`) > `mac:` (LLDP chassis-id) > `name:` (`sysName`) > `mgmt:` (mgmt IP) | **anchored on SNMP-immutable facts, not LLDP** (often disabled); `mgmt:` is mutable last-resort. Producer canonicalizes (Toise is byte-exact); raw parts descriptive. Endpoints resolved to the canonical id via `ifPhysAddress` before emitting edges. Frozen for Lot 5 — see [`otel-mapping.md`](./otel-mapping.md#networkdevice-identity--snmp-topology-lot-5-frozen). |
 | `compute.vm` | `{host.id, vmid}` — the **hypervisor node's** `host.id` plus the hypervisor's vm id | a VM seen **from the hypervisor**, where the guest machine-id is unavailable. **Not** a `host` (a vmid is not a machine-id). `runs_on` the hypervisor `host`. The in-guest `host` (machine-id) is a separate facet, reconciled later by a `same_as` overlay (ADR 0020), never merged. |
-| `container` | `{container.id}` | an OCI/Docker container — a compute resource, not a `service.instance`. `image`/`name`/`state` descriptive; `runs_on` its `host`. |
+| `container` | `{container.id}` | an OCI/Docker container — a compute resource, not a `service.instance`. `image`/`name` descriptive; `status` is a **state key** (see below); `runs_on` its `host`. |
 
 ### Descriptive attributes — vocabulary & state semantics (toise#216)
 
@@ -137,9 +137,9 @@ in the change taxonomy (`stateKeys` → `entity.state_changed` vs
   rates, lag). `replica_count` is **not** an attribute — model replicas as
   entities/relations (the count is derivable) or a metric.
 
-**Follow-ups:** a Toise PR adds `replication.role` + `read_only` to `stateKeys` (AT4);
-agent-side rollout starts with AT1 (redis `db.version` → `db.system.version`; thread the
-captured version onto the mysql/postgres/oracle entity).
+**Follow-ups:** AT4 is **done** — `replication.role` + `read_only` are in Toise's
+`stateKeys` (#217). Agent-side rollout starts with AT1 (redis `db.version` →
+`db.system.version`; thread the captured version onto the mysql/postgres/oracle entity).
 
 ### Time & liveness — explicit delete + interval backstop
 
