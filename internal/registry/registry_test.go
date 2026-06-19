@@ -84,6 +84,11 @@ func TestForIsolatesTenants(t *testing.T) {
 			t.Errorf("tenant %s store dir missing: %v", id, err)
 		}
 	}
+
+	// TenantCount backs the toise_tenants_open gauge: acme + globex + the default.
+	if n := reg.TenantCount(); n != 3 {
+		t.Errorf("TenantCount = %d, want 3 (acme, globex, default)", n)
+	}
 }
 
 // TestQuarantinesCorruptTenantAtBoot pins #166: one tenant whose store fails to

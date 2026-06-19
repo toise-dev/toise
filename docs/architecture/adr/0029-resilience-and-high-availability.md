@@ -1,7 +1,7 @@
 # 29. Resilience and high availability
 
 - Status: Accepted
-- Date: 2026-06-17 (log-backend fork resolved 2026-06-19, see point 4)
+- Date: 2026-06-17 (both forks resolved 2026-06-19: log backend point 4, per-tenant scaling point 6)
 - Governed by: ADR 0030 (deployment tiers — HA is opt-in; tier-0/1 stay single-node)
 - Relates to: ADR 0002 (event sourcing), ADR 0007 (Pebble), ADR 0008 (in-memory
   projection), ADR 0019 (per-producer liveness), ADR 0025 (multi-tenancy)
@@ -76,11 +76,28 @@ reconstructible is **history / time-travel — which lives in the event log.**
    copy) gains a scheduled off-node backup + a documented restore-by-replay
    runbook. Works at every tier.
 
-6. **Per-tenant scaling is a dependency, decided separately.** ADR 0025 chose a
-   Pebble stack *per tenant* and deferred a key-prefixed single store. Large
-   external tenant counts will outgrow stack-per-tenant. This ADR flags it: 1.0
-   must either **cap tenants** (`max_tenants`) or adopt a partitioned store — to be
-   decided when real external tenant numbers are known.
+6. **Per-tenant scaling = a per-node cap plus horizontal tenant sharding; keep
+   stack-per-tenant.** ADR 0025 chose a Pebble stack *per tenant* and deferred a
+   key-prefixed single store. **Decided 2026-06-19: cap tenants per node
+   (`max_tenants`) and shard tenants across nodes — reject the partitioned single
+   store as the 1.0 path** (ADR 0025 stands).
+   - The dominant per-tenant cost is the **in-memory projection** (a graph per
+     tenant in RAM), not the Pebble instance. A partitioned single store collapses
+     the per-instance overhead but leaves the projection cost — the real ceiling —
+     untouched, while discarding the clean per-tenant isolation ADR 0025 chose.
+   - RAM therefore bounds the tenants a node holds → a **per-node cap** is the
+     natural primitive (`max_tenants`, already enforced). Beyond it, **shard**:
+     each node owns a disjoint subset via `tenant_allowlist`, routed by
+     `X-Scope-OrgID` at the gateway — the Mimir/Cortex/Loki pattern, and consistent
+     with point 1 (no ring on the data path).
+   - Sharding composes with the durable log (point 4): any node's tenants are
+     reconstructible elsewhere, so re-sharding or node loss is a reassignment +
+     replay, not a data migration. An `toise_tenants_open` gauge makes the cap
+     observable for capacity planning.
+   - **Escape hatch:** a partitioned store is revisited only if a future workload is
+     genuinely *very many tiny tenants* (projection memory negligible, per-instance
+     overhead dominant) — not the LLM-first infra-graph shape (tens of clients, rich
+     graphs), so not the 1.0 path.
 
 7. **State SLA targets for tier-2 (object-store-backed).** RPO = the unshipped-
    segment window (local-WAL flush + async-upload cadence, seconds-scale and
@@ -103,5 +120,6 @@ reconstructible is **history / time-travel — which lives in the event log.**
   — ADR 0030).
 - Audit-log durability (ADR 0028) rides the same backend choice.
 - The first-release durable-log backend is **object-store-backed** (point 4,
-  resolved 2026-06-19). The one open item deliberately not closed here is the
-  per-tenant scaling decision (point 6).
+  resolved 2026-06-19) and per-tenant scaling is **a per-node cap plus horizontal
+  sharding, keeping stack-per-tenant** (point 6, resolved 2026-06-19). No open
+  items remain; the ADR's forks are all closed.

@@ -184,6 +184,17 @@ func NewQuarantinedTenants() prometheus.Gauge {
 	})
 }
 
+// NewOpenTenants returns a gauge that reports, on each scrape, how many tenant
+// stacks are currently open — watched against max_tenants for capacity planning
+// and to decide when to shard tenants across nodes (ADR 0029). It is computed at
+// scrape time via count, so it never goes stale. Register it via Handler's extras.
+func NewOpenTenants(count func() float64) prometheus.Collector {
+	return prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Name: "toise_tenants_open",
+		Help: "Tenant stacks currently open (watch against max_tenants).",
+	}, count)
+}
+
 // QueryMetrics records per-tool MCP call counts and durations — the query-side
 // observability hung off the mcp.Observer seam (#166). One instance is shared
 // across tenants; register its Collectors via Handler's extras.
