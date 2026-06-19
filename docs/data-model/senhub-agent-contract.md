@@ -173,9 +173,26 @@ ADR 0018 intact — never mint a permanent identity from an IP or a URL.
   `deployment.environment.name`); reachability stays a metric. With no operator-stable name,
   **no entity** — never key on the URL/host.
 
-**Governance attributes** that apply across all entity types — owner/team, criticality,
-on-prem location, lifecycle — and advertising the attribute vocabulary on `describe_type` /
-filtering it in `find_entities`, are tracked in the attribute-enrichment program (toise#231).
+### AT9 — cross-cutting governance attributes
+
+Operator-supplied descriptive facts that may decorate **any** entity type and make the
+graph answerable for an LLM/human ("who owns this, how critical, where, what lifecycle").
+They are plain descriptive attributes — Toise stores them as-is (ADR 0022), never requires
+or normalizes them; an entity carrying none is valid. Reuse the semconv key where one
+exists; the `entity.*` keys are Toise-provisional where semconv is silent (SIG-raise
+candidates). Toise advertises this vocabulary on `describe_schema` (so a consumer discovers
+the keys before any are observed) and filters it via `find_entities` (toise#231).
+
+| Dimension | Key | Source | Notes |
+| --- | --- | --- | --- |
+| Owning team (services) | `service.namespace` | semconv (Stable) | reuse when the entity is a service; do not override an existing value |
+| Owning team (any entity) | `entity.owner.team` | Toise-provisional | where `service.namespace` does not apply |
+| Escalation contact | `entity.owner.contact` | Toise-provisional | optional |
+| Criticality / tier | `service.criticality` | semconv (Development) | values `critical`/`high`/`medium`/`low`; semconv scopes it to services, Toise applies it to any entity |
+| Physical location | `entity.location.site` / `.datacenter` / `.rack` / `.room` | Toise-provisional | on-prem; semconv covers only cloud regions |
+| Lifecycle / maintenance | `entity.lifecycle.status` | Toise-provisional | open enum, e.g. `active`/`maintenance`/`decommissioning`/`retired` |
+
+All optional. Emit what the operator supplies (config/labels); never fabricate.
 
 ### Time & liveness — explicit delete + interval backstop
 
