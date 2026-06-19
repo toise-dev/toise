@@ -206,6 +206,19 @@ type ChangeConnection {
 input EntityFilter {
   "Restrict to this entity type, e.g. `host`."
   type: String
+  """
+  Keep only entities where every given key equals the given value, matched
+  against both identifying and descriptive attributes (AND semantics). Mirrors
+  the MCP `find_entities` match — use it to filter on governance attributes such
+  as `service.criticality` or `entity.owner.team`.
+  """
+  match: [AttributeMatch!]
+}
+
+"One attribute key/value equality, used by EntityFilter.match."
+input AttributeMatch {
+  key: String!
+  value: String!
 }
 
 "Filter for the relations query."

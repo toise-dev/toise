@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -55,13 +54,13 @@ type Change struct {
 func valueString(v model.Value) (str, typ string) {
 	switch v.Kind() {
 	case model.KindInt:
-		return strconv.FormatInt(v.Int(), 10), "int"
+		return v.Display(), "int"
 	case model.KindDouble:
-		return strconv.FormatFloat(v.Double(), 'g', -1, 64), "double"
+		return v.Display(), "double"
 	case model.KindBool:
-		return strconv.FormatBool(v.Bool()), "bool"
+		return v.Display(), "bool"
 	default:
-		return v.Str(), "string"
+		return v.Display(), "string"
 	}
 }
 
@@ -178,25 +177,8 @@ func formatTime(t time.Time) string {
 }
 
 // matches reports whether every wanted key/value is present (as a string-equal
-// attribute) in the entity's identity or attributes.
+// attribute) in the entity's identity or attributes. The shared predicate lives
+// on the model so the GraphQL entities query filters identically.
 func matches(e model.Entity, want map[string]string) bool {
-	for k, v := range want {
-		if !hasAttr(e.Identity, k, v) && !hasAttr(e.Attributes, k, v) {
-			return false
-		}
-	}
-	return true
-}
-
-func hasAttr(kvs []model.KeyValue, key, val string) bool {
-	for _, kv := range kvs {
-		if kv.Key != key {
-			continue
-		}
-		s, _ := valueString(kv.Value)
-		if s == val {
-			return true
-		}
-	}
-	return false
+	return e.MatchAll(want)
 }

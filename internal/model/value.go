@@ -62,6 +62,23 @@ func (v Value) Bool() bool { return v.b }
 // String implements fmt.Stringer with a human-readable rendering.
 func (v Value) String() string { return v.canonical() }
 
+// Display renders the value as a plain, untyped string for human/consumer
+// surfaces and attribute-equality matching — no type tag (unlike canonical,
+// which is for identity hashing). A string "1" and the integer 1 render the
+// same here, which is the intended behavior for a string-equality filter.
+func (v Value) Display() string {
+	switch v.kind {
+	case KindInt:
+		return strconv.FormatInt(v.i, 10)
+	case KindDouble:
+		return strconv.FormatFloat(v.f, 'g', -1, 64)
+	case KindBool:
+		return strconv.FormatBool(v.b)
+	default:
+		return v.s
+	}
+}
+
 // canonical returns a deterministic, type-tagged string encoding used for
 // identity hashing. The type tag ensures the string "1" and the integer 1 do
 // not collide.

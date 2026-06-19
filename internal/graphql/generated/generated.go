@@ -569,6 +569,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 	ec := newExecutionContext(opCtx, e, make(chan graphql.DeferredResult))
 	inputUnmarshalMap := graphql.BuildUnmarshalerMap(
 		ec.unmarshalInputAnnotationInput,
+		ec.unmarshalInputAttributeMatch,
 		ec.unmarshalInputChangeFilter,
 		ec.unmarshalInputEntityFilter,
 		ec.unmarshalInputRelationFilter,
@@ -872,6 +873,19 @@ type ChangeConnection {
 input EntityFilter {
   "Restrict to this entity type, e.g. ` + "`" + `host` + "`" + `."
   type: String
+  """
+  Keep only entities where every given key equals the given value, matched
+  against both identifying and descriptive attributes (AND semantics). Mirrors
+  the MCP ` + "`" + `find_entities` + "`" + ` match — use it to filter on governance attributes such
+  as ` + "`" + `service.criticality` + "`" + ` or ` + "`" + `entity.owner.team` + "`" + `.
+  """
+  match: [AttributeMatch!]
+}
+
+"One attribute key/value equality, used by EntityFilter.match."
+input AttributeMatch {
+  key: String!
+  value: String!
 }
 
 "Filter for the relations query."
@@ -4314,6 +4328,43 @@ func (ec *executionContext) unmarshalInputAnnotationInput(ctx context.Context, o
 	return it, nil
 }
 
+func (ec *executionContext) unmarshalInputAttributeMatch(ctx context.Context, obj any) (AttributeMatch, error) {
+	var it AttributeMatch
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"key", "value"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "key":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("key"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Key = data
+		case "value":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("value"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Value = data
+		}
+	}
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputChangeFilter(ctx context.Context, obj any) (ChangeFilter, error) {
 	var it ChangeFilter
 	if obj == nil {
@@ -4376,7 +4427,7 @@ func (ec *executionContext) unmarshalInputEntityFilter(ctx context.Context, obj 
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"type"}
+	fieldsInOrder := [...]string{"type", "match"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -4390,6 +4441,13 @@ func (ec *executionContext) unmarshalInputEntityFilter(ctx context.Context, obj 
 				return it, err
 			}
 			it.Type = data
+		case "match":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("match"))
+			data, err := ec.unmarshalOAttributeMatch2ᚕgithubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐAttributeMatchᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Match = data
 		}
 	}
 	return it, nil
@@ -5774,6 +5832,11 @@ func (ec *executionContext) marshalNAttribute2ᚕgithubᚗcomᚋtoiseᚑdevᚋto
 	return ret
 }
 
+func (ec *executionContext) unmarshalNAttributeMatch2githubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐAttributeMatch(ctx context.Context, v any) (AttributeMatch, error) {
+	res, err := ec.unmarshalInputAttributeMatch(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
 func (ec *executionContext) unmarshalNBoolean2bool(ctx context.Context, v any) (bool, error) {
 	res, err := graphql.UnmarshalBoolean(v)
 	return res, graphql.ErrorOnPath(ctx, err)
@@ -6180,6 +6243,24 @@ func (ec *executionContext) marshalOAnnotation2ᚖgithubᚗcomᚋtoiseᚑdevᚋt
 		return graphql.Null
 	}
 	return ec._Annotation(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalOAttributeMatch2ᚕgithubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐAttributeMatchᚄ(ctx context.Context, v any) ([]AttributeMatch, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var vSlice []any
+	vSlice = graphql.CoerceList(v)
+	var err error
+	res := make([]AttributeMatch, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNAttributeMatch2githubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐAttributeMatch(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
 }
 
 func (ec *executionContext) unmarshalOBoolean2bool(ctx context.Context, v any) (bool, error) {
