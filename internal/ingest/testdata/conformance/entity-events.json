@@ -539,7 +539,7 @@
                     "kvlistValue": {
                       "values": [
                         {
-                          "key": "oper.state",
+                          "key": "oper_state",
                           "value": {
                             "stringValue": "up"
                           }
@@ -594,7 +594,7 @@
                     "kvlistValue": {
                       "values": [
                         {
-                          "key": "oper.state",
+                          "key": "oper_state",
                           "value": {
                             "stringValue": "up"
                           }
