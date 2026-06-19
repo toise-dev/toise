@@ -1,7 +1,7 @@
 # 29. Resilience and high availability
 
 - Status: Accepted
-- Date: 2026-06-17
+- Date: 2026-06-17 (log-backend fork resolved 2026-06-19, see point 4)
 - Governed by: ADR 0030 (deployment tiers — HA is opt-in; tier-0/1 stay single-node)
 - Relates to: ADR 0002 (event sourcing), ADR 0007 (Pebble), ADR 0008 (in-memory
   projection), ADR 0019 (per-producer liveness), ADR 0025 (multi-tenancy)
@@ -48,15 +48,29 @@ reconstructible is **history / time-travel — which lives in the event log.**
    same log — point history queries at a log-backed node, live queries anywhere.
    This is itself an adoption argument: HA with zero extra infrastructure.
 
-4. **Log durability / write HA = a pluggable durable-log backend (tier-2, opt-in).**
-   The default stays **local Pebble** (tier-0/1, ADR 0030). For tier-2, the same
-   log interface admits two backends, single-writer preserved:
-   - **(a) object-store-backed log** — the cloud-native default (S3-class); makes
-     the stateless replicas trivial and is the recommended SaaS target;
-   - **(b) active-passive + log shipping** — a standby tails the writer's log and is
-     promoted on failover; less invasive, a good intermediate step.
-   Choosing between (a) and (b) for the first SaaS release is left open here; both
-   sit behind one interface so the choice is not load-bearing on the rest.
+4. **Log durability / write HA = an object-store-backed durable log (tier-2, opt-in).**
+   The default stays **local Pebble** (tier-0/1, ADR 0030). For tier-2 the same
+   single-writer log interface gains a second implementation whose segments flush
+   to object storage (S3-class). **Decided 2026-06-19: the object-store-backed log
+   is the canonical first-SaaS-release backend, not active-passive log shipping.**
+   - Single-writer is preserved and durability is delegated to an 11-nines service
+     — the cloud-native pattern the benchmark already endorses
+     (Mimir/Loki/Tempo/Thanos) and the one the resilience axiom (point 2) points to.
+   - It makes the stateless read replicas (point 3) trivially correct: every
+     replica opens the *same* object-store log; there is no per-standby shipping
+     channel to operate.
+   - It is the continuous limit of the scheduled off-node backup (point 5) — ship
+     WAL segments instead of periodic full checkpoints, so RPO collapses from
+     `backup_interval` to a segment-flush window. Write latency is hidden the way
+     Loki/Tempo do it: the local Pebble WAL gives immediate durability while
+     segments upload asynchronously.
+   - **Active-passive is the rejected alternative.** A divergent double-writer
+     corrupts the log, so it would need fencing/promotion orchestration
+     (consensus-adjacent, exactly what point 1 avoids) plus a second always-on
+     node — for an RPO no better than object-store shipping.
+   The interface still *admits* an active-passive implementation for an on-prem
+   tier-2 deployment without S3-class storage, but that is not a first-release
+   target and carries the fencing cost above.
 
 5. **Backup/restore, elevated.** The existing cold `checkpoint` (per-tenant Pebble
    copy) gains a scheduled off-node backup + a documented restore-by-replay
@@ -68,9 +82,14 @@ reconstructible is **history / time-travel — which lives in the event log.**
    must either **cap tenants** (`max_tenants`) or adopt a partitioned store — to be
    decided when real external tenant numbers are known.
 
-7. **State SLA targets for tier-2.** Document target RPO (≈ log-shipping lag, or
-   near-zero for object-store-backed) and RTO (promotion + projection rebuild,
-   bounded by one heartbeat window) so the design is measurable.
+7. **State SLA targets for tier-2 (object-store-backed).** RPO = the unshipped-
+   segment window (local-WAL flush + async-upload cadence, seconds-scale and
+   configurable); a hard node loss forfeits at most that last window of *history*,
+   never live state (producers re-assert within one heartbeat). RTO = node start +
+   open the object-store log + projection rebuild (snapshot + tail), bounded by one
+   heartbeat window for the live graph; a pre-warmed read replica is effectively
+   zero-RTO for live queries and gains full history the moment it opens the shared
+   log.
 
 ## Consequences
 
@@ -83,5 +102,6 @@ reconstructible is **history / time-travel — which lives in the event log.**
   into tier-0/1 (no object store or external dependency to develop, build, or test
   — ADR 0030).
 - Audit-log durability (ADR 0028) rides the same backend choice.
-- Open items deliberately not closed here: the (a)/(b) backend choice for the
-  first SaaS release, and the per-tenant scaling decision (point 6).
+- The first-release durable-log backend is **object-store-backed** (point 4,
+  resolved 2026-06-19). The one open item deliberately not closed here is the
+  per-tenant scaling decision (point 6).
