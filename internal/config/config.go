@@ -145,6 +145,13 @@ type Config struct {
 	// off-node (ADR 0029). Empty = no scheduled backups (the default).
 	BackupDir      string   `yaml:"backup_dir"`
 	BackupInterval Duration `yaml:"backup_interval"`
+	// LogShipDir, with LogShipInterval > 0, enables continuous log shipping: every
+	// interval each tenant's new event-log tail is exported as an immutable segment
+	// under <LogShipDir>/<tenant>/, the finer-RPO complement to scheduled backups
+	// (ADR 0029). The directory may be a mounted object-store bucket / NFS / rsync
+	// target. Empty = off (the default).
+	LogShipDir      string   `yaml:"log_shipping_dir"`
+	LogShipInterval Duration `yaml:"log_shipping_interval"`
 	// OIDC* enable verifying OIDC/JWT bearers on the read surfaces (ADR 0028).
 	// OIDCIssuer empty = OIDC off (the default). Not secrets — the issuer/audience
 	// and claim names are configuration. OIDCTenantClaim defaults to "tenant";
@@ -173,6 +180,9 @@ func (c Config) Validate() error {
 	}
 	if c.BackupDir != "" && c.BackupInterval.D() <= 0 {
 		return fmt.Errorf("backup_dir is set but backup_interval is 0: no backup would ever be written")
+	}
+	if c.LogShipDir != "" && c.LogShipInterval.D() <= 0 {
+		return fmt.Errorf("log_shipping_dir is set but log_shipping_interval is 0: no segment would ever be shipped")
 	}
 	switch strings.ToLower(c.LogLevel) {
 	// "warning" is accepted as an alias for "warn" to match SlogLevel, which
@@ -369,6 +379,7 @@ func (c *Config) applyEnv(getenv func(string) string) error {
 		{"TOISE_RETENTION_COMPACTION_INTERVAL", &c.CompactionInterval},
 		{"TOISE_SNAPSHOT_INTERVAL", &c.SnapshotInterval},
 		{"TOISE_BACKUP_INTERVAL", &c.BackupInterval},
+		{"TOISE_LOG_SHIPPING_INTERVAL", &c.LogShipInterval},
 	} {
 		if v := getenv(e.key); v != "" {
 			parsed, err := time.ParseDuration(v)
@@ -421,6 +432,9 @@ func (c *Config) applyEnv(getenv func(string) string) error {
 	}
 	if v := getenv("TOISE_BACKUP_DIR"); v != "" {
 		c.BackupDir = v
+	}
+	if v := getenv("TOISE_LOG_SHIPPING_DIR"); v != "" {
+		c.LogShipDir = v
 	}
 	if v := getenv("TOISE_AUDIT_LOG"); v != "" {
 		c.AuditLog = v
@@ -512,6 +526,8 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	oidcRoleClaim := fs.String("oidc-role-claim", cfg.OIDCRoleClaim, "JWT claim carrying the role read/ingest/full (empty = full)")
 	backupDir := fs.String("backup-dir", cfg.BackupDir, "directory for periodic online backups (with --backup-interval); empty = off")
 	backupInterval := fs.Duration("backup-interval", cfg.BackupInterval.D(), "interval between online backups of every tenant's event log (0 = off)")
+	logShipDir := fs.String("log-shipping-dir", cfg.LogShipDir, "directory to ship event-log segments to (with --log-shipping-interval); may be a mounted bucket/NFS; empty = off")
+	logShipInterval := fs.Duration("log-shipping-interval", cfg.LogShipInterval.D(), "interval between event-log segment ships of every tenant (0 = off)")
 	auditLog := fs.String("audit-log", cfg.AuditLog, "append-only JSON-line audit file for operator writes (annotate_entity); empty = off")
 	tlsCertFile := fs.String("tls-cert-file", cfg.TLSCertFile, "PEM certificate file; with --tls-key-file, serves HTTP and OTLP over TLS")
 	tlsKeyFile := fs.String("tls-key-file", cfg.TLSKeyFile, "PEM private key file (pairs with --tls-cert-file)")
@@ -546,6 +562,8 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	cfg.OIDCRoleClaim = *oidcRoleClaim
 	cfg.BackupDir = *backupDir
 	cfg.BackupInterval = Duration(*backupInterval)
+	cfg.LogShipDir = *logShipDir
+	cfg.LogShipInterval = Duration(*logShipInterval)
 	cfg.AuditLog = *auditLog
 	cfg.TLSCertFile = *tlsCertFile
 	cfg.TLSKeyFile = *tlsKeyFile

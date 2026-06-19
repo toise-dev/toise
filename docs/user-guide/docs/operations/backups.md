@@ -29,6 +29,19 @@ backup_interval: 1h
 
 Each run writes `<backup_dir>/<UTC-timestamp>/<tenant>/` — a complete, openable data dir per tenant. Sync `backup_dir` **off-node** (rsync/object-store) and rotate it; Toise writes, it does not prune or ship. This is the in-process complement to the `checkpoint` subcommand (which needs the server stopped). Failures are logged per tenant and never interrupt serving (ADR 0029).
 
+## Continuous log shipping: `log_shipping_dir` + `log_shipping_interval`
+
+A scheduled checkpoint copies the **whole** store each run; its recovery point is one `backup_interval`. **Log shipping** is the finer-grained complement: on a cadence it exports only each tenant's **new event-log tail** since the last ship, as an immutable segment — so the recovery point collapses to one `log_shipping_interval` (seconds, if you want), at a fraction of the bytes.
+
+```
+log_shipping_dir: /var/lib/toise/segments
+log_shipping_interval: 30s
+```
+
+Each run writes `<log_shipping_dir>/<tenant>/<from>-<to>.seg`, contiguous by sequence. The cursor is **derived from the destination itself** (the highest shipped sequence), so it needs no local state and a restart or crash never duplicates or skips a segment. The directory may be a **mounted object-store bucket, an NFS export, or an rsync staging dir** — this is the on-prem / dependency-free path of the object-store-backed log (ADR 0029); a native S3-class driver is the next step. Off by default; failures are logged per tenant and never interrupt serving.
+
+Shipping and the cold/scheduled checkpoint are complementary: the checkpoint is a coarse, instantly-openable full copy; the segments are a fine-grained, append-only tail. Keep both for a small RPO **and** a fast restore.
+
 ## Restore (runbook)
 
 1. Stop the server (or start a fresh node).
@@ -36,11 +49,13 @@ Each run writes `<backup_dir>/<UTC-timestamp>/<tenant>/` — a complete, openabl
 3. Point the server at it: `toise-server --data-dir <backup>` (or copy it to the data dir). On start the projection **rebuilds by replaying the log** (a snapshot inside accelerates it; an unreadable one falls back to full replay).
 4. The live graph re-converges from producers within one heartbeat interval; history/time-travel is whatever the restored log holds.
 
+Shipped **segments** (`log_shipping_dir`) are the fine-grained tail between checkpoints: restore the most recent checkpoint, then the segments after it carry the events up to the last ship. A `restore-log` command that replays segments into a data dir is the next step; until it lands, recover from the latest checkpoint and treat the segments as the low-RPO ledger of what came after.
+
 ## High availability
 
 Toise is single-writer and the live graph is **derivable** (producers re-assert every heartbeat), so read HA needs no clustering: run **N identical instances** behind a load balancer, each ingesting the same OTLP fan-out and rebuilding its own projection (the "run two Prometheus" pattern). Point live queries at any replica; point **history/time-travel** queries at a node backed by the durable log. No Raft, no ring (ADR 0029).
 
-**RPO/RTO.** With scheduled backups, the recovery-point is at most one `backup_interval` (plus your off-node sync lag); recovery-time is a process start plus the projection rebuild (bounded by one heartbeat window for the live graph). A read replica that is already running has effectively zero RTO for live queries.
+**RPO/RTO.** With scheduled backups, the recovery-point is at most one `backup_interval` (plus your off-node sync lag); **log shipping shrinks the recovery point to one `log_shipping_interval`** (seconds-scale) at a fraction of the bytes. Recovery-time is a process start plus the projection rebuild (bounded by one heartbeat window for the live graph). A read replica that is already running has effectively zero RTO for live queries.
 
 ## Live restart acceleration: projection snapshots
 
