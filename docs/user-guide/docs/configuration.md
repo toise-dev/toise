@@ -28,6 +28,8 @@ for the rationale.
 | `retention_max_age` | `TOISE_RETENTION_MAX_AGE` | `--retention-max-age` | `0` | max age of retained events (`0` = unlimited) |
 | `retention_compaction_interval` | `TOISE_RETENTION_COMPACTION_INTERVAL` | `--retention-compaction-interval` | `1h` | heartbeat-coalescing compaction cadence |
 | `snapshot_interval` | `TOISE_SNAPSHOT_INTERVAL` | `--snapshot-interval` | `5m` | projection snapshot cadence for fast restart and liveness survival across restarts (`0` = disabled) |
+| `backup_dir` | `TOISE_BACKUP_DIR` | `--backup-dir` | (empty) | directory for periodic online backups (with `backup_interval`); empty = off (ADR 0029) |
+| `backup_interval` | `TOISE_BACKUP_INTERVAL` | `--backup-interval` | `0` | interval between online backups of every tenant's event log (`0` = off) |
 | `log_format` | `TOISE_LOG_FORMAT` | `--log-format` | `text` | log output format: `text` or `json` |
 | `log_level` | `TOISE_LOG_LEVEL` | `--log-level` | `info` | `debug`, `info`, `warn`, or `error` |
 | `production` | `TOISE_PRODUCTION` | `--production` | `false` | hardening profile — forces the three below off |

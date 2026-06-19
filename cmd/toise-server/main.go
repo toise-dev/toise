@@ -485,6 +485,35 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		logger.Warn("liveness sweeping is on but snapshots are disabled: producer references will NOT survive restarts, so entities of producers that die while the server is down are never expired — set snapshot_interval (default 5m)")
 	}
 
+	// Periodic online backups (ADR 0029): every interval, checkpoint each tenant's
+	// event log (Pebble's lock-free checkpoint) into <backup-dir>/<timestamp>/<tenant>
+	// for an operator to sync off-node. Off unless backup_dir + backup_interval set.
+	if cfg.BackupDir != "" && cfg.BackupInterval.D() > 0 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ticker := time.NewTicker(cfg.BackupInterval.D())
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					dest := filepath.Join(cfg.BackupDir, time.Now().UTC().Format("20060102T150405Z"))
+					for _, st := range reg.Stacks() {
+						if err := maint.Observe("backup", st.Tenant, func() error {
+							return st.Store.Checkpoint(filepath.Join(dest, st.Tenant))
+						}); err != nil {
+							logger.Error("backup checkpoint failed", "tenant", st.Tenant, "dest", dest, "err", err)
+						}
+					}
+					logger.Info("backup written", "dest", dest, "tenants", len(reg.Stacks()))
+				}
+			}
+		}()
+		logger.Info("scheduled backups enabled", "dir", cfg.BackupDir, "interval", cfg.BackupInterval.D())
+	}
+
 	fmt.Printf("Toise %s — the living map of your infrastructure\n", version.String())
 	logger.Info("toise-server ready",
 		"graphql", scheme+"://"+cfg.Listen+"/graphql",
