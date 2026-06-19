@@ -202,6 +202,40 @@ func TestEntitiesPagination(t *testing.T) {
 	}
 }
 
+// TestEntitiesAttributeMatch pins the EntityFilter.match parity with the MCP
+// find_entities tool: AND-matching on identifying and descriptive attributes,
+// with the filtered count reflected in totalCount.
+func TestEntitiesAttributeMatch(t *testing.T) {
+	s := newStack(t)
+	c := s.client(t)
+	var resp struct {
+		Entities struct {
+			TotalCount int
+			Edges      []struct {
+				Node struct{ ID, Type string }
+			}
+		}
+	}
+
+	// Descriptive attribute: only the host carries status=down (current state).
+	c.MustPost(`{ entities(filter: {match: [{key:"status", value:"down"}]}) { totalCount edges { node { id type } } } }`, &resp)
+	if resp.Entities.TotalCount != 1 || len(resp.Entities.Edges) != 1 || resp.Entities.Edges[0].Node.Type != model.TypeHost {
+		t.Fatalf("status=down match = %+v, want exactly the host", resp.Entities)
+	}
+
+	// Identifying attribute matches too.
+	c.MustPost(`{ entities(filter: {match: [{key:"host.id", value:"h1"}]}) { totalCount } }`, &resp)
+	if resp.Entities.TotalCount != 1 {
+		t.Fatalf("host.id=h1 match total = %d, want 1", resp.Entities.TotalCount)
+	}
+
+	// AND with type, and a miss: the host's current status is down, not up.
+	c.MustPost(`{ entities(filter: {type:"host", match: [{key:"status", value:"up"}]}) { totalCount } }`, &resp)
+	if resp.Entities.TotalCount != 0 {
+		t.Fatalf("status=up match total = %d, want 0 (current state is down)", resp.Entities.TotalCount)
+	}
+}
+
 func TestRelationsQuery(t *testing.T) {
 	s := newStack(t)
 	c := s.client(t)

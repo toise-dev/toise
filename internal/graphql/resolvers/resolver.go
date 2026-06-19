@@ -100,6 +100,19 @@ func (r *queryResolver) Entities(ctx context.Context, filter *generated.EntityFi
 		typ = *filter.Type
 	}
 	all := g.ListEntities(typ)
+	if filter != nil && len(filter.Match) > 0 {
+		want := make(map[string]string, len(filter.Match))
+		for _, m := range filter.Match {
+			want[m.Key] = m.Value
+		}
+		kept := make([]model.Entity, 0, len(all))
+		for _, e := range all {
+			if e.MatchAll(want) {
+				kept = append(kept, e)
+			}
+		}
+		all = kept
+	}
 	page, end, hasNext, err := paginate(all, func(e model.Entity) string { return string(e.ID) }, first, after)
 	if err != nil {
 		return nil, err

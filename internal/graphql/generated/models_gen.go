@@ -50,6 +50,12 @@ type Attribute struct {
 	Type ValueType `json:"type"`
 }
 
+// One attribute key/value equality, used by EntityFilter.match.
+type AttributeMatch struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
 // A paginated list of change events.
 type ChangeConnection struct {
 	Edges      []ChangeEdge `json:"edges"`
@@ -141,6 +147,11 @@ type EntityEdge struct {
 type EntityFilter struct {
 	// Restrict to this entity type, e.g. `host`.
 	Type *string `json:"type,omitempty"`
+	// Keep only entities where every given key equals the given value, matched
+	// against both identifying and descriptive attributes (AND semantics). Mirrors
+	// the MCP `find_entities` match — use it to filter on governance attributes such
+	// as `service.criticality` or `entity.owner.team`.
+	Match []AttributeMatch `json:"match,omitempty"`
 }
 
 type Mutation struct {

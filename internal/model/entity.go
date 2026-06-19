@@ -27,6 +27,28 @@ type Entity struct {
 	SchemaURL string
 }
 
+// MatchAll reports whether every wanted key/value is present as a string-equal
+// attribute in the entity's identity or descriptive attributes (AND semantics).
+// Values are compared via Value.Display (untyped), so the filter is the same
+// across the MCP find_entities tool and the GraphQL entities query.
+func (e Entity) MatchAll(want map[string]string) bool {
+	for k, v := range want {
+		if !hasAttr(e.Identity, k, v) && !hasAttr(e.Attributes, k, v) {
+			return false
+		}
+	}
+	return true
+}
+
+func hasAttr(kvs []KeyValue, key, val string) bool {
+	for _, kv := range kvs {
+		if kv.Key == key && kv.Value.Display() == val {
+			return true
+		}
+	}
+	return false
+}
+
 // field/record separators for canonical identity encoding.
 const (
 	sepField  = "\x1e"
