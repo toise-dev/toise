@@ -248,11 +248,20 @@ interface carries:
 - **`speed` is in bit/s** (convert at the source: SNMP `ifSpeed` is bit/s, Linux `/sys` is
   Mbit/s). One `speed` key = the **negotiated/effective** rate; a separate `speed.max`
   (capability) is deferred until a use-case needs it.
-- **Emit every non-loopback NIC,** not only those with a resolvable unicast IP. An IP-less or
-  down interface is still a real entity; carrying it (with `oper_state`) makes a link going
-  down a clean `entity.state_changed` rather than a disappearance. The IP-resolution /
-  connection-topology overlay uses the subset that have addresses — a narrower purpose that
-  must not narrow the interface inventory.
+- **Emit beyond the IP-bearing interfaces, but not the ephemeral churn.** The point of
+  carrying IP-less NICs is that a *physical* link going down is then a clean
+  `entity.state_changed` (with `oper_state`) rather than a disappearance — a signal that does
+  not apply to the hundreds of ephemeral `veth*`/`cali*`/`cni*`/`lxc*` interfaces a container
+  runtime creates and destroys at pod cadence. Emitting those as entities (each with a
+  heartbeat and a teardown delete) is pure cardinality and churn for interfaces with no IP and
+  no standalone meaning. So the inventory rule is:
+  - **every interface that has an IP** — including named virtual ones (bridges, bonds, vlans),
+    which have standalone meaning;
+  - **plus IP-less `physical`/`wireless` NICs** — the down-link signal we want;
+  - **excluding IP-less `virtual` interfaces** (the ephemeral/plumbing ones).
+
+  The IP-resolution / connection-topology overlay still uses only the subset that have
+  addresses.
 
 ### Time & liveness — explicit delete + interval backstop
 
