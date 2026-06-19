@@ -194,6 +194,66 @@ the keys before any are observed) and filters it via `find_entities` (toise#231)
 
 All optional. Emit what the operator supplies (config/labels); never fabricate.
 
+### AT10 — host capacity attributes
+
+Nameplate/capacity facts on the `host` entity; the paired utilization stays a metric
+(AT7). Keys extend OTel's `host.*` / `host.cpu.*` namespaces and are Toise-provisional
+where semconv is silent.
+
+| Key | Type | Unit | Example |
+| --- | --- | --- | --- |
+| `host.cpu.logical.count` | int | count | `48` |
+| `host.cpu.physical.count` | int | count | `24` |
+| `host.cpu.frequency.nominal` | int | **Hz** | `2100000000` |
+| `host.memory.total` | int | By | `137438953472` |
+| `host.disk.total` | int | By | `1920383410176` |
+
+`host.cpu.frequency.nominal` is in **Hz (integer)**, not a human GHz string — UCUM-consistent
+and machine-comparable; formatting to GHz is a consumer concern. (semconv-ratified host
+nameplate already shipped — `os.name`, `os.build_id`, `host.cpu.model.name`,
+`host.cpu.vendor.id`, and the DMI `hw.vendor`/`hw.model`/`hw.serial_number` — needs no
+decision; the `hw.serial_number` on the in-OS host is the join key that lets the BMC facet
+(AT8 redfish) reconcile via a `same_as` overlay, never merged.)
+
+### AT11 — `host.virtualization` value vocabulary
+
+OTel reserves `host.type` for the cloud machine type, so virtualization has no key. One
+descriptive attribute `host.virtualization`, normalized lowercase, open enum:
+
+`none` · `kvm` · `vmware` · `xen` · `hyperv` · `virtualbox` · `qemu` · `lxc` · `openvz` · `bhyve` · `unknown`
+
+(`none` = bare metal; `unknown` = virtualized, type undetected.) Toise-provisional.
+
+### AT12 — `host.chassis.type` value vocabulary
+
+SMBIOS defines ~30 numeric chassis codes; raw codes are high-cardinality and unfriendly, so
+normalize to: `desktop` · `laptop` · `server` · `blade` · `vm` · `other`. Mapping (abridged):
+desktop/tower/all-in-one → `desktop`; portable/laptop/notebook/convertible → `laptop`;
+main-server/RAID/rack/multi-system → `server`; blade/blade-enclosure → `blade`; `vm` derived
+when chassis is Other/Unknown **and** `host.virtualization != none`; everything else → `other`.
+Toise-provisional.
+
+### AT13 — `network.interface` descriptive attributes
+
+Beyond the `oper_state` state key (see the casing rule above) and `speed`, the host/SNMP
+interface carries:
+
+| Key | Type | Value | Note |
+| --- | --- | --- | --- |
+| `mac` | string | `aa:bb:cc:dd:ee:ff` | hardware address, stable per NIC |
+| `mtu` | int | octets | config, not utilization |
+| `interface.type` | enum | `physical`/`virtual`/`wireless`/`loopback` | start with physical/virtual |
+| `duplex` | enum | `full`/`half`/`unknown` | renegotiable |
+
+- **`speed` is in bit/s** (convert at the source: SNMP `ifSpeed` is bit/s, Linux `/sys` is
+  Mbit/s). One `speed` key = the **negotiated/effective** rate; a separate `speed.max`
+  (capability) is deferred until a use-case needs it.
+- **Emit every non-loopback NIC,** not only those with a resolvable unicast IP. An IP-less or
+  down interface is still a real entity; carrying it (with `oper_state`) makes a link going
+  down a clean `entity.state_changed` rather than a disappearance. The IP-resolution /
+  connection-topology overlay uses the subset that have addresses — a narrower purpose that
+  must not narrow the interface inventory.
+
 ### Time & liveness — explicit delete + interval backstop
 
 `event_time` = LogRecord `Timestamp`; `recorded_at` stamped by Toise. Liveness uses
