@@ -130,6 +130,11 @@ type Config struct {
 	// both are set.
 	TLSCertFile string `yaml:"tls_cert_file"`
 	TLSKeyFile  string `yaml:"tls_key_file"`
+	// TLSClientCAFile, when set, requires and verifies a client certificate on the
+	// OTLP ingest listener against this PEM CA bundle — optional mTLS for ingest
+	// (ADR 0028), on top of bearer auth. Requires TLS to be enabled. Not a secret.
+	// The HTTP read surfaces are unaffected (they use bearer/OIDC).
+	TLSClientCAFile string `yaml:"tls_client_ca_file"`
 	// AuditLog is a file path that, when set, receives an append-only JSON-line
 	// audit record for every operator write (annotate_entity) — distinct from the
 	// event log (ADR 0028). Empty = auditing off (the default). Not a secret.
@@ -145,6 +150,9 @@ func (c Config) TLSEnabled() bool { return c.TLSCertFile != "" && c.TLSKeyFile !
 func (c Config) Validate() error {
 	if (c.TLSCertFile == "") != (c.TLSKeyFile == "") {
 		return fmt.Errorf("tls_cert_file and tls_key_file must be set together: half-set TLS would silently serve plaintext")
+	}
+	if c.TLSClientCAFile != "" && !c.TLSEnabled() {
+		return fmt.Errorf("tls_client_ca_file (ingest mTLS) requires tls_cert_file and tls_key_file: there is no TLS handshake to verify a client cert on")
 	}
 	if c.RetentionMaxAge.D() > 0 && c.CompactionInterval.D() <= 0 {
 		return fmt.Errorf("retention_max_age is set but retention_compaction_interval is 0: nothing would ever prune")
@@ -383,6 +391,9 @@ func (c *Config) applyEnv(getenv func(string) string) error {
 	if v := getenv("TOISE_TLS_CERT_FILE"); v != "" {
 		c.TLSCertFile = v
 	}
+	if v := getenv("TOISE_TLS_CLIENT_CA_FILE"); v != "" {
+		c.TLSClientCAFile = v
+	}
 	if v := getenv("TOISE_TLS_KEY_FILE"); v != "" {
 		c.TLSKeyFile = v
 	}
@@ -461,6 +472,7 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	auditLog := fs.String("audit-log", cfg.AuditLog, "append-only JSON-line audit file for operator writes (annotate_entity); empty = off")
 	tlsCertFile := fs.String("tls-cert-file", cfg.TLSCertFile, "PEM certificate file; with --tls-key-file, serves HTTP and OTLP over TLS")
 	tlsKeyFile := fs.String("tls-key-file", cfg.TLSKeyFile, "PEM private key file (pairs with --tls-cert-file)")
+	tlsClientCAFile := fs.String("tls-client-ca-file", cfg.TLSClientCAFile, "PEM CA bundle; when set, requires+verifies a client certificate on OTLP ingest (mTLS, needs TLS)")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -488,6 +500,7 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	cfg.AuditLog = *auditLog
 	cfg.TLSCertFile = *tlsCertFile
 	cfg.TLSKeyFile = *tlsKeyFile
+	cfg.TLSClientCAFile = *tlsClientCAFile
 	cfg.LogFormat = *logFormat
 	cfg.LogLevel = *logLevel
 

@@ -48,6 +48,7 @@ for the rationale.
 | `tenant_trust_mode` | `TOISE_TENANT_TRUST_MODE` | `--tenant-trust-mode` | `trust-header` | how a request's tenant is decided. `trust-header`: from `X-Scope-OrgID` / `tenant.id` (the edge is trusted). `derive-only`: a tenant-scoped token's tenant is **derived from its binding** and any client-supplied `X-Scope-OrgID` / `tenant.id` is **ignored** (anti-spoofing for multi-tenant SaaS, ADR 0028); global (operator) tokens keep header-based cross-tenant selection |
 | `tls_cert_file` | `TOISE_TLS_CERT_FILE` | `--tls-cert-file` | (empty) | PEM certificate; with the key, serves HTTP + OTLP over TLS |
 | `tls_key_file` | `TOISE_TLS_KEY_FILE` | `--tls-key-file` | (empty) | PEM private key (pairs with the cert) |
+| `tls_client_ca_file` | `TOISE_TLS_CLIENT_CA_FILE` | `--tls-client-ca-file` | (empty) | PEM CA bundle; when set, requires + verifies a client certificate on **OTLP ingest** (mTLS, ADR 0028) — needs TLS; the HTTP surfaces are unaffected |
 | `audit_log` | `TOISE_AUDIT_LOG` | `--audit-log` | (empty) | path to an append-only JSON-line audit file for operator writes (`annotate_entity`), per tenant; empty = off (ADR 0028) |
 
 Durations are Go-duration strings (`"30s"`, `"5m"`, `"1h30m"`). **Unknown YAML
@@ -118,6 +119,10 @@ network (private datacenter segment or VPN; ADR 0014). Exposing it to other host
   `tenant:token` pair authorized only for its tenant and surface (ADR 0028).
 - **TLS.** Point `tls_cert_file` and `tls_key_file` at a PEM cert/key pair to serve
   the HTTP surfaces and OTLP ingestion over TLS.
+- **mTLS on ingest (optional).** Set `tls_client_ca_file` to a PEM CA bundle to
+  require and verify a client certificate on the OTLP ingest listener — for
+  regulated producers, on top of the bearer token. It applies to ingest only; the
+  HTTP read surfaces keep bearer/OIDC auth. Requires TLS to be enabled (ADR 0028).
 - **Audit log.** Set `audit_log` to a file path to record an append-only JSON-line
   entry for every operator write (`annotate_entity`, on MCP and GraphQL) — the time,
   tenant, surface, and target entity. It is distinct from the producer event log,

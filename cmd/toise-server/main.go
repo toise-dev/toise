@@ -18,6 +18,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
@@ -96,6 +97,29 @@ func main() {
 		logger.Error("server failed", "err", err)
 		os.Exit(1)
 	}
+}
+
+// ingestTLSConfig returns the OTLP ingest listener's TLS config: a clone of base
+// (the server certificate) plus, when clientCAFile is set, required and verified
+// client-certificate auth — optional mTLS for ingest (ADR 0028) — against that
+// PEM CA bundle. An empty clientCAFile returns base's clone unchanged. The HTTP
+// read surfaces are unaffected (they authenticate by bearer/OIDC, not certs).
+func ingestTLSConfig(base *tls.Config, clientCAFile string) (*tls.Config, error) {
+	conf := base.Clone()
+	if clientCAFile == "" {
+		return conf, nil
+	}
+	caPEM, err := os.ReadFile(clientCAFile)
+	if err != nil {
+		return nil, fmt.Errorf("reading TLS client CA %s: %w", clientCAFile, err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		return nil, fmt.Errorf("TLS client CA %s contains no usable certificates", clientCAFile)
+	}
+	conf.ClientCAs = pool
+	conf.ClientAuth = tls.RequireAndVerifyClientCert
+	return conf, nil
 }
 
 func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
@@ -193,7 +217,18 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 				return &cert, nil
 			},
 		}
-		grpcOpts = append(grpcOpts, grpc.Creds(credentials.NewTLS(tlsConf)))
+		// The OTLP ingest listener gets its own TLS config so optional mTLS
+		// (client-certificate auth, ADR 0028) applies to ingest only — the HTTP
+		// read surfaces stay on bearer/OIDC, not client certs. Off unless a client
+		// CA is configured.
+		ingestTLS, terr := ingestTLSConfig(tlsConf, cfg.TLSClientCAFile)
+		if terr != nil {
+			return terr
+		}
+		if cfg.TLSClientCAFile != "" {
+			logger.Info("mTLS enabled on OTLP ingest", "client_ca", cfg.TLSClientCAFile)
+		}
+		grpcOpts = append(grpcOpts, grpc.Creds(credentials.NewTLS(ingestTLS)))
 	}
 
 	ingestMetrics := ingest.NewMetrics()

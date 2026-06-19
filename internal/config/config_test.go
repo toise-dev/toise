@@ -221,6 +221,9 @@ func TestValidateRejectsSilentMisconfigurations(t *testing.T) {
 		{"negative max_tenants", func(c *Config) { c.MaxTenants = -1 }},
 		{"empty allowlist entry", func(c *Config) { c.TenantAllowlist = []string{""} }},
 		{"whitespace allowlist entry", func(c *Config) { c.TenantAllowlist = []string{"ten ant"} }},
+		{"unknown tenant_trust_mode", func(c *Config) { c.TenantTrustMode = "wishful" }},
+		{"mTLS client CA without server TLS", func(c *Config) { c.TLSClientCAFile = "/x/ca.pem" }},
+		{"bad tenant_read_tokens pair", func(c *Config) { c.TenantReadTokens = []string{"no-colon"} }},
 	}
 	for _, tc := range cases {
 		cfg := base
