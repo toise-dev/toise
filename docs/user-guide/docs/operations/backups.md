@@ -57,6 +57,25 @@ Toise is single-writer and the live graph is **derivable** (producers re-assert 
 
 **RPO/RTO.** With scheduled backups, the recovery-point is at most one `backup_interval` (plus your off-node sync lag); **log shipping shrinks the recovery point to one `log_shipping_interval`** (seconds-scale) at a fraction of the bytes. Recovery-time is a process start plus the projection rebuild (bounded by one heartbeat window for the live graph). A read replica that is already running has effectively zero RTO for live queries.
 
+## Scaling: many tenants
+
+Each tenant is an isolated stack — its own event log **and** its own in-memory projection (ADR 0025). The projection (a graph per tenant in RAM) is the cost that bounds how many tenants a node holds, so Toise scales tenants by **a per-node cap plus horizontal sharding**, not by collapsing tenants into one store (ADR 0029).
+
+- **Cap per node:** `max_tenants` caps the open stacks on a node; creation beyond it is refused. Watch the `toise_tenants_open` gauge against it for capacity planning.
+- **Shard across nodes:** give each node a disjoint `tenant_allowlist` and route requests by `X-Scope-OrgID` at the gateway so each tenant lands on the node that owns it (the "tenants partitioned across instances" pattern). No ring, no coordination.
+- **Durability makes re-sharding cheap:** with the durable log shipped off-node, a tenant moved to another node (or recovered after a node loss) is a reassignment plus a replay — not a data migration.
+
+```
+# node A
+max_tenants: 200
+tenant_allowlist: acme,globex,initech,...
+# node B
+max_tenants: 200
+tenant_allowlist: umbrella,soylent,...
+```
+
+Size the per-node cap from available RAM and your typical per-tenant graph size; the gauge tells you the live headroom.
+
 ## Live restart acceleration: projection snapshots
 
 `--snapshot-interval` (default `5m`) periodically writes a projection snapshot *inside* the store so a restart replays only the tail; a final one is written at graceful shutdown. It is a restart optimization, not a backup: it lives in the same directory it would have to protect.

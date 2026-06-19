@@ -321,6 +321,14 @@ func (r *Registry) ensure(id string) (*Stack, error) {
 	return s, err
 }
 
+// TenantCount returns how many tenant stacks are currently open — a cheap
+// locked read for the open-tenants gauge (capacity planning against max_tenants).
+func (r *Registry) TenantCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.stacks)
+}
+
 // Stacks returns the currently-open stacks, sorted by tenant id, for the
 // background goroutines (sweep, compaction, snapshot) and aggregate metrics.
 func (r *Registry) Stacks() []*Stack {
