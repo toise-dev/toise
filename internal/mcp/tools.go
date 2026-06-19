@@ -474,6 +474,16 @@ type TypeCount struct {
 	Count int    `json:"count"`
 }
 
+// GovernanceAttributeInfo advertises one cross-cutting governance attribute key
+// that may appear on any entity and can be filtered via find_entities.
+type GovernanceAttributeInfo struct {
+	Key     string   `json:"key"`
+	Summary string   `json:"summary"`
+	Example string   `json:"example,omitempty"`
+	Values  []string `json:"values,omitempty" jsonschema:"well-known values when the key is an open enum"`
+	Semconv bool     `json:"semconv" jsonschema:"true when this is a standard OTel semantic-convention key reused verbatim"`
+}
+
 // DescribeSchemaOutput summarizes the graph's contents.
 type DescribeSchemaOutput struct {
 	Description    string      `json:"description" jsonschema:"a natural-language summary of what this Toise instance currently knows"`
@@ -481,6 +491,11 @@ type DescribeSchemaOutput struct {
 	RelationTypes  []TypeCount `json:"relation_types"`
 	TotalEntities  int         `json:"total_entities"`
 	TotalRelations int         `json:"total_relations"`
+	// GovernanceAttributes is the advisory cross-cutting vocabulary (ownership,
+	// criticality, location, lifecycle) that may decorate any entity; it is
+	// constant, not derived from the graph, so the consumer learns what it can
+	// filter on even before any producer emits these keys.
+	GovernanceAttributes []GovernanceAttributeInfo `json:"governance_attributes" jsonschema:"operator-supplied descriptive attributes that may appear on any entity and can be filtered via find_entities (advisory; an entity carries them only if its producer emits them)"`
 }
 
 func (s *Server) describeSchema(ctx context.Context, _ *mcpsdk.CallToolRequest, in DescribeSchemaInput) (*mcpsdk.CallToolResult, DescribeSchemaOutput, error) {
@@ -491,13 +506,31 @@ func (s *Server) describeSchema(ctx context.Context, _ *mcpsdk.CallToolRequest, 
 	entTypes := sortedCounts(g.CountByType())
 	relTypes := sortedCounts(relationCounts(g.ListRelations("", "", "")))
 	out := DescribeSchemaOutput{
-		EntityTypes:    entTypes,
-		RelationTypes:  relTypes,
-		TotalEntities:  g.EntityCount(),
-		TotalRelations: g.RelationCount(),
+		EntityTypes:          entTypes,
+		RelationTypes:        relTypes,
+		TotalEntities:        g.EntityCount(),
+		TotalRelations:       g.RelationCount(),
+		GovernanceAttributes: governanceVocabulary(),
 	}
 	out.Description = describe(out)
 	return nil, out, nil
+}
+
+// governanceVocabulary maps the model's advisory governance registry to the
+// wire shape. It is constant — the same on an empty graph as on a full one.
+func governanceVocabulary() []GovernanceAttributeInfo {
+	src := model.GovernanceAttributes()
+	out := make([]GovernanceAttributeInfo, len(src))
+	for i, a := range src {
+		out[i] = GovernanceAttributeInfo{
+			Key:     a.Key,
+			Summary: a.Summary,
+			Example: a.Example,
+			Values:  a.Values,
+			Semconv: a.Semconv,
+		}
+	}
+	return out
 }
 
 func relationCounts(rels []model.Relation) map[string]int {
@@ -541,6 +574,10 @@ func describe(o DescribeSchemaOutput) string {
 		b.WriteString(", with no relations recorded yet")
 	}
 	b.WriteString(".")
+	if len(o.GovernanceAttributes) > 0 {
+		fmt.Fprintf(&b, " Any entity may also carry %d cross-cutting governance attributes (ownership, criticality, location, lifecycle) you can filter on — see governance_attributes.",
+			len(o.GovernanceAttributes))
+	}
 	return b.String()
 }
 
