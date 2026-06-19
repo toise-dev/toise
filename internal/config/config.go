@@ -139,6 +139,14 @@ type Config struct {
 	// audit record for every operator write (annotate_entity) — distinct from the
 	// event log (ADR 0028). Empty = auditing off (the default). Not a secret.
 	AuditLog string `yaml:"audit_log"`
+	// OIDC* enable verifying OIDC/JWT bearers on the read surfaces (ADR 0028).
+	// OIDCIssuer empty = OIDC off (the default). Not secrets — the issuer/audience
+	// and claim names are configuration. OIDCTenantClaim defaults to "tenant";
+	// OIDCRoleClaim empty means every valid token is full role.
+	OIDCIssuer      string `yaml:"oidc_issuer"`
+	OIDCAudience    string `yaml:"oidc_audience"`
+	OIDCTenantClaim string `yaml:"oidc_tenant_claim"`
+	OIDCRoleClaim   string `yaml:"oidc_role_claim"`
 }
 
 // TLSEnabled reports whether both a certificate and key are configured.
@@ -236,6 +244,10 @@ func parseTenantTokens(pairs []string, label string) (map[string][]string, error
 // client-supplied X-Scope-OrgID / tenant.id is ignored. The empty value is
 // trust-header (the default).
 func (c Config) DeriveOnlyTenancy() bool { return c.TenantTrustMode == "derive-only" }
+
+// OIDCEnabled reports whether OIDC/JWT verification is configured (an issuer is
+// set). Off by default (ADR 0028 / 0030).
+func (c Config) OIDCEnabled() bool { return c.OIDCIssuer != "" }
 
 // Default returns the built-in configuration (the lowest-precedence layer). These
 // mirror the historical flag defaults: loopback listeners, no retention cap.
@@ -385,6 +397,18 @@ func (c *Config) applyEnv(getenv func(string) string) error {
 	if v := getenv("TOISE_INGEST_TOKENS"); v != "" {
 		c.IngestTokens = splitOrigins(v)
 	}
+	if v := getenv("TOISE_OIDC_ISSUER"); v != "" {
+		c.OIDCIssuer = v
+	}
+	if v := getenv("TOISE_OIDC_AUDIENCE"); v != "" {
+		c.OIDCAudience = v
+	}
+	if v := getenv("TOISE_OIDC_TENANT_CLAIM"); v != "" {
+		c.OIDCTenantClaim = v
+	}
+	if v := getenv("TOISE_OIDC_ROLE_CLAIM"); v != "" {
+		c.OIDCRoleClaim = v
+	}
 	if v := getenv("TOISE_AUDIT_LOG"); v != "" {
 		c.AuditLog = v
 	}
@@ -469,6 +493,10 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	tenantAllowlist := fs.String("tenant-allowlist", strings.Join(cfg.TenantAllowlist, ","), "comma-separated tenant ids allowed to be created (empty: any)")
 	maxTenants := fs.Int("max-tenants", cfg.MaxTenants, "cap on open tenants, 0 = unbounded")
 	tenantTrustMode := fs.String("tenant-trust-mode", cfg.TenantTrustMode, "how a request's tenant is decided: trust-header (default) or derive-only (derive a scoped token's tenant, ignore the client header)")
+	oidcIssuer := fs.String("oidc-issuer", cfg.OIDCIssuer, "OIDC issuer URL to verify JWT bearers on the read surfaces; empty = OIDC off")
+	oidcAudience := fs.String("oidc-audience", cfg.OIDCAudience, "expected OIDC audience (aud) for JWT verification")
+	oidcTenantClaim := fs.String("oidc-tenant-claim", cfg.OIDCTenantClaim, "JWT claim carrying the tenant id (default: tenant)")
+	oidcRoleClaim := fs.String("oidc-role-claim", cfg.OIDCRoleClaim, "JWT claim carrying the role read/ingest/full (empty = full)")
 	auditLog := fs.String("audit-log", cfg.AuditLog, "append-only JSON-line audit file for operator writes (annotate_entity); empty = off")
 	tlsCertFile := fs.String("tls-cert-file", cfg.TLSCertFile, "PEM certificate file; with --tls-key-file, serves HTTP and OTLP over TLS")
 	tlsKeyFile := fs.String("tls-key-file", cfg.TLSKeyFile, "PEM private key file (pairs with --tls-cert-file)")
@@ -497,6 +525,10 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	cfg.TenantAllowlist = splitOrigins(*tenantAllowlist)
 	cfg.MaxTenants = *maxTenants
 	cfg.TenantTrustMode = *tenantTrustMode
+	cfg.OIDCIssuer = *oidcIssuer
+	cfg.OIDCAudience = *oidcAudience
+	cfg.OIDCTenantClaim = *oidcTenantClaim
+	cfg.OIDCRoleClaim = *oidcRoleClaim
 	cfg.AuditLog = *auditLog
 	cfg.TLSCertFile = *tlsCertFile
 	cfg.TLSKeyFile = *tlsKeyFile

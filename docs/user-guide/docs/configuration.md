@@ -50,6 +50,10 @@ for the rationale.
 | `tls_key_file` | `TOISE_TLS_KEY_FILE` | `--tls-key-file` | (empty) | PEM private key (pairs with the cert) |
 | `tls_client_ca_file` | `TOISE_TLS_CLIENT_CA_FILE` | `--tls-client-ca-file` | (empty) | PEM CA bundle; when set, requires + verifies a client certificate on **OTLP ingest** (mTLS, ADR 0028) — needs TLS; the HTTP surfaces are unaffected |
 | `audit_log` | `TOISE_AUDIT_LOG` | `--audit-log` | (empty) | path to an append-only JSON-line audit file for operator writes (`annotate_entity`), per tenant; empty = off (ADR 0028) |
+| `oidc_issuer` | `TOISE_OIDC_ISSUER` | `--oidc-issuer` | (empty) | OIDC issuer URL; when set, JWT bearers are verified on the read surfaces (discovery + JWKS). Empty = OIDC off (ADR 0028) |
+| `oidc_audience` | `TOISE_OIDC_AUDIENCE` | `--oidc-audience` | (empty) | expected JWT `aud` |
+| `oidc_tenant_claim` | `TOISE_OIDC_TENANT_CLAIM` | `--oidc-tenant-claim` | `tenant` | JWT claim carrying the tenant id |
+| `oidc_role_claim` | `TOISE_OIDC_ROLE_CLAIM` | `--oidc-role-claim` | (empty) | JWT claim carrying the role (`read`/`ingest`/`full`); empty = every valid token is full |
 
 Durations are Go-duration strings (`"30s"`, `"5m"`, `"1h30m"`). **Unknown YAML
 keys are rejected** — a typo fails at startup rather than being silently ignored.
@@ -128,6 +132,12 @@ network (private datacenter segment or VPN; ADR 0014). Exposing it to other host
   tenant, surface, and target entity. It is distinct from the producer event log,
   exportable, and off by default. A write failure is logged (never silent), and
   never fails the audited operation (ADR 0028).
+- **OIDC / JWT (read surfaces).** Set `oidc_issuer` (and `oidc_audience`) to verify
+  JWT bearers on GraphQL/MCP/debug as a second path after the static tokens: the
+  token is validated against the issuer (discovery + JWKS, signature, audience,
+  expiry), and its `oidc_tenant_claim` / `oidc_role_claim` map to a tenant and role.
+  The client `X-Scope-OrgID` is ignored for a verified JWT (the claim is the
+  authority). Off by default; the static bearer tokens stay the baseline (ADR 0028).
 
 See [ADR 0024](https://github.com/toise-dev/toise/blob/main/docs/architecture/adr/0024-native-auth-and-tls.md)
 and [ADR 0028](https://github.com/toise-dev/toise/blob/main/docs/architecture/adr/0028-access-security-for-multi-tenant-saas.md).

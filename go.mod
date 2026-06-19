@@ -7,6 +7,8 @@ toolchain go1.26.3
 require (
 	github.com/99designs/gqlgen v0.17.90
 	github.com/cockroachdb/pebble v1.1.5
+	github.com/coreos/go-oidc/v3 v3.19.0
+	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/gorilla/websocket v1.5.3
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/oklog/ulid/v2 v2.1.1

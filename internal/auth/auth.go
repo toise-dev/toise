@@ -28,7 +28,22 @@ import (
 // ctxKey is the private type for context values this package sets.
 type ctxKey int
 
-const writableKey ctxKey = iota
+const (
+	writableKey ctxKey = iota
+	// resolvedTenantKey carries the tenant the auth layer resolved for this
+	// request when it is not the client header — set by the middleware for an
+	// OIDC identity (the tenant comes from a verified claim). EffectiveTenantHTTP
+	// reads it so the tenant router routes to the claim's tenant.
+	resolvedTenantKey
+)
+
+// OIDCVerifier verifies an OIDC/JWT bearer on the read surfaces and returns the
+// tenant and role ("full"/"read"/"ingest") it grants. It is a narrow interface
+// so this package need not depend on internal/oidc (or its go-oidc transitive
+// deps). nil disables OIDC.
+type OIDCVerifier interface {
+	Verify(ctx context.Context, rawToken string) (tenant, role string, ok bool)
+}
 
 // CanWrite reports whether the caller in ctx may perform a write (e.g. annotate
 // an entity). Writes require a full or tenant-scoped token; a read-only token
@@ -64,6 +79,16 @@ type Authenticator struct {
 	// token's tenant is derived from its binding and the client-supplied
 	// X-Scope-OrgID / tenant.id is ignored. Off by default (trust-header).
 	deriveOnly bool
+	// oidc, when set, verifies an OIDC/JWT bearer on the read surfaces as a second
+	// path after the static tokens (ADR 0028). nil = OIDC off.
+	oidc OIDCVerifier
+}
+
+// SetOIDC attaches an OIDC verifier for the read surfaces (ADR 0028); returns a
+// for chaining. nil (the default) leaves OIDC off. Set before serving.
+func (a *Authenticator) SetOIDC(v OIDCVerifier) *Authenticator {
+	a.oidc = v
+	return a
 }
 
 // SetTenantTrustMode switches the ADR 0028 anti-spoofing derivation on
@@ -113,10 +138,14 @@ func (a *Authenticator) TenantForBearerGRPC(ctx context.Context) (string, bool) 
 }
 
 // EffectiveTenantHTTP resolves the tenant an HTTP request targets, honoring the
-// trust mode. In derive-only a scoped token's tenant is derived from its binding
-// (the client X-Scope-OrgID is ignored); a global token, or trust-header mode,
+// trust mode. An OIDC identity's tenant (resolved by the middleware from a
+// verified claim) takes precedence; then, in derive-only, a scoped token's tenant
+// is derived from its binding (the client X-Scope-OrgID is ignored); otherwise it
 // falls back to the header. ok mirrors tenant.FromHTTP (false = invalid header).
 func (a *Authenticator) EffectiveTenantHTTP(r *http.Request) (string, bool) {
+	if id, ok := r.Context().Value(resolvedTenantKey).(string); ok && id != "" {
+		return id, true
+	}
 	if a.deriveOnly && a.Enabled() {
 		if id, ok := a.TenantForBearer(r.Header.Get("Authorization")); ok {
 			return id, true
@@ -233,10 +262,11 @@ func hashToken(t string) []byte {
 	return sum[:]
 }
 
-// Enabled reports whether any token is configured (i.e. auth is enforced).
+// Enabled reports whether any token or OIDC is configured (i.e. auth is
+// enforced). An OIDC-only deployment (no static tokens) still enforces auth.
 func (a *Authenticator) Enabled() bool {
 	return len(a.tokens) > 0 || len(a.readTokens) > 0 || len(a.ingestTokens) > 0 ||
-		len(a.scoped) > 0 || len(a.scopedRead) > 0 || len(a.scopedIngest) > 0
+		len(a.scoped) > 0 || len(a.scopedRead) > 0 || len(a.scopedIngest) > 0 || a.oidc != nil
 }
 
 // matchAny reports, in constant time per candidate, whether token equals any of
@@ -362,26 +392,43 @@ func (a *Authenticator) HTTPMiddleware(public map[string]bool) func(http.Handler
 				return
 			}
 			h := r.Header.Get("Authorization")
-			if !a.validHeader(h, surfaceRead) {
-				a.failed()
-				w.Header().Set("WWW-Authenticate", "Bearer")
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
+			if a.validHeader(h, surfaceRead) {
+				// Static token authenticated for reads; now authorize it for the
+				// request's EFFECTIVE tenant — in derive-only that is the scoped
+				// token's own tenant (so a scoped token is always allowed for it),
+				// not the client header. An invalid tenant header passes through —
+				// the tenant router rejects it with a 400 and better context.
+				if id, ok := a.EffectiveTenantHTTP(r); ok && !a.allowedForTenant(bearer(h), id, surfaceRead) {
+					a.failed()
+					http.Error(w, "token not authorized for this tenant", http.StatusForbidden)
+					return
+				}
+				// Tag the request so write handlers (annotate) can reject a
+				// read-only token: full/scoped tokens may write, read-only cannot.
+				ctx := context.WithValue(r.Context(), writableKey, a.canWriteHeader(h))
+				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
-			// Authenticated for reads; now authorize the token for the request's
-			// EFFECTIVE tenant — in derive-only that is the scoped token's own
-			// tenant (so a scoped token is always allowed for it), not the client
-			// header. An invalid tenant header passes through — the tenant router
-			// rejects it with a 400 and better context.
-			if id, ok := a.EffectiveTenantHTTP(r); ok && !a.allowedForTenant(bearer(h), id, surfaceRead) {
-				a.failed()
-				http.Error(w, "token not authorized for this tenant", http.StatusForbidden)
-				return
+			// Second path: a verified OIDC/JWT bearer authenticates with a
+			// claim-derived tenant and role (ADR 0028). The tenant comes from the
+			// claim (the client X-Scope-OrgID is ignored), flowed to the router via
+			// resolvedTenantKey. An ingest-only role may not read.
+			if a.oidc != nil {
+				if tID, role, ok := a.oidc.Verify(r.Context(), bearer(h)); ok {
+					if role == "ingest" {
+						a.failed()
+						http.Error(w, "token not authorized for this tenant", http.StatusForbidden)
+						return
+					}
+					ctx := context.WithValue(r.Context(), resolvedTenantKey, tID)
+					ctx = context.WithValue(ctx, writableKey, role == "full")
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
 			}
-			// Tag the request so write handlers (annotate) can reject a read-only
-			// token: full/scoped tokens may write, read-only tokens may not.
-			ctx := context.WithValue(r.Context(), writableKey, a.canWriteHeader(h))
-			next.ServeHTTP(w, r.WithContext(ctx))
+			a.failed()
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
 		})
 	}
 }
