@@ -44,6 +44,7 @@ import (
 	"github.com/toise-dev/toise/internal/graphql"
 	"github.com/toise-dev/toise/internal/graphql/resolvers"
 	"github.com/toise-dev/toise/internal/ingest"
+	"github.com/toise-dev/toise/internal/logship"
 	"github.com/toise-dev/toise/internal/mcp"
 	"github.com/toise-dev/toise/internal/metrics"
 	"github.com/toise-dev/toise/internal/oidc"
@@ -512,6 +513,44 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 			}
 		}()
 		logger.Info("scheduled backups enabled", "dir", cfg.BackupDir, "interval", cfg.BackupInterval.D())
+	}
+
+	// Continuous log shipping (ADR 0029): every interval, export each tenant's new
+	// event-log tail as an immutable segment under <log-shipping-dir>/<tenant>/ —
+	// the finer-RPO complement to the full checkpoint backup. The cursor is derived
+	// from the sink, so it survives restarts without local state. Off unless
+	// log_shipping_dir + log_shipping_interval set.
+	if cfg.LogShipDir != "" && cfg.LogShipInterval.D() > 0 {
+		sink, serr := logship.NewFileSink(cfg.LogShipDir)
+		if serr != nil {
+			return fmt.Errorf("log shipping: %w", serr)
+		}
+		shipper := logship.New(sink)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ticker := time.NewTicker(cfg.LogShipInterval.D())
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					for _, st := range reg.Stacks() {
+						if err := maint.Observe("logship", st.Tenant, func() error {
+							n, err := shipper.Ship(ctx, st.Tenant, st.Store)
+							if err == nil && n > 0 {
+								logger.Info("log segment shipped", "tenant", st.Tenant, "events", n)
+							}
+							return err
+						}); err != nil {
+							logger.Error("log shipping failed", "tenant", st.Tenant, "err", err)
+						}
+					}
+				}
+			}
+		}()
+		logger.Info("log shipping enabled", "dir", cfg.LogShipDir, "interval", cfg.LogShipInterval.D())
 	}
 
 	fmt.Printf("Toise %s — the living map of your infrastructure\n", version.String())

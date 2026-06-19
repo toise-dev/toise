@@ -1,0 +1,149 @@
+package logship
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/toise-dev/toise/internal/model"
+)
+
+var fixedTime = time.Unix(1_700_000_000, 0).UTC()
+
+// fakeSource is an in-memory event log: events[i] has sequence i+1.
+type fakeSource struct{ events []model.Event }
+
+func (f *fakeSource) Sequence() uint64 { return uint64(len(f.events)) }
+
+func (f *fakeSource) ScanFrom(after uint64, fn func(uint64, model.Event) error) error {
+	for i := range f.events {
+		seq := uint64(i + 1)
+		if seq <= after {
+			continue
+		}
+		if err := fn(seq, f.events[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ev(id string) model.Event {
+	return model.Event{Entity: &model.EntityEvent{
+		EventID:       id,
+		ChangeType:    model.EntityCreated,
+		Entity:        model.Entity{Type: model.TypeHost, Identity: []model.KeyValue{{Key: "host.id", Value: model.StringValue(id)}}},
+		EventTime:     fixedTime,
+		RecordedAt:    fixedTime,
+		SchemaVersion: model.SchemaVersion,
+	}}
+}
+
+func ids(events []model.Event) []string {
+	out := make([]string, len(events))
+	for i := range events {
+		out[i] = events[i].Entity.EventID
+	}
+	return out
+}
+
+func TestShipReplayRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	sink, err := NewFileSink(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := &fakeSource{events: []model.Event{ev("a"), ev("b"), ev("c")}}
+	sh := New(sink)
+
+	// First ship: all three events, one segment.
+	n, err := sh.Ship(ctx, "acme", src)
+	if err != nil || n != 3 {
+		t.Fatalf("first ship = (%d, %v), want (3, nil)", n, err)
+	}
+	// Nothing new: a no-op.
+	if n, err := sh.Ship(ctx, "acme", src); err != nil || n != 0 {
+		t.Fatalf("idempotent ship = (%d, %v), want (0, nil)", n, err)
+	}
+
+	// Append two more; only the delta ships.
+	src.events = append(src.events, ev("d"), ev("e"))
+	if n, err := sh.Ship(ctx, "acme", src); err != nil || n != 2 {
+		t.Fatalf("delta ship = (%d, %v), want (2, nil)", n, err)
+	}
+
+	// Replay reconstructs every event, in order, across both segments.
+	var got []model.Event
+	if err := sh.Replay(ctx, "acme", func(e model.Event) error { got = append(got, e); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"a", "b", "c", "d", "e"}
+	if g := ids(got); !equal(g, want) {
+		t.Fatalf("replay order = %v, want %v", g, want)
+	}
+}
+
+// TestCursorDerivedFromSink pins the crash-safety property: a fresh shipper with
+// no in-memory cursor must resume from the sink and not re-ship.
+func TestCursorDerivedFromSink(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	sink, _ := NewFileSink(dir)
+	src := &fakeSource{events: []model.Event{ev("a"), ev("b")}}
+	if n, err := New(sink).Ship(ctx, "acme", src); err != nil || n != 2 {
+		t.Fatalf("ship = (%d, %v), want (2, nil)", n, err)
+	}
+
+	// A brand-new shipper (simulating a process restart) over the same sink.
+	sink2, _ := NewFileSink(dir)
+	if n, err := New(sink2).Ship(ctx, "acme", src); err != nil || n != 0 {
+		t.Fatalf("post-restart ship = (%d, %v), want (0, nil) — cursor must derive from the sink", n, err)
+	}
+}
+
+func TestPerTenantIsolation(t *testing.T) {
+	ctx := context.Background()
+	sink, _ := NewFileSink(t.TempDir())
+	sh := New(sink)
+	if _, err := sh.Ship(ctx, "acme", &fakeSource{events: []model.Event{ev("a1")}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sh.Ship(ctx, "globex", &fakeSource{events: []model.Event{ev("g1"), ev("g2")}}); err != nil {
+		t.Fatal(err)
+	}
+	var acme []model.Event
+	if err := sh.Replay(ctx, "acme", func(e model.Event) error { acme = append(acme, e); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if g := ids(acme); !equal(g, []string{"a1"}) {
+		t.Fatalf("acme replay = %v, want [a1] — a tenant must not see another's segments", g)
+	}
+}
+
+func TestFileSinkPutGetAtomic(t *testing.T) {
+	ctx := context.Background()
+	sink, _ := NewFileSink(t.TempDir())
+	if err := sink.Put(ctx, "t/x.seg", []byte("hello")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := sink.Get(ctx, "t/x.seg")
+	if err != nil || string(got) != "hello" {
+		t.Fatalf("get = (%q, %v), want hello", got, err)
+	}
+	names, err := sink.List(ctx, "t/")
+	if err != nil || len(names) != 1 || names[0] != "t/x.seg" {
+		t.Fatalf("list = (%v, %v), want [t/x.seg]", names, err)
+	}
+}
+
+func equal(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

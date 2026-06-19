@@ -30,6 +30,8 @@ for the rationale.
 | `snapshot_interval` | `TOISE_SNAPSHOT_INTERVAL` | `--snapshot-interval` | `5m` | projection snapshot cadence for fast restart and liveness survival across restarts (`0` = disabled) |
 | `backup_dir` | `TOISE_BACKUP_DIR` | `--backup-dir` | (empty) | directory for periodic online backups (with `backup_interval`); empty = off (ADR 0029) |
 | `backup_interval` | `TOISE_BACKUP_INTERVAL` | `--backup-interval` | `0` | interval between online backups of every tenant's event log (`0` = off) |
+| `log_shipping_dir` | `TOISE_LOG_SHIPPING_DIR` | `--log-shipping-dir` | (empty) | directory to ship event-log segments to (with `log_shipping_interval`); may be a mounted bucket/NFS; empty = off (ADR 0029) |
+| `log_shipping_interval` | `TOISE_LOG_SHIPPING_INTERVAL` | `--log-shipping-interval` | `0` | interval between event-log segment ships of every tenant (`0` = off) |
 | `log_format` | `TOISE_LOG_FORMAT` | `--log-format` | `text` | log output format: `text` or `json` |
 | `log_level` | `TOISE_LOG_LEVEL` | `--log-level` | `info` | `debug`, `info`, `warn`, or `error` |
 | `production` | `TOISE_PRODUCTION` | `--production` | `false` | hardening profile — forces the three below off |
