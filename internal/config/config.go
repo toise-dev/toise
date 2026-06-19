@@ -139,6 +139,12 @@ type Config struct {
 	// audit record for every operator write (annotate_entity) — distinct from the
 	// event log (ADR 0028). Empty = auditing off (the default). Not a secret.
 	AuditLog string `yaml:"audit_log"`
+	// BackupDir, with BackupInterval > 0, enables periodic online backups: every
+	// interval each tenant's event log is checkpointed (Pebble's lock-free
+	// checkpoint) into <BackupDir>/<timestamp>/<tenant>, for an operator to sync
+	// off-node (ADR 0029). Empty = no scheduled backups (the default).
+	BackupDir      string   `yaml:"backup_dir"`
+	BackupInterval Duration `yaml:"backup_interval"`
 	// OIDC* enable verifying OIDC/JWT bearers on the read surfaces (ADR 0028).
 	// OIDCIssuer empty = OIDC off (the default). Not secrets — the issuer/audience
 	// and claim names are configuration. OIDCTenantClaim defaults to "tenant";
@@ -164,6 +170,9 @@ func (c Config) Validate() error {
 	}
 	if c.RetentionMaxAge.D() > 0 && c.CompactionInterval.D() <= 0 {
 		return fmt.Errorf("retention_max_age is set but retention_compaction_interval is 0: nothing would ever prune")
+	}
+	if c.BackupDir != "" && c.BackupInterval.D() <= 0 {
+		return fmt.Errorf("backup_dir is set but backup_interval is 0: no backup would ever be written")
 	}
 	switch strings.ToLower(c.LogLevel) {
 	// "warning" is accepted as an alias for "warn" to match SlogLevel, which
@@ -359,6 +368,7 @@ func (c *Config) applyEnv(getenv func(string) string) error {
 		{"TOISE_RETENTION_MAX_AGE", &c.RetentionMaxAge},
 		{"TOISE_RETENTION_COMPACTION_INTERVAL", &c.CompactionInterval},
 		{"TOISE_SNAPSHOT_INTERVAL", &c.SnapshotInterval},
+		{"TOISE_BACKUP_INTERVAL", &c.BackupInterval},
 	} {
 		if v := getenv(e.key); v != "" {
 			parsed, err := time.ParseDuration(v)
@@ -408,6 +418,9 @@ func (c *Config) applyEnv(getenv func(string) string) error {
 	}
 	if v := getenv("TOISE_OIDC_ROLE_CLAIM"); v != "" {
 		c.OIDCRoleClaim = v
+	}
+	if v := getenv("TOISE_BACKUP_DIR"); v != "" {
+		c.BackupDir = v
 	}
 	if v := getenv("TOISE_AUDIT_LOG"); v != "" {
 		c.AuditLog = v
@@ -497,6 +510,8 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	oidcAudience := fs.String("oidc-audience", cfg.OIDCAudience, "expected OIDC audience (aud) for JWT verification")
 	oidcTenantClaim := fs.String("oidc-tenant-claim", cfg.OIDCTenantClaim, "JWT claim carrying the tenant id (default: tenant)")
 	oidcRoleClaim := fs.String("oidc-role-claim", cfg.OIDCRoleClaim, "JWT claim carrying the role read/ingest/full (empty = full)")
+	backupDir := fs.String("backup-dir", cfg.BackupDir, "directory for periodic online backups (with --backup-interval); empty = off")
+	backupInterval := fs.Duration("backup-interval", cfg.BackupInterval.D(), "interval between online backups of every tenant's event log (0 = off)")
 	auditLog := fs.String("audit-log", cfg.AuditLog, "append-only JSON-line audit file for operator writes (annotate_entity); empty = off")
 	tlsCertFile := fs.String("tls-cert-file", cfg.TLSCertFile, "PEM certificate file; with --tls-key-file, serves HTTP and OTLP over TLS")
 	tlsKeyFile := fs.String("tls-key-file", cfg.TLSKeyFile, "PEM private key file (pairs with --tls-cert-file)")
@@ -529,6 +544,8 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	cfg.OIDCAudience = *oidcAudience
 	cfg.OIDCTenantClaim = *oidcTenantClaim
 	cfg.OIDCRoleClaim = *oidcRoleClaim
+	cfg.BackupDir = *backupDir
+	cfg.BackupInterval = Duration(*backupInterval)
 	cfg.AuditLog = *auditLog
 	cfg.TLSCertFile = *tlsCertFile
 	cfg.TLSKeyFile = *tlsKeyFile
