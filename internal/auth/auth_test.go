@@ -354,3 +354,59 @@ func TestPerTenantRBAC(t *testing.T) {
 		t.Error("a role-scoped-only config must enable auth")
 	}
 }
+
+type fakeOIDC struct {
+	tenant, role string
+	ok           bool
+}
+
+func (f fakeOIDC) Verify(_ context.Context, raw string) (string, string, bool) {
+	if raw == "" {
+		return "", "", false
+	}
+	return f.tenant, f.role, f.ok
+}
+
+func TestOIDCMiddleware(t *testing.T) {
+	run := func(v OIDCVerifier, bearer string) (code string, tenant string, canWrite bool) {
+		a := NewWithRoles(nil, nil, nil, nil).SetOIDC(v) // OIDC-only: no static tokens
+		if !a.Enabled() {
+			t.Fatal("OIDC-only config must enable auth")
+		}
+		var gotTenant string
+		var gotWrite bool
+		h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotTenant, _ = a.EffectiveTenantHTTP(r)
+			gotWrite = CanWrite(r.Context())
+			w.WriteHeader(http.StatusOK)
+		})
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/graphql", nil)
+		if bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		a.HTTPMiddleware(nil)(h).ServeHTTP(rec, req)
+		return http.StatusText(rec.Code), gotTenant, gotWrite
+	}
+
+	// A read-role JWT authenticates, routes to the claim tenant, cannot write.
+	if code, ten, write := run(fakeOIDC{"acme", "read", true}, "jwt"); code != "OK" || ten != "acme" || write {
+		t.Errorf("read JWT = %s tenant=%q write=%v; want OK acme false", code, ten, write)
+	}
+	// A full-role JWT may write.
+	if code, _, write := run(fakeOIDC{"acme", "full", true}, "jwt"); code != "OK" || !write {
+		t.Errorf("full JWT = %s write=%v; want OK true", code, write)
+	}
+	// An ingest-only role may not read.
+	if code, _, _ := run(fakeOIDC{"acme", "ingest", true}, "jwt"); code != "Forbidden" {
+		t.Errorf("ingest JWT on read surface = %s; want Forbidden", code)
+	}
+	// An unverifiable token is unauthorized.
+	if code, _, _ := run(fakeOIDC{"acme", "read", false}, "jwt"); code != "Unauthorized" {
+		t.Errorf("bad JWT = %s; want Unauthorized", code)
+	}
+	// No bearer at all is unauthorized.
+	if code, _, _ := run(fakeOIDC{"acme", "read", true}, ""); code != "Unauthorized" {
+		t.Errorf("no bearer = %s; want Unauthorized", code)
+	}
+}

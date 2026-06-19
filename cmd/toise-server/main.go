@@ -46,6 +46,7 @@ import (
 	"github.com/toise-dev/toise/internal/ingest"
 	"github.com/toise-dev/toise/internal/mcp"
 	"github.com/toise-dev/toise/internal/metrics"
+	"github.com/toise-dev/toise/internal/oidc"
 	"github.com/toise-dev/toise/internal/ops"
 	"github.com/toise-dev/toise/internal/registry"
 	"github.com/toise-dev/toise/internal/store"
@@ -193,6 +194,21 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	authn := auth.NewWithRoles(cfg.AuthTokens, cfg.ReadTokens, cfg.IngestTokens, scopedTokens).
 		WithScopedRoleTokens(scopedRead, scopedIngest) // per-tenant RBAC (ADR 0028)
 	authn.SetTenantTrustMode(cfg.DeriveOnlyTenancy()) // ADR 0028 anti-spoofing; off by default
+	if cfg.OIDCEnabled() {
+		// OIDC/JWT verification on the read surfaces (ADR 0028). Discovery hits the
+		// issuer once at startup; off unless an issuer is configured.
+		dctx, dcancel := context.WithTimeout(context.Background(), 20*time.Second)
+		verifier, oerr := oidc.New(dctx, oidc.Config{
+			Issuer: cfg.OIDCIssuer, Audience: cfg.OIDCAudience,
+			TenantClaim: cfg.OIDCTenantClaim, RoleClaim: cfg.OIDCRoleClaim,
+		})
+		dcancel()
+		if oerr != nil {
+			return oerr
+		}
+		authn.SetOIDC(verifier)
+		logger.Info("OIDC verification enabled on read surfaces", "issuer", cfg.OIDCIssuer)
+	}
 	var grpcOpts []grpc.ServerOption
 	if authn.Enabled() {
 		grpcOpts = append(grpcOpts,
@@ -298,10 +314,10 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	mcpRouter := newTenantRouter(reg, logger, func(st *registry.Stack) (http.Handler, error) {
 		return mcp.New(st.Graph, st.Store).SetObserver(queryMetrics).SetAnnotations(st.Annotations).SetAuditor(auditor).HTTPHandler(), nil
 	})
-	if cfg.DeriveOnlyTenancy() {
-		// derive-only: route a scoped token to its own tenant, ignoring the
-		// client X-Scope-OrgID (ADR 0028). The auth middleware authorizes against
-		// the same effective tenant.
+	if cfg.DeriveOnlyTenancy() || cfg.OIDCEnabled() {
+		// Route to the effective tenant: a derive-only scoped token's own tenant,
+		// or an OIDC identity's claim tenant — ignoring the client X-Scope-OrgID
+		// (ADR 0028). The auth middleware authorizes against the same tenant.
 		graphqlRouter.resolve = authn.EffectiveTenantHTTP
 		mcpRouter.resolve = authn.EffectiveTenantHTTP
 	}
@@ -335,7 +351,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		debugRouter := newTenantRouter(reg, logger, func(st *registry.Stack) (http.Handler, error) {
 			return debugui.New(st.Graph, st.Store)
 		})
-		if cfg.DeriveOnlyTenancy() {
+		if cfg.DeriveOnlyTenancy() || cfg.OIDCEnabled() {
 			debugRouter.resolve = authn.EffectiveTenantHTTP
 		}
 		mux.Handle("/", debugRouter)
