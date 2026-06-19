@@ -121,16 +121,16 @@ func (sh *Shipper) lastShipped(ctx context.Context, tenant string) (uint64, erro
 	if err != nil {
 		return 0, err
 	}
-	var max uint64
+	var maxSeq uint64
 	for _, name := range names {
-		if _, to, ok := parseSegmentName(name); ok && to > max {
-			max = to
+		if _, to, ok := parseSegmentName(name); ok && to > maxSeq {
+			maxSeq = to
 		}
 	}
 	sh.mu.Lock()
-	sh.cursor[tenant] = max
+	sh.cursor[tenant] = maxSeq
 	sh.mu.Unlock()
-	return max, nil
+	return maxSeq, nil
 }
 
 func (sh *Shipper) segments(ctx context.Context, tenant string) ([]string, error) {
