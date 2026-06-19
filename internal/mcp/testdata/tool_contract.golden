@@ -422,6 +422,12 @@ tool describe_schema
   entity_types []object
     count int
     type string
+  governance_attributes []object
+    example string
+    key string
+    semconv bool
+    summary string
+    values []string
   relation_types []object
     count int
     type string

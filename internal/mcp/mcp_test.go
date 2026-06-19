@@ -444,6 +444,27 @@ func TestDescribeSchemaEmpty(t *testing.T) {
 	if out.TotalEntities != 0 || out.Description == "" {
 		t.Fatalf("unexpected empty description: %+v", out)
 	}
+	// The governance vocabulary is constant: it must be advertised even on an
+	// empty graph, so a consumer learns what it can filter on before any entity
+	// exists.
+	if len(out.GovernanceAttributes) == 0 {
+		t.Error("describe_schema must advertise the governance vocabulary even when empty")
+	}
+	var sawSemconv, sawProvisional bool
+	for _, g := range out.GovernanceAttributes {
+		if g.Key == "" || g.Summary == "" {
+			t.Errorf("governance attribute missing key/summary: %+v", g)
+		}
+		if g.Key == "service.criticality" && g.Semconv {
+			sawSemconv = true
+		}
+		if g.Key == "entity.owner.team" && !g.Semconv {
+			sawProvisional = true
+		}
+	}
+	if !sawSemconv || !sawProvisional {
+		t.Errorf("expected both a semconv key and an entity.* provisional key advertised, got %+v", out.GovernanceAttributes)
+	}
 }
 
 // --- end-to-end over the MCP protocol ---------------------------------------
