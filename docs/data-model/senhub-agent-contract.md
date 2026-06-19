@@ -263,7 +263,7 @@ attributes**. So anything a producer would have hung on an edge becomes an
 **entity** instead:
 
 - **Ports are entities.** A port is a `network.interface` entity
-  (`{network.device.id, interface.name}`, with `oper.state`/`speed` as attributes),
+  (`{network.device.id, interface.name}`, with `oper_state`/`speed` as attributes),
   linked by `has_interface` (device→port); physical adjacency is a **bare
   `connected_to`** (port↔port) — never `adjacent_to` carrying `{local_port,
   remote_port}`.
@@ -280,9 +280,15 @@ attributes**. So anything a producer would have hung on an edge becomes an
 - **`device.role`** (e.g. `switch`, `router`) is an **optional descriptive**
   attribute (never identity); infer best-effort from `sysServices` (L3 bit → router,
   L2 → switch) and omit when ambiguous.
-- **Descriptive key casing is dotted lowercase** (`sys.name`, `mgmt.ip`, `oper.state`
-  — not `sys_name`). Toise does not validate descriptive keys, but follow this for
+- **Descriptive key casing is dotted lowercase** (`sys.name`, `mgmt.ip` — not
+  `sys_name`). Toise does not validate descriptive keys, but follow this for
   cross-producer consistency.
+- **State-bearing keys are a fixed recognized set with exact spellings** the change
+  engine matches: `oper_state`, `admin_state`, `status`, `replication.role`,
+  `read_only` (note the **underscore** forms — they predate and override the dotted
+  convention). A change to one of these classifies as `entity.state_changed`; emit
+  the exact string — a dotted variant like `oper.state` is silently treated as an
+  ordinary attribute and the state change never fires.
 - **Identity is unchanged** (`network.device.id` precedence `serial:<PEN>`/…, exact
   matching, per-producer liveness) — those are facts and stay.
 

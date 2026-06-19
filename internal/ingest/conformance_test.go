@@ -114,18 +114,19 @@ func buildConformanceLogs() plog.Logs {
 	// switches, their **ports as `network.interface` entities**, a routing-table entry
 	// as a **`network.route` entity**, with `has_interface` (device->port), `has_route`
 	// (device->route) and a **bare `connected_to`** (port-to-port) adjacency, all
-	// embedded. No edge attributes — the ports carry their own facts (oper.state,
+	// embedded. No edge attributes — the ports carry their own facts (oper_state,
 	// speed) and the route carries its metric/protocol; device-level adjacency is
 	// *derived* at read, not stored. Device identity stays anchored on
 	// observer-independent SNMP facts; the mutable mgmt IP and sysName are descriptive
-	// only. Descriptive keys are dotted lowercase (`sys.name`, `oper.state`). Each
+	// only. Descriptive keys are dotted lowercase (`sys.name`); state-bearing keys
+	// keep their exact recognized spelling — `oper_state` (underscore), not `oper.state`. Each
 	// edge's endpoints exist first: portb/porta and the route precede the switch that
 	// embeds has_interface/has_route, and porta embeds connected_to -> portb. The route
 	// identity is {network.device.id, route.destination}; its next hop rides as the
 	// scalar `next_hop.ip` (network.address is deferred).
 	route1 := map[string]any{"network.device.id": "serial:9:FOC2150X0AB", "route.destination": "10.20.0.0/16"}
-	entity(evEntityState, model.TypeNetworkInterface, portb, map[string]any{"oper.state": "up", "speed": int64(1_000_000_000)})
-	entity(evEntityState, model.TypeNetworkInterface, porta, map[string]any{"oper.state": "up", "speed": int64(1_000_000_000)},
+	entity(evEntityState, model.TypeNetworkInterface, portb, map[string]any{"oper_state": "up", "speed": int64(1_000_000_000)})
+	entity(evEntityState, model.TypeNetworkInterface, porta, map[string]any{"oper_state": "up", "speed": int64(1_000_000_000)},
 		embRel{model.RelConnectedTo, model.TypeNetworkInterface, portb})
 	entity(evEntityState, model.TypeNetworkRoute, route1, map[string]any{"metric": int64(10), "route.protocol": "ospf", "next_hop.ip": "10.0.0.254"})
 	entity(evEntityState, model.TypeNetworkDevice, sw1, map[string]any{"device.role": "switch", "sys.name": "core-sw-01", "mgmt.ip": "10.0.0.1"},

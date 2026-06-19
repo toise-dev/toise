@@ -300,7 +300,7 @@ standardizes no network entities, only `network.*` span/metric attributes) is:
 | Entity | Identity | Descriptive attributes | Attached by |
 | --- | --- | --- | --- |
 | `network.device` | `{network.device.id}` (precedence ladder below) | `sys.name`, `mgmt.ip`, `device.role`, … | — (the discovered asset) |
-| `network.interface` (a port) | `{network.device.id, interface.name}` | `oper.state`, `speed`, … | `has_interface` (device→interface) |
+| `network.interface` (a port) | `{network.device.id, interface.name}` | `oper_state` (state key), `speed`, … | `has_interface` (device→interface) |
 | `network.route` | `{network.device.id, route.destination}` (CIDR) | `metric`, `route.protocol`, `next_hop.ip` | `has_route` (device→route) |
 
 Physical adjacency is a **bare `connected_to`** (interface↔interface). Device-level
@@ -320,9 +320,14 @@ demonstrates the model** (port + route entities, `has_interface`/`has_route`/bar
 
 **Descriptive-attribute key casing.** Identity keys are fixed by the registry; for
 **descriptive** attributes the convention is **dotted, lowercase** (`sys.name`,
-`mgmt.ip`, `oper.state` — not `sys_name`). Toise does **not** validate descriptive
-keys (only entity/relation *types* are registered), so this is a cross-producer
-convention, not a rejection — but producers should follow it for consistency.
+`mgmt.ip` — not `sys_name`). Toise does **not** validate descriptive keys (only
+entity/relation *types* are registered), so this is a cross-producer convention, not
+a rejection — but producers should follow it for consistency. **Exception — state
+keys:** the change engine recognizes a fixed set whose exact spellings it matches
+(`oper_state`, `admin_state`, `status`, `replication.role`, `read_only`; note the
+underscore forms). Emit the exact string for the change to classify as
+`entity.state_changed` — a dotted variant such as `oper.state` is treated as an
+ordinary descriptive attribute and the state change is lost.
 
 **Remote endpoints known only by MAC.** `connected_to` requires **two
 `network.interface` entities with exact identity** `{network.device.id,
