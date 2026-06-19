@@ -112,6 +112,9 @@ in the change taxonomy (`stateKeys` → `entity.state_changed` vs
 | `service.instance` | `service.name`, `service.version`, `service.namespace` | — |
 | `host` | `host.name`, `host.arch`, `os.type`, `os.version`, `os.description` | — |
 | `container` | `container.name`, `container.image.name`, `container.image.tag`, `container.image.digest`, `container.runtime` | `status` (`running`/`stopped`/`paused`) |
+| `network.device` | `hw.vendor`, `hw.model`, `hw.firmware_version` (hardware semconv); `sysName` and `sysDescr` (SNMP, raw/descriptive); mgmt address (descriptive, **mutable**) | — (reachability / admin status is a metric) |
+| `compute.vm` | vm name (descriptive); guest `os.type` / `os.version` when the hypervisor reports it; configured vCPU count + memory size (descriptive **config**, not utilization); hypervisor platform | power state (`running` / `stopped` / `suspended`) |
+| `network.endpoint` | **none by design** — the observer sees only the identity (`server.address`, `server.port`, `network.transport`) and resolves to a canonical entity at read time (#184); populating more would mint a false identity | — |
 
 - **AT1 — version key.** `service.version` (semconv) for services; `db.system.version`
   for databases (consistent with the `db.system.*` namespace). The technology name is a
@@ -140,6 +143,39 @@ in the change taxonomy (`stateKeys` → `entity.state_changed` vs
 **Follow-ups:** AT4 is **done** — `replication.role` + `read_only` are in Toise's
 `stateKeys` (#217). Agent-side rollout starts with AT1 (redis `db.version` →
 `db.system.version`; thread the captured version onto the mysql/postgres/oracle entity).
+
+### AT8 — remote out-of-band probes & active checks
+
+Probes that observe a target they do **not** run on (BMC/Redfish, remote SQL, ICMP/HTTP
+checks) split into two families. The rule: **emit an entity only when the target has a
+durable, non-network-derived identity the producer can assert (a serial, an operator-assigned
+name); otherwise the check is pure telemetry (an `up`/latency metric), no entity.** This keeps
+ADR 0018 intact — never mint a permanent identity from an IP or a URL.
+
+- **redfish** (physical server via BMC) → `service.instance`, `service.name=redfish`,
+  `id=redfish:<serial|uuid>`. Hardware facts use the OTel **`hw.*`** namespace: `hw.vendor`,
+  `hw.model`, `hw.serial_number`, `hw.firmware_version`, `hw.bios_version` (descriptive);
+  `hw.state` (`ok`/`degraded`/`failed`/`predicted_failure`) is **state-bearing**. Sensor
+  readings (temperature, fan RPM, PSU watts) are **metrics**, not attributes. The same box's
+  in-OS `host` (machine-id) is a **separate facet** — echo the serial as a descriptive
+  attribute on **both** so a future `same_as` overlay (ADR 0020) can reconcile them; never merge.
+- **ibmi** (LPAR via JT400) → `service.instance`, `service.name=ibmi`, `id=ibmi:<serial>`
+  (QSRLNBR). Descriptive: system name, `os.type=ibmi`, `os.version`, `hw.model` /
+  `hw.serial_number`, `deployment.environment.name`. **Not a `host`** (same collision argument).
+  The IBM i Db2 is a **separate `db` entity** (boundary rule: anything semconv gives a
+  `db.system.name` is a `db`), linked by `monitors`; do not fold the partition and the database
+  into one entity.
+- **gateway** (ICMP reachability of an IP) → **no entity**: a ping is reachability telemetry.
+  Do not key a `network.endpoint` on the IP. If the gateway is wanted in inventory, the right
+  model is a SNMP-discovered `network.device` (real identity), with the ping attached as a metric.
+- **webapp** (URL check) → `service.instance` **only when the operator supplies a stable app
+  name** (`service.name=<app>`, descriptive `url.full`, `service.version` if readable,
+  `deployment.environment.name`); reachability stays a metric. With no operator-stable name,
+  **no entity** — never key on the URL/host.
+
+**Governance attributes** that apply across all entity types — owner/team, criticality,
+on-prem location, lifecycle — and advertising the attribute vocabulary on `describe_type` /
+filtering it in `find_entities`, are tracked in the attribute-enrichment program (toise#231).
 
 ### Time & liveness — explicit delete + interval backstop
 
