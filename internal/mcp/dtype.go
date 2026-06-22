@@ -202,6 +202,8 @@ func describeRelationType(g Graph, typ string, rels []model.Relation) DescribeTy
 			out.ImpactFlow = "to_from"
 		case model.ImpactFromTo:
 			out.ImpactFlow = "from_to"
+		case model.ImpactNone:
+			out.ImpactFlow = "none"
 		default:
 			out.ImpactFlow = "both"
 		}

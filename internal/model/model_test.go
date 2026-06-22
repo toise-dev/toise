@@ -199,7 +199,7 @@ func TestRegistry(t *testing.T) {
 	if def, ok := RelationDef(RelListensOn); !ok || def.From != TypeServiceListener || def.To != TypeNetworkInterface {
 		t.Error("relation def wrong")
 	}
-	if len(EntityTypes()) != 12 || len(RelationTypes()) != 12 {
+	if len(EntityTypes()) != 12 || len(RelationTypes()) != 13 {
 		t.Errorf("registry counts: %d entity, %d relation", len(EntityTypes()), len(RelationTypes()))
 	}
 	// compute.vm (hypervisor-discovered VM) and container are registered compute
@@ -341,5 +341,23 @@ func TestEventEnvelope(t *testing.T) {
 	}
 	if err := (Event{}).Validate(); !errors.Is(err, ErrMissingEntity) {
 		t.Error("empty envelope should be invalid")
+	}
+}
+
+// TestSameAsRegistration pins ADR 0020 Lot A: same_as is a registered,
+// non-structural, no-impact identity-belief edge.
+func TestSameAsRegistration(t *testing.T) {
+	def, ok := RelationDef(RelSameAs)
+	if !ok {
+		t.Fatal("same_as must be a registered relation type (else the boundary rejects it)")
+	}
+	if def.Structural {
+		t.Error("same_as must be non-structural: a belief assertion is not an alert-worthy structural change")
+	}
+	if def.Impact != ImpactNone {
+		t.Errorf("same_as Impact = %v, want ImpactNone (an alias is not a failure path)", def.Impact)
+	}
+	if ImpactFlowOf(RelSameAs) != ImpactNone {
+		t.Error("ImpactFlowOf(same_as) must be ImpactNone")
 	}
 }
