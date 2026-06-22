@@ -1242,6 +1242,44 @@ func TestImpactOfSkipsSameAs(t *testing.T) {
 	}
 }
 
+// TestImpactOfFoldsAliases pins ADR 0020 Lot B alias-aware impact: querying any
+// facet of a machine yields the same blast radius — what depends on hostB is
+// impacted when you ask about its high-confidence same_as alias vmA.
+func TestImpactOfFoldsAliases(t *testing.T) {
+	g := &fakeGraph{
+		entities: map[model.EntityID]model.Entity{
+			"vmA":   {ID: "vmA", Type: model.TypeComputeVM},
+			"hostB": {ID: "hostB", Type: model.TypeHost},
+			"procX": {ID: "procX", Type: model.TypeProcess},
+		},
+		deleted: map[model.EntityID]bool{},
+		relations: []model.Relation{
+			{ID: "r1", Type: model.RelRunsOn, From: "procX", To: "hostB", Structural: true}, // hostB failing impacts procX
+			{ID: "s1", Type: model.RelSameAs, From: "vmA", To: "hostB",
+				Attributes: []model.KeyValue{{Key: "confidence", Value: model.DoubleValue(0.95)}, {Key: "basis", Value: sv("hyperv-kvp")}}},
+		},
+	}
+	s := New(g, &fakeStore{})
+
+	// Ask about vmA — the alias hostB's dependents must be in the blast radius.
+	_, out, err := s.impactOf(context.Background(), nil, ImpactOfInput{EntityID: "vmA"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Total != 1 || out.Aliases != 1 || len(out.Impacted) != 1 || out.Impacted[0].ID != "procX" {
+		t.Fatalf("impact_of(vmA) = total %d aliases %d impacted %+v, want procX via the hostB alias", out.Total, out.Aliases, out.Impacted)
+	}
+
+	// Symmetric: asking about hostB folds in vmA and reaches the same dependents.
+	_, out, err = s.impactOf(context.Background(), nil, ImpactOfInput{EntityID: "hostB"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Total != 1 || out.Aliases != 1 || out.Impacted[0].ID != "procX" {
+		t.Fatalf("impact_of(hostB) = total %d aliases %d, want procX with vmA folded", out.Total, out.Aliases)
+	}
+}
+
 // TestGetEntityCanonical pins ADR 0020 Lot B: get_entity surfaces the read-time
 // canonical group — transitive over same_as edges at/above the threshold, with
 // low-confidence edges excluded and no group when none qualifies.

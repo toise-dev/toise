@@ -129,6 +129,7 @@ tool impact_of
   limit int
   max_depth int
   out:
+  aliases int
   by_type []object
     count int
     type string

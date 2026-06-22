@@ -35,10 +35,49 @@ type CanonicalGroup struct {
 // transitively, and returns the other group members plus the supporting links.
 // Returns nil when no qualifying same_as edge touches the entity.
 func (s *Server) canonicalGroup(g Graph, root model.EntityID) *CanonicalGroup {
+	members, links := s.walkSameAs(g, root)
+	if len(members) <= 1 {
+		return nil
+	}
+	var aliases []CanonicalMember
+	for _, id := range members {
+		if id == root {
+			continue
+		}
+		if ent, ok, deleted := g.GetEntity(id); ok && !deleted {
+			aliases = append(aliases, CanonicalMember{ID: string(id), Type: ent.Type, Label: label(ent)})
+		} else {
+			aliases = append(aliases, CanonicalMember{ID: string(id)})
+		}
+	}
+	if len(aliases) == 0 {
+		return nil
+	}
+	sort.Slice(aliases, func(i, j int) bool { return aliases[i].ID < aliases[j].ID })
+	sort.Slice(links, func(i, j int) bool {
+		if links[i].From != links[j].From {
+			return links[i].From < links[j].From
+		}
+		return links[i].To < links[j].To
+	})
+	return &CanonicalGroup{Aliases: aliases, Links: links}
+}
+
+// canonicalMemberIDs returns the entity's canonical group as ids — itself plus
+// every entity reachable over same_as edges at/above the threshold, transitively.
+// A single-element slice (just root) means no qualifying alias.
+func (s *Server) canonicalMemberIDs(g Graph, root model.EntityID) []model.EntityID {
+	members, _ := s.walkSameAs(g, root)
+	return members
+}
+
+// walkSameAs is the shared BFS over same_as edges with confidence >= threshold.
+// It returns the connected group (root first) and the supporting links.
+func (s *Server) walkSameAs(g Graph, root model.EntityID) ([]model.EntityID, []SameAsLink) {
 	seen := map[model.EntityID]bool{root: true}
 	seenLink := map[model.RelationID]bool{}
+	members := []model.EntityID{root}
 	queue := []model.EntityID{root}
-	var aliases []CanonicalMember
 	var links []SameAsLink
 
 	for len(queue) > 0 {
@@ -61,23 +100,11 @@ func (s *Server) canonicalGroup(g Graph, root model.EntityID) *CanonicalGroup {
 				continue
 			}
 			seen[other] = true
+			members = append(members, other)
 			queue = append(queue, other)
-			if ent, ok, deleted := g.GetEntity(other); ok && !deleted {
-				aliases = append(aliases, CanonicalMember{ID: string(other), Type: ent.Type, Label: label(ent)})
-			}
 		}
 	}
-	if len(aliases) == 0 {
-		return nil
-	}
-	sort.Slice(aliases, func(i, j int) bool { return aliases[i].ID < aliases[j].ID })
-	sort.Slice(links, func(i, j int) bool {
-		if links[i].From != links[j].From {
-			return links[i].From < links[j].From
-		}
-		return links[i].To < links[j].To
-	})
-	return &CanonicalGroup{Aliases: aliases, Links: links}
+	return members, links
 }
 
 // relConfidence reads the same_as edge's confidence attribute as a number in
