@@ -113,7 +113,8 @@ in the change taxonomy (`stateKeys` → `entity.state_changed` vs
 | `host` | `host.name`, `host.arch`, `os.type`, `os.version`, `os.description` | — |
 | `container` | `container.name`, `container.image.name`, `container.image.tag`, `container.image.digest`, `container.runtime` | `status` (`running`/`stopped`/`paused`) |
 | `network.device` | `hw.vendor`, `hw.model`, `hw.firmware_version` (hardware semconv); `sysName` and `sysDescr` (SNMP, raw/descriptive); mgmt address (descriptive, **mutable**) | — (reachability / admin status is a metric) |
-| `compute.vm` | vm name (descriptive); guest `os.type` / `os.version` when the hypervisor reports it; `guest.host.id` when the hypervisor surfaces the guest machine-id (evidence for the `same_as` overlay, not identity); configured vCPU count + memory size (descriptive **config**, not utilization); hypervisor platform | power state (`running` / `stopped` / `suspended`) |
+| `compute.vm` | `host.name` (vm name); guest `os.type` / `os.version` when the hypervisor reports it; `guest.host.id` when the hypervisor surfaces the guest machine-id (evidence for the `same_as` overlay, not identity); configured capacity reusing the AT10 keys — `host.cpu.logical.count` (vCPUs) and `host.memory.total` (By) — as **config**, not utilization; `host.virtualization` for the hypervisor platform (the AT11 value set: `hyperv`/`vmware`/`kvm`/…) | power state (`running` / `stopped` / `suspended`) |
+| `service.listener` | `process.executable.name`, `process.pid`, `network.transport`, `listen.address`, `port` (the port is also encoded in the `service.endpoint` identity) | — |
 | `network.endpoint` | **none by design** — the observer sees only the identity (`server.address`, `server.port`, `network.transport`) and resolves to a canonical entity at read time (#184); populating more would mint a false identity | — |
 
 - **AT1 — version key.** `service.version` (semconv) for services; `db.system.version`
@@ -190,9 +191,10 @@ the keys before any are observed) and filters it via `find_entities` (toise#231)
 | Escalation contact | `entity.owner.contact` | Toise-provisional | optional |
 | Criticality / tier | `service.criticality` | semconv (Development) | values `critical`/`high`/`medium`/`low`; semconv scopes it to services, Toise applies it to any entity |
 | Physical location | `entity.location.site` / `.datacenter` / `.rack` / `.room` | Toise-provisional | on-prem; semconv covers only cloud regions |
-| Lifecycle / maintenance | `entity.lifecycle.status` | Toise-provisional | open enum, e.g. `active`/`maintenance`/`decommissioning`/`retired` |
+| Lifecycle / maintenance | `entity.lifecycle.status` | Toise-provisional | open enum, e.g. `active` (in service) / `maintenance` / `decommissioning` / `retired`; **distinct from `deployment.environment.name`** (prod/staging/dev) — orthogonal axes |
+| Free-form operator labels | `entity.label.<key>` | Toise-provisional | arbitrary operator keys under one prefix (e.g. `entity.label.cost_center`), string values; the prefix lets a consumer surface all operator labels at once |
 
-All optional. Emit what the operator supplies (config/labels); never fabricate.
+All optional. Emit what the operator supplies (config/labels); never fabricate. `entity.owner.contact` is free-form (email, Slack, pager) — not email-only. `service.criticality` keeps the semconv value set (`critical`/`high`/`medium`/`low`); do not invent a parallel `tier_0/1/2`.
 
 ### AT10 — host capacity attributes
 
