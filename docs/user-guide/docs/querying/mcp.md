@@ -30,7 +30,7 @@ question without a second lookup.
 | `describe_schema()` | a natural-language description of the entity and relation types currently in the graph, to bootstrap the model's understanding |
 | `describe_type(type)` | zoom on one type: observed attribute keys with examples, empirical relation shapes and peers — or, for a relation type, endpoint shapes and failure-propagation direction |
 | `find_entities(type, match, limit, verbosity)` | entities matching a type / attribute filter, with `total`/`truncated` |
-| `get_entity(entity_id, verbosity)` | a full entity with its attributes, plus any operator `annotations` |
+| `get_entity(entity_id, verbosity)` | a full entity with its attributes, plus any operator `annotations`, plus a `canonical` group — other entities that high-confidence `same_as` edges assert are the same real thing (ADR 0020; a read-time view, the entities are not merged) |
 | `annotate_entity(entity_id, annotations)` | attach operator notes (an overlay, **not** producer truth) to an entity — merge key/values, an empty value removes a key; the one **write** tool, so it needs a write-capable token |
 | `get_neighbors(entity_id, relation_type, max_depth, limit, verbosity)` | traverse relations up to `max_depth` (**capped at 5**); each neighbor carries the relation type, direction, and hop distance that reached it, with `total`/`truncated` like the other list tools |
 | `find_path(from_id, to_id, relation_type, max_depth)` | the shortest relation path between two entities; `reachable: false` is a first-class answer, never an error |

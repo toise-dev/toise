@@ -31,6 +31,16 @@ tool get_entity
     author string
     updated_at string
     values map
+  canonical object
+    aliases []object
+      id string
+      label string
+      type string
+    links []object
+      basis string
+      confidence float64
+      from string
+      to string
   entity object
     attributes []object
       key string

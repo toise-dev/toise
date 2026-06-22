@@ -70,8 +70,9 @@ type GetEntityInput struct {
 // GetEntityOutput carries the entity and any operator annotations (an overlay,
 // not producer truth — see annotate_entity).
 type GetEntityOutput struct {
-	Entity      Entity         `json:"entity"`
-	Annotations *AnnotationOut `json:"annotations,omitempty" jsonschema:"operator-added notes on this entity (not producer truth); absent when none"`
+	Entity      Entity          `json:"entity"`
+	Annotations *AnnotationOut  `json:"annotations,omitempty" jsonschema:"operator-added notes on this entity (not producer truth); absent when none"`
+	Canonical   *CanonicalGroup `json:"canonical,omitempty" jsonschema:"read-time identity overlay (ADR 0020): other entities that high-confidence same_as edges assert are the same real thing; absent when none. The entities are NOT merged — this is a derived view over the belief edges."`
 }
 
 func (s *Server) getEntity(ctx context.Context, _ *mcpsdk.CallToolRequest, in GetEntityInput) (*mcpsdk.CallToolResult, GetEntityOutput, error) {
@@ -90,7 +91,11 @@ func (s *Server) getEntity(ctx context.Context, _ *mcpsdk.CallToolRequest, in Ge
 	if !ok {
 		return nil, GetEntityOutput{}, fmt.Errorf("no entity found with id %q; use find_entities to discover ids — if it was deleted a while ago its tombstone may have been evicted, but entity_history still has its past", in.EntityID)
 	}
-	return nil, GetEntityOutput{Entity: entityOutV(e, deleted, compact), Annotations: s.annotationFor(in.EntityID)}, nil
+	return nil, GetEntityOutput{
+		Entity:      entityOutV(e, deleted, compact),
+		Annotations: s.annotationFor(in.EntityID),
+		Canonical:   s.canonicalGroup(g, model.EntityID(in.EntityID)),
+	}, nil
 }
 
 // --- get_neighbors ---

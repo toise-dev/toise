@@ -173,7 +173,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		logger.Info("serving MCP over stdio", "data_dir", cfg.DataDir, "tenant", tenant.Default)
-		if serveErr := mcp.New(st.Graph, st.Store).SetAnnotations(st.Annotations).ServeStdio(ctx); serveErr != nil && !errors.Is(serveErr, context.Canceled) {
+		if serveErr := mcp.New(st.Graph, st.Store).SetAnnotations(st.Annotations).SetIdentityThreshold(cfg.IdentityThreshold).ServeStdio(ctx); serveErr != nil && !errors.Is(serveErr, context.Canceled) {
 			return fmt.Errorf("mcp stdio: %w", serveErr)
 		}
 		return nil
@@ -322,7 +322,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		}), nil
 	})
 	mcpRouter := newTenantRouter(reg, logger, func(st *registry.Stack) (http.Handler, error) {
-		return mcp.New(st.Graph, st.Store).SetObserver(queryMetrics).SetAnnotations(st.Annotations).SetAuditor(auditor).HTTPHandler(), nil
+		return mcp.New(st.Graph, st.Store).SetObserver(queryMetrics).SetAnnotations(st.Annotations).SetAuditor(auditor).SetIdentityThreshold(cfg.IdentityThreshold).HTTPHandler(), nil
 	})
 	if cfg.DeriveOnlyTenancy() || cfg.OIDCEnabled() {
 		// Route to the effective tenant: a derive-only scoped token's own tenant,

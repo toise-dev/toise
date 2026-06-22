@@ -100,7 +100,13 @@ type Server struct {
 	obs     Observer
 	ann     *annotations.Store // per-tenant annotation sidecar; nil disables annotate_entity
 	audit   *audit.Auditor     // nil/disabled = no audit records (ADR 0028)
+	idThr   float64            // same_as confidence threshold for the canonical view (ADR 0020 Lot B)
 }
+
+// defaultIdentityThreshold is the same_as confidence at or above which an alias
+// belief joins an entity's canonical group — the high band (serial/engine-id/KVP)
+// per ADR 0020. Override with SetIdentityThreshold.
+const defaultIdentityThreshold = 0.9
 
 // SetAnnotations attaches the per-tenant annotation sidecar, enabling
 // annotate_entity and the annotations block on get_entity; returns s for
@@ -124,11 +130,21 @@ func (s *Server) SetObserver(o Observer) *Server {
 	return s
 }
 
+// SetIdentityThreshold sets the same_as confidence at or above which an alias
+// joins an entity's canonical group (ADR 0020 Lot B); returns s for chaining. A
+// value outside (0,1] falls back to the default.
+func (s *Server) SetIdentityThreshold(t float64) *Server {
+	if t > 0 && t <= 1 {
+		s.idThr = t
+	}
+	return s
+}
+
 // New builds an MCP server reading from the given projection and event log. The
 // underlying SDK server is constructed once and reused across transports and
 // HTTP sessions; the tools are stateless reads.
 func New(graph Graph, store EventReader) *Server {
-	s := &Server{graph: graph, store: store, now: time.Now, timeout: toolTimeout}
+	s := &Server{graph: graph, store: store, now: time.Now, timeout: toolTimeout, idThr: defaultIdentityThreshold}
 	impl := &mcpsdk.Implementation{
 		Name:    "toise",
 		Title:   "Toise — the living map of your infrastructure",

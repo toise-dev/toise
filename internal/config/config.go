@@ -160,6 +160,10 @@ type Config struct {
 	OIDCAudience    string `yaml:"oidc_audience"`
 	OIDCTenantClaim string `yaml:"oidc_tenant_claim"`
 	OIDCRoleClaim   string `yaml:"oidc_role_claim"`
+	// IdentityThreshold is the same_as confidence (0–1] at or above which an alias
+	// belief joins an entity's canonical group in the read-time identity overlay
+	// (ADR 0020). Default 0.9 (the high band). Never merges storage.
+	IdentityThreshold float64 `yaml:"identity_confidence_threshold"`
 }
 
 // TLSEnabled reports whether both a certificate and key are configured.
@@ -183,6 +187,9 @@ func (c Config) Validate() error {
 	}
 	if c.LogShipDir != "" && c.LogShipInterval.D() <= 0 {
 		return fmt.Errorf("log_shipping_dir is set but log_shipping_interval is 0: no segment would ever be shipped")
+	}
+	if c.IdentityThreshold <= 0 || c.IdentityThreshold > 1 {
+		return fmt.Errorf("identity_confidence_threshold must be in (0,1], got %v", c.IdentityThreshold)
 	}
 	switch strings.ToLower(c.LogLevel) {
 	// "warning" is accepted as an alias for "warn" to match SlogLevel, which
@@ -289,6 +296,7 @@ func Default() Config {
 		Playground:            true,
 		DebugUI:               true,
 		TenantAutoCreate:      true,
+		IdentityThreshold:     0.9,
 	}
 }
 
@@ -436,6 +444,13 @@ func (c *Config) applyEnv(getenv func(string) string) error {
 	if v := getenv("TOISE_LOG_SHIPPING_DIR"); v != "" {
 		c.LogShipDir = v
 	}
+	if v := getenv("TOISE_IDENTITY_CONFIDENCE_THRESHOLD"); v != "" {
+		f, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return fmt.Errorf("TOISE_IDENTITY_CONFIDENCE_THRESHOLD: invalid float %q: %w", v, err)
+		}
+		c.IdentityThreshold = f
+	}
 	if v := getenv("TOISE_AUDIT_LOG"); v != "" {
 		c.AuditLog = v
 	}
@@ -528,6 +543,7 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	backupInterval := fs.Duration("backup-interval", cfg.BackupInterval.D(), "interval between online backups of every tenant's event log (0 = off)")
 	logShipDir := fs.String("log-shipping-dir", cfg.LogShipDir, "directory to ship event-log segments to (with --log-shipping-interval); may be a mounted bucket/NFS; empty = off")
 	logShipInterval := fs.Duration("log-shipping-interval", cfg.LogShipInterval.D(), "interval between event-log segment ships of every tenant (0 = off)")
+	identityThreshold := fs.Float64("identity-confidence-threshold", cfg.IdentityThreshold, "same_as confidence (0,1] at/above which an alias joins the canonical view (ADR 0020)")
 	auditLog := fs.String("audit-log", cfg.AuditLog, "append-only JSON-line audit file for operator writes (annotate_entity); empty = off")
 	tlsCertFile := fs.String("tls-cert-file", cfg.TLSCertFile, "PEM certificate file; with --tls-key-file, serves HTTP and OTLP over TLS")
 	tlsKeyFile := fs.String("tls-key-file", cfg.TLSKeyFile, "PEM private key file (pairs with --tls-cert-file)")
@@ -564,6 +580,7 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	cfg.BackupInterval = Duration(*backupInterval)
 	cfg.LogShipDir = *logShipDir
 	cfg.LogShipInterval = Duration(*logShipInterval)
+	cfg.IdentityThreshold = *identityThreshold
 	cfg.AuditLog = *auditLog
 	cfg.TLSCertFile = *tlsCertFile
 	cfg.TLSKeyFile = *tlsKeyFile
