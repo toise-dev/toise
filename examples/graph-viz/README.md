@@ -98,6 +98,15 @@ relations** — the right fix is for the producer to assert the relationship. Wi
 and loopback addresses (`0.0.0.0`, `127.0.0.0/8`, `::`) are skipped, as they are not
 meaningful join points.
 
+## Attribute filter
+
+The header **`attr`** box highlights nodes whose identity or descriptive attributes
+match and **dims the rest** — type a key (`entity.owner.team`), a `key=value`
+(`service.criticality=critical`), or a free substring. It is a read-time view over
+the data already fetched, so it works on whatever attributes producers emit (the
+governance vocabulary, the per-type AT keys, anything). A match count shows next to
+the stats; the box turns amber when nothing matches.
+
 ## Notes
 
 - `toise-server` has no authentication by default; enable its native bearer-token
