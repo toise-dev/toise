@@ -9,6 +9,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
+## [0.8.0] - 2026-06-22
+
+**The SaaS-readiness release.** 0.8.0 lands the two pillars a multi-tenant,
+externally-exposed Toise needs — **access security** and **resilience/HA** — plus
+a **multi-source identity** overlay and a major **attribute-enrichment** pass.
+Everything is **additive and opt-in**: the zero-config single-binary path is
+unchanged (and now guarded by a CI smoke test). **Not a wire-contract break, no
+data migration** — see the
+[0.7 → 0.8 migration guide](docs/migration/0.7-to-0.8.md).
+
+### Added
+
+- **Resilience & HA (ADR 0029).** Scheduled online backups (`backup_dir`);
+  continuous event-log shipping to a directory or an **S3-compatible store**
+  (`log_shipping_*` — AWS S3 / MinIO / Ceph / R2); `restore-log` to rebuild a data
+  dir from shipped segments (a directory or S3); read HA via N stateless replicas;
+  per-tenant scaling by a per-node cap (`max_tenants`) plus horizontal sharding,
+  with a `toise_tenants_open` gauge.
+- **Multi-source identity (ADR 0020).** Producer-asserted `same_as` belief edges
+  (confidence + basis); a read-time **canonical view** on `get_entity` above a
+  configurable confidence threshold; alias-aware `impact_of` and `find_path`.
+- **Attribute enrichment.** A cross-cutting governance vocabulary (ownership,
+  criticality, location, lifecycle) advertised on `describe_schema`; attribute
+  filtering on the GraphQL `entities` query (parity with `find_entities`); pinned
+  descriptive vocabularies for `host` / `network.device` / `network.interface` /
+  `compute.vm` / `service.listener` and the remote-probe entities (AT8–AT13).
+- **Deployment & operability.** ADRs 0028 / 0029 / 0030 ratified; a consolidated
+  "Deployment tiers & SaaS operations" guide; a tier-0 zero-config CI smoke test.
+
+### Security
+
+- **Access security for multi-tenant SaaS (ADR 0028).** `derive-only` tenant trust
+  mode (anti-spoofing — the tenant is derived from the token, the client header is
+  ignored); bearer tokens **hashed at rest** (SHA-256); **per-tenant RBAC**
+  (role-scoped tenant tokens); **OIDC/JWT** verification on the read surfaces;
+  optional **mTLS** (client-cert auth) on OTLP ingest; an append-only **audit log**
+  for operator writes. All off by default; absence never degrades the zero-config
+  path (ADR 0030).
+
+### Changed
+
+- The network-interface state key is canonicalized on `oper_state` (the engine's
+  recognized spelling); `listens_on` is documented as a **bare edge** — the port
+  lives on the `service.listener` entity.
+- `restore-log --from` is now optional: with no `--from` it restores from the
+  configured shipping target (S3 or `log_shipping_dir`).
+
+### Fixed
+
+- `go install …/cmd/toise-server@latest` works again (require the published
+  `pkg/emit` tag instead of a local `replace`).
+- The `/viz` graph no longer truncates at the 200-item page cap.
+- The cold subcommands (`checkpoint`, `restore-log`, …) no longer error when
+  shipping environment variables are present.
+- A wall-clock-racy registry boot-grace test now uses an injectable clock.
+
 ## [0.7.0] - 2026-06-15
 
 **The integration release.** 0.7.0 widens what an integrator can do with Toise:
@@ -603,6 +659,7 @@ contract converged with the senhub-agent reference producer.
   endpoint enforces an origin check.
 
 [Unreleased]: https://github.com/toise-dev/toise/compare/v0.7.0...HEAD
+[0.8.0]: https://github.com/toise-dev/toise/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/toise-dev/toise/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/toise-dev/toise/compare/0.5.0...v0.6.0
 [0.2.0]: https://github.com/toise-dev/toise/compare/0.1.1...0.2.0
