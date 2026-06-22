@@ -1331,6 +1331,55 @@ func TestGetEntityCanonical(t *testing.T) {
 	}
 }
 
+// TestFindPathAliasAware pins ADR 0020 Lot B for find_path: a strong same_as
+// connects a path (shown as a same_as hop), a below-threshold one does not.
+func TestFindPathAliasAware(t *testing.T) {
+	sa := func(id string, from, to model.EntityID, conf float64) model.Relation {
+		return model.Relation{ID: model.RelationID(id), Type: model.RelSameAs, From: from, To: to,
+			Attributes: []model.KeyValue{{Key: "confidence", Value: model.DoubleValue(conf)}, {Key: "basis", Value: sv("hyperv-kvp")}}}
+	}
+	g := &fakeGraph{
+		entities: map[model.EntityID]model.Entity{
+			"vmA":   {ID: "vmA", Type: model.TypeComputeVM},
+			"vmW":   {ID: "vmW", Type: model.TypeComputeVM},
+			"hostB": {ID: "hostB", Type: model.TypeHost},
+			"procX": {ID: "procX", Type: model.TypeProcess},
+		},
+		deleted: map[model.EntityID]bool{},
+		relations: []model.Relation{
+			{ID: "r1", Type: model.RelRunsOn, From: "procX", To: "hostB", Structural: true},
+			sa("s1", "vmA", "hostB", 0.95), // strong alias -> traversable
+			sa("s2", "vmW", "hostB", 0.5),  // weak alias -> not traversable
+		},
+	}
+	s := New(g, &fakeStore{})
+
+	_, out, err := s.findPath(context.Background(), nil, FindPathInput{FromID: "vmA", ToID: "procX"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.Reachable {
+		t.Fatal("vmA should reach procX through the strong same_as alias")
+	}
+	sawSameAs := false
+	for _, h := range out.Path {
+		if h.ViaRelation == model.RelSameAs {
+			sawSameAs = true
+		}
+	}
+	if !sawSameAs {
+		t.Errorf("path should cross a same_as hop: %+v", out.Path)
+	}
+
+	_, out2, err := s.findPath(context.Background(), nil, FindPathInput{FromID: "vmW", ToID: "procX"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out2.Reachable {
+		t.Error("vmW's only link is a below-threshold same_as; procX must be unreachable")
+	}
+}
+
 // TestDescribeType pins #137: the per-type zoom answers from the live graph —
 // observed keys with usage, empirical relation shapes, and the relation-kind
 // view with endpoint shapes and impact flow.
