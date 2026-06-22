@@ -541,10 +541,31 @@ func splitOrigins(s string) []string {
 	return out
 }
 
-// Load resolves the configuration from all layers in precedence order. getenv is
-// injected (pass os.Getenv) so the resolution is testable without touching the
-// process environment.
+// Load resolves the configuration from all layers (defaults < file < env < flags)
+// and validates it — the server entry point.
 func Load(args []string, getenv func(string) string) (Config, error) {
+	cfg, err := resolve(args, getenv)
+	if err != nil {
+		return Config{}, err
+	}
+	if err := cfg.Validate(); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+// LoadCold resolves the configuration without the server-runtime Validate. The
+// cold subcommands (checkpoint, drop-snapshot, delete-tenant, restore-log) use it:
+// they need only the resolved data dir / shipping target, and must not be blocked
+// by run()-time invariants (e.g. a shipping interval) that do not apply to them.
+func LoadCold(args []string, getenv func(string) string) (Config, error) {
+	return resolve(args, getenv)
+}
+
+// resolve applies every layer in precedence order (defaults < file < env < flags)
+// and the production lockdown, but does not Validate. getenv is injected (pass
+// os.Getenv) so resolution is testable without touching the process environment.
+func resolve(args []string, getenv func(string) string) (Config, error) {
 	cfg := Default()
 
 	// The config-file path underlays env and flags, so resolve it first — from
@@ -654,9 +675,6 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 		cfg.GraphQLIntrospection = false
 		cfg.Playground = false
 		cfg.DebugUI = false
-	}
-	if err := cfg.Validate(); err != nil {
-		return Config{}, err
 	}
 	return cfg, nil
 }

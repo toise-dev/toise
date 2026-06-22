@@ -70,15 +70,18 @@ Shipping and the cold/scheduled checkpoint are complementary: the checkpoint is 
 
 ### Restore from shipped segments
 
-Shipped **segments** (`log_shipping_dir`) reconstruct the log directly — the low-RPO path. With the server stopped, replay them into a **fresh** data dir:
+Shipped **segments** reconstruct the log directly — the low-RPO path. With the server stopped, replay them into a **fresh** data dir. `restore-log` reads the **configured shipping target** (the `log_shipping_dir`, or the **S3 bucket** when one is set — the same `TOISE_LOG_SHIPPING_S3_*` env), so no `--from` is needed; pass `--from <dir>` only to read a local copy (a mirror, or a directory of segments):
 
 ```bash
+# restore from the configured target (S3 or log_shipping_dir):
+toise-server restore-log --config /etc/toise/toise-server.yaml --data-dir /var/lib/toise/restored
+# or from an explicit local directory of segments:
 toise-server restore-log --from /var/lib/toise/segments --data-dir /var/lib/toise/restored
 # one tenant only:
 toise-server restore-log --from /var/lib/toise/segments --data-dir /var/lib/toise/restored --tenant acme
 ```
 
-It replays each tenant's contiguous segments and re-appends the events into a new per-tenant store, faithfully reconstructing the log (the event/recorded timestamps ride on the events, so history and time-travel are preserved); the projection rebuilds on the next start. It **refuses to write into a data dir that already holds events**, so it never clobbers or duplicates an existing log — always restore into an empty/new directory, then point the server at it. Default restores every tenant found under `--from`.
+It replays each tenant's contiguous segments and re-appends the events into a new per-tenant store, faithfully reconstructing the log (the event/recorded timestamps ride on the events, so history and time-travel are preserved); the projection rebuilds on the next start. It **refuses to write into a data dir that already holds events**, so it never clobbers or duplicates an existing log — always restore into an empty/new directory, then point the server at it. Default restores every tenant found at the source.
 
 ## High availability
 

@@ -284,3 +284,21 @@ func TestTenantTokensMap(t *testing.T) {
 		}
 	}
 }
+
+// TestLoadColdSkipsRuntimeValidation pins the cold-subcommand fix: a shipping
+// target without an interval is a run()-time misconfiguration that Load (server)
+// rejects, but LoadCold (checkpoint/restore-log/…) must resolve — those tools
+// never ship, they only need the resolved target.
+func TestLoadColdSkipsRuntimeValidation(t *testing.T) {
+	getenv := env(map[string]string{"TOISE_LOG_SHIPPING_S3_BUCKET": "b"})
+	if _, err := Load(nil, getenv); err == nil {
+		t.Error("Load must reject a shipping bucket with no interval")
+	}
+	cfg, err := LoadCold(nil, getenv)
+	if err != nil {
+		t.Fatalf("LoadCold must resolve without the runtime validation: %v", err)
+	}
+	if cfg.LogShipS3Bucket != "b" {
+		t.Errorf("LoadCold lost the bucket: %q", cfg.LogShipS3Bucket)
+	}
+}
