@@ -32,6 +32,13 @@ for the rationale.
 | `backup_interval` | `TOISE_BACKUP_INTERVAL` | `--backup-interval` | `0` | interval between online backups of every tenant's event log (`0` = off) |
 | `log_shipping_dir` | `TOISE_LOG_SHIPPING_DIR` | `--log-shipping-dir` | (empty) | directory to ship event-log segments to (with `log_shipping_interval`); may be a mounted bucket/NFS; empty = off (ADR 0029) |
 | `log_shipping_interval` | `TOISE_LOG_SHIPPING_INTERVAL` | `--log-shipping-interval` | `0` | interval between event-log segment ships of every tenant (`0` = off) |
+| `log_shipping_s3_bucket` | `TOISE_LOG_SHIPPING_S3_BUCKET` | — | (empty) | ship segments to this S3 bucket instead of a directory (selects S3 mode); AWS S3 or any S3-compatible store (ADR 0029) |
+| `log_shipping_s3_endpoint` | `TOISE_LOG_SHIPPING_S3_ENDPOINT` | — | (empty) | S3 endpoint `host[:port]`, no scheme (e.g. `s3.amazonaws.com`, `minio.internal:9000`) |
+| `log_shipping_s3_region` | `TOISE_LOG_SHIPPING_S3_REGION` | — | (empty) | optional S3 region; ignored by many compatible stores |
+| `log_shipping_s3_prefix` | `TOISE_LOG_SHIPPING_S3_PREFIX` | — | (empty) | optional key prefix under the bucket |
+| `log_shipping_s3_use_ssl` | `TOISE_LOG_SHIPPING_S3_USE_SSL` | — | `true` | use HTTPS to the endpoint |
+| (secret) | `TOISE_LOG_SHIPPING_S3_ACCESS_KEY` | — | (empty) | S3 access key — env-only (never config file or flag) |
+| (secret) | `TOISE_LOG_SHIPPING_S3_SECRET_KEY` | — | (empty) | S3 secret key — env-only |
 | `identity_confidence_threshold` | `TOISE_IDENTITY_CONFIDENCE_THRESHOLD` | `--identity-confidence-threshold` | `0.9` | `same_as` confidence (0,1] at/above which an alias joins an entity's canonical view on `get_entity` (ADR 0020); read-time only, never merges storage |
 | `log_format` | `TOISE_LOG_FORMAT` | `--log-format` | `text` | log output format: `text` or `json` |
 | `log_level` | `TOISE_LOG_LEVEL` | `--log-level` | `info` | `debug`, `info`, `warn`, or `error` |

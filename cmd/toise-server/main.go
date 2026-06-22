@@ -526,14 +526,18 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	}
 
 	// Continuous log shipping (ADR 0029): every interval, export each tenant's new
-	// event-log tail as an immutable segment under <log-shipping-dir>/<tenant>/ —
-	// the finer-RPO complement to the full checkpoint backup. The cursor is derived
-	// from the sink, so it survives restarts without local state. Off unless
-	// log_shipping_dir + log_shipping_interval set.
-	if cfg.LogShipDir != "" && cfg.LogShipInterval.D() > 0 {
-		sink, serr := logship.NewFileSink(cfg.LogShipDir)
+	// event-log tail as an immutable segment — the finer-RPO complement to the full
+	// checkpoint backup. The target is a directory (mounted bucket/NFS/rsync) or an
+	// S3-compatible store; the cursor is derived from the sink, so it survives
+	// restarts without local state. Off unless a target + interval are set.
+	if cfg.LogShipEnabled() {
+		sink, serr := buildLogSink(cfg)
 		if serr != nil {
 			return fmt.Errorf("log shipping: %w", serr)
+		}
+		target := cfg.LogShipDir
+		if cfg.LogShipS3Enabled() {
+			target = "s3://" + cfg.LogShipS3Bucket
 		}
 		shipper := logship.New(sink)
 		wg.Add(1)
@@ -560,7 +564,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 				}
 			}
 		}()
-		logger.Info("log shipping enabled", "dir", cfg.LogShipDir, "interval", cfg.LogShipInterval.D())
+		logger.Info("log shipping enabled", "target", target, "interval", cfg.LogShipInterval.D())
 	}
 
 	fmt.Printf("Toise %s — the living map of your infrastructure\n", version.String())
@@ -882,6 +886,24 @@ func restoreTenantLog(ctx context.Context, shipper *logship.Shipper, dataDir, id
 	}
 	fmt.Printf("restored tenant %s -> %s (%d events)\n", id, filepath.Join(dataDir, id), count)
 	return nil
+}
+
+// buildLogSink picks the log-shipping sink from config: an S3-compatible store
+// when a bucket is set (works against AWS S3 and MinIO/Ceph/R2/… alike),
+// otherwise a directory.
+func buildLogSink(cfg config.Config) (logship.Sink, error) {
+	if cfg.LogShipS3Enabled() {
+		return logship.NewS3Sink(logship.S3Config{
+			Endpoint:  cfg.LogShipS3Endpoint,
+			Bucket:    cfg.LogShipS3Bucket,
+			Region:    cfg.LogShipS3Region,
+			Prefix:    cfg.LogShipS3Prefix,
+			AccessKey: cfg.LogShipS3AccessKey,
+			SecretKey: cfg.LogShipS3SecretKey,
+			UseSSL:    cfg.LogShipS3UseSSL,
+		})
+	}
+	return logship.NewFileSink(cfg.LogShipDir)
 }
 
 // loopbackAddr reports whether addr binds a loopback interface.

@@ -147,3 +147,24 @@ func equal(a, b []string) bool {
 	}
 	return true
 }
+
+// TestNewS3SinkValidation pins the required-field checks; it builds the client
+// (no network) and asserts the Sink interface is satisfied.
+func TestNewS3SinkValidation(t *testing.T) {
+	bad := []S3Config{
+		{Bucket: "b", AccessKey: "a", SecretKey: "s"},   // no endpoint
+		{Endpoint: "e", AccessKey: "a", SecretKey: "s"}, // no bucket
+		{Endpoint: "e", Bucket: "b", SecretKey: "s"},    // no access key
+		{Endpoint: "e", Bucket: "b", AccessKey: "a"},    // no secret key
+	}
+	for _, c := range bad {
+		if _, err := NewS3Sink(c); err == nil {
+			t.Errorf("expected error for incomplete config %+v", c)
+		}
+	}
+	s, err := NewS3Sink(S3Config{Endpoint: "s3.example.com", Bucket: "b", AccessKey: "a", SecretKey: "s", UseSSL: true})
+	if err != nil || s == nil {
+		t.Fatalf("valid config: sink=%v err=%v", s, err)
+	}
+	var _ Sink = s
+}
