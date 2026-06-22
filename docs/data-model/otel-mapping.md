@@ -318,6 +318,18 @@ attribute and interface addresses stay descriptive. The **conformance fixture
 demonstrates the model** (port + route entities, `has_interface`/`has_route`/bare
 `connected_to`).
 
+**`network.address` identity — globally-unique addresses only.** Its identity is the
+IP, so it MUST be globally unique. **Host-local / non-routable addresses are not
+identities** and must never be emitted as a (shared) `network.address` entity: the
+same value exists independently on every host, so a single node would falsely link
+unrelated entities across machines — most visibly the **Docker default bridge gateway
+`172.17.0.1`** (identical on every Docker host), and likewise loopback (`127.0.0.0/8`,
+`::1`), wildcard (`0.0.0.0`, `::`), and link-local (`169.254.0.0/16`, `fe80::/10`).
+This is the same network-derived-identity anti-pattern rejected for `db` and
+`service.listener` (ADR 0018). If such an address must be recorded at all, keep it as a
+**host-scoped descriptive attribute**, never a shared entity. (Consumers that overlay
+inferred links — e.g. the `graph-viz` example — skip these ranges for the same reason.)
+
 **Descriptive-attribute key casing.** Identity keys are fixed by the registry; for
 **descriptive** attributes the convention is **dotted, lowercase** (`sys.name`,
 `mgmt.ip` — not `sys_name`). Toise does **not** validate descriptive keys (only

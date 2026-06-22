@@ -107,7 +107,7 @@ of nine change types (see
 | `host`              | A compute host (physical server, VM, or hypervisor guest).   |
 | `process`           | A running process on a host.                                 |
 | `network.interface` | A network interface on a host.                               |
-| `network.address`   | An IP address, typically bound to an interface.              |
+| `network.address`   | A **globally-unique** IP address, typically bound to an interface. Host-local / non-routable IPs (loopback, link-local, the Docker bridge gateway `172.17.0.1`) are **not** identities — never a shared entity (see otel-mapping). |
 | `network.route`     | A routing-table entry / forwarding decision.                 |
 | `service.listener`  | A service endpoint listening on an interface and port.       |
 
