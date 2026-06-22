@@ -85,6 +85,14 @@ const (
 	// normative semantics yet — treat as transitional (#184).
 	RelDependsOn = "depends_on"
 
+	// RelSameAs is a producer-asserted identity belief: "these two entities are
+	// the same real thing", with edge attributes confidence (0-1) and basis (e.g.
+	// hyperv-kvp, serial_match). It does NOT merge the entities and carries no
+	// failure impact (ImpactNone); the canonical collapse over high-confidence
+	// same_as edges is a deferred read-time overlay (ADR 0020, Lot B). The
+	// producer states evidence it can justify; it never pre-merges (ADR 0018/0020).
+	RelSameAs = "same_as"
+
 	// Legacy device-level edges — superseded under topology-as-entities (ADR 0022)
 	// and NOT to be emitted by producers: routes_via is replaced by network.route +
 	// has_route + next_hop_via; adjacent_to by port-to-port connected_to; forwards_to
@@ -111,6 +119,10 @@ const (
 	ImpactToFrom
 	// ImpactFromTo: a failure at From affects To (containment edges: has_interface).
 	ImpactFromTo
+	// ImpactNone: a failure crosses this edge in neither direction — it is not a
+	// dependency. Used by identity-belief edges (same_as): an alias assertion is
+	// not a failure path, and a low-confidence one must not inflate blast radius.
+	ImpactNone
 )
 
 // RelationTypeDef describes a known relation type and its constraints.
@@ -167,6 +179,10 @@ var relationTypes = map[string]RelationTypeDef{
 	RelConnectedTo: {Type: RelConnectedTo, From: TypeNetworkInterface, To: TypeNetworkInterface, Structural: true, Impact: ImpactBoth},
 	// "X depends_on Y": the dependency target failing affects the dependent.
 	RelDependsOn: {Type: RelDependsOn, From: TypeServiceInstance, To: TypeNetworkEndpoint, Structural: true, Impact: ImpactToFrom},
+	// "X same_as Y": identity belief, any entity type either side (From/To advisory).
+	// Non-structural (its appearance is not an alert) and ImpactNone (not a failure
+	// path); the canonical collapse is a deferred read-time overlay (ADR 0020, Lot B).
+	RelSameAs: {Type: RelSameAs, From: "", To: "", Structural: false, Impact: ImpactNone},
 	// legacy device-level edges (superseded; not emitted — see the const block)
 	RelRoutesVia:  {Type: RelRoutesVia, From: TypeNetworkDevice, To: TypeNetworkDevice, Structural: true, Impact: ImpactToFrom},
 	RelForwardsTo: {Type: RelForwardsTo, From: TypeNetworkDevice, To: TypeNetworkDevice, Structural: true, Impact: ImpactBoth},

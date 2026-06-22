@@ -108,6 +108,8 @@ func impactPropagates(e *edge, failed model.EntityID) bool {
 		return e.rel.To == failed
 	case model.ImpactFromTo:
 		return e.rel.From == failed
+	case model.ImpactNone:
+		return false // identity belief (same_as), not a failure path
 	default: // ImpactBoth
 		return true
 	}

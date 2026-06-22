@@ -298,9 +298,14 @@ never an entity attribute (which would flap last-writer-wins).
 
 The registry holds the agreed vocabulary: entities `service.instance`, `db`,
 `network.device`, `network.interface`, `network.route`, `compute.vm`, `container`;
-relations `monitors`, `has_interface`, `has_route`, `connected_to`. **`runs_on`**
+relations `monitors`, `has_interface`, `has_route`, `connected_to`, `same_as`. **`runs_on`**
 is the foundational edge: `service.instance`, `compute.vm`, and `container` each
-`--runs_on--> host`. `monitors` source is the `service.instance`
+`--runs_on--> host`. **`same_as`** is a producer-asserted **identity belief** (ADR 0020):
+any entity either side, edge attributes `confidence` (0–1) + `basis` (e.g. `hyperv-kvp`,
+`serial_match`); non-structural, no failure impact, never merges. It is the graduation
+target for the `guest.host.id` / `hw.serial_number` reconciliation evidence — assert
+`same_as` once you hold a justified link. Toise stores `confidence`/`basis` as-is (ADR 0022);
+the canonical collapse over high-confidence edges is a deferred read-time overlay (Lot B). `monitors` source is the `service.instance`
 (the agent); targets are the monitored entity — `host`, `db`, and later `netscaler`,
 `veeam`, `redfish`, `citrix`, `ibmi`, `network.device` (registered when their lot
 lands).

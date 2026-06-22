@@ -363,7 +363,16 @@ the boundary. The registry is:
   `container`;
 - **relations:** `runs_on`, `has_interface`, `has_route`, `bound_to`,
   `next_hop_via`, `listens_on`, `connected_to`, and the producer vocabulary
-  `monitors` (each with declared endpoint types and a structural flag);
+  `monitors` and `depends_on`, plus `same_as` (each with declared endpoint types
+  and a structural flag);
+- **`same_as` — producer-asserted identity belief (ADR 0020).** Any entity type
+  either side; edge attributes `confidence` (0–1) and `basis` (e.g. `hyperv-kvp`,
+  `serial_match`). Non-structural and **no failure impact** — it is not a
+  dependency, so it never enters a blast radius. The producer states evidence it
+  can justify; it never merges the entities. The canonical collapse over
+  high-confidence `same_as` edges is a deferred read-time overlay (ADR 0020 Lot B);
+  until then the edges accumulate and are queryable as-is. Per ADR 0022 Toise
+  stores the asserted `confidence`/`basis` as-is and does not police their values.
 - **legacy relations** `routes_via`, `forwards_to`, `adjacent_to` remain registered
   (so the boundary still accepts them) but are **superseded and not to be emitted** —
   use `network.route` + `has_route` + `next_hop_via`, and port-to-port

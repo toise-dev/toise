@@ -1215,6 +1215,33 @@ func TestImpactOf(t *testing.T) {
 	}
 }
 
+// TestImpactOfSkipsSameAs pins ADR 0020 Lot A: a same_as identity belief is not a
+// failure path, so it must never enter the blast radius (a low-confidence alias
+// otherwise inflates impact).
+func TestImpactOfSkipsSameAs(t *testing.T) {
+	vm := model.Entity{ID: "vmA", Type: model.TypeComputeVM, Identity: []model.KeyValue{{Key: "vmid", Value: sv("42")}}}
+	host := model.Entity{ID: "hostB", Type: model.TypeHost, Identity: []model.KeyValue{{Key: "host.id", Value: sv("mid-b")}}}
+	g := &fakeGraph{
+		entities: map[model.EntityID]model.Entity{vm.ID: vm, host.ID: host},
+		deleted:  map[model.EntityID]bool{},
+		relations: []model.Relation{{
+			ID: "s1", Type: model.RelSameAs, From: vm.ID, To: host.ID,
+			Attributes: []model.KeyValue{
+				{Key: "confidence", Value: model.DoubleValue(0.95)},
+				{Key: "basis", Value: sv("hyperv-kvp")},
+			},
+		}},
+	}
+	s := New(g, &fakeStore{})
+	_, out, err := s.impactOf(context.Background(), nil, ImpactOfInput{EntityID: "vmA"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Total != 0 {
+		t.Fatalf("same_as must not propagate impact; blast radius = %d, want 0", out.Total)
+	}
+}
+
 // TestDescribeType pins #137: the per-type zoom answers from the live graph —
 // observed keys with usage, empirical relation shapes, and the relation-kind
 // view with endpoint shapes and impact flow.
