@@ -119,7 +119,7 @@ of nine change types (see
 | `has_interface` | `host` → `network.interface`             | yes        |                                |
 | `bound_to`      | `network.address` → `network.interface`  | yes        |                                |
 | `next_hop_via`  | `network.route` → `network.address`      | yes        |                                |
-| `listens_on`    | `service.listener` → `network.interface` | yes        | carries a `port` attribute     |
+| `listens_on`    | `service.listener` → `network.interface` | yes        | bare edge; the port lives on the `service.listener` entity |
 
 All phase-1 relations are **structural**. For structural relation types, a
 `relation.added` or `relation.removed` change emits a **high-priority signal**
