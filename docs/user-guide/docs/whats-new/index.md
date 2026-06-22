@@ -9,6 +9,12 @@ called out below with a migration path.
 
 ## Releases
 
+- [**0.8.0**](0.8.0.md) — 2026-06-22 — **the SaaS-readiness release**: access
+  security (derive-only tenancy, hash-at-rest, per-tenant RBAC, OIDC, mTLS ingest,
+  audit log), resilience/HA (backups, log shipping incl. S3, `restore-log`, read
+  replicas, tenant sharding), a multi-source identity overlay (`same_as` + canonical
+  view), and an attribute-enrichment pass — all opt-in; the zero-config path is
+  unchanged.
 - [**0.7.0**](0.7.0.md) — 2026-06-15 — **the integration release**: operator
   annotations (MCP tool + first GraphQL mutation, an overlay), MCP resources and
   prompts, read-only / ingest-only token roles, verbosity tiers, the
