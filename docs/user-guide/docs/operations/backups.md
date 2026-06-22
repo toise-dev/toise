@@ -49,7 +49,17 @@ Shipping and the cold/scheduled checkpoint are complementary: the checkpoint is 
 3. Point the server at it: `toise-server --data-dir <backup>` (or copy it to the data dir). On start the projection **rebuilds by replaying the log** (a snapshot inside accelerates it; an unreadable one falls back to full replay).
 4. The live graph re-converges from producers within one heartbeat interval; history/time-travel is whatever the restored log holds.
 
-Shipped **segments** (`log_shipping_dir`) are the fine-grained tail between checkpoints: restore the most recent checkpoint, then the segments after it carry the events up to the last ship. A `restore-log` command that replays segments into a data dir is the next step; until it lands, recover from the latest checkpoint and treat the segments as the low-RPO ledger of what came after.
+### Restore from shipped segments
+
+Shipped **segments** (`log_shipping_dir`) reconstruct the log directly — the low-RPO path. With the server stopped, replay them into a **fresh** data dir:
+
+```bash
+toise-server restore-log --from /var/lib/toise/segments --data-dir /var/lib/toise/restored
+# one tenant only:
+toise-server restore-log --from /var/lib/toise/segments --data-dir /var/lib/toise/restored --tenant acme
+```
+
+It replays each tenant's contiguous segments and re-appends the events into a new per-tenant store, faithfully reconstructing the log (the event/recorded timestamps ride on the events, so history and time-travel are preserved); the projection rebuilds on the next start. It **refuses to write into a data dir that already holds events**, so it never clobbers or duplicates an existing log — always restore into an empty/new directory, then point the server at it. Default restores every tenant found under `--from`.
 
 ## High availability
 
