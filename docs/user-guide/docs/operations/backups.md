@@ -38,7 +38,26 @@ log_shipping_dir: /var/lib/toise/segments
 log_shipping_interval: 30s
 ```
 
-Each run writes `<log_shipping_dir>/<tenant>/<from>-<to>.seg`, contiguous by sequence. The cursor is **derived from the destination itself** (the highest shipped sequence), so it needs no local state and a restart or crash never duplicates or skips a segment. The directory may be a **mounted object-store bucket, an NFS export, or an rsync staging dir** — this is the on-prem / dependency-free path of the object-store-backed log (ADR 0029); a native S3-class driver is the next step. Off by default; failures are logged per tenant and never interrupt serving.
+Each run writes `<log_shipping_dir>/<tenant>/<from>-<to>.seg`, contiguous by sequence. The cursor is **derived from the destination itself** (the highest shipped sequence), so it needs no local state and a restart or crash never duplicates or skips a segment. The directory may be a **mounted object-store bucket, an NFS export, or an rsync staging dir**. Off by default; failures are logged per tenant and never interrupt serving.
+
+### Ship to S3 (or any S3-compatible store)
+
+Instead of a directory, ship straight to an S3-compatible object store — **AWS S3, MinIO, Ceph, R2, …, one config shape** (the native client, no extra deployment). Set the bucket to select it; keys come from the environment (never the config file or a flag):
+
+```
+log_shipping_interval: 30s
+log_shipping_s3_endpoint: s3.amazonaws.com      # host[:port], no scheme; e.g. minio.internal:9000 on-prem
+log_shipping_s3_bucket: toise-segments
+log_shipping_s3_region: us-east-1               # optional; ignored by many compatible stores
+log_shipping_s3_prefix: prod/                   # optional key prefix
+log_shipping_s3_use_ssl: true                   # default
+```
+```
+TOISE_LOG_SHIPPING_S3_ACCESS_KEY=...
+TOISE_LOG_SHIPPING_S3_SECRET_KEY=...
+```
+
+Same segment layout (`<prefix>/<tenant>/<from>-<to>.seg`), same sink-derived cursor, same restore path. Pick a directory **or** a bucket, not both.
 
 Shipping and the cold/scheduled checkpoint are complementary: the checkpoint is a coarse, instantly-openable full copy; the segments are a fine-grained, append-only tail. Keep both for a small RPO **and** a fast restore.
 

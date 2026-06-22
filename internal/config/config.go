@@ -152,6 +152,18 @@ type Config struct {
 	// target. Empty = off (the default).
 	LogShipDir      string   `yaml:"log_shipping_dir"`
 	LogShipInterval Duration `yaml:"log_shipping_interval"`
+	// LogShipS3* ship segments to an S3-compatible object store instead of a
+	// directory (same LogShipInterval). Setting LogShipS3Bucket selects S3. Works
+	// against AWS S3 and any compatible store (MinIO/Ceph/R2/…) — one config shape.
+	// The access/secret keys are secrets: env-only (TOISE_LOG_SHIPPING_S3_ACCESS_KEY
+	// / _SECRET_KEY), never a flag or the config file.
+	LogShipS3Endpoint  string `yaml:"log_shipping_s3_endpoint"`
+	LogShipS3Bucket    string `yaml:"log_shipping_s3_bucket"`
+	LogShipS3Region    string `yaml:"log_shipping_s3_region"`
+	LogShipS3Prefix    string `yaml:"log_shipping_s3_prefix"`
+	LogShipS3UseSSL    bool   `yaml:"log_shipping_s3_use_ssl"`
+	LogShipS3AccessKey string `yaml:"-"`
+	LogShipS3SecretKey string `yaml:"-"`
 	// OIDC* enable verifying OIDC/JWT bearers on the read surfaces (ADR 0028).
 	// OIDCIssuer empty = OIDC off (the default). Not secrets — the issuer/audience
 	// and claim names are configuration. OIDCTenantClaim defaults to "tenant";
@@ -187,6 +199,17 @@ func (c Config) Validate() error {
 	}
 	if c.LogShipDir != "" && c.LogShipInterval.D() <= 0 {
 		return fmt.Errorf("log_shipping_dir is set but log_shipping_interval is 0: no segment would ever be shipped")
+	}
+	if c.LogShipS3Enabled() {
+		if c.LogShipDir != "" {
+			return fmt.Errorf("log_shipping_dir and log_shipping_s3_bucket are both set: pick one shipping target")
+		}
+		if c.LogShipInterval.D() <= 0 {
+			return fmt.Errorf("log_shipping_s3_bucket is set but log_shipping_interval is 0: no segment would ever be shipped")
+		}
+		if c.LogShipS3Endpoint == "" {
+			return fmt.Errorf("log_shipping_s3_bucket is set but log_shipping_s3_endpoint is empty")
+		}
 	}
 	if c.IdentityThreshold <= 0 || c.IdentityThreshold > 1 {
 		return fmt.Errorf("identity_confidence_threshold must be in (0,1], got %v", c.IdentityThreshold)
@@ -297,7 +320,18 @@ func Default() Config {
 		DebugUI:               true,
 		TenantAutoCreate:      true,
 		IdentityThreshold:     0.9,
+		LogShipS3UseSSL:       true,
 	}
+}
+
+// LogShipS3Enabled reports whether log shipping targets an S3-compatible store
+// (selected by setting the bucket) rather than a directory.
+func (c Config) LogShipS3Enabled() bool { return c.LogShipS3Bucket != "" }
+
+// LogShipEnabled reports whether continuous log shipping is on (a directory or an
+// S3 bucket, with an interval).
+func (c Config) LogShipEnabled() bool {
+	return (c.LogShipDir != "" || c.LogShipS3Enabled()) && c.LogShipInterval.D() > 0
 }
 
 // applyFile overlays the YAML at path onto c, touching only the keys the file
@@ -443,6 +477,31 @@ func (c *Config) applyEnv(getenv func(string) string) error {
 	}
 	if v := getenv("TOISE_LOG_SHIPPING_DIR"); v != "" {
 		c.LogShipDir = v
+	}
+	if v := getenv("TOISE_LOG_SHIPPING_S3_ENDPOINT"); v != "" {
+		c.LogShipS3Endpoint = v
+	}
+	if v := getenv("TOISE_LOG_SHIPPING_S3_BUCKET"); v != "" {
+		c.LogShipS3Bucket = v
+	}
+	if v := getenv("TOISE_LOG_SHIPPING_S3_REGION"); v != "" {
+		c.LogShipS3Region = v
+	}
+	if v := getenv("TOISE_LOG_SHIPPING_S3_PREFIX"); v != "" {
+		c.LogShipS3Prefix = v
+	}
+	if v := getenv("TOISE_LOG_SHIPPING_S3_USE_SSL"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("TOISE_LOG_SHIPPING_S3_USE_SSL: invalid bool %q: %w", v, err)
+		}
+		c.LogShipS3UseSSL = b
+	}
+	if v := getenv("TOISE_LOG_SHIPPING_S3_ACCESS_KEY"); v != "" {
+		c.LogShipS3AccessKey = v
+	}
+	if v := getenv("TOISE_LOG_SHIPPING_S3_SECRET_KEY"); v != "" {
+		c.LogShipS3SecretKey = v
 	}
 	if v := getenv("TOISE_IDENTITY_CONFIDENCE_THRESHOLD"); v != "" {
 		f, err := strconv.ParseFloat(v, 64)

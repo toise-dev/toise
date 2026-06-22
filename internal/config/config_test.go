@@ -225,6 +225,20 @@ func TestValidateRejectsSilentMisconfigurations(t *testing.T) {
 		{"mTLS client CA without server TLS", func(c *Config) { c.TLSClientCAFile = "/x/ca.pem" }},
 		{"backup_dir without interval", func(c *Config) { c.BackupDir = "/x/backups" }},
 		{"log_shipping_dir without interval", func(c *Config) { c.LogShipDir = "/x/segments" }},
+		{"s3 bucket without endpoint", func(c *Config) {
+			c.LogShipS3Bucket = "b"
+			c.LogShipInterval = Duration(time.Hour)
+		}},
+		{"s3 bucket without interval", func(c *Config) {
+			c.LogShipS3Bucket = "b"
+			c.LogShipS3Endpoint = "e"
+		}},
+		{"s3 bucket and dir both set", func(c *Config) {
+			c.LogShipS3Bucket = "b"
+			c.LogShipS3Endpoint = "e"
+			c.LogShipDir = "/x/segments"
+			c.LogShipInterval = Duration(time.Hour)
+		}},
 		{"identity threshold above 1", func(c *Config) { c.IdentityThreshold = 1.5 }},
 		{"identity threshold zero", func(c *Config) { c.IdentityThreshold = 0 }},
 		{"bad tenant_read_tokens pair", func(c *Config) { c.TenantReadTokens = []string{"no-colon"} }},
