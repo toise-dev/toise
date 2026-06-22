@@ -94,9 +94,13 @@ smeared across several disconnected nodes.
 The header **`inferred`** toggle (off by default) overlays **dashed, derived edges**
 from each IP-bearing entity to the matching `network.address` node, so the graph
 reads as connected. These edges are a **consumer-side reading aid, not stored
-relations** — the right fix is for the producer to assert the relationship. Wildcard
-and loopback addresses (`0.0.0.0`, `127.0.0.0/8`, `::`) are skipped, as they are not
-meaningful join points.
+relations** — the right fix is for the producer to assert the relationship.
+Addresses that are **host-local rather than global join points** are skipped:
+wildcard (`0.0.0.0`), loopback (`127.0.0.0/8`, `::`), link-local (`169.254.0.0/16`),
+and the **Docker default bridge** (`172.17.0.0/16`) — the same `172.17.0.1` gateway
+exists on every host, so joining through it would falsely connect containers on
+different machines. (Other RFC 1918 ranges can be genuinely routable, so the real
+fix for any host-local address is producer-side: don't emit it as a shared entity.)
 
 ## Attribute filter
 
