@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -105,6 +106,34 @@ func (sh *Shipper) Replay(ctx context.Context, tenant string, apply func(model.E
 		}
 	}
 	return nil
+}
+
+// Tenants returns the distinct tenant ids that have segments in the sink, sorted
+// — the set a restore would reconstruct.
+func (sh *Shipper) Tenants(ctx context.Context) ([]string, error) {
+	names, err := sh.sink.List(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]struct{}{}
+	var out []string
+	for _, n := range names {
+		if !strings.HasSuffix(n, segExt) {
+			continue
+		}
+		i := strings.IndexByte(n, '/')
+		if i <= 0 {
+			continue
+		}
+		t := n[:i]
+		if _, ok := seen[t]; ok {
+			continue
+		}
+		seen[t] = struct{}{}
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // lastShipped is the highest sequence already in the sink for the tenant,

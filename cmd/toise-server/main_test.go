@@ -25,6 +25,7 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	"github.com/toise-dev/toise/internal/config"
+	"github.com/toise-dev/toise/internal/logship"
 	"github.com/toise-dev/toise/internal/model"
 	"github.com/toise-dev/toise/internal/projection"
 	"github.com/toise-dev/toise/internal/registry"
@@ -627,4 +628,72 @@ func TestWarnsWhenSweepingWithoutSnapshots(t *testing.T) {
 	if !strings.Contains(logs.String(), "snapshots are disabled") {
 		t.Error("no startup warning for sweeping-on/snapshots-off")
 	}
+}
+
+// TestRestoreLogSubcommand pins ADR 0029 restore: shipped segments replay into a
+// fresh data dir and reconstruct the graph, the destination is never clobbered,
+// and an empty source errors clearly.
+func TestRestoreLogSubcommand(t *testing.T) {
+	when := time.Unix(1_700_000_000, 0).UTC()
+	mkEv := func(eid, host string) model.Event {
+		return model.Event{Entity: &model.EntityEvent{
+			EventID: model.NewEventID(), ChangeType: model.EntityCreated,
+			Entity: model.Entity{ID: model.EntityID(eid), Type: model.TypeHost,
+				Identity: []model.KeyValue{{Key: "host.id", Value: model.StringValue(host)}}},
+			EventTime: when, RecordedAt: when, SchemaVersion: model.SchemaVersion,
+		}}
+	}
+
+	// A source store with two host events, shipped to a segment sink.
+	src := filepath.Join(t.TempDir(), "acme")
+	st, err := store.Open(src, store.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if aerr := st.Append(mkEv("e1", "h1"), mkEv("e2", "h2")); aerr != nil {
+		t.Fatal(aerr)
+	}
+	segDir := t.TempDir()
+	n, err := logship.New(mustSink(t, segDir)).Ship(context.Background(), "acme", st)
+	if err != nil || n != 2 {
+		t.Fatalf("ship = (%d, %v), want (2, nil)", n, err)
+	}
+	_ = st.Close()
+
+	// Restore into a fresh data dir.
+	dst := t.TempDir()
+	if rerr := runRestoreLog([]string{"--from", segDir, "--data-dir", dst}, func(string) string { return "" }); rerr != nil {
+		t.Fatalf("runRestoreLog: %v", rerr)
+	}
+	restored, err := store.Open(filepath.Join(dst, "acme"), store.DefaultConfig())
+	if err != nil {
+		t.Fatalf("open restored: %v", err)
+	}
+	g := projection.New()
+	if rerr := g.Replay(restored); rerr != nil {
+		t.Fatalf("replay restored: %v", rerr)
+	}
+	if g.EntityCount() != 2 {
+		t.Errorf("restored EntityCount = %d, want 2", g.EntityCount())
+	}
+	_ = restored.Close()
+
+	// Clobber guard: restoring again into the now-non-empty data dir must refuse.
+	if rerr := runRestoreLog([]string{"--from", segDir, "--data-dir", dst}, func(string) string { return "" }); rerr == nil {
+		t.Error("restore into a store that already holds events must error")
+	}
+
+	// An empty source is a clear error, not a silent no-op.
+	if rerr := runRestoreLog([]string{"--from", t.TempDir(), "--data-dir", t.TempDir()}, func(string) string { return "" }); rerr == nil {
+		t.Error("restore with no shipped segments must error")
+	}
+}
+
+func mustSink(t *testing.T, dir string) *logship.FileSink {
+	t.Helper()
+	s, err := logship.NewFileSink(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
 }

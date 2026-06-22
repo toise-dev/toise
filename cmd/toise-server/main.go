@@ -47,6 +47,7 @@ import (
 	"github.com/toise-dev/toise/internal/logship"
 	"github.com/toise-dev/toise/internal/mcp"
 	"github.com/toise-dev/toise/internal/metrics"
+	"github.com/toise-dev/toise/internal/model"
 	"github.com/toise-dev/toise/internal/oidc"
 	"github.com/toise-dev/toise/internal/ops"
 	"github.com/toise-dev/toise/internal/registry"
@@ -74,6 +75,14 @@ func main() {
 
 	if len(os.Args) > 1 && os.Args[1] == "delete-tenant" {
 		if err := runDeleteTenant(os.Args[2:], os.Getenv); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	if len(os.Args) > 1 && os.Args[1] == "restore-log" {
+		if err := runRestoreLog(os.Args[2:], os.Getenv); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -764,6 +773,114 @@ func runDeleteTenant(args []string, getenv func(string) string) error {
 		return fmt.Errorf("removing tenant %q: %w", id, rerr)
 	}
 	fmt.Printf("deleted tenant %s (%s)\n", id, dir)
+	return nil
+}
+
+// runRestoreLog rebuilds tenant event logs from shipped segments (logship,
+// ADR 0029) into a data dir: for each tenant under --from (or just --tenant) it
+// replays the contiguous segments and re-appends the events into a fresh
+// per-tenant store, faithfully reconstructing the log (the bi-temporal facts ride
+// on the events; the projection rebuilds on the next server start). It refuses to
+// write into a store that already holds events, so it never clobbers or
+// duplicates an existing log — restore into an empty/new data dir. COLD tool: run
+// it with toise-server stopped.
+func runRestoreLog(args []string, getenv func(string) string) error {
+	fs := flag.NewFlagSet("toise-server restore-log", flag.ContinueOnError)
+	configPath := fs.String("config", "", "path to a YAML config file (env: TOISE_CONFIG)")
+	dataDir := fs.String("data-dir", "", "destination data dir to reconstruct into (env: TOISE_DATA_DIR)")
+	from := fs.String("from", "", "directory of shipped log segments (a log_shipping_dir)")
+	only := fs.String("tenant", "", "restore only this tenant (default: every tenant found under --from)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *from == "" {
+		return fmt.Errorf("usage: toise-server restore-log --from <segments-dir> [--data-dir dir] [--tenant id]")
+	}
+
+	var cfgArgs []string
+	if *configPath != "" {
+		cfgArgs = append(cfgArgs, "--config="+*configPath)
+	}
+	if *dataDir != "" {
+		cfgArgs = append(cfgArgs, "--data-dir="+*dataDir)
+	}
+	cfg, err := config.Load(cfgArgs, getenv)
+	if err != nil {
+		return fmt.Errorf("resolving configuration: %w", err)
+	}
+
+	sink, err := logship.NewFileSink(*from)
+	if err != nil {
+		return err
+	}
+	shipper := logship.New(sink)
+	ctx := context.Background()
+
+	var tenants []string
+	if *only != "" {
+		id, ok := tenant.Sanitize(*only)
+		if !ok {
+			return fmt.Errorf("invalid tenant id %q", *only)
+		}
+		tenants = []string{id}
+	} else if tenants, err = shipper.Tenants(ctx); err != nil {
+		return err
+	}
+	if len(tenants) == 0 {
+		return fmt.Errorf("no shipped segments found under %s", *from)
+	}
+	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
+		return fmt.Errorf("creating data dir %s: %w", cfg.DataDir, err)
+	}
+	for _, id := range tenants {
+		if err := restoreTenantLog(ctx, shipper, cfg.DataDir, id); err != nil {
+			return fmt.Errorf("tenant %s: %w", id, err)
+		}
+	}
+	return nil
+}
+
+func restoreTenantLog(ctx context.Context, shipper *logship.Shipper, dataDir, id string) error {
+	// A restore reconstructs previously-accepted events; it does not re-police
+	// vocabulary, so relax the type check (the events passed it once already).
+	scfg := store.DefaultConfig()
+	scfg.AcceptUnknownTypes = true
+	st, err := store.Open(filepath.Join(dataDir, id), scfg)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+	if st.Sequence() > 0 {
+		return fmt.Errorf("destination store already holds %d events; restore into an empty data dir", st.Sequence())
+	}
+
+	const batchSize = 1000
+	batch := make([]model.Event, 0, batchSize)
+	count := 0
+	flush := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+		if aerr := st.Append(batch...); aerr != nil {
+			return aerr
+		}
+		batch = batch[:0]
+		return nil
+	}
+	if rerr := shipper.Replay(ctx, id, func(ev model.Event) error {
+		batch = append(batch, ev)
+		count++
+		if len(batch) >= batchSize {
+			return flush()
+		}
+		return nil
+	}); rerr != nil {
+		return rerr
+	}
+	if ferr := flush(); ferr != nil {
+		return ferr
+	}
+	fmt.Printf("restored tenant %s -> %s (%d events)\n", id, filepath.Join(dataDir, id), count)
 	return nil
 }
 
