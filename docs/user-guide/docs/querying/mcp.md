@@ -34,7 +34,7 @@ question without a second lookup.
 | `annotate_entity(entity_id, annotations)` | attach operator notes (an overlay, **not** producer truth) to an entity — merge key/values, an empty value removes a key; the one **write** tool, so it needs a write-capable token |
 | `get_neighbors(entity_id, relation_type, max_depth, limit, verbosity)` | traverse relations up to `max_depth` (**capped at 5**); each neighbor carries the relation type, direction, and hop distance that reached it, with `total`/`truncated` like the other list tools |
 | `find_path(from_id, to_id, relation_type, max_depth)` | the shortest relation path between two entities; `reachable: false` is a first-class answer, never an error |
-| `impact_of(entity_id, max_depth)` | the blast radius of a failure: everything the entity takes down, following each relation type's dependency direction, nearest first |
+| `impact_of(entity_id, max_depth)` | the blast radius of a failure: everything the entity takes down, following each relation type's dependency direction, nearest first. High-confidence `same_as` aliases of the entity are folded into the origin (ADR 0020), so querying any facet of a machine yields the same radius |
 | `entity_history(entity_id, since, until, ...)` | an entity's timeline from the event log (bi-temporal), heartbeats excluded by default, bounded by `limit`, with a per-type digest |
 | `recent_changes(window, kind, change_type, ...)` | recent qualified changes across the graph — same budget and digest contract; `window` defaults to 1h |
 | `graph_diff(window | from/to, limit)` | the folded **net** difference between two instants: created / deleted / changed / **transient** (flapping) entities and relations, churn collapsed away |

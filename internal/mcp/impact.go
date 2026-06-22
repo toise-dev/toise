@@ -35,6 +35,7 @@ type ImpactOfOutput struct {
 	Total     int              `json:"total" jsonschema:"impacted entities before the limit was applied"`
 	Truncated bool             `json:"truncated"`
 	ByType    []TypeCount      `json:"by_type,omitempty" jsonschema:"impacted entities per type, before the limit"`
+	Aliases   int              `json:"aliases,omitempty" jsonschema:"count of high-confidence same_as aliases of the root folded into the origin (ADR 0020); the blast radius is computed for the whole canonical group"`
 	Summary   string           `json:"summary" jsonschema:"a one-line natural-language summary of the blast radius"`
 }
 
@@ -58,8 +59,17 @@ func (s *Server) impactOf(ctx context.Context, _ *mcpsdk.CallToolRequest, in Imp
 	}
 
 	out := ImpactOfOutput{Root: entityOut(root, false)}
-	visited := map[model.EntityID]struct{}{rootID: {}}
-	frontier := []model.EntityID{rootID}
+	// Alias-aware (ADR 0020 Lot B): the root's canonical group is one logical node,
+	// so seed the traversal with every high-confidence same_as alias. Querying any
+	// facet of a machine then yields the same blast radius, and the aliases
+	// themselves are origins, not downstream impact.
+	group := s.canonicalMemberIDs(g, rootID)
+	visited := make(map[model.EntityID]struct{}, len(group))
+	for _, id := range group {
+		visited[id] = struct{}{}
+	}
+	frontier := append([]model.EntityID(nil), group...)
+	out.Aliases = len(group) - 1
 	var impacted []ImpactedEntity
 	counts := map[string]int{}
 	for d := 1; d <= depth && len(frontier) > 0; d++ {
