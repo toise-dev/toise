@@ -97,6 +97,7 @@ nav:
   - Data model: data-model.md
   - API stability: api-stability.md
   - Operations:
+      - Deployment tiers & SaaS: operations/saas.md
       - Backups: operations/backups.md
       - Performance: operations/performance.md
       - Storage sizing: operations/storage-sizing.md

@@ -697,3 +697,55 @@ func mustSink(t *testing.T, dir string) *logship.FileSink {
 	}
 	return s
 }
+
+// TestTierZeroSmoke guards the ADR 0030 invariant: with pure zero-config — no
+// flags beyond the unavoidable test addresses/data-dir, no env, no --production,
+// no auth tokens — the binary just works. Ingest and query need no auth, and the
+// dev surfaces are on by default. If anyone makes auth mandatory or flips the
+// defaults, this fails.
+func TestTierZeroSmoke(t *testing.T) {
+	httpAddr, otlpAddr := freeAddr(t), freeAddr(t)
+	cfg, err := config.Load([]string{
+		"--listen", httpAddr,
+		"--otlp-listen", otlpAddr,
+		"--data-dir", t.TempDir(),
+	}, func(string) string { return "" })
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	storeCfg := store.DefaultConfig()
+
+	done := make(chan error, 1)
+	go func() { done <- run(cfg, storeCfg, slog.New(slog.DiscardHandler)) }()
+	base := "http://" + httpAddr
+	waitReady(t, base+"/readyz")
+
+	// No auth by default: an unauthenticated read is served (200), not 401.
+	if code := httpCode(t, base+"/graphql", "POST", `{"query":"{ entities { totalCount } }"}`, false); code != http.StatusOK {
+		t.Errorf("tier-0 unauthenticated /graphql = %d, want 200 (no auth by default)", code)
+	}
+	// Dev surfaces are on by default (the opposite of --production).
+	if code := httpCode(t, base+"/playground", "GET", "", false); code != http.StatusOK {
+		t.Errorf("tier-0 /playground = %d, want 200 (dev surfaces on by default)", code)
+	}
+	if code := httpCode(t, base+"/", "GET", "", false); code != http.StatusOK {
+		t.Errorf("tier-0 debug UI / = %d, want 200 (dev surfaces on by default)", code)
+	}
+	// Ingest then read with no setup: an entity lands in the default tenant.
+	exportEntity(t, otlpAddr, "", "h-tier0")
+	if n := gqlTotal(t, base, ""); n != 1 {
+		t.Errorf("tier-0 default-tenant totalCount = %d, want 1", n)
+	}
+
+	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatalf("sigterm: %v", err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run() returned %v after SIGTERM, want nil", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("run() did not return within 10s of SIGTERM")
+	}
+}
