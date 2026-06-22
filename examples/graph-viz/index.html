@@ -21,7 +21,9 @@
   link each IP-bearing entity (a listener's bind address, an endpoint's
   server.address, a route's next hop) to the network.address node for that IP. The
   engine stores facts only and never merges by heuristic, so these are NOT stored
-  relations — they are a consumer-side reading aid. Wildcard/loopback are skipped.
+  relations — they are a consumer-side reading aid. Host-local addresses that are not
+  global join points are skipped: wildcard, loopback, link-local, and the Docker
+  default bridge (172.17.0.0/16) — the same 172.17.0.1 exists on every host.
 
   Attribute filter: the header "attr" box highlights nodes whose identity/attributes
   match (a key, key=value, or a free substring) and dims the rest — a read-time view
@@ -147,8 +149,15 @@ function hostNameById(hid){ for(const e of Object.values(ENT)){ if(e.type==='hos
 // the graph reads as connected. These edges are DERIVED, not stored relations.
 let inferred=localStorage.getItem('toise_viz_inferred')==='1';
 const IPV4=/(?:^|[^0-9.])(\d{1,3}(?:\.\d{1,3}){3})(?![0-9.])/g;
-// Wildcard / loopback are per-host or "any" — not meaningful global join points.
-const notJoinable=ip=> !ip || ip==='0.0.0.0' || ip.startsWith('127.') || ip==='::' || ip==='::1';
+// Host-local / non-routable addresses are NOT global join points: the same IP
+// exists independently on every host, so linking through it smears unrelated nodes
+// together (e.g. containers on different machines via the Docker bridge gateway
+// 172.17.0.1). Skip wildcard, loopback, link-local (RFC 3927), and the Docker
+// default bridge. (Other RFC 1918 ranges can be legitimately routable, so the real
+// fix for a host-local address is producer-side — don't emit it as a shared entity.)
+const notJoinable=ip=> !ip || ip==='0.0.0.0' || ip.startsWith('127.') || ip==='::' || ip==='::1'
+  || ip.startsWith('169.254.')   // link-local
+  || ip.startsWith('172.17.');   // Docker default bridge — same gateway on every host
 function inferredEdges(visible){
   const addrByIp={};
   for(const n of Object.values(ENT)){ if(n.type==='network.address'){ const ip=identOf(n)['network.address']; if(ip) addrByIp[ip]=n.id; } }
