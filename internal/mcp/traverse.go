@@ -103,6 +103,14 @@ func (s *Server) findPath(ctx context.Context, _ *mcpsdk.CallToolRequest, in Fin
 			edges := edgesOf(g, cur, in.RelationType)
 			for i := range edges {
 				e := &edges[i]
+				// Alias-aware (ADR 0020 Lot B): a same_as belief connects a path only
+				// at/above the confidence threshold — a weak alias must not create a
+				// spurious route. A strong one does, and shows as a same_as hop.
+				if e.rel.Type == model.RelSameAs {
+					if c, ok := relConfidence(e.rel); !ok || c < s.idThr {
+						continue
+					}
+				}
 				if _, seen := parents[e.other]; seen {
 					continue
 				}
