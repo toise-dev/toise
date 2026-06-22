@@ -664,7 +664,7 @@ func runCheckpoint(args []string, getenv func(string) string) error {
 	if *dataDir != "" {
 		cfgArgs = append(cfgArgs, "--data-dir="+*dataDir)
 	}
-	cfg, err := config.Load(cfgArgs, getenv)
+	cfg, err := config.LoadCold(cfgArgs, getenv)
 	if err != nil {
 		return fmt.Errorf("resolving configuration: %w", err)
 	}
@@ -712,7 +712,7 @@ func runDropSnapshot(args []string, getenv func(string) string) error {
 	if *dataDir != "" {
 		cfgArgs = append(cfgArgs, "--data-dir="+*dataDir)
 	}
-	cfg, err := config.Load(cfgArgs, getenv)
+	cfg, err := config.LoadCold(cfgArgs, getenv)
 	if err != nil {
 		return fmt.Errorf("resolving configuration: %w", err)
 	}
@@ -765,7 +765,7 @@ func runDeleteTenant(args []string, getenv func(string) string) error {
 	if *dataDir != "" {
 		cfgArgs = append(cfgArgs, "--data-dir="+*dataDir)
 	}
-	cfg, err := config.Load(cfgArgs, getenv)
+	cfg, err := config.LoadCold(cfgArgs, getenv)
 	if err != nil {
 		return fmt.Errorf("resolving configuration: %w", err)
 	}
@@ -792,13 +792,10 @@ func runRestoreLog(args []string, getenv func(string) string) error {
 	fs := flag.NewFlagSet("toise-server restore-log", flag.ContinueOnError)
 	configPath := fs.String("config", "", "path to a YAML config file (env: TOISE_CONFIG)")
 	dataDir := fs.String("data-dir", "", "destination data dir to reconstruct into (env: TOISE_DATA_DIR)")
-	from := fs.String("from", "", "directory of shipped log segments (a log_shipping_dir)")
-	only := fs.String("tenant", "", "restore only this tenant (default: every tenant found under --from)")
+	from := fs.String("from", "", "read segments from this directory; default: the configured shipping target (log_shipping_dir or the S3 bucket)")
+	only := fs.String("tenant", "", "restore only this tenant (default: every tenant found at the source)")
 	if err := fs.Parse(args); err != nil {
 		return err
-	}
-	if *from == "" {
-		return fmt.Errorf("usage: toise-server restore-log --from <segments-dir> [--data-dir dir] [--tenant id]")
 	}
 
 	var cfgArgs []string
@@ -808,12 +805,23 @@ func runRestoreLog(args []string, getenv func(string) string) error {
 	if *dataDir != "" {
 		cfgArgs = append(cfgArgs, "--data-dir="+*dataDir)
 	}
-	cfg, err := config.Load(cfgArgs, getenv)
+	cfg, err := config.LoadCold(cfgArgs, getenv)
 	if err != nil {
 		return fmt.Errorf("resolving configuration: %w", err)
 	}
 
-	sink, err := logship.NewFileSink(*from)
+	// Source: an explicit --from directory, else the configured shipping target —
+	// S3 when a bucket is set, otherwise log_shipping_dir. Restore from wherever you
+	// ship to, or from a local copy (a mirror, or a checkpoint of the segments).
+	var sink logship.Sink
+	switch {
+	case *from != "":
+		sink, err = logship.NewFileSink(*from)
+	case cfg.LogShipS3Enabled() || cfg.LogShipDir != "":
+		sink, err = buildLogSink(cfg)
+	default:
+		return fmt.Errorf("no source: pass --from <dir>, or configure a shipping target (log_shipping_dir or log_shipping_s3_bucket)")
+	}
 	if err != nil {
 		return err
 	}

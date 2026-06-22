@@ -749,3 +749,55 @@ func TestTierZeroSmoke(t *testing.T) {
 		t.Fatal("run() did not return within 10s of SIGTERM")
 	}
 }
+
+// TestRestoreLogFromConfiguredTarget pins the finding-2 fix: with no --from,
+// restore-log reads the configured shipping target (here log_shipping_dir via
+// env) — the same code path S3 takes (buildLogSink) — and a shipping env that
+// lacks an interval must NOT block the subcommand (finding 1, via LoadCold).
+func TestRestoreLogFromConfiguredTarget(t *testing.T) {
+	when := time.Unix(1_700_000_000, 0).UTC()
+	ev := model.Event{Entity: &model.EntityEvent{
+		EventID: model.NewEventID(), ChangeType: model.EntityCreated,
+		Entity: model.Entity{ID: "e1", Type: model.TypeHost,
+			Identity: []model.KeyValue{{Key: "host.id", Value: model.StringValue("h1")}}},
+		EventTime: when, RecordedAt: when, SchemaVersion: model.SchemaVersion,
+	}}
+	src := filepath.Join(t.TempDir(), "acme")
+	st, err := store.Open(src, store.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if aerr := st.Append(ev); aerr != nil {
+		t.Fatal(aerr)
+	}
+	segDir := t.TempDir()
+	if _, serr := logship.New(mustSink(t, segDir)).Ship(context.Background(), "acme", st); serr != nil {
+		t.Fatal(serr)
+	}
+	_ = st.Close()
+
+	// No --from: the source is the configured log_shipping_dir. The env has the dir
+	// but no interval — LoadCold must resolve it anyway.
+	dst := t.TempDir()
+	getenv := func(k string) string {
+		if k == "TOISE_LOG_SHIPPING_DIR" {
+			return segDir
+		}
+		return ""
+	}
+	if rerr := runRestoreLog([]string{"--data-dir", dst}, getenv); rerr != nil {
+		t.Fatalf("restore from configured target: %v", rerr)
+	}
+	restored, err := store.Open(filepath.Join(dst, "acme"), store.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = restored.Close() })
+	g := projection.New()
+	if rerr := g.Replay(restored); rerr != nil {
+		t.Fatal(rerr)
+	}
+	if g.EntityCount() != 1 {
+		t.Errorf("restored EntityCount = %d, want 1", g.EntityCount())
+	}
+}
