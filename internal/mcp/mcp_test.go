@@ -1242,6 +1242,57 @@ func TestImpactOfSkipsSameAs(t *testing.T) {
 	}
 }
 
+// TestGetEntityCanonical pins ADR 0020 Lot B: get_entity surfaces the read-time
+// canonical group — transitive over same_as edges at/above the threshold, with
+// low-confidence edges excluded and no group when none qualifies.
+func TestGetEntityCanonical(t *testing.T) {
+	sa := func(id string, from, to model.EntityID, conf float64, basis string) model.Relation {
+		return model.Relation{ID: model.RelationID(id), Type: model.RelSameAs, From: from, To: to,
+			Attributes: []model.KeyValue{{Key: "confidence", Value: model.DoubleValue(conf)}, {Key: "basis", Value: sv(basis)}}}
+	}
+	g := &fakeGraph{
+		entities: map[model.EntityID]model.Entity{
+			"vmA":    {ID: "vmA", Type: model.TypeComputeVM},
+			"hostB":  {ID: "hostB", Type: model.TypeHost},
+			"hostC":  {ID: "hostC", Type: model.TypeHost},
+			"noiseN": {ID: "noiseN", Type: model.TypeHost},
+		},
+		deleted: map[model.EntityID]bool{},
+		relations: []model.Relation{
+			sa("l1", "vmA", "hostB", 0.95, "hyperv-kvp"),     // vmA == hostB
+			sa("l2", "hostB", "hostC", 0.95, "serial_match"), // hostB == hostC (transitive)
+			sa("l3", "vmA", "noiseN", 0.5, "name_guess"),     // below threshold -> excluded
+		},
+	}
+	s := New(g, &fakeStore{})
+	_, out, err := s.getEntity(context.Background(), nil, GetEntityInput{EntityID: "vmA"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Canonical == nil {
+		t.Fatal("expected a canonical group for vmA")
+	}
+	got := map[string]bool{}
+	for _, a := range out.Canonical.Aliases {
+		got[a.ID] = true
+	}
+	if !got["hostB"] || !got["hostC"] {
+		t.Errorf("aliases = %+v, want hostB + hostC (transitive)", out.Canonical.Aliases)
+	}
+	if got["noiseN"] {
+		t.Error("a below-threshold same_as must not collapse into the canonical group")
+	}
+
+	// An entity whose only same_as is below threshold has no canonical group.
+	_, out2, err := s.getEntity(context.Background(), nil, GetEntityInput{EntityID: "noiseN"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out2.Canonical != nil {
+		t.Errorf("noiseN: only a below-threshold link, want no canonical group, got %+v", out2.Canonical)
+	}
+}
+
 // TestDescribeType pins #137: the per-type zoom answers from the live graph —
 // observed keys with usage, empirical relation shapes, and the relation-kind
 // view with endpoint shapes and impact flow.

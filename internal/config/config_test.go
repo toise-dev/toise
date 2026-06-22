@@ -225,6 +225,8 @@ func TestValidateRejectsSilentMisconfigurations(t *testing.T) {
 		{"mTLS client CA without server TLS", func(c *Config) { c.TLSClientCAFile = "/x/ca.pem" }},
 		{"backup_dir without interval", func(c *Config) { c.BackupDir = "/x/backups" }},
 		{"log_shipping_dir without interval", func(c *Config) { c.LogShipDir = "/x/segments" }},
+		{"identity threshold above 1", func(c *Config) { c.IdentityThreshold = 1.5 }},
+		{"identity threshold zero", func(c *Config) { c.IdentityThreshold = 0 }},
 		{"bad tenant_read_tokens pair", func(c *Config) { c.TenantReadTokens = []string{"no-colon"} }},
 	}
 	for _, tc := range cases {

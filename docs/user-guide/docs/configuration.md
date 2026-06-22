@@ -32,6 +32,7 @@ for the rationale.
 | `backup_interval` | `TOISE_BACKUP_INTERVAL` | `--backup-interval` | `0` | interval between online backups of every tenant's event log (`0` = off) |
 | `log_shipping_dir` | `TOISE_LOG_SHIPPING_DIR` | `--log-shipping-dir` | (empty) | directory to ship event-log segments to (with `log_shipping_interval`); may be a mounted bucket/NFS; empty = off (ADR 0029) |
 | `log_shipping_interval` | `TOISE_LOG_SHIPPING_INTERVAL` | `--log-shipping-interval` | `0` | interval between event-log segment ships of every tenant (`0` = off) |
+| `identity_confidence_threshold` | `TOISE_IDENTITY_CONFIDENCE_THRESHOLD` | `--identity-confidence-threshold` | `0.9` | `same_as` confidence (0,1] at/above which an alias joins an entity's canonical view on `get_entity` (ADR 0020); read-time only, never merges storage |
 | `log_format` | `TOISE_LOG_FORMAT` | `--log-format` | `text` | log output format: `text` or `json` |
 | `log_level` | `TOISE_LOG_LEVEL` | `--log-level` | `info` | `debug`, `info`, `warn`, or `error` |
 | `production` | `TOISE_PRODUCTION` | `--production` | `false` | hardening profile — forces the three below off |
