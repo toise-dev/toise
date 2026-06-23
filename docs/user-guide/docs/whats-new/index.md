@@ -4,8 +4,11 @@ Release notes for Toise. The full, canonical changelog lives in
 [`CHANGELOG.md`](https://github.com/toise-dev/toise/blob/main/CHANGELOG.md);
 these pages are the readable summary.
 
-Toise is pre-1.0 (alpha). Expect breaking changes between minor releases; each is
-called out below with a migration path.
+Toise is pre-1.0 (alpha), but since 0.7.0 the public contracts (the OTLP wire
+contract, the MCP surface, and the GraphQL schema) are pinned and evolve
+**additively** within a release series. A breaking change to them ships only with
+a deprecation notice in the preceding release and a migration path — called out
+below. See the [API stability policy](../api-stability.md).
 
 ## Releases
 

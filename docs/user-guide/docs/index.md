@@ -76,5 +76,7 @@ assistant can answer an operator's questions about it directly.
 
     Toise binds to loopback with **no authentication by default**. For an exposed
     deployment, turn on bearer-token auth, TLS, and `--production` — see
-    [Authentication & TLS](configuration.md#authentication-tls). Expect breaking
-    changes between releases (each with a migration guide).
+    [Authentication & TLS](configuration.md#authentication-tls). Since 0.7.0 the
+    public contracts are pinned and evolve additively; a breaking change ships only
+    with a deprecation notice and a migration guide (see the
+    [API stability policy](api-stability.md)).

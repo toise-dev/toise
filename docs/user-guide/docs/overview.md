@@ -92,6 +92,9 @@ closes the follow-up audit's entire P0 lot and moves to standard Go versioning
 release — operator annotations (a `get_entity` overlay + the first GraphQL
 mutation), MCP resources and prompts, read-only / ingest-only token roles,
 verbosity tiers, and the `toise-conformance` CLI — twelve MCP tools total.**
-Expect breaking changes between minor releases (each with a migration guide).
+Since 0.7.0 the public contracts (the OTLP wire contract, MCP, and GraphQL) are
+pinned and evolve **additively** within a release series; a breaking change ships
+only with a deprecation notice in the preceding release plus a migration guide.
+See the [API stability policy](api-stability.md).
 
 Next: [install and run toise-server](installation.md).
