@@ -27,6 +27,27 @@ can build on.
 - **No silent retyping or renaming** of an existing field — that is a breaking
   change and follows the deprecation path.
 
+## Following the upstream entity-events spec
+
+The producer wire contract follows the OpenTelemetry **entity-events**
+specification, which is still at **Development** status upstream. Toise's
+stability guarantee is its **own** — the byte-exact conformance fixture plus the
+change rules above — not a mirror of the upstream lifecycle label. In practice:
+
+- **Compatible upstream additions** (new optional fields, new entity/relation
+  types) are adopted additively within the current series, never breaking existing
+  producers.
+- A **breaking upstream change** (a renamed key, a changed identification
+  mechanism) is absorbed through the deprecation path: Toise accepts both the old
+  and the new form for at least one release (dual-read) with a changelog notice,
+  and only becomes a Toise major bump if coexistence is genuinely impossible. The
+  conformance fixture is the tripwire — any wire drift fails the build until it is
+  deliberately addressed.
+
+This is the posture ratified in
+[ADR 0031](https://github.com/toise-dev/toise/blob/main/docs/architecture/adr/0031-one-zero-stability-decoupled-from-upstream-spec.md):
+we do not gate Toise's stability on an externally-controlled "Stable" date.
+
 ## Not covered (may change anytime)
 
 - The **debug UI** (`/`), the GraphQL **playground** and **introspection** — development aids, off under `--production`.
