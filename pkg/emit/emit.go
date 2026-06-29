@@ -45,6 +45,10 @@ type Entity struct {
 	Interval time.Duration
 	// Relationships this entity asserts (removal is by absence on re-emit).
 	Relationships []Relationship
+	// DeleteReason is an optional motive attached to a Delete (entity.delete.reason),
+	// e.g. "terminated", "expired", "evicted", "scaled_down". It is an open enum —
+	// any string is valid — and is emitted only on Delete; it is ignored by State.
+	DeleteReason string
 }
 
 // Relationship is an embedded relationship descriptor: the source is the
@@ -216,6 +220,9 @@ func (c *Client) Build(eventName string, entities []Entity) (plog.Logs, error) {
 		}
 		if e.Interval > 0 {
 			a.PutInt(wire.AttrEntityReportInterval, int64(e.Interval/time.Second))
+		}
+		if eventName == wire.EventEntityDelete && e.DeleteReason != "" {
+			a.PutStr(wire.AttrEntityDeleteReason, e.DeleteReason)
 		}
 		if eventName == wire.EventEntityState && len(e.Relationships) > 0 {
 			slc := a.PutEmptySlice(wire.AttrEntityRelationships)
