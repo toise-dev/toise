@@ -47,8 +47,12 @@ type Change struct {
 	EventTime   string    `json:"event_time" jsonschema:"RFC 3339; when the change became true in the real world"`
 	RecordedAt  string    `json:"recorded_at" jsonschema:"RFC 3339; when Toise recorded the change"`
 	ChangedKeys []string  `json:"changed_keys" jsonschema:"the attribute keys that changed, for update/state-change events"`
-	Entity      *Entity   `json:"entity,omitempty"`
-	Relation    *Relation `json:"relation,omitempty"`
+	// DeleteReason is the producer's open-enum motive on an entity.delete (e.g.
+	// terminated, expired, evicted); empty when none was given or for non-delete
+	// changes. Omitted from the payload when empty.
+	DeleteReason string    `json:"delete_reason,omitempty" jsonschema:"why an entity was deleted, e.g. terminated/expired/evicted; open enum, may be empty"`
+	Entity       *Entity   `json:"entity,omitempty"`
+	Relation     *Relation `json:"relation,omitempty"`
 }
 
 func valueString(v model.Value) (str, typ string) {
@@ -152,6 +156,7 @@ func changeOut(ev model.Event) Change {
 		if ee.ChangedKeys != nil {
 			c.ChangedKeys = ee.ChangedKeys
 		}
+		c.DeleteReason = ee.DeleteReason
 		ent := entityOut(ee.Entity, ee.ChangeType == model.EntityDeleted)
 		c.Entity = &ent
 	case ev.Relation != nil:

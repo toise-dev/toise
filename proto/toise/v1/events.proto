@@ -87,6 +87,11 @@ message EntityEvent {
   // changed_keys lists the attribute keys that changed, for
   // attribute_updated/state_changed events.
   repeated string changed_keys = 7;
+  // delete_reason is the producer-supplied motive for an entity.delete
+  // (entity.delete.reason), an OPEN enum (free string, never a closed set on
+  // Toise's side). Empty for non-delete events and for deletes that carried no
+  // reason. See the OTel entity-events spec (1.58.0).
+  string delete_reason = 8;
 }
 
 // RelationEvent is a classified change about a relation. Bi-temporal: ADR 0005.

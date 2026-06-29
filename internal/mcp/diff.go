@@ -49,10 +49,10 @@ type GraphDiffOutput struct {
 	To      string `json:"to"`
 	Summary string `json:"summary" jsonschema:"a one-line natural-language summary of the net difference"`
 
-	EntitiesCreated   []Entity     `json:"entities_created,omitempty" jsonschema:"entities present at to but not at from"`
-	EntitiesDeleted   []Entity     `json:"entities_deleted,omitempty" jsonschema:"entities present at from but not at to"`
-	EntitiesChanged   []EntityDiff `json:"entities_changed,omitempty" jsonschema:"entities present at both instants whose attributes changed"`
-	EntitiesTransient []Entity     `json:"entities_transient,omitempty" jsonschema:"entities that appeared AND disappeared within the window (flapping)"`
+	EntitiesCreated   []Entity        `json:"entities_created,omitempty" jsonschema:"entities present at to but not at from"`
+	EntitiesDeleted   []DeletedEntity `json:"entities_deleted,omitempty" jsonschema:"entities present at from but not at to"`
+	EntitiesChanged   []EntityDiff    `json:"entities_changed,omitempty" jsonschema:"entities present at both instants whose attributes changed"`
+	EntitiesTransient []DeletedEntity `json:"entities_transient,omitempty" jsonschema:"entities that appeared AND disappeared within the window (flapping)"`
 
 	RelationsAdded     []Relation `json:"relations_added,omitempty"`
 	RelationsRemoved   []Relation `json:"relations_removed,omitempty"`
@@ -63,6 +63,15 @@ type GraphDiffOutput struct {
 	Truncated bool       `json:"truncated" jsonschema:"true if any bucket was cut to the limit; totals still cover everything"`
 }
 
+// DeletedEntity is an entity render for a disappearance surface: the entity plus
+// the producer's open-enum motive (entity.delete.reason), when one was given.
+type DeletedEntity struct {
+	Entity
+	// DeleteReason is the last delete motive seen for this entity in the window;
+	// empty when the producer gave none or the entity expired by liveness.
+	DeleteReason string `json:"delete_reason,omitempty" jsonschema:"why the entity disappeared, e.g. terminated/expired/evicted; open enum, may be empty"`
+}
+
 // entityFold accumulates one entity's events across the window.
 type entityFold struct {
 	createdFirst  bool             // the first event in the window was entity.created
@@ -70,6 +79,7 @@ type entityFold struct {
 	changedKeys   map[string]struct{}
 	stateChanged  bool
 	ent           model.Entity // latest payload
+	deleteReason  string       // last entity.delete.reason seen (empty if none)
 	seq           int          // arrival order, for stable output
 }
 
@@ -112,6 +122,9 @@ func (s *Server) graphDiff(ctx context.Context, _ *mcpsdk.CallToolRequest, in Gr
 			switch ee.ChangeType {
 			case model.EntityCreated, model.EntityDeleted:
 				f.lastLifecycle = ee.ChangeType
+				if ee.ChangeType == model.EntityDeleted {
+					f.deleteReason = ee.DeleteReason
+				}
 			case model.EntityAttributeUpdated, model.EntityStateChanged:
 				for _, k := range ee.ChangedKeys {
 					f.changedKeys[k] = struct{}{}
@@ -175,10 +188,10 @@ func (s *Server) graphDiff(ctx context.Context, _ *mcpsdk.CallToolRequest, in Gr
 		out.EntitiesCreated = append(out.EntitiesCreated, entityOut(f.ent, false))
 	}
 	for _, f := range deleted.folds {
-		out.EntitiesDeleted = append(out.EntitiesDeleted, entityOut(f.ent, true))
+		out.EntitiesDeleted = append(out.EntitiesDeleted, DeletedEntity{Entity: entityOut(f.ent, true), DeleteReason: f.deleteReason})
 	}
 	for _, f := range transient.folds {
-		out.EntitiesTransient = append(out.EntitiesTransient, entityOut(f.ent, true))
+		out.EntitiesTransient = append(out.EntitiesTransient, DeletedEntity{Entity: entityOut(f.ent, true), DeleteReason: f.deleteReason})
 	}
 	for _, f := range changed.folds {
 		keys := make([]string, 0, len(f.changedKeys))

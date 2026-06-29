@@ -86,6 +86,11 @@ type ChangeEvent struct {
 	SchemaVersion string `json:"schemaVersion"`
 	// For attribute/state changes, the keys that changed.
 	ChangedKeys []string `json:"changedKeys"`
+	// For an entity.deleted event, the producer's motive (entity.delete.reason):
+	// an OPEN enum (e.g. `terminated`, `expired`, `evicted`, `user_requested`,
+	// `scaled_down`) kept verbatim. Null when none was given or for non-delete
+	// events.
+	DeleteReason *string `json:"deleteReason,omitempty"`
 	// Events dropped just before this one because this subscriber could not keep
 	// up. Positive means you have a gap: re-query the current state and resume.
 	Dropped int `json:"dropped"`

@@ -151,8 +151,8 @@ github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 github.com/tinylib/msgp v1.6.1 h1:ESRv8eL3u+DNHUoSAAQRE50Hm162zqAnBoGv9PzScPY=
 github.com/tinylib/msgp v1.6.1/go.mod h1:RSp0LW9oSxFut3KzESt5Voq4GVWyS+PSulT77roAqEA=
-github.com/toise-dev/toise/pkg/emit v0.2.0 h1:mMHeSSHWjj5U1sR0kza7t94FygGE4pJxDwDmonFBgmI=
-github.com/toise-dev/toise/pkg/emit v0.2.0/go.mod h1:p7O2ay9SVPvLf0VXZs3pGo6+4S4XsPNSikZmPvVkc/s=
+github.com/toise-dev/toise/pkg/emit v0.3.0 h1:+ZaCn3+pWrGMkkOo2JGc2/O1dEn9v3mrvEU861GgVQI=
+github.com/toise-dev/toise/pkg/emit v0.3.0/go.mod h1:p7O2ay9SVPvLf0VXZs3pGo6+4S4XsPNSikZmPvVkc/s=
 github.com/vektah/gqlparser/v2 v2.5.33 h1:lRp8aIeNUNbimf/axZd7ETg24q06hBtPaas+TcvI/7E=
 github.com/vektah/gqlparser/v2 v2.5.33/go.mod h1:c1I28gSOVNzlfc4WuDlqU7voQnsqI6OG2amkBAFmgts=
 github.com/yosida95/uritemplate/v3 v3.0.2 h1:Ed3Oyj9yrmi9087+NczuL5BwkIc4wvTb5zIM+UJPGz4=

@@ -352,6 +352,10 @@ type EntityObservation struct {
 	// is reference-counted per producer: an entity stays live while any producer
 	// references it (ADR 0019). Empty means a single anonymous producer.
 	Producer string
+	// DeleteReason is the producer's motive on an entity.delete
+	// (entity.delete.reason), an open enum kept verbatim. Only consulted on the
+	// delete path; ignored on state observations.
+	DeleteReason string
 }
 
 // EndpointRef references a relation endpoint by its entity identity.
@@ -494,6 +498,7 @@ func (e *Engine) deleteEntityLocked(obs EntityObservation) (ev model.Event, emit
 		EventTime:     obs.EventTime,
 		RecordedAt:    e.now(),
 		SchemaVersion: model.SchemaVersion,
+		DeleteReason:  obs.DeleteReason,
 	}}
 	if err := e.commit(ev, false); err != nil {
 		return model.Event{}, false, err
