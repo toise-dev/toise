@@ -83,6 +83,10 @@ func eventToChangeGQL(ev model.Event) *generated.ChangeEvent {
 		if ee.ChangedKeys != nil {
 			ce.ChangedKeys = ee.ChangedKeys
 		}
+		if ee.DeleteReason != "" {
+			r := ee.DeleteReason
+			ce.DeleteReason = &r
+		}
 		ce.Entity = entityToGQL(ee.Entity, ee.ChangeType == model.EntityDeleted)
 	case ev.Relation != nil:
 		re := ev.Relation

@@ -588,7 +588,12 @@ type EntityEvent struct {
 	SchemaVersion string `protobuf:"bytes,6,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
 	// changed_keys lists the attribute keys that changed, for
 	// attribute_updated/state_changed events.
-	ChangedKeys   []string `protobuf:"bytes,7,rep,name=changed_keys,json=changedKeys,proto3" json:"changed_keys,omitempty"`
+	ChangedKeys []string `protobuf:"bytes,7,rep,name=changed_keys,json=changedKeys,proto3" json:"changed_keys,omitempty"`
+	// delete_reason is the producer-supplied motive for an entity.delete
+	// (entity.delete.reason), an OPEN enum (free string, never a closed set on
+	// Toise's side). Empty for non-delete events and for deletes that carried no
+	// reason. See the OTel entity-events spec (1.58.0).
+	DeleteReason  string `protobuf:"bytes,8,opt,name=delete_reason,json=deleteReason,proto3" json:"delete_reason,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -670,6 +675,13 @@ func (x *EntityEvent) GetChangedKeys() []string {
 		return x.ChangedKeys
 	}
 	return nil
+}
+
+func (x *EntityEvent) GetDeleteReason() string {
+	if x != nil {
+		return x.DeleteReason
+	}
+	return ""
 }
 
 // RelationEvent is a classified change about a relation. Bi-temporal: ADR 0005.
@@ -893,7 +905,7 @@ const file_toise_v1_events_proto_rawDesc = "" +
 	"attributes\x12\x1e\n" +
 	"\n" +
 	"structural\x18\x06 \x01(\bR\n" +
-	"structural\"\xb7\x02\n" +
+	"structural\"\xdc\x02\n" +
 	"\vEntityEvent\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x125\n" +
 	"\vchange_type\x18\x02 \x01(\x0e2\x14.toise.v1.ChangeTypeR\n" +
@@ -902,7 +914,8 @@ const file_toise_v1_events_proto_rawDesc = "" +
 	"\x14event_time_unix_nano\x18\x04 \x01(\x03R\x11eventTimeUnixNano\x121\n" +
 	"\x15recorded_at_unix_nano\x18\x05 \x01(\x03R\x12recordedAtUnixNano\x12%\n" +
 	"\x0eschema_version\x18\x06 \x01(\tR\rschemaVersion\x12!\n" +
-	"\fchanged_keys\x18\a \x03(\tR\vchangedKeys\"\xbf\x02\n" +
+	"\fchanged_keys\x18\a \x03(\tR\vchangedKeys\x12#\n" +
+	"\rdelete_reason\x18\b \x01(\tR\fdeleteReason\"\xbf\x02\n" +
 	"\rRelationEvent\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x125\n" +
 	"\vchange_type\x18\x02 \x01(\x0e2\x14.toise.v1.ChangeTypeR\n" +

@@ -151,6 +151,13 @@ type ChangeEvent {
   "For attribute/state changes, the keys that changed."
   changedKeys: [String!]!
   """
+  For an entity.deleted event, the producer's motive (entity.delete.reason):
+  an OPEN enum (e.g. `terminated`, `expired`, `evicted`, `user_requested`,
+  `scaled_down`) kept verbatim. Null when none was given or for non-delete
+  events.
+  """
+  deleteReason: String
+  """
   Events dropped just before this one because this subscriber could not keep
   up. Positive means you have a gap: re-query the current state and resume.
   """

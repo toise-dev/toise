@@ -43,6 +43,10 @@ const (
 	// reference-counted per producer (ADR 0019).
 	resAttrProducer = wire.ResServiceInstanceID
 
+	// entity.delete.reason is an optional open-enum motive carried on delete
+	// events; Toise keeps it verbatim and never rejects an unknown value.
+	attrEntityDeleteReason = wire.AttrEntityDeleteReason
+
 	attrEntityRelationships = wire.AttrEntityRelationships
 	relDescType             = wire.RelType
 	relDescEntityType       = wire.RelTargetType
@@ -99,6 +103,11 @@ func routeRecordVocab(e engine, lr plog.LogRecord, producer string, strictVocab 
 			return true, drop, oerr
 		}
 		obs.Producer = producer
+		// entity.delete.reason is optional and an open enum: carry whatever the
+		// producer sent, never validate it against a closed set.
+		if reason, ok := strAttr(attrs, attrEntityDeleteReason); ok {
+			obs.DeleteReason = reason
+		}
 		_, _, oerr = e.DeleteEntity(obs)
 		return true, drop, oerr
 	default:

@@ -29,6 +29,10 @@ type EntityEvent struct {
 	// ChangedKeys lists the attribute keys that changed, for
 	// attribute_updated/state_changed events.
 	ChangedKeys []string
+	// DeleteReason is the producer-supplied motive for a delete
+	// (entity.delete.reason), an open enum kept verbatim as a free string. Empty
+	// for non-delete events and for deletes that carried no reason.
+	DeleteReason string
 }
 
 // RelationEvent is a classified change about a relation. Bi-temporal: ADR 0005.
@@ -130,6 +134,7 @@ func (e EntityEvent) ToProto() *toisev1.EntityEvent {
 		RecordedAtUnixNano: nanoOf(e.RecordedAt),
 		SchemaVersion:      e.SchemaVersion,
 		ChangedKeys:        e.ChangedKeys,
+		DeleteReason:       e.DeleteReason,
 	}
 }
 
@@ -146,6 +151,7 @@ func EntityEventFromProto(p *toisev1.EntityEvent) EntityEvent {
 		RecordedAt:    timeOf(p.GetRecordedAtUnixNano()),
 		SchemaVersion: p.GetSchemaVersion(),
 		ChangedKeys:   p.GetChangedKeys(),
+		DeleteReason:  p.GetDeleteReason(),
 	}
 }
 

@@ -183,6 +183,7 @@ tool entity_history
   changes []object
     change_type string
     changed_keys []string
+    delete_reason string
     entity object
       attributes []object
         key string
@@ -227,6 +228,7 @@ tool recent_changes
   changes []object
     change_type string
     changed_keys []string
+    delete_reason string
     entity object
       attributes []object
         key string
@@ -302,6 +304,7 @@ tool graph_diff
       value string
     label string
     type string
+    delete_reason string
   entities_transient []object
     attributes []object
       key string
@@ -315,6 +318,7 @@ tool graph_diff
       value string
     label string
     type string
+    delete_reason string
   from string
   relations_added []object
     attributes []object
