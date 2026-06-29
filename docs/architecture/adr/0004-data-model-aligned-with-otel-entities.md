@@ -68,10 +68,40 @@ Phase-1 relation types:
   per ADR 0015.
 - The typed `Value` loses some of `AnyValue`'s generality — no nested kvlist,
   array, or bytes values in phase 1 — by design. The cost is revisited if a
-  later phase needs richer values.
+  later phase needs richer values. **(Superseded for descriptive attributes by
+  the 0.9.0 amendment below.)**
 - The hand-written domain types add converter boilerplate (`ToProto` /
   `FromProto`), accepted in exchange for decoupling the domain from the wire
   format.
 - The type registry centralizes validation of entity and relation types and
   their endpoint constraints, making additions safe and keeping type rules in
   one place.
+
+## Amendment — 0.9.0: full AnyValue for descriptive attributes
+
+- Date: 2026-06-29
+
+The OTel entity-events spec (1.58.0) types `entity.description` as an `AnyValue`
+that "can contain scalar values, arrays, or nested maps". To align strictly and
+avoid silently losing producer facts, `Value` is widened from the four scalars
+to the **full AnyValue**: it gains an **array** (ordered `[]Value`) and a
+**kvlist** (ordered `[]KeyValue`) form, recursively, mirroring OTLP's
+`ArrayValue` / `KeyValueList` wrapper messages on the proto side.
+
+Scope and invariants:
+
+- **Identity stays scalar.** Only descriptive attributes (`entity.description`)
+  carry the full AnyValue. Identity (`entity.id`) and relationship endpoint ids
+  remain scalar by contract (ADR 0018); a nested value in an identity map is
+  dropped and surfaced, never hashed.
+- **Lossless and backward compatible.** Scalar-only producers are byte-for-byte
+  unchanged. Arrays and nested maps that were previously dropped (and surfaced
+  on the dropped-keys path) are now ingested faithfully end to end (ingest →
+  store → projection → GraphQL/MCP). An unsupported leaf (e.g. bytes) inside a
+  composite still rejects that composite and is surfaced, never stored partial.
+- **Rendering.** On read surfaces a composite value renders as compact JSON,
+  tagged with a value type of `array` / `kvlist` (GraphQL `ValueType.ARRAY` /
+  `KVLIST`, MCP `"array"` / `"kvlist"`); scalar rendering is unchanged.
+- **Canonical encoding** for arrays/kvlists is length-prefixed and sorts kvlist
+  keys, so identity hashing and attribute-change detection stay deterministic
+  and collision-free across nesting shapes.

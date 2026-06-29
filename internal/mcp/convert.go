@@ -59,6 +59,10 @@ func valueString(v model.Value) (str, typ string) {
 		return v.Display(), "double"
 	case model.KindBool:
 		return v.Display(), "bool"
+	case model.KindArray:
+		return v.Display(), "array"
+	case model.KindKvlist:
+		return v.Display(), "kvlist"
 	default:
 		return v.Display(), "string"
 	}

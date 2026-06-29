@@ -395,6 +395,10 @@ func valueString(v model.Value) (str, typ string) {
 		return strconv.FormatFloat(v.Double(), 'g', -1, 64), "double"
 	case model.KindBool:
 		return strconv.FormatBool(v.Bool()), "bool"
+	case model.KindArray:
+		return v.Display(), "array"
+	case model.KindKvlist:
+		return v.Display(), "kvlist"
 	default:
 		return v.Str(), "string"
 	}

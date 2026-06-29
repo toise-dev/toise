@@ -92,9 +92,10 @@ func (ChangeType) EnumDescriptor() ([]byte, []int) {
 	return file_toise_v1_events_proto_rawDescGZIP(), []int{0}
 }
 
-// Value is a typed attribute value: a deliberate subset of the OpenTelemetry
-// AnyValue (string, int64, double, bool). Nested kvlist/array/bytes are not
-// supported in phase 1. See ADR 0004.
+// Value is a typed attribute value mirroring the OpenTelemetry AnyValue:
+// the four scalars (string, int64, double, bool) plus recursive array and
+// kvlist forms. Descriptive attributes (entity.description) carry the full
+// AnyValue; identity values stay scalar by contract (ADR 0018). See ADR 0004.
 type Value struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Value:
@@ -103,6 +104,8 @@ type Value struct {
 	//	*Value_IntValue
 	//	*Value_DoubleValue
 	//	*Value_BoolValue
+	//	*Value_ArrayValue
+	//	*Value_KvlistValue
 	Value         isValue_Value `protobuf_oneof:"value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -181,6 +184,24 @@ func (x *Value) GetBoolValue() bool {
 	return false
 }
 
+func (x *Value) GetArrayValue() *ArrayValue {
+	if x != nil {
+		if x, ok := x.Value.(*Value_ArrayValue); ok {
+			return x.ArrayValue
+		}
+	}
+	return nil
+}
+
+func (x *Value) GetKvlistValue() *KeyValueList {
+	if x != nil {
+		if x, ok := x.Value.(*Value_KvlistValue); ok {
+			return x.KvlistValue
+		}
+	}
+	return nil
+}
+
 type isValue_Value interface {
 	isValue_Value()
 }
@@ -201,6 +222,16 @@ type Value_BoolValue struct {
 	BoolValue bool `protobuf:"varint,4,opt,name=bool_value,json=boolValue,proto3,oneof"`
 }
 
+type Value_ArrayValue struct {
+	// array_value and kvlist_value are wrapper messages because a oneof field
+	// cannot itself be `repeated` (this mirrors OTLP's ArrayValue/KeyValueList).
+	ArrayValue *ArrayValue `protobuf:"bytes,5,opt,name=array_value,json=arrayValue,proto3,oneof"`
+}
+
+type Value_KvlistValue struct {
+	KvlistValue *KeyValueList `protobuf:"bytes,6,opt,name=kvlist_value,json=kvlistValue,proto3,oneof"`
+}
+
 func (*Value_StringValue) isValue_Value() {}
 
 func (*Value_IntValue) isValue_Value() {}
@@ -208,6 +239,100 @@ func (*Value_IntValue) isValue_Value() {}
 func (*Value_DoubleValue) isValue_Value() {}
 
 func (*Value_BoolValue) isValue_Value() {}
+
+func (*Value_ArrayValue) isValue_Value() {}
+
+func (*Value_KvlistValue) isValue_Value() {}
+
+// ArrayValue is an ordered list of Values (the array AnyValue form).
+type ArrayValue struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Values        []*Value               `protobuf:"bytes,1,rep,name=values,proto3" json:"values,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ArrayValue) Reset() {
+	*x = ArrayValue{}
+	mi := &file_toise_v1_events_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ArrayValue) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ArrayValue) ProtoMessage() {}
+
+func (x *ArrayValue) ProtoReflect() protoreflect.Message {
+	mi := &file_toise_v1_events_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ArrayValue.ProtoReflect.Descriptor instead.
+func (*ArrayValue) Descriptor() ([]byte, []int) {
+	return file_toise_v1_events_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *ArrayValue) GetValues() []*Value {
+	if x != nil {
+		return x.Values
+	}
+	return nil
+}
+
+// KeyValueList is an ordered list of KeyValues (the kvlist/map AnyValue form).
+type KeyValueList struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Values        []*KeyValue            `protobuf:"bytes,1,rep,name=values,proto3" json:"values,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KeyValueList) Reset() {
+	*x = KeyValueList{}
+	mi := &file_toise_v1_events_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KeyValueList) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KeyValueList) ProtoMessage() {}
+
+func (x *KeyValueList) ProtoReflect() protoreflect.Message {
+	mi := &file_toise_v1_events_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KeyValueList.ProtoReflect.Descriptor instead.
+func (*KeyValueList) Descriptor() ([]byte, []int) {
+	return file_toise_v1_events_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *KeyValueList) GetValues() []*KeyValue {
+	if x != nil {
+		return x.Values
+	}
+	return nil
+}
 
 // KeyValue is a single attribute.
 type KeyValue struct {
@@ -220,7 +345,7 @@ type KeyValue struct {
 
 func (x *KeyValue) Reset() {
 	*x = KeyValue{}
-	mi := &file_toise_v1_events_proto_msgTypes[1]
+	mi := &file_toise_v1_events_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -232,7 +357,7 @@ func (x *KeyValue) String() string {
 func (*KeyValue) ProtoMessage() {}
 
 func (x *KeyValue) ProtoReflect() protoreflect.Message {
-	mi := &file_toise_v1_events_proto_msgTypes[1]
+	mi := &file_toise_v1_events_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -245,7 +370,7 @@ func (x *KeyValue) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KeyValue.ProtoReflect.Descriptor instead.
 func (*KeyValue) Descriptor() ([]byte, []int) {
-	return file_toise_v1_events_proto_rawDescGZIP(), []int{1}
+	return file_toise_v1_events_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *KeyValue) GetKey() string {
@@ -288,7 +413,7 @@ type Entity struct {
 
 func (x *Entity) Reset() {
 	*x = Entity{}
-	mi := &file_toise_v1_events_proto_msgTypes[2]
+	mi := &file_toise_v1_events_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -300,7 +425,7 @@ func (x *Entity) String() string {
 func (*Entity) ProtoMessage() {}
 
 func (x *Entity) ProtoReflect() protoreflect.Message {
-	mi := &file_toise_v1_events_proto_msgTypes[2]
+	mi := &file_toise_v1_events_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -313,7 +438,7 @@ func (x *Entity) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Entity.ProtoReflect.Descriptor instead.
 func (*Entity) Descriptor() ([]byte, []int) {
-	return file_toise_v1_events_proto_rawDescGZIP(), []int{2}
+	return file_toise_v1_events_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *Entity) GetEntityId() string {
@@ -377,7 +502,7 @@ type Relation struct {
 
 func (x *Relation) Reset() {
 	*x = Relation{}
-	mi := &file_toise_v1_events_proto_msgTypes[3]
+	mi := &file_toise_v1_events_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -389,7 +514,7 @@ func (x *Relation) String() string {
 func (*Relation) ProtoMessage() {}
 
 func (x *Relation) ProtoReflect() protoreflect.Message {
-	mi := &file_toise_v1_events_proto_msgTypes[3]
+	mi := &file_toise_v1_events_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -402,7 +527,7 @@ func (x *Relation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Relation.ProtoReflect.Descriptor instead.
 func (*Relation) Descriptor() ([]byte, []int) {
-	return file_toise_v1_events_proto_rawDescGZIP(), []int{3}
+	return file_toise_v1_events_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *Relation) GetRelationId() string {
@@ -470,7 +595,7 @@ type EntityEvent struct {
 
 func (x *EntityEvent) Reset() {
 	*x = EntityEvent{}
-	mi := &file_toise_v1_events_proto_msgTypes[4]
+	mi := &file_toise_v1_events_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -482,7 +607,7 @@ func (x *EntityEvent) String() string {
 func (*EntityEvent) ProtoMessage() {}
 
 func (x *EntityEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_toise_v1_events_proto_msgTypes[4]
+	mi := &file_toise_v1_events_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -495,7 +620,7 @@ func (x *EntityEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EntityEvent.ProtoReflect.Descriptor instead.
 func (*EntityEvent) Descriptor() ([]byte, []int) {
-	return file_toise_v1_events_proto_rawDescGZIP(), []int{4}
+	return file_toise_v1_events_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *EntityEvent) GetEventId() string {
@@ -563,7 +688,7 @@ type RelationEvent struct {
 
 func (x *RelationEvent) Reset() {
 	*x = RelationEvent{}
-	mi := &file_toise_v1_events_proto_msgTypes[5]
+	mi := &file_toise_v1_events_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -575,7 +700,7 @@ func (x *RelationEvent) String() string {
 func (*RelationEvent) ProtoMessage() {}
 
 func (x *RelationEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_toise_v1_events_proto_msgTypes[5]
+	mi := &file_toise_v1_events_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -588,7 +713,7 @@ func (x *RelationEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RelationEvent.ProtoReflect.Descriptor instead.
 func (*RelationEvent) Descriptor() ([]byte, []int) {
-	return file_toise_v1_events_proto_rawDescGZIP(), []int{5}
+	return file_toise_v1_events_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *RelationEvent) GetEventId() string {
@@ -654,7 +779,7 @@ type Event struct {
 
 func (x *Event) Reset() {
 	*x = Event{}
-	mi := &file_toise_v1_events_proto_msgTypes[6]
+	mi := &file_toise_v1_events_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -666,7 +791,7 @@ func (x *Event) String() string {
 func (*Event) ProtoMessage() {}
 
 func (x *Event) ProtoReflect() protoreflect.Message {
-	mi := &file_toise_v1_events_proto_msgTypes[6]
+	mi := &file_toise_v1_events_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -679,7 +804,7 @@ func (x *Event) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Event.ProtoReflect.Descriptor instead.
 func (*Event) Descriptor() ([]byte, []int) {
-	return file_toise_v1_events_proto_rawDescGZIP(), []int{6}
+	return file_toise_v1_events_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *Event) GetEvent() isEvent_Event {
@@ -727,14 +852,22 @@ var File_toise_v1_events_proto protoreflect.FileDescriptor
 
 const file_toise_v1_events_proto_rawDesc = "" +
 	"\n" +
-	"\x15toise/v1/events.proto\x12\btoise.v1\"\x9a\x01\n" +
+	"\x15toise/v1/events.proto\x12\btoise.v1\"\x90\x02\n" +
 	"\x05Value\x12#\n" +
 	"\fstring_value\x18\x01 \x01(\tH\x00R\vstringValue\x12\x1d\n" +
 	"\tint_value\x18\x02 \x01(\x03H\x00R\bintValue\x12#\n" +
 	"\fdouble_value\x18\x03 \x01(\x01H\x00R\vdoubleValue\x12\x1f\n" +
 	"\n" +
-	"bool_value\x18\x04 \x01(\bH\x00R\tboolValueB\a\n" +
-	"\x05value\"C\n" +
+	"bool_value\x18\x04 \x01(\bH\x00R\tboolValue\x127\n" +
+	"\varray_value\x18\x05 \x01(\v2\x14.toise.v1.ArrayValueH\x00R\n" +
+	"arrayValue\x12;\n" +
+	"\fkvlist_value\x18\x06 \x01(\v2\x16.toise.v1.KeyValueListH\x00R\vkvlistValueB\a\n" +
+	"\x05value\"5\n" +
+	"\n" +
+	"ArrayValue\x12'\n" +
+	"\x06values\x18\x01 \x03(\v2\x0f.toise.v1.ValueR\x06values\":\n" +
+	"\fKeyValueList\x12*\n" +
+	"\x06values\x18\x01 \x03(\v2\x12.toise.v1.KeyValueR\x06values\"C\n" +
 	"\bKeyValue\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12%\n" +
 	"\x05value\x18\x02 \x01(\v2\x0f.toise.v1.ValueR\x05value\"\xe1\x01\n" +
@@ -809,33 +942,39 @@ func file_toise_v1_events_proto_rawDescGZIP() []byte {
 }
 
 var file_toise_v1_events_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_toise_v1_events_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_toise_v1_events_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_toise_v1_events_proto_goTypes = []any{
 	(ChangeType)(0),       // 0: toise.v1.ChangeType
 	(*Value)(nil),         // 1: toise.v1.Value
-	(*KeyValue)(nil),      // 2: toise.v1.KeyValue
-	(*Entity)(nil),        // 3: toise.v1.Entity
-	(*Relation)(nil),      // 4: toise.v1.Relation
-	(*EntityEvent)(nil),   // 5: toise.v1.EntityEvent
-	(*RelationEvent)(nil), // 6: toise.v1.RelationEvent
-	(*Event)(nil),         // 7: toise.v1.Event
+	(*ArrayValue)(nil),    // 2: toise.v1.ArrayValue
+	(*KeyValueList)(nil),  // 3: toise.v1.KeyValueList
+	(*KeyValue)(nil),      // 4: toise.v1.KeyValue
+	(*Entity)(nil),        // 5: toise.v1.Entity
+	(*Relation)(nil),      // 6: toise.v1.Relation
+	(*EntityEvent)(nil),   // 7: toise.v1.EntityEvent
+	(*RelationEvent)(nil), // 8: toise.v1.RelationEvent
+	(*Event)(nil),         // 9: toise.v1.Event
 }
 var file_toise_v1_events_proto_depIdxs = []int32{
-	1,  // 0: toise.v1.KeyValue.value:type_name -> toise.v1.Value
-	2,  // 1: toise.v1.Entity.identity:type_name -> toise.v1.KeyValue
-	2,  // 2: toise.v1.Entity.attributes:type_name -> toise.v1.KeyValue
-	2,  // 3: toise.v1.Relation.attributes:type_name -> toise.v1.KeyValue
-	0,  // 4: toise.v1.EntityEvent.change_type:type_name -> toise.v1.ChangeType
-	3,  // 5: toise.v1.EntityEvent.entity:type_name -> toise.v1.Entity
-	0,  // 6: toise.v1.RelationEvent.change_type:type_name -> toise.v1.ChangeType
-	4,  // 7: toise.v1.RelationEvent.relation:type_name -> toise.v1.Relation
-	5,  // 8: toise.v1.Event.entity_event:type_name -> toise.v1.EntityEvent
-	6,  // 9: toise.v1.Event.relation_event:type_name -> toise.v1.RelationEvent
-	10, // [10:10] is the sub-list for method output_type
-	10, // [10:10] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	2,  // 0: toise.v1.Value.array_value:type_name -> toise.v1.ArrayValue
+	3,  // 1: toise.v1.Value.kvlist_value:type_name -> toise.v1.KeyValueList
+	1,  // 2: toise.v1.ArrayValue.values:type_name -> toise.v1.Value
+	4,  // 3: toise.v1.KeyValueList.values:type_name -> toise.v1.KeyValue
+	1,  // 4: toise.v1.KeyValue.value:type_name -> toise.v1.Value
+	4,  // 5: toise.v1.Entity.identity:type_name -> toise.v1.KeyValue
+	4,  // 6: toise.v1.Entity.attributes:type_name -> toise.v1.KeyValue
+	4,  // 7: toise.v1.Relation.attributes:type_name -> toise.v1.KeyValue
+	0,  // 8: toise.v1.EntityEvent.change_type:type_name -> toise.v1.ChangeType
+	5,  // 9: toise.v1.EntityEvent.entity:type_name -> toise.v1.Entity
+	0,  // 10: toise.v1.RelationEvent.change_type:type_name -> toise.v1.ChangeType
+	6,  // 11: toise.v1.RelationEvent.relation:type_name -> toise.v1.Relation
+	7,  // 12: toise.v1.Event.entity_event:type_name -> toise.v1.EntityEvent
+	8,  // 13: toise.v1.Event.relation_event:type_name -> toise.v1.RelationEvent
+	14, // [14:14] is the sub-list for method output_type
+	14, // [14:14] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_toise_v1_events_proto_init() }
@@ -848,8 +987,10 @@ func file_toise_v1_events_proto_init() {
 		(*Value_IntValue)(nil),
 		(*Value_DoubleValue)(nil),
 		(*Value_BoolValue)(nil),
+		(*Value_ArrayValue)(nil),
+		(*Value_KvlistValue)(nil),
 	}
-	file_toise_v1_events_proto_msgTypes[6].OneofWrappers = []any{
+	file_toise_v1_events_proto_msgTypes[8].OneofWrappers = []any{
 		(*Event_EntityEvent)(nil),
 		(*Event_RelationEvent)(nil),
 	}
@@ -859,7 +1000,7 @@ func file_toise_v1_events_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_toise_v1_events_proto_rawDesc), len(file_toise_v1_events_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   7,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

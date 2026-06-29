@@ -680,6 +680,10 @@ enum ValueType {
   INT
   DOUBLE
   BOOL
+  "An array AnyValue; ` + "`" + `value` + "`" + ` is its compact JSON encoding."
+  ARRAY
+  "A nested map (kvlist) AnyValue; ` + "`" + `value` + "`" + ` is its compact JSON encoding."
+  KVLIST
 }
 
 """
