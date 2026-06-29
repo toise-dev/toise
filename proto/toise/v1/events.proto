@@ -4,16 +4,31 @@ package toise.v1;
 
 option go_package = "github.com/toise-dev/toise/proto/toise/v1;toisev1";
 
-// Value is a typed attribute value: a deliberate subset of the OpenTelemetry
-// AnyValue (string, int64, double, bool). Nested kvlist/array/bytes are not
-// supported in phase 1. See ADR 0004.
+// Value is a typed attribute value mirroring the OpenTelemetry AnyValue:
+// the four scalars (string, int64, double, bool) plus recursive array and
+// kvlist forms. Descriptive attributes (entity.description) carry the full
+// AnyValue; identity values stay scalar by contract (ADR 0018). See ADR 0004.
 message Value {
   oneof value {
     string string_value = 1;
     int64 int_value = 2;
     double double_value = 3;
     bool bool_value = 4;
+    // array_value and kvlist_value are wrapper messages because a oneof field
+    // cannot itself be `repeated` (this mirrors OTLP's ArrayValue/KeyValueList).
+    ArrayValue array_value = 5;
+    KeyValueList kvlist_value = 6;
   }
+}
+
+// ArrayValue is an ordered list of Values (the array AnyValue form).
+message ArrayValue {
+  repeated Value values = 1;
+}
+
+// KeyValueList is an ordered list of KeyValues (the kvlist/map AnyValue form).
+message KeyValueList {
+  repeated KeyValue values = 1;
 }
 
 // KeyValue is a single attribute.

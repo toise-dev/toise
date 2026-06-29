@@ -106,29 +106,32 @@ endpoint is a retriable ingest error instead. See *Robustness backstops* below.
 | Entity `schema_url`                       | `Entity.schema_url`                                                          |
 | `LogRecord` timestamp / observed timestamp | `event_time` (producer/reality)                                            |
 | (ingestion)                               | `recorded_at` — set by Toise at ingest, never taken from the producer       |
-| OTel `AnyValue`                           | Toise typed `Value` (`string` / `int64` / `double` / `bool`)                |
+| OTel `AnyValue`                           | Toise typed `Value` (scalars + `array` + `kvlist`)                          |
 
-### AnyValue restriction
+### AnyValue support
 
-Toise's typed `Value` is a deliberate subset of OTel `AnyValue`. Only the four
-scalar kinds — `string`, `int64`, `double`, `bool` — are supported in phase 1.
+Toise's typed `Value` mirrors the OTel `AnyValue`: the four scalar kinds
+(`string`, `int64`, `double`, `bool`) **plus** `array` (ordered list) and
+`kvlist` (nested map), recursively. This follows the spec, which types
+`entity.description` as an `AnyValue` that "can contain scalar values, arrays, or
+nested maps". (Amended in 0.9.0 — earlier releases kept only the four scalars;
+see [ADR 0004](../architecture/adr/0004-data-model-aligned-with-otel-entities.md).)
 
-The `entity.id` / `entity.description` (and relation-endpoint id) attributes are
-themselves **maps**, and Toise reads them structurally: it iterates the **top-level**
-map and keeps each entry whose **leaf value is one of the four scalars**. A
-non-scalar leaf (a nested `kvlist`/`array`/`bytes`) is dropped — the boundary does
-**not** recurse into nested structures.
+Two scopes, by contract:
 
-The practical contract for producers: the `id` and `attributes` maps must be
-**flat maps of scalars**. Pre-flatten any structure with dotted keys before
-emitting — send `{"server.address": "10.0.0.1", "server.port": 5432}`, never
-`{"server": {"address": "10.0.0.1", "port": 5432}}` (the nested `server` value
-would be discarded).
+- **`entity.description` carries the full AnyValue.** Arrays and nested maps are
+  ingested faithfully end to end (ingest → store → projection → GraphQL/MCP). On
+  read, a composite renders as compact JSON, tagged `array` / `kvlist`.
+- **Identity stays scalar.** `entity.id` and relation-endpoint ids must remain
+  **flat maps of scalars** (ADR 0018): exact-match identity is over scalar
+  strings. A nested value in an identity map is **dropped and surfaced**, never
+  hashed. Pre-flatten identity structure with dotted keys — send
+  `{"server.address": "10.0.0.1", "server.port": "5432"}`, not a nested `server`.
 
-**No silent loss:** dropping a nested value is **surfaced**, not silent — the
-boundary logs a `Warn` naming the dropped key(s) (e.g.
-`entity.description.foo`) so the loss is observable. Pre-flattening remains
-the producer's contract; the consumer never drops data quietly.
+**No silent loss:** the only values dropped now are non-scalar **identity** leaves
+and unsupported leaves (e.g. `bytes`) anywhere; each is **surfaced**, not silent —
+the boundary logs a `Warn` naming the dropped key (e.g. `entity.description.blob`)
+so the loss is observable. The consumer never drops data quietly.
 
 ### Entity liveness — explicit delete primary, interval backstop
 

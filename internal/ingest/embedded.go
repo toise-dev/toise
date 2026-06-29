@@ -58,7 +58,7 @@ func (r *embeddedReconciler) handleVocab(e engine, lr plog.LogRecord, strictVoca
 		return nil, nil // not an entity event
 	}
 	sourceType, okT := strAttr(attrs, attrEntityType)
-	sourceID, idDropped, okI := mapAttr(attrs, attrEntityID)
+	sourceID, idDropped, okI := mapAttr(attrs, attrEntityID, false)
 	if !okT || !okI || len(sourceID) == 0 {
 		// malformed/incomplete entity event — routeRecord surfaces the error; we
 		// have no source to key on, so there is nothing to reconcile.
@@ -187,7 +187,7 @@ func embeddedRelations(attrs pcommon.Map, source change.EndpointRef, when time.T
 				continue
 			}
 		}
-		toID, idDropped := kvsFromMap(idv.Map(), key+"."+relDescEntityID)
+		toID, idDropped := kvsFromMap(idv.Map(), key+"."+relDescEntityID, false)
 		dropped = append(dropped, idDropped...)
 		if len(toID) == 0 {
 			dropped = append(dropped, key+"."+relDescEntityID)

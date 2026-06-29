@@ -301,6 +301,10 @@ const (
 	ValueTypeInt    ValueType = "INT"
 	ValueTypeDouble ValueType = "DOUBLE"
 	ValueTypeBool   ValueType = "BOOL"
+	// An array AnyValue; `value` is its compact JSON encoding.
+	ValueTypeArray ValueType = "ARRAY"
+	// A nested map (kvlist) AnyValue; `value` is its compact JSON encoding.
+	ValueTypeKvlist ValueType = "KVLIST"
 )
 
 var AllValueType = []ValueType{
@@ -308,11 +312,13 @@ var AllValueType = []ValueType{
 	ValueTypeInt,
 	ValueTypeDouble,
 	ValueTypeBool,
+	ValueTypeArray,
+	ValueTypeKvlist,
 }
 
 func (e ValueType) IsValid() bool {
 	switch e {
-	case ValueTypeString, ValueTypeInt, ValueTypeDouble, ValueTypeBool:
+	case ValueTypeString, ValueTypeInt, ValueTypeDouble, ValueTypeBool, ValueTypeArray, ValueTypeKvlist:
 		return true
 	}
 	return false

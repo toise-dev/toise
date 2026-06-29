@@ -30,6 +30,10 @@ func valueToGQL(v model.Value) (string, generated.ValueType) {
 		return strconv.FormatFloat(v.Double(), 'g', -1, 64), generated.ValueTypeDouble
 	case model.KindBool:
 		return strconv.FormatBool(v.Bool()), generated.ValueTypeBool
+	case model.KindArray:
+		return v.Display(), generated.ValueTypeArray
+	case model.KindKvlist:
+		return v.Display(), generated.ValueTypeKvlist
 	default:
 		return v.Str(), generated.ValueTypeString
 	}

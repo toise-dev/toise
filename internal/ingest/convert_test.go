@@ -99,15 +99,22 @@ func TestRouteIgnoresNonEntity(t *testing.T) {
 	}
 }
 
+// Since #259 the description carries the full AnyValue, so nested maps and
+// arrays are KEPT (not dropped). Surfacing now applies to identity nesting
+// (identity stays scalar by contract) and to unsupported leaves (e.g. bytes).
 func TestRouteSurfacesDroppedNonScalar(t *testing.T) {
 	lr := newRecord(evEntityState)
 	a := lr.Attributes()
 	a.PutStr(attrEntityType, model.TypeHost)
-	a.PutEmptyMap(attrEntityID).PutStr("host.id", "h1")
+	id := a.PutEmptyMap(attrEntityID)
+	id.PutStr("host.id", "h1")
+	id.PutEmptySlice("nested.id") // identity must stay scalar: dropped and reported
 	attrs := a.PutEmptyMap(attrEntityDesc)
 	attrs.PutStr("os.type", "linux") // scalar: kept
-	attrs.PutEmptyMap("nested")      // non-scalar: dropped and reported
-	attrs.PutEmptySlice("tags")      // non-scalar: dropped and reported
+	attrs.PutEmptyMap("labels").PutStr("env", "prod")
+	attrs.PutEmptySlice("tags").AppendEmpty().SetStr("edge")
+	attrs.PutEmptyBytes("blob").Append(1, 2, 3) // unsupported leaf: dropped and reported
+
 	f := &fakeEngine{}
 	handled, dropped, err := routeRecord(f, lr, "")
 	if !handled || err != nil {
@@ -117,11 +124,27 @@ func TestRouteSurfacesDroppedNonScalar(t *testing.T) {
 	for _, k := range dropped {
 		got[k] = true
 	}
-	if !got["entity.description.nested"] || !got["entity.description.tags"] {
-		t.Errorf("dropped = %v, want the nested map and slice keys surfaced", dropped)
+	if !got["entity.id.nested.id"] {
+		t.Errorf("dropped = %v, want the nested identity key surfaced", dropped)
 	}
-	if len(f.lastEntity.Attributes) != 1 || f.lastEntity.Attributes[0].Key != "os.type" {
-		t.Errorf("kept attributes = %+v, want just the scalar os.type", f.lastEntity.Attributes)
+	if !got["entity.description.blob"] {
+		t.Errorf("dropped = %v, want the unsupported bytes leaf surfaced", dropped)
+	}
+	kept := map[string]string{}
+	for _, kv := range f.lastEntity.Attributes {
+		kept[kv.Key] = kv.Value.Display()
+	}
+	if kept["os.type"] != "linux" {
+		t.Errorf("scalar os.type not kept: %+v", f.lastEntity.Attributes)
+	}
+	if kept["labels"] != `{"env":"prod"}` {
+		t.Errorf("nested map labels = %q, want a kept kvlist", kept["labels"])
+	}
+	if kept["tags"] != `["edge"]` {
+		t.Errorf("nested array tags = %q, want a kept array", kept["tags"])
+	}
+	if _, present := kept["blob"]; present {
+		t.Errorf("unsupported bytes leaf should not be kept: %+v", f.lastEntity.Attributes)
 	}
 }
 

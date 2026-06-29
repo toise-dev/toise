@@ -111,11 +111,13 @@ func entityObs(attrs pcommon.Map, when time.Time, strictVocab bool) (change.Enti
 	if !ok {
 		return change.EntityObservation{}, nil, fmt.Errorf("%w: missing %s", errInvalidRecord, attrEntityType)
 	}
-	ident, identDropped, ok := mapAttr(attrs, attrEntityID)
+	// Identity stays scalar by contract (ADR 0018): a nested value in entity.id is
+	// dropped and surfaced, never hashed. The description carries the full AnyValue.
+	ident, identDropped, ok := mapAttr(attrs, attrEntityID, false)
 	if !ok || len(ident) == 0 {
 		return change.EntityObservation{}, identDropped, fmt.Errorf("%w: missing or empty %s", errInvalidRecord, attrEntityID)
 	}
-	descriptive, descDropped, _ := mapAttr(attrs, attrEntityDesc)
+	descriptive, descDropped, _ := mapAttr(attrs, attrEntityDesc, true)
 	dropped := make([]string, 0, len(identDropped)+len(descDropped))
 	dropped = append(dropped, identDropped...)
 	dropped = append(dropped, descDropped...)
@@ -172,32 +174,47 @@ func strAttr(attrs pcommon.Map, key string) (string, bool) {
 	return v.Str(), true
 }
 
-func mapAttr(attrs pcommon.Map, key string) ([]model.KeyValue, []string, bool) {
+func mapAttr(attrs pcommon.Map, key string, allowNested bool) ([]model.KeyValue, []string, bool) {
 	v, ok := attrs.Get(key)
 	if !ok || v.Type() != pcommon.ValueTypeMap {
 		return nil, nil, false
 	}
-	kvs, dropped := kvsFromMap(v.Map(), key)
+	kvs, dropped := kvsFromMap(v.Map(), key, allowNested)
 	return kvs, dropped, true
 }
 
-// kvsFromMap converts a pcommon.Map of scalar values to Toise KeyValues. It
-// returns the dotted keys (prefixed with the map's attribute name) of any
-// non-scalar entries it dropped, so the caller can surface the loss.
-func kvsFromMap(m pcommon.Map, prefix string) (kvs []model.KeyValue, dropped []string) {
+// kvsFromMap converts a pcommon.Map to Toise KeyValues. With allowNested it
+// ingests the full AnyValue (arrays and nested maps); without it (identity), a
+// non-scalar entry is dropped. It returns the dotted keys (prefixed with the
+// map's attribute name) of any entries it dropped, so the caller can surface the
+// loss rather than discard data silently.
+func kvsFromMap(m pcommon.Map, prefix string, allowNested bool) (kvs []model.KeyValue, dropped []string) {
 	kvs = make([]model.KeyValue, 0, m.Len())
 	m.Range(func(k string, v pcommon.Value) bool {
-		if mv, ok := valueFrom(v); ok {
+		if mv, ok := valueFrom(v, allowNested); ok {
 			kvs = append(kvs, model.KeyValue{Key: k, Value: mv})
 		} else {
-			dropped = append(dropped, prefix+"."+k)
+			dropped = append(dropped, joinKey(prefix, k))
 		}
 		return true
 	})
 	return kvs, dropped
 }
 
-func valueFrom(v pcommon.Value) (model.Value, bool) {
+func joinKey(prefix, k string) string {
+	if prefix == "" {
+		return k
+	}
+	return prefix + "." + k
+}
+
+// valueFrom converts one OTLP value. Scalars are always accepted. With
+// allowNested, arrays and maps are converted recursively into the matching
+// AnyValue forms; otherwise (identity context) a non-scalar is rejected. An
+// unsupported leaf (e.g. bytes) deep inside a composite rejects the whole
+// composite, so a partial structure is surfaced as a drop, never stored with a
+// silent hole.
+func valueFrom(v pcommon.Value, allowNested bool) (model.Value, bool) {
 	switch v.Type() {
 	case pcommon.ValueTypeStr:
 		return model.StringValue(v.Str()), true
@@ -207,6 +224,29 @@ func valueFrom(v pcommon.Value) (model.Value, bool) {
 		return model.DoubleValue(v.Double()), true
 	case pcommon.ValueTypeBool:
 		return model.BoolValue(v.Bool()), true
+	case pcommon.ValueTypeSlice:
+		if !allowNested {
+			return model.Value{}, false
+		}
+		s := v.Slice()
+		elems := make([]model.Value, 0, s.Len())
+		for i := 0; i < s.Len(); i++ {
+			ev, ok := valueFrom(s.At(i), true)
+			if !ok {
+				return model.Value{}, false
+			}
+			elems = append(elems, ev)
+		}
+		return model.ArrayValue(elems), true
+	case pcommon.ValueTypeMap:
+		if !allowNested {
+			return model.Value{}, false
+		}
+		kvs, dropped := kvsFromMap(v.Map(), "", true)
+		if len(dropped) > 0 {
+			return model.Value{}, false
+		}
+		return model.KvlistValue(kvs), true
 	default:
 		return model.Value{}, false
 	}
