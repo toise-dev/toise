@@ -60,6 +60,22 @@ opt-in, off by default; a tier-0/1 deployment is unchanged.**
    on the OTLP listener; bearer + TLS stays the baseline. Closes ADR 0024's
    deferred mTLS.
 
+## Amendment — 0.9.0: ingest auth decoupled from read auth (#262)
+
+The auth-enabled decision was global: configuring any read token also armed the
+gRPC ingest interceptor, so a deployment that wanted **scoped tokens on the read
+surfaces** was forced to also put a bearer on ingest — even though mTLS already
+authenticates the producer. That coupled two independent surfaces.
+
+`ingest_mtls_only` (config / `TOISE_INGEST_MTLS_ONLY`, opt-in, requires
+`tls_client_ca_file`) **decouples** them: with it set, OTLP ingest is
+authenticated by **mutual TLS alone** (no bearer required or consulted on
+ingest), while the **read surfaces (GraphQL, MCP) keep requiring their per-client
+scoped tokens / OIDC**. Default off — the existing bearer-on-ingest posture is
+unchanged. The read-side capability (per-client tokens with a read/full role,
+individually revocable) is the pre-existing per-tenant RBAC of point 4; #262 adds
+the surface decoupling, not a new token type.
+
 ## Consequences
 
 - External tenants can be **authenticated, isolated, and audited**; the

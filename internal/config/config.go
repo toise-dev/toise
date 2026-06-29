@@ -135,6 +135,13 @@ type Config struct {
 	// (ADR 0028), on top of bearer auth. Requires TLS to be enabled. Not a secret.
 	// The HTTP read surfaces are unaffected (they use bearer/OIDC).
 	TLSClientCAFile string `yaml:"tls_client_ca_file"`
+	// IngestMTLSOnly decouples ingest auth from read auth (#262): when true, the
+	// OTLP ingest surface relies on mutual TLS alone and requires no bearer token,
+	// while the read surfaces (GraphQL, MCP) keep requiring their scoped tokens /
+	// OIDC. Requires TLSClientCAFile (there must be a verified client cert to rely
+	// on). Default false = unchanged (a bearer is required on ingest when tokens
+	// are configured). Not a secret: TOISE_INGEST_MTLS_ONLY (env) or yaml.
+	IngestMTLSOnly bool `yaml:"ingest_mtls_only"`
 	// AuditLog is a file path that, when set, receives an append-only JSON-line
 	// audit record for every operator write (annotate_entity) — distinct from the
 	// event log (ADR 0028). Empty = auditing off (the default). Not a secret.
@@ -190,6 +197,9 @@ func (c Config) Validate() error {
 	}
 	if c.TLSClientCAFile != "" && !c.TLSEnabled() {
 		return fmt.Errorf("tls_client_ca_file (ingest mTLS) requires tls_cert_file and tls_key_file: there is no TLS handshake to verify a client cert on")
+	}
+	if c.IngestMTLSOnly && c.TLSClientCAFile == "" {
+		return fmt.Errorf("ingest_mtls_only requires tls_client_ca_file: with no verified client certificate, ingest would be left open")
 	}
 	if c.RetentionMaxAge.D() > 0 && c.CompactionInterval.D() <= 0 {
 		return fmt.Errorf("retention_max_age is set but retention_compaction_interval is 0: nothing would ever prune")
@@ -439,6 +449,7 @@ func (c *Config) applyEnv(getenv func(string) string) error {
 		{"TOISE_GRAPHQL_INTROSPECTION", &c.GraphQLIntrospection},
 		{"TOISE_PLAYGROUND", &c.Playground},
 		{"TOISE_DEBUG_UI", &c.DebugUI},
+		{"TOISE_INGEST_MTLS_ONLY", &c.IngestMTLSOnly},
 	} {
 		if v := getenv(e.key); v != "" {
 			b, err := strconv.ParseBool(v)
@@ -628,6 +639,7 @@ func resolve(args []string, getenv func(string) string) (Config, error) {
 	tlsCertFile := fs.String("tls-cert-file", cfg.TLSCertFile, "PEM certificate file; with --tls-key-file, serves HTTP and OTLP over TLS")
 	tlsKeyFile := fs.String("tls-key-file", cfg.TLSKeyFile, "PEM private key file (pairs with --tls-cert-file)")
 	tlsClientCAFile := fs.String("tls-client-ca-file", cfg.TLSClientCAFile, "PEM CA bundle; when set, requires+verifies a client certificate on OTLP ingest (mTLS, needs TLS)")
+	ingestMTLSOnly := fs.Bool("ingest-mtls-only", cfg.IngestMTLSOnly, "authenticate OTLP ingest by mTLS alone (no bearer); reads still need their scoped tokens (needs --tls-client-ca-file)")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -665,6 +677,7 @@ func resolve(args []string, getenv func(string) string) (Config, error) {
 	cfg.TLSCertFile = *tlsCertFile
 	cfg.TLSKeyFile = *tlsKeyFile
 	cfg.TLSClientCAFile = *tlsClientCAFile
+	cfg.IngestMTLSOnly = *ingestMTLSOnly
 	cfg.LogFormat = *logFormat
 	cfg.LogLevel = *logLevel
 

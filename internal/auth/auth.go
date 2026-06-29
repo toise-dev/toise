@@ -8,6 +8,10 @@
 // read-only token (read_tokens) only on the HTTP query surfaces, an ingest-only
 // token (ingest_tokens) only on OTLP ingest — least privilege for a producer
 // that should never read, or a dashboard that should never write (0.7.0).
+//
+// Ingest and read auth are decoupled (#262): in ingest-mTLS-only mode the OTLP
+// surface is authenticated by mutual TLS and requires no bearer, while the read
+// surfaces (GraphQL, MCP) still require their per-client scoped tokens or OIDC.
 package auth
 
 import (
@@ -82,6 +86,13 @@ type Authenticator struct {
 	// oidc, when set, verifies an OIDC/JWT bearer on the read surfaces as a second
 	// path after the static tokens (ADR 0028). nil = OIDC off.
 	oidc OIDCVerifier
+	// ingestMTLSOnly decouples ingest auth from read auth (#262): when set, the
+	// OTLP ingest surface is authenticated by mutual TLS at the transport, so the
+	// gRPC interceptors neither require nor consult a bearer on ingest — while the
+	// HTTP read surfaces still require their scoped tokens / OIDC. The operator
+	// asserts the ingest listener runs RequireAndVerifyClientCert (cmd validates
+	// mTLS is actually configured before enabling this).
+	ingestMTLSOnly bool
 }
 
 // SetOIDC attaches an OIDC verifier for the read surfaces (ADR 0028); returns a
@@ -95,6 +106,12 @@ func (a *Authenticator) SetOIDC(v OIDCVerifier) *Authenticator {
 // (derive-only) or off (trust-header, the default). Set before serving; it is
 // not synchronized against concurrent use.
 func (a *Authenticator) SetTenantTrustMode(deriveOnly bool) { a.deriveOnly = deriveOnly }
+
+// SetIngestMTLSOnly decouples the ingest surface's auth from the read surface
+// (#262): with v true, OTLP ingest is authenticated by mutual TLS and the gRPC
+// path does not require a bearer, while GraphQL/MCP still require their scoped
+// tokens. Returns a for chaining; set before serving.
+func (a *Authenticator) SetIngestMTLSOnly(v bool) *Authenticator { a.ingestMTLSOnly = v; return a }
 
 // TenantForBearer returns the single tenant a scoped bearer is bound to, and
 // true, when the token is a per-client tenant-scoped token. A global (operator)
@@ -367,6 +384,9 @@ func (a *Authenticator) canWriteHeader(h string) bool {
 // receiver calls it per resolved tenant — including the per-ResourceLogs
 // tenant.id override an interceptor cannot see (#104).
 func (a *Authenticator) AllowedForTenantGRPC(ctx context.Context, tenantID string) bool {
+	if a.ingestMTLSOnly {
+		return true // ingest is gated by mutual TLS, not a per-tenant bearer (#262)
+	}
 	if !a.Enabled() {
 		return true
 	}
@@ -455,6 +475,12 @@ func (a *Authenticator) StreamInterceptor() grpc.StreamServerInterceptor {
 
 // checkContext validates the ingest-surface bearer token in the gRPC metadata.
 func (a *Authenticator) checkContext(ctx context.Context) error {
+	if a.ingestMTLSOnly {
+		// Ingest is authenticated by mutual TLS at the transport (the gRPC server
+		// runs RequireAndVerifyClientCert); no bearer is required or consulted on
+		// this surface, decoupled from the read surfaces' tokens (#262).
+		return nil
+	}
 	if !a.Enabled() {
 		return nil
 	}

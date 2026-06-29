@@ -204,6 +204,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	authn := auth.NewWithRoles(cfg.AuthTokens, cfg.ReadTokens, cfg.IngestTokens, scopedTokens).
 		WithScopedRoleTokens(scopedRead, scopedIngest) // per-tenant RBAC (ADR 0028)
 	authn.SetTenantTrustMode(cfg.DeriveOnlyTenancy()) // ADR 0028 anti-spoofing; off by default
+	authn.SetIngestMTLSOnly(cfg.IngestMTLSOnly)       // #262: ingest gated by mTLS, reads by scoped token
 	if cfg.OIDCEnabled() {
 		// OIDC/JWT verification on the read surfaces (ADR 0028). Discovery hits the
 		// issuer once at startup; off unless an issuer is configured.
