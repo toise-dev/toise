@@ -223,6 +223,7 @@ func TestValidateRejectsSilentMisconfigurations(t *testing.T) {
 		{"whitespace allowlist entry", func(c *Config) { c.TenantAllowlist = []string{"ten ant"} }},
 		{"unknown tenant_trust_mode", func(c *Config) { c.TenantTrustMode = "wishful" }},
 		{"mTLS client CA without server TLS", func(c *Config) { c.TLSClientCAFile = "/x/ca.pem" }},
+		{"ingest_mtls_only without client CA", func(c *Config) { c.IngestMTLSOnly = true }},
 		{"backup_dir without interval", func(c *Config) { c.BackupDir = "/x/backups" }},
 		{"log_shipping_dir without interval", func(c *Config) { c.LogShipDir = "/x/segments" }},
 		{"s3 bucket without endpoint", func(c *Config) {
@@ -259,6 +260,13 @@ func TestValidateRejectsSilentMisconfigurations(t *testing.T) {
 	warn.LogLevel = "warning"
 	if err := warn.Validate(); err != nil {
 		t.Errorf("log_level \"warning\" must validate (SlogLevel maps it): %v", err)
+	}
+	// ingest_mtls_only is valid once a verified client cert exists (full TLS + CA).
+	mtls := base
+	mtls.TLSCertFile, mtls.TLSKeyFile, mtls.TLSClientCAFile = "/x/cert.pem", "/x/key.pem", "/x/ca.pem"
+	mtls.IngestMTLSOnly = true
+	if err := mtls.Validate(); err != nil {
+		t.Errorf("ingest_mtls_only with full mTLS must validate: %v", err)
 	}
 }
 

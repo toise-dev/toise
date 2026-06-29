@@ -92,9 +92,36 @@ TOISE_AUTH_TOKENS="$(cat /run/secrets/toise-token)" \
     --listen 0.0.0.0:8443 --otlp-listen 0.0.0.0:4317
 ```
 
-> A valid token grants full access (read + ingest); fine-grained scopes and mTLS are
-> future work. Producer identity for liveness stays keyed on the Resource
-> `service.instance.id` (ADR 0019), independent of the auth token.
+> A full token grants read + ingest. Finer grains exist: **role tokens**
+> (`read_tokens` / `ingest_tokens`), **per-tenant scoped tokens** (read / ingest /
+> full), **OIDC/JWT** on the read surfaces, and **mTLS** on ingest (ADR 0028).
+> Producer identity for liveness stays keyed on the Resource `service.instance.id`
+> (ADR 0019), independent of the auth token.
+
+### Decoupling ingest auth from read auth (mTLS-only ingest)
+
+By default, configuring any token arms **both** surfaces, so protecting the read
+surfaces (GraphQL, MCP) with tokens also makes OTLP ingest demand a bearer. When
+ingest is already authenticated by **mutual TLS** (`tls_client_ca_file`), that
+extra bearer is redundant. Set **`ingest_mtls_only`** (`TOISE_INGEST_MTLS_ONLY=true`,
+requires `tls_client_ca_file`) to decouple them (#262):
+
+- **Ingest** is authenticated by the verified client certificate alone — no bearer
+  required or consulted on the OTLP surface.
+- **Read surfaces** keep requiring their per-client scoped tokens (role read /
+  full, individually revocable) or OIDC.
+
+```sh
+# reads gated by per-client scoped tokens; ingest gated by mTLS, no bearer
+TOISE_TENANT_READ_TOKENS="acme:$(cat /run/secrets/acme-read)" \
+  toise-server --production \
+    --tls-cert-file /etc/toise/tls.crt --tls-key-file /etc/toise/tls.key \
+    --tls-client-ca-file /etc/toise/clients-ca.pem \
+    --ingest-mtls-only \
+    --listen 0.0.0.0:8443 --otlp-listen 0.0.0.0:4317
+```
+
+It is opt-in: leave it off and the bearer-on-ingest posture is unchanged.
 
 ## Hardening for production
 
