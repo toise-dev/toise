@@ -35,6 +35,12 @@ const (
 	// re-asserted within its interval is expired. It is a backstop, not a
 	// primary delete signal.
 	AttrEntityReportInterval = "entity.report.interval"
+	// AttrEntityDeleteReason is the optional motive a producer attaches to an
+	// entity.delete event (e.g. "terminated", "expired", "evicted",
+	// "user_requested", "scaled_down"). It is an OPEN enum: those values are
+	// illustrative, not exhaustive, and the consumer must never reject an
+	// unrecognized one. Only meaningful on entity.delete events.
+	AttrEntityDeleteReason = "entity.delete.reason"
 	// AttrEntityRelationships is the embedded-relationship array an
 	// entity.state event MAY carry: each element is a descriptor map (see the
 	// Rel* keys). This is the sole on-wire relationship form (ADR 0022): the
