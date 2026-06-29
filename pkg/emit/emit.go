@@ -37,8 +37,16 @@ type Entity struct {
 	// string "443", not an int; typed identity values would only invite
 	// hash-mismatch ambiguity for no gain.
 	ID map[string]string
-	// Attributes are descriptive (non-identifying) attributes.
+	// Attributes are descriptive (non-identifying) attributes with scalar string
+	// values — the common, flat case.
 	Attributes map[string]string
+	// RichAttributes are descriptive attributes whose values are the full OTel
+	// AnyValue (scalars, arrays, nested maps), for the rarer structured case that
+	// Toise's entity.description accepts. Native Go types map to OTLP: string,
+	// bool, int/int8…int64, uint/…/uint32, float32/float64, []any, and
+	// map[string]any (recursively). A key here must NOT also appear in Attributes,
+	// and unsupported value types are rejected at Build — no silent loss.
+	RichAttributes map[string]any
 	// Interval, when > 0, arms the consumer's liveness backstop: re-assert the
 	// entity at least this often or it is expired. Size it with slack for
 	// jitter and a missed heartbeat.
@@ -211,8 +219,12 @@ func (c *Client) Build(eventName string, entities []Entity) (plog.Logs, error) {
 		a := lr.Attributes()
 		a.PutStr(wire.AttrEntityType, e.Type)
 		putSorted(a.PutEmptyMap(wire.AttrEntityID), e.ID)
-		if len(e.Attributes) > 0 {
-			putSorted(a.PutEmptyMap(wire.AttrEntityDescription), e.Attributes)
+		if len(e.Attributes) > 0 || len(e.RichAttributes) > 0 {
+			desc := a.PutEmptyMap(wire.AttrEntityDescription)
+			putSorted(desc, e.Attributes)
+			if rerr := putRich(desc, e.Attributes, e.RichAttributes); rerr != nil {
+				return plog.Logs{}, fmt.Errorf("emit: entity %d (%s) description: %w", i, e.Type, rerr)
+			}
 		}
 		if e.Interval > 0 {
 			a.PutInt(wire.AttrEntityReportInterval, int64(e.Interval/time.Second))
@@ -244,4 +256,85 @@ func putSorted(m pcommon.Map, kvs map[string]string) {
 	for _, k := range keys {
 		m.PutStr(k, kvs[k])
 	}
+}
+
+// putRich writes the full-AnyValue attributes into dst (already holding the
+// scalar Attributes), in sorted key order for a deterministic wire form. A key
+// shared with the scalar attributes is rejected: it would otherwise produce a
+// duplicate key on the wire.
+func putRich(dst pcommon.Map, scalar map[string]string, rich map[string]any) error {
+	if len(rich) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(rich))
+	for k := range rich {
+		if _, dup := scalar[k]; dup {
+			return fmt.Errorf("key %q is set in both Attributes and RichAttributes", k)
+		}
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if err := putAnyValue(dst.PutEmpty(k), rich[k]); err != nil {
+			return fmt.Errorf("key %q: %w", k, err)
+		}
+	}
+	return nil
+}
+
+// putAnyValue translates a native Go value into an OTLP AnyValue, recursively
+// for slices and maps. Unsupported types are an error, never silently dropped.
+// Map keys are written sorted so the wire form is deterministic.
+func putAnyValue(dst pcommon.Value, v any) error {
+	switch x := v.(type) {
+	case string:
+		dst.SetStr(x)
+	case bool:
+		dst.SetBool(x)
+	case int:
+		dst.SetInt(int64(x))
+	case int8:
+		dst.SetInt(int64(x))
+	case int16:
+		dst.SetInt(int64(x))
+	case int32:
+		dst.SetInt(int64(x))
+	case int64:
+		dst.SetInt(x)
+	case uint:
+		dst.SetInt(int64(x))
+	case uint8:
+		dst.SetInt(int64(x))
+	case uint16:
+		dst.SetInt(int64(x))
+	case uint32:
+		dst.SetInt(int64(x))
+	case float32:
+		dst.SetDouble(float64(x))
+	case float64:
+		dst.SetDouble(x)
+	case []any:
+		s := dst.SetEmptySlice()
+		s.EnsureCapacity(len(x))
+		for i, e := range x {
+			if err := putAnyValue(s.AppendEmpty(), e); err != nil {
+				return fmt.Errorf("[%d]: %w", i, err)
+			}
+		}
+	case map[string]any:
+		m := dst.SetEmptyMap()
+		keys := make([]string, 0, len(x))
+		for k := range x {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			if err := putAnyValue(m.PutEmpty(k), x[k]); err != nil {
+				return fmt.Errorf(".%s: %w", k, err)
+			}
+		}
+	default:
+		return fmt.Errorf("unsupported value type %T (want a scalar, []any, or map[string]any)", v)
+	}
+	return nil
 }
