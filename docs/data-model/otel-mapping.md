@@ -151,6 +151,12 @@ Liveness uses **two mechanisms, not one**:
 Producers emit **both**: the explicit delete *and* the interval. Only entities that
 carry an interval are ever expired, so the sweeper is safe to leave on.
 
+An **`entity.report.interval` of 0 — or an absent interval — means "no cadence":**
+the entity declares it sends no periodic state events, so the liveness backstop is
+never armed and Toise **never expires it by Sweep** (only an explicit `entity.delete`
+removes it). Toise does not distinguish an asserted `0` from an absent interval; both
+read as "no cadence". This is locked by `TestConformanceIntervalZeroNeverExpires`.
+
 #### Edge liveness — derived from endpoints (primary), per-edge TTL (optional)
 
 An edge to a deleted node is meaningless, so edge liveness is **primarily derived
