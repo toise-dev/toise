@@ -27,13 +27,13 @@ func TestDeleteReasonCaptured(t *testing.T) {
 
 	stateThenDelete := func(hostID, reason string, withReason bool) {
 		state := newHostRecord(hostID, "", false)
-		if _, _, err := routeRecord(eng, state, "p1"); err != nil {
-			t.Fatalf("state %s: %v", hostID, err)
+		if _, _, rerr := routeRecord(eng, state, "p1"); rerr != nil {
+			t.Fatalf("state %s: %v", hostID, rerr)
 		}
 		del := newHostRecord(hostID, reason, withReason)
 		del.SetEventName(evEntityDelete)
-		if _, _, err := routeRecord(eng, del, "p1"); err != nil {
-			t.Fatalf("delete %s: %v", hostID, err)
+		if _, _, rerr := routeRecord(eng, del, "p1"); rerr != nil {
+			t.Fatalf("delete %s: %v", hostID, rerr)
 		}
 	}
 	stateThenDelete("h-1", "terminated", true)
@@ -69,13 +69,13 @@ func TestDeleteReasonOpenEnum(t *testing.T) {
 	eng := change.New(projection.New(), st)
 
 	const custom = "decommissioned-by-runbook-42" // not in the spec's example set
-	if _, _, err := routeRecord(eng, newHostRecord("h-x", "", false), "p1"); err != nil {
-		t.Fatal(err)
+	if _, _, rerr := routeRecord(eng, newHostRecord("h-x", "", false), "p1"); rerr != nil {
+		t.Fatal(rerr)
 	}
 	del := newHostRecord("h-x", custom, true)
 	del.SetEventName(evEntityDelete)
-	if _, _, err := routeRecord(eng, del, "p1"); err != nil {
-		t.Fatalf("delete with custom reason must be accepted: %v", err)
+	if _, _, rerr := routeRecord(eng, del, "p1"); rerr != nil {
+		t.Fatalf("delete with custom reason must be accepted: %v", rerr)
 	}
 	evs, err := st.ReadByType(context.Background(), model.EntityDeleted)
 	if err != nil {

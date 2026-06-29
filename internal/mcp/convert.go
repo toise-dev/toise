@@ -42,11 +42,11 @@ type Relation struct {
 // EventTime is when the fact became true in the world, RecordedAt is when Toise
 // learned it (ADR 0005). Exactly one of Entity or Relation is set.
 type Change struct {
-	EventID     string    `json:"event_id"`
-	ChangeType  string    `json:"change_type" jsonschema:"the taxonomy name, e.g. entity.created, relation.added"`
-	EventTime   string    `json:"event_time" jsonschema:"RFC 3339; when the change became true in the real world"`
-	RecordedAt  string    `json:"recorded_at" jsonschema:"RFC 3339; when Toise recorded the change"`
-	ChangedKeys []string  `json:"changed_keys" jsonschema:"the attribute keys that changed, for update/state-change events"`
+	EventID     string   `json:"event_id"`
+	ChangeType  string   `json:"change_type" jsonschema:"the taxonomy name, e.g. entity.created, relation.added"`
+	EventTime   string   `json:"event_time" jsonschema:"RFC 3339; when the change became true in the real world"`
+	RecordedAt  string   `json:"recorded_at" jsonschema:"RFC 3339; when Toise recorded the change"`
+	ChangedKeys []string `json:"changed_keys" jsonschema:"the attribute keys that changed, for update/state-change events"`
 	// DeleteReason is the producer's open-enum motive on an entity.delete (e.g.
 	// terminated, expired, evicted); empty when none was given or for non-delete
 	// changes. Omitted from the payload when empty.
