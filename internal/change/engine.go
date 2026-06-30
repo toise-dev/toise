@@ -374,6 +374,12 @@ type RelationObservation struct {
 	// Interval, when > 0, arms the same liveness backstop as for entities: an edge
 	// not re-asserted within Interval is expired (relation.removed) by Sweep.
 	Interval time.Duration
+	// SourceInterval, when > 0, is the re-emit cadence of the source entity. It
+	// only sizes how long an out-of-order edge stays parked in the reconciliation
+	// buffer — so a missing endpoint has a full re-emit cycle to arrive before the
+	// edge is dropped. Unlike Interval it never arms a liveness backstop, which is
+	// why embedded edges (no per-edge liveness, see ingest reconciler) can set it.
+	SourceInterval time.Duration
 }
 
 // ObserveEntity classifies an entity observation, persists the qualified event,
@@ -659,7 +665,16 @@ func (e *Engine) observeRelationBuffered(obs RelationObservation) (model.Event, 
 				"relation_type", oldest.Type, "from_type", oldest.From.Type, "to_type", oldest.To.Type,
 				"cap", maxPendingRelations)
 		}
-		e.pending = append(e.pending, pendingRelation{obs: obs, deadline: e.now().Add(e.bufferTTL)})
+		// Hold the parked edge for at least one re-emit cycle of its source when the
+		// source reports an interval: a slower-than-bufferTTL cadence (a host
+		// re-asserted every ~2 min while bufferTTL is 30s) would otherwise see the
+		// edge swept before its missing endpoint's next heartbeat, dropping it for a
+		// full cycle (toise-dev/toise#269).
+		hold := e.bufferTTL
+		if obs.SourceInterval > hold {
+			hold = obs.SourceInterval
+		}
+		e.pending = append(e.pending, pendingRelation{obs: obs, deadline: e.now().Add(hold)})
 		e.rebuildPendingHashes()
 		return model.Event{}, false, nil
 	}
