@@ -163,6 +163,7 @@ func embeddedRelations(attrs pcommon.Map, source change.EndpointRef, when time.T
 	if !ok || v.Type() != pcommon.ValueTypeSlice {
 		return nil, nil, nil
 	}
+	srcInterval := reportEntityInterval(attrs)
 	sl := v.Slice()
 	for i := 0; i < sl.Len(); i++ {
 		key := fmt.Sprintf("%s[%d]", attrEntityRelationships, i)
@@ -194,10 +195,11 @@ func embeddedRelations(attrs pcommon.Map, source change.EndpointRef, when time.T
 			continue
 		}
 		rels = append(rels, change.RelationObservation{
-			Type:      relType,
-			From:      source,
-			To:        change.EndpointRef{Type: toType, Identity: toID},
-			EventTime: when,
+			Type:           relType,
+			From:           source,
+			To:             change.EndpointRef{Type: toType, Identity: toID},
+			EventTime:      when,
+			SourceInterval: srcInterval,
 		})
 	}
 	return rels, dropped, err

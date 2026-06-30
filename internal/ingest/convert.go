@@ -165,6 +165,19 @@ func entityObs(attrs pcommon.Map, when time.Time, strictVocab bool) (change.Enti
 	}, dropped, nil
 }
 
+// reportEntityInterval reads the optional entity.report.interval (seconds) as a
+// duration. A missing, non-positive, or mis-typed value yields 0 (the entity path
+// in toObservation surfaces a mis-typed interval on the dropped-keys path; here we
+// only need the value to size the out-of-order parking hold).
+func reportEntityInterval(attrs pcommon.Map) time.Duration {
+	if v, ok := attrs.Get(attrEntityInterval); ok && v.Type() == pcommon.ValueTypeInt {
+		if secs := v.Int(); secs > 0 {
+			return time.Duration(secs) * time.Second
+		}
+	}
+	return 0
+}
+
 func eventTimeOf(lr plog.LogRecord) time.Time {
 	if ts := lr.Timestamp(); ts != 0 {
 		return ts.AsTime()
