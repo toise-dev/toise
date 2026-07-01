@@ -32,7 +32,7 @@ contract, expect to write or update an ADR as part of the work.
 
 ## Prerequisites
 
-- [Go](https://go.dev/dl/) 1.26 or newer (we track the latest stable release)
+- [Go](https://go.dev/dl/) 1.26.4 or newer (we track the latest stable release)
 - `make`
 - [`golangci-lint`](https://golangci-lint.run/usage/install/)
 
