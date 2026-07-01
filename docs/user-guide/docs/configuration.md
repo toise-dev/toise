@@ -61,6 +61,7 @@ for the rationale.
 | `tls_cert_file` | `TOISE_TLS_CERT_FILE` | `--tls-cert-file` | (empty) | PEM certificate; with the key, serves HTTP + OTLP over TLS |
 | `tls_key_file` | `TOISE_TLS_KEY_FILE` | `--tls-key-file` | (empty) | PEM private key (pairs with the cert) |
 | `tls_client_ca_file` | `TOISE_TLS_CLIENT_CA_FILE` | `--tls-client-ca-file` | (empty) | PEM CA bundle; when set, requires + verifies a client certificate on **OTLP ingest** (mTLS, ADR 0028) — needs TLS; the HTTP surfaces are unaffected |
+| `ingest_mtls_only` | `TOISE_INGEST_MTLS_ONLY` | `--ingest-mtls-only` | `false` | authenticate OTLP ingest by **mutual TLS alone** (no bearer required or consulted on ingest) while the read surfaces keep requiring their scoped tokens / OIDC; decouples ingest auth from read auth (ADR 0028). Requires `tls_client_ca_file` |
 | `audit_log` | `TOISE_AUDIT_LOG` | `--audit-log` | (empty) | path to an append-only JSON-line audit file for operator writes (`annotate_entity`), per tenant; empty = off (ADR 0028) |
 | `oidc_issuer` | `TOISE_OIDC_ISSUER` | `--oidc-issuer` | (empty) | OIDC issuer URL; when set, JWT bearers are verified on the read surfaces (discovery + JWKS). Empty = OIDC off (ADR 0028) |
 | `oidc_audience` | `TOISE_OIDC_AUDIENCE` | `--oidc-audience` | (empty) | expected JWT `aud` |
