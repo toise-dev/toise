@@ -39,12 +39,13 @@ same values, as strings).
 
 ## Identity attributes silently missing
 
-`entity.id` / `entity.description` are read **structurally but not recursively**:
-only flat scalar leaves (`string`, `int64`, `double`, `bool`) are kept. A nested
-map is dropped — and **logged as a `Warn`** naming the key. Pre-flatten with
-dotted keys: `{"server.address": "10.0.0.1"}`, never
-`{"server": {"address": "10.0.0.1"}}`. See
-[Identity values must be flat scalars](ingestion.md#identity-values-must-be-flat-scalars).
+**`entity.id` (identity) must be flat scalars** — only `string` / `int64` /
+`double` / `bool` leaves are kept; a nested map in an identity is dropped and
+**logged as a `Warn`** naming the key. Pre-flatten with dotted keys:
+`{"server.address": "10.0.0.1"}`, never `{"server": {"address": "10.0.0.1"}}`.
+(`entity.description`, unlike identity, keeps the full AnyValue — arrays and nested
+maps are preserved; only unsupported leaves like `bytes` are dropped and surfaced.)
+See [Identity is scalar; description is full AnyValue](ingestion.md#identity-is-scalar-description-is-full-anyvalue).
 
 ## Two distinct things merged into one
 

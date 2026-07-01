@@ -12,6 +12,11 @@ below. See the [API stability policy](../api-stability.md).
 
 ## Releases
 
+- [**0.9.0**](0.9.0.md) — 2026-07-01 — **strict spec alignment & read-surface
+  security**: full `AnyValue` in `entity.description`, `entity.delete.reason`,
+  `entity.report.interval == 0` = no cadence, and `ingest_mtls_only` decoupling ingest
+  mTLS from read tokens — plus an out-of-order relation-buffer fix and a Go 1.26.4
+  security bump. *(No wire-contract break, no data migration; all additive.)*
 - [**0.8.0**](0.8.0.md) — 2026-06-22 — **the SaaS-readiness release**: access
   security (derive-only tenancy, hash-at-rest, per-tenant RBAC, OIDC, mTLS ingest,
   audit log), resilience/HA (backups, log shipping incl. S3, `restore-log`, read

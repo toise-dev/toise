@@ -22,9 +22,13 @@ An **entity** has four parts:
 - a set of **descriptive attributes** — informational, non-identifying metadata;
 - a **`schema_url`** — versions the entity definition.
 
-Attribute values are a typed `Value`: one of `string`, `int64`, `double`, or
-`bool` — a deliberate subset of OTel's `AnyValue` that keeps the internal model
-independent of OTLP wire types. Translation happens only at the
+Attribute values are a typed `Value` that mirrors OTel's `AnyValue`: the four
+scalar kinds (`string`, `int64`, `double`, `bool`) **plus** `array` and `kvlist`
+(nested map), recursively. **Descriptive attributes carry the full AnyValue** —
+arrays and nested maps are kept, and render on read as compact JSON tagged `array`
+/ `kvlist` (since 0.9.0). **Identity stays scalar**: `entity.id` and
+relation-endpoint ids must be flat maps of scalars (ADR 0018), because exact-match
+identity is over scalar strings. Translation happens only at the
 [ingest boundary](ingestion.md).
 
 ## Two identities, not one

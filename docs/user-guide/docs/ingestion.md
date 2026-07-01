@@ -35,28 +35,33 @@ record is ignored. This follows the **merged** OpenTelemetry entity-events spec
 | `EventName` (LogRecord) | string | yes | `entity.state` (upsert) or `entity.delete` (soft delete) |
 | `entity.type` | string | yes | the entity type — must be in Toise's type registry |
 | `entity.id` | **map** | yes | identifying attributes (the entity's identity), `map<string,string>` |
-| `entity.description` | **map** | no | descriptive, non-identifying attributes |
-| `entity.report.interval` | int | no | heartbeat cadence in **seconds**; arms the liveness backstop |
+| `entity.description` | **map** (`AnyValue`) | no | descriptive, non-identifying attributes — full AnyValue (scalars, arrays, nested maps) |
+| `entity.report.interval` | int | no | heartbeat cadence in **seconds**; arms the liveness backstop. `0` or absent = **no cadence** (removed only by an explicit `entity.delete`) |
 | `LogRecord.Timestamp` | — | yes | becomes `event_time` (falls back to `ObservedTimestamp`, then ingest time) |
 
 Set the OTLP **Resource** `service.instance.id` to identify the producing agent
 on every export — it keys per-producer liveness reference counting so multiple
 producers can assert the same entity without one's silence deleting it.
 
-### Identity values must be flat scalars
+### Identity is scalar; description is full AnyValue
 
-`entity.id` and `entity.description` are genuine OTLP maps, read **structurally**
-but **not recursively**: each entry is kept only if its leaf value is one of four
-scalar kinds — `string`, `int64`, `double`, `bool`. Pre-flatten any structure
-with dotted keys:
+`entity.id` and `entity.description` are genuine OTLP maps, but they are read by
+**different rules**:
+
+- **`entity.description` carries the full `AnyValue`** — scalars (`string`,
+  `int64`, `double`, `bool`), **arrays**, and **nested maps**, recursively. Composite
+  values are ingested faithfully and render on read as compact JSON tagged `array` /
+  `kvlist` (since 0.9.0). Only unsupported leaves (e.g. `bytes`) are dropped, and
+  never silently — the boundary logs a `Warn` naming the key.
+- **`entity.id` (identity) must be flat scalars.** Exact-match identity is over
+  scalar strings (ADR 0018), so a nested value in an identity map is **dropped and
+  surfaced** (a `Warn` naming the key), never hashed. Pre-flatten identity structure
+  with dotted keys:
 
 ```text
-{ "server.address": "10.0.0.1", "server.port": 5432 }   # correct — flat scalars
-{ "server": { "address": "10.0.0.1", "port": 5432 } }   # wrong — nested map is dropped
+{ "server.address": "10.0.0.1", "server.port": "5432" }   # correct — flat scalars
+{ "server": { "address": "10.0.0.1", "port": "5432" } }   # wrong — nested map is dropped from identity
 ```
-
-A dropped nested value is **not silent** — the boundary logs a `Warn` naming the
-key, so the loss is observable. Keep identity values as strings.
 
 ## Relationships are embedded
 
@@ -96,11 +101,17 @@ Liveness uses two mechanisms:
 
 1. **Explicit `entity.delete` is the primary signal.** When a producer knows an
    entity is gone, it emits `entity.delete` and Toise soft-deletes it (history
-   retained). A heartbeat is just a re-emitted `entity.state`.
-2. **Interval backstop.** If a producer set `entity.report.interval` and then
+   retained). A heartbeat is just a re-emitted `entity.state`. A delete may carry
+   an optional **`entity.delete.reason`** — an open enum (`terminated`, `expired`,
+   `evicted`, …, never validated against a closed set) — captured, persisted, and
+   surfaced on MCP `recent_changes` / `graph_diff` and GraphQL `ChangeEvent.deleteReason`.
+2. **Interval backstop.** If a producer set `entity.report.interval` (> 0) and then
    goes silent past that interval, the liveness sweep expires the entity — so a
    producer that crashes without sending a delete doesn't leave stale entities
-   forever.
+   forever. An entity with **`entity.report.interval == 0` (or absent) has no
+   cadence**: the sweep never expires it, so it is removed only by an explicit
+   `entity.delete`. Use `0` for entities whose absence is only ever asserted, not
+   inferred from silence.
 
 !!! warning "Heartbeat faster than your interval"
     A producer must re-assert its entities **more often** than the

@@ -9,6 +9,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
+## [0.9.0] - 2026-07-01
+
+**Strict OpenTelemetry entity-events (1.58.0) alignment and read-surface security.**
+0.9.0 promotes the 0.9.0-beta line to stable and adds an out-of-order relation fix and
+a Go toolchain security bump. Every change is additive and backward compatible: existing
+producers, consumers, and deployments keep working unchanged, and the zero-config single
+binary is untouched. No wire-contract break, no data migration.
+
+### Added
+
+- **Full AnyValue fidelity for `entity.description`** (#259). Descriptions carrying
+  arrays and nested maps are ingested faithfully end to end (ingest → store →
+  projection → GraphQL/MCP) instead of dropping the non-scalar parts; composite values
+  render as compact JSON tagged `array` / `kvlist`. Identity stays scalar by contract
+  (ADR 0018). ADR 0004 amended.
+- **`entity.delete.reason`** (#260). A producer's motive on a delete (open enum —
+  `terminated`, `expired`, `evicted`, … — never validated against a closed set) is
+  captured, persisted, and exposed on MCP `recent_changes` / `graph_diff` and GraphQL
+  `ChangeEvent.deleteReason`.
+- **Decoupled ingest and read authentication** (#262). New opt-in `ingest_mtls_only`
+  (`TOISE_INGEST_MTLS_ONLY`, requires `tls_client_ca_file`): OTLP ingest is
+  authenticated by mutual TLS alone — no bearer — while GraphQL/MCP keep requiring their
+  per-client scoped tokens (role read / full, individually revocable) or OIDC. Default
+  off; the bearer-on-ingest posture is unchanged. ADR 0028 amended.
+- **Producer SDK `pkg/emit` v0.3.0.** `Entity.RichAttributes` (`map[string]any`) emits
+  the full AnyValue (arrays, nested maps); `Entity.DeleteReason` emits
+  `entity.delete.reason`. Additive: scalar-only producers are byte-for-byte unchanged
+  and the published conformance fixture still holds.
+
+### Changed
+
+- **`entity.report.interval == 0` (or absent) = no cadence** (#261), locked by a
+  conformance test: such an entity is only ever removed by an explicit `entity.delete`,
+  never expired by the liveness sweep.
+- **ADR 0031 ratified** — 1.0 stability is decoupled from the upstream entity-events
+  spec status (#257); the pre-1.0 versioning message aligned with the pinned contracts
+  (#258).
+
+### Fixed
+
+- **Relation buffer no longer drops a parked edge whose target reappears periodically**
+  (#269). An out-of-order edge (e.g. `runs_on -> host` where the host heartbeats on a
+  slower cadence than the buffer TTL) is now held for at least one source re-emit cycle,
+  so the endpoint's next heartbeat attaches it instead of the sweep dropping it. The
+  hold auto-scales from the source's `entity.report.interval`; edges without a reported
+  interval keep the previous behaviour.
+
+### Security
+
+- **Go toolchain bumped to 1.26.4** (#271), resolving three reachable standard-library
+  advisories flagged by `govulncheck`: GO-2026-5038 (quadratic `mime.WordDecoder`,
+  reachable via the S3 log sink), GO-2026-5037 (inefficient `crypto/x509` hostname
+  parsing, reachable via the S3 sink and ingest), and one further stdlib advisory. No
+  application code changed.
+
 ## [0.8.0] - 2026-06-22
 
 **The SaaS-readiness release.** 0.8.0 lands the two pillars a multi-tenant,
@@ -658,7 +713,8 @@ contract converged with the senhub-agent reference producer.
   default and are intended for trusted networks only; the WebSocket subscription
   endpoint enforces an origin check.
 
-[Unreleased]: https://github.com/toise-dev/toise/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/toise-dev/toise/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/toise-dev/toise/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/toise-dev/toise/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/toise-dev/toise/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/toise-dev/toise/compare/0.5.0...v0.6.0
