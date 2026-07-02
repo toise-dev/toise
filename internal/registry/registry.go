@@ -149,7 +149,7 @@ func openWithClock(dataDir string, storeCfg store.Config, relBuf time.Duration, 
 		logger.Warn("skipping non-tenant directories in the data dir", "data_dir", dataDir, "skipped", skipped)
 	}
 	for _, id := range existing {
-		if _, err := r.ensure(id); err != nil {
+		if _, err := r.ensure(id, false); err != nil {
 			// Quarantine, do not abort: one tenant's unreadable store (corrupt
 			// snapshot's own log, half-written pebble, bad perms) must not take
 			// the whole multi-tenant process down with it. Warn, skip, count, and
@@ -164,7 +164,7 @@ func openWithClock(dataDir string, storeCfg store.Config, relBuf time.Duration, 
 	// A default stack always exists, so a single-tenant deployment that never sets
 	// X-Scope-OrgID behaves exactly as a single-graph build did. Its failure is
 	// fatal — there is no degraded mode without it.
-	if _, err := r.ensure(tenant.Default); err != nil {
+	if _, err := r.ensure(tenant.Default, false); err != nil {
 		_ = r.Close()
 		return nil, err
 	}
@@ -259,20 +259,16 @@ func (r *Registry) For(rawTenant string) (*Stack, error) {
 	if !ok {
 		return nil, fmt.Errorf("invalid tenant id %q", rawTenant)
 	}
-	r.mu.Lock()
-	if s, ok := r.stacks[id]; ok {
-		r.mu.Unlock()
-		return s, nil
-	}
+	// A tenant whose directory already exists always opens (e.g. restored from a
+	// backup after boot); only a brand-new mint is subject to Limits. This stat
+	// is advisory: the cap is enforced atomically inside ensure, together with
+	// the singleflight-slot insert, so concurrent distinct-id mints cannot both
+	// pass the check and overshoot max_tenants.
+	minting := false
 	if _, derr := os.Stat(filepath.Join(r.dataDir, id)); derr != nil {
-		// The directory does not exist: this call would mint a tenant.
-		if lerr := r.limits.allows(id, len(r.stacks)+len(r.opening)); lerr != nil {
-			r.mu.Unlock()
-			return nil, lerr
-		}
+		minting = true
 	}
-	r.mu.Unlock()
-	return r.ensure(id)
+	return r.ensure(id, minting)
 }
 
 // Peek returns the stack only if it is already open. Query surfaces use it so
@@ -289,11 +285,13 @@ func (r *Registry) Peek(rawTenant string) (*Stack, bool) {
 	return s, ok
 }
 
-// ensure opens and caches id's stack without applying Limits (the boot and
-// already-exists paths). The pebble open runs OUTSIDE the registry mutex —
-// opening one tenant must not block every other tenant's requests (#115) —
-// with a singleflight slot so concurrent callers open it once.
-func (r *Registry) ensure(id string) (*Stack, error) {
+// ensure opens and caches id's stack, applying Limits only when minting is true
+// (a brand-new tenant); the boot and already-exists paths pass false. The cap
+// check runs in the same critical section as the singleflight-slot insert, so
+// it is atomic against concurrent distinct-id mints. The pebble open itself runs
+// OUTSIDE the registry mutex — opening one tenant must not block every other
+// tenant's requests (#115) — with a slot so concurrent callers open it once.
+func (r *Registry) ensure(id string, minting bool) (*Stack, error) {
 	r.mu.Lock()
 	if s, ok := r.stacks[id]; ok {
 		r.mu.Unlock()
@@ -303,6 +301,12 @@ func (r *Registry) ensure(id string) (*Stack, error) {
 		r.mu.Unlock()
 		<-fl.done
 		return fl.s, fl.err
+	}
+	if minting {
+		if lerr := r.limits.allows(id, len(r.stacks)+len(r.opening)); lerr != nil {
+			r.mu.Unlock()
+			return nil, lerr
+		}
 	}
 	fl := &inflight{done: make(chan struct{})}
 	r.opening[id] = fl
