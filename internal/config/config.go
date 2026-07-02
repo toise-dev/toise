@@ -201,6 +201,23 @@ func (c Config) Validate() error {
 	if c.IngestMTLSOnly && c.TLSClientCAFile == "" {
 		return fmt.Errorf("ingest_mtls_only requires tls_client_ca_file: with no verified client certificate, ingest would be left open")
 	}
+	if c.IngestMTLSOnly {
+		// ingest_mtls_only decouples ingest auth (mTLS) from read auth, so the
+		// read surfaces MUST have their own authenticator — otherwise mTLS protects
+		// ingest while GraphQL/MCP/debug UI are wide open, the opposite of #262.
+		readAuth := len(c.AuthTokens) > 0 || len(c.ReadTokens) > 0 ||
+			len(c.TenantTokens) > 0 || len(c.TenantReadTokens) > 0 || c.OIDCIssuer != ""
+		if !readAuth {
+			return fmt.Errorf("ingest_mtls_only leaves the read surfaces open: configure a read authenticator (read_tokens / tenant_read_tokens / auth_tokens / oidc_issuer) or drop ingest_mtls_only")
+		}
+		// A client certificate carries no tenant, so mTLS-only ingest takes the
+		// tenant from the request header/resource attribute — which derive-only
+		// exists precisely to distrust. The combination silently defeats the
+		// anti-spoofing guarantee; refuse it rather than pretend to enforce it.
+		if c.TenantTrustMode == "derive-only" {
+			return fmt.Errorf("ingest_mtls_only is incompatible with tenant_trust_mode: derive-only: a client cert carries no tenant, so ingest cannot enforce per-tenant isolation — bind certs to tenants at the gateway with trust-header, or drop ingest_mtls_only")
+		}
+	}
 	if c.RetentionMaxAge.D() > 0 && c.CompactionInterval.D() <= 0 {
 		return fmt.Errorf("retention_max_age is set but retention_compaction_interval is 0: nothing would ever prune")
 	}
