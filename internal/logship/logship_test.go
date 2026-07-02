@@ -2,6 +2,9 @@ package logship
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -99,6 +102,62 @@ func TestCursorDerivedFromSink(t *testing.T) {
 	if n, err := New(sink2).Ship(ctx, "acme", src); err != nil || n != 0 {
 		t.Fatalf("post-restart ship = (%d, %v), want (0, nil) — cursor must derive from the sink", n, err)
 	}
+}
+
+// TestReplayDetectsGapAndOverlap pins the restore-integrity guard: a sink
+// mutated after write (lifecycle expiry loses a middle object; a racing shipper
+// writes an overlapping range) must fail the restore loudly instead of silently
+// reconstructing a divergent log.
+func TestReplayDetectsGapAndOverlap(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("gap from a lost middle segment", func(t *testing.T) {
+		dir := t.TempDir()
+		sink, _ := NewFileSink(dir)
+		sh := New(sink)
+		// three contiguous segments: (0,1], (1,2], (2,3]
+		for i := 1; i <= 3; i++ {
+			evs := []model.Event{ev("a"), ev("b"), ev("c")}[:i]
+			if _, err := sh.Ship(ctx, "acme", &fakeSource{events: evs}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		names, _ := sink.List(ctx, "acme/")
+		if len(names) != 3 {
+			t.Fatalf("want 3 segments, got %d", len(names))
+		}
+		if err := os.Remove(filepath.Join(dir, filepath.FromSlash(names[1]))); err != nil {
+			t.Fatal(err)
+		}
+		err := sh.Replay(ctx, "acme", func(model.Event) error { return nil })
+		if err == nil || !strings.Contains(err.Error(), "gap") {
+			t.Fatalf("Replay over a gap = %v, want a gap error", err)
+		}
+	})
+
+	t.Run("overlapping segment", func(t *testing.T) {
+		ctx := context.Background()
+		sink, _ := NewFileSink(t.TempDir())
+		sh := New(sink)
+		if _, err := sh.Ship(ctx, "acme", &fakeSource{events: []model.Event{ev("a")}}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := sh.Ship(ctx, "acme", &fakeSource{events: []model.Event{ev("a"), ev("b"), ev("c")}}); err != nil {
+			t.Fatal(err)
+		}
+		// inject a segment (0,2] that overlaps the existing (1,3]
+		seg, err := encodeSegment([]model.Event{ev("a"), ev("b")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = sink.Put(ctx, segmentName("acme", 0, 2), seg); err != nil {
+			t.Fatal(err)
+		}
+		err = sh.Replay(ctx, "acme", func(model.Event) error { return nil })
+		if err == nil || !strings.Contains(err.Error(), "overlap") {
+			t.Fatalf("Replay over an overlap = %v, want an overlap error", err)
+		}
+	})
 }
 
 func TestPerTenantIsolation(t *testing.T) {
