@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -80,6 +81,58 @@ func exportEntityAs(otlpAddr, token, tenantHeader, hostID string) error {
 	}
 	_, err = plogotlp.NewGRPCClient(conn).Export(ctx, plogotlp.NewExportRequestFromLogs(ld))
 	return err
+}
+
+// gqlRaw posts an arbitrary GraphQL query/mutation with a bearer token and an
+// optional tenant header, returning the raw response body.
+func gqlRaw(t *testing.T, base, token, tenantHeader, query string) []byte {
+	t.Helper()
+	body, _ := json.Marshal(map[string]string{"query": query})
+	req, _ := http.NewRequest("POST", base+"/graphql", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	if tenantHeader != "" {
+		req.Header.Set("X-Scope-OrgID", tenantHeader)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("graphql: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	out := make([]byte, 0, 512)
+	buf := make([]byte, 512)
+	for {
+		n, rerr := resp.Body.Read(buf)
+		out = append(out, buf[:n]...)
+		if rerr != nil {
+			break
+		}
+	}
+	return out
+}
+
+// firstEntityID returns the id of the first entity visible to token/header.
+func firstEntityID(t *testing.T, base, token, tenantHeader string) string {
+	t.Helper()
+	raw := gqlRaw(t, base, token, tenantHeader, `{ entities { edges { node { id } } } }`)
+	var out struct {
+		Data struct {
+			Entities struct {
+				Edges []struct {
+					Node struct {
+						ID string `json:"id"`
+					} `json:"node"`
+				} `json:"edges"`
+			} `json:"entities"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("decode entity id: %v (body %s)", err, raw)
+	}
+	if len(out.Data.Entities.Edges) == 0 {
+		t.Fatalf("no entities visible to annotate (body %s)", raw)
+	}
+	return out.Data.Entities.Edges[0].Node.ID
 }
 
 // TestRunDeriveOnlyTenantSecurity boots the full server through run() with the
@@ -164,6 +217,40 @@ func TestRunDeriveOnlyTenantSecurity(t *testing.T) {
 	}
 	if n := gqlTotalAs(t, base, globalTok, "victim"); n != 2 {
 		t.Errorf("victim has %d entities, want 2 — a spoofed scoped ingest leaked into victim", n)
+	}
+
+	// An operator write is audited: annotate an acme entity with the acme (full)
+	// token and assert a JSON audit line lands with the resolved tenant, surface,
+	// action, and target — the audit composition end to end, not just the file.
+	entID := firstEntityID(t, base, acmeTok, "")
+	mutation := `mutation { annotateEntity(id: "` + entID + `", annotations: [{key: "owner", value: "team-a"}]) { values { key value } } }`
+	if raw := gqlRaw(t, base, acmeTok, "", mutation); !strings.Contains(string(raw), "team-a") {
+		t.Fatalf("annotate mutation failed: %s", raw)
+	}
+	auditData, aerr := os.ReadFile(auditPath)
+	if aerr != nil {
+		t.Fatalf("read audit log: %v", aerr)
+	}
+	var found bool
+	for _, ln := range strings.Split(strings.TrimSpace(string(auditData)), "\n") {
+		if ln == "" {
+			continue
+		}
+		var ev struct {
+			Tenant, Surface, Action, Target string
+		}
+		if json.Unmarshal([]byte(ln), &ev) != nil {
+			continue
+		}
+		if ev.Action == "annotate_entity" {
+			found = true
+			if ev.Tenant != "acme" || ev.Surface != "graphql" || ev.Target != entID {
+				t.Errorf("audit line = %+v, want tenant=acme surface=graphql target=%s", ev, entID)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("no annotate_entity audit line written; audit log = %q", auditData)
 	}
 
 	// Clean shutdown.

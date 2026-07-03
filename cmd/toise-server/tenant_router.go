@@ -54,7 +54,11 @@ func (tr *tenantRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown tenant", http.StatusNotFound)
 		return
 	}
-	h.ServeHTTP(w, r)
+	// Stamp the resolved tenant into the context so downstream consumers agree
+	// with the stack we routed to. The audit log reads it (ADR 0028): without
+	// this, tenant.FromContext falls back to the default and every operator write
+	// — including a derive-only scoped token's — is misattributed to "default".
+	h.ServeHTTP(w, r.WithContext(tenant.NewContext(r.Context(), id)))
 }
 
 func (tr *tenantRouter) handlerFor(id string) (http.Handler, bool, error) {
