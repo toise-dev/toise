@@ -40,24 +40,36 @@ func TestPruneOlderThanKeepsLiveTail(t *testing.T) {
 	}
 
 	got := scanAll(t, s)
-	if len(got) != 3 {
-		t.Fatalf("after prune: %d events, want 3", len(got))
+	// Kept: c@50 and rel a->c@60 (live tail, still older than the cutoff so no
+	// baseline needed), a@100 (a's recent state), plus a re-materialized horizon
+	// baseline for 'a' at the cutoff — 'a' was live and born before the cutoff but
+	// its only surviving event is newer, so a fold at the horizon must still see
+	// it. Four events.
+	if len(got) != 4 {
+		t.Fatalf("after prune: %d events, want 4", len(got))
 	}
-	live := map[model.EntityID]bool{}
+	live := map[model.EntityID]int{}
 	rels := 0
+	sawBaseline := false
 	for _, e := range got {
 		switch {
 		case e.Entity != nil:
-			live[e.Entity.Entity.ID] = true
-			if e.Entity.Entity.ID == a && !e.Entity.EventTime.Equal(ts(100)) {
-				t.Errorf("surviving 'a' event at %v, want the latest ts(100)", e.Entity.EventTime)
+			live[e.Entity.Entity.ID]++
+			if e.Entity.Entity.ID == a && e.Entity.EventTime.Equal(ts(90)) {
+				sawBaseline = true
 			}
 		case e.Relation != nil:
 			rels++
 		}
 	}
-	if !live[a] || !live[c] || live[b] {
-		t.Errorf("surviving entities = %v, want a and c (not the deleted b)", live)
+	if live[a] != 2 {
+		t.Errorf("surviving 'a' events = %d, want 2 (recent state + horizon baseline)", live[a])
+	}
+	if !sawBaseline {
+		t.Error("expected a re-materialized baseline for 'a' at the cutoff ts(90)")
+	}
+	if live[c] != 1 || live[b] != 0 {
+		t.Errorf("surviving entities: a=%d b=%d c=%d, want a and c live, b gone", live[a], live[b], live[c])
 	}
 	if rels != 1 {
 		t.Errorf("surviving relations = %d, want 1 (the live a->c)", rels)
