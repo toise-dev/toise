@@ -29,6 +29,17 @@
   match (a key, key=value, or a free substring) and dims the rest — a read-time view
   over the fetched data, so it works on whatever attributes producers emit.
 
+  Timeline (time travel): the bottom bar folds the graph to a past instant via the
+  entities(asOf:) / relations(asOf:) event-time arguments — drag left to rewind, click
+  LIVE (or drag back to now) to resume streaming. Live updates are ignored while
+  browsing history so the past view stays put; a request before the retention horizon
+  is refused and surfaced.
+
+  Layout: the force simulation runs only until it stabilises, then FREEZES, so the
+  graph settles once instead of drifting forever. A structural change (a node/edge
+  added or removed) re-runs it briefly and re-freezes; attribute-only heartbeats never
+  move it. "relayout" re-runs the layout on demand.
+
   Multi-tenancy (ADR 0025): pick a tenant with ?tenant=<id>. It is sent as the
   X-Scope-OrgID header on queries; for the live subscription (a browser can't set a
   header on a WebSocket) it is appended as ?tenant=, which a translating proxy maps
@@ -72,6 +83,12 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
 #feed{font-size:11px;color:var(--dim);max-height:30vh;overflow:auto;margin-top:.4rem;}
 #feed div{padding:.15rem 0;border-bottom:1px solid var(--line);}
 #err{color:var(--warn);font-size:12px;}
+.timeline{display:flex;align-items:center;gap:.7rem;padding:.45rem 1rem;background:var(--panel);border-top:1px solid var(--line);font-size:12px;}
+.timeline input[type=range]{flex:1;min-width:120px;accent-color:var(--accent);cursor:pointer;}
+.timeline select{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;padding:.05rem .2rem;}
+#tlLive{color:var(--ok);border-color:var(--ok);}
+#tlLive.hist{color:var(--warn);border-color:var(--warn);}
+#tlLabel{min-width:12rem;text-align:right;color:var(--fg);}
 </style>
 </head>
 <body>
@@ -90,6 +107,7 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
     <label class="muted" for="tn">tenant<input id="tn" spellcheck="false" autocomplete="off" placeholder="default" title="X-Scope-OrgID — sent as a header on queries and as ?tenant= on the subscription" style="background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;padding:.1rem .35rem;width:8rem;margin-left:.3rem;"></label>
     <button id="labels" title="Toggle node labels: human-readable names vs technical ids">labels: names</button>
     <button id="inferred" title="Overlay derived (not stored) edges linking IP-bearing entities to their network.address hub">inferred: off</button>
+    <button id="relayout" title="Re-run the force layout, then freeze it">relayout</button>
     <button id="resync">resync</button>
     <button id="fit">fit</button>
   </div>
@@ -103,6 +121,17 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
     <div id="feed"></div>
   </aside>
 </main>
+<footer class="timeline">
+  <button id="tlLive" title="Jump back to the live view">● LIVE</button>
+  <span class="muted">past</span>
+  <input type="range" id="tlRange" min="0" max="1000" value="1000" step="1"
+    title="Drag left to view the topology as it was at a past instant (event-time). Far right = live.">
+  <span class="muted">now</span>
+  <label class="muted">window <select id="tlWin">
+    <option value="1h">1h</option><option value="6h">6h</option>
+    <option value="24h">24h</option><option value="7d">7d</option></select></label>
+  <span id="tlLabel">now</span>
+</footer>
 <script>
 // GraphQL endpoint: same-origin /graphql by default; override with ?api=...
 const params=new URLSearchParams(location.search);
@@ -130,6 +159,18 @@ const net=new vis.Network(document.getElementById('net'),{nodes,edges},{
   physics:{barnesHut:{gravitationalConstant:-9000,springLength:130,springConstant:.03,damping:.5},stabilization:{iterations:180}},
   interaction:{hover:true,tooltipDelay:120,multiselect:true}
 });
+
+// --- layout settling: run the force simulation only until it stabilises, then
+// FREEZE it, so the graph stops drifting instead of jittering indefinitely (the
+// "wait for it to stop moving" annoyance). A structural change (a node or edge
+// added/removed) re-runs the simulation for a bounded window and freezes again;
+// attribute-only updates (heartbeats) never disturb the layout. "relayout" re-runs
+// it on demand.
+let freezeTimer=null;
+function freeze(){ clearTimeout(freezeTimer); freezeTimer=null; net.setOptions({physics:{enabled:false}}); }
+function settle(ms=1600){ net.setOptions({physics:{enabled:true}}); clearTimeout(freezeTimer);
+  freezeTimer=setTimeout(freeze, ms); }
+net.on('stabilizationIterationsDone',freeze);   // initial layout done -> freeze
 
 // Node labels: a toggle between human-readable names and raw technical ids.
 // Identities are opaque (host.id is a UUID, a listener is <host-uuid>:port); name
@@ -221,6 +262,7 @@ function titleOf(n){ const I=(n.identity||[]).map(a=>a.key+'='+a.value).join(', 
 let rebuildTimer=null;
 function scheduleRebuild(){ if(rebuildTimer) return; rebuildTimer=setTimeout(()=>{rebuildTimer=null;rebuild();},250); }
 function rebuild(){
+  const prevNodeIds=new Set(nodes.getIds());
   const allTypes=new Set(), nodeIds=new Set(), nUp=[];
   const q=attrQuery.trim(); let matched=0;
   Object.values(ENT).forEach(n=>{ allTypes.add(n.type); if(hidden.has(n.type)) return; nodeIds.add(n.id);
@@ -247,6 +289,11 @@ function rebuild(){
   [...allTypes].sort().forEach(t=>{ const s=document.createElement('span'); s.className=hidden.has(t)?'off':'';
     s.innerHTML='<i style="background:'+colorFor(t)+'"></i>'+esc(t);
     s.onclick=()=>{ hidden.has(t)?hidden.delete(t):hidden.add(t); rebuild(); }; leg.appendChild(s); });
+  // Re-run the layout only when the set of nodes changed (a node appeared or went
+  // away), then freeze — never on a plain attribute/heartbeat update.
+  let structural = nodeIds.size!==prevNodeIds.size;
+  if(!structural){ for(const id of nodeIds){ if(!prevNodeIds.has(id)){ structural=true; break; } } }
+  if(structural && fitted) settle();
   if(!fitted && nodeIds.size){ fitted=true; setTimeout(()=>net.fit({animation:false}),300); }
 }
 
@@ -257,10 +304,11 @@ function rebuild(){
 // fetch the whole connection before rebuilding (#209).
 const ENT_FIELDS='id type deleted identity{key value} attributes{key value}';
 const REL_FIELDS='id type fromId toId';
-async function fetchAll(conn,fields){
+async function fetchAll(conn,fields,asOf){
   const nodes=[]; let after=null, guard=0;
+  const asArg=asOf?`, asOf:${JSON.stringify(asOf)}`:'';
   do{
-    const q=`{ ${conn}(first:200${after?`, after:${JSON.stringify(after)}`:''}){ edges{ node{ ${fields} } } pageInfo{ hasNextPage endCursor } } }`;
+    const q=`{ ${conn}(first:200${after?`, after:${JSON.stringify(after)}`:''}${asArg}){ edges{ node{ ${fields} } } pageInfo{ hasNextPage endCursor } } }`;
     const r=await fetch(withTenant(API),{method:'POST',headers:gqlHeaders(),credentials:'same-origin',body:JSON.stringify({query:q})});
     const j=await r.json(); if(j.errors) throw new Error(j.errors[0].message);
     const c=j.data[conn];
@@ -280,16 +328,52 @@ async function loadFull(){
   }catch(e){ err.textContent='⚠ '+e.message; }
 }
 
+// --- timeline: view the topology as-of a past instant (event-time) --------------
+// Drag the slider left to fold the log up to an earlier moment via the GraphQL
+// entities(asOf:)/relations(asOf:) time-travel arguments; the far right is live.
+// While browsing history, live subscription updates are ignored so the past view
+// stays put; "LIVE" (or dragging back to now) resumes streaming.
+let historical=false;
+const WINDOWS={'1h':3600e3,'6h':6*3600e3,'24h':86400e3,'7d':604800e3};
+let tlWindow=localStorage.getItem('toise_viz_window')||'24h';
+const tlRange=()=>document.getElementById('tlRange');
+function tlInstant(){ const v=+tlRange().value; if(v>=1000) return null;
+  return new Date(Date.now() - (WINDOWS[tlWindow]||WINDOWS['24h'])*(1000-v)/1000); }
+async function loadAsOf(iso){
+  const err=document.getElementById('err'); err.textContent='';
+  try{
+    const [ents,rels]=await Promise.all([fetchAll('entities',ENT_FIELDS,iso),fetchAll('relations',REL_FIELDS,iso)]);
+    for(const k in ENT) delete ENT[k]; for(const k in REL) delete REL[k];
+    ents.forEach(n=>ENT[n.id]=n); rels.forEach(n=>REL[n.id]=n);
+    rebuild(); settle();
+  }catch(e){ err.textContent='⚠ '+e.message+' (before the retention horizon? drag toward now)'; }
+}
+function returnLive(){ historical=false; tlRange().value=1000;
+  document.getElementById('tlLabel').textContent='now';
+  document.getElementById('tlLive').classList.remove('hist');
+  setStatus(acked?'live':'poll', acked?'live (ws)':'polling (ws off)');
+  loadFull(); }
+let tlTimer=null;
+function onTimeline(){ clearTimeout(tlTimer); tlTimer=setTimeout(()=>{
+  const t=tlInstant();
+  if(!t){ returnLive(); return; }
+  historical=true;
+  document.getElementById('tlLabel').textContent=t.toLocaleString();
+  document.getElementById('tlLive').classList.add('hist');
+  setStatus('poll','as-of '+t.toLocaleString());
+  loadAsOf(t.toISOString());
+},180); }
+
 function feed(txt){ const f=document.getElementById('feed'); if(!f) return; const d=document.createElement('div');
   d.textContent=new Date().toLocaleTimeString()+'  '+txt; f.prepend(d);
   while(f.childNodes.length>40) f.removeChild(f.lastChild); }
 function flashStatus(){ const i=document.querySelector('#status i'); i.classList.remove('pulse'); void i.offsetWidth; i.classList.add('pulse'); }
 
-function applyEntity(ce){ const n=ce&&ce.entity; if(!n) return;
+function applyEntity(ce){ if(historical) return; const n=ce&&ce.entity; if(!n) return;
   if(ce.changeType==='ENTITY_DELETED') n.deleted=true;
   ENT[n.id]=n; scheduleRebuild();
   if(ce.changeType!=='ENTITY_UNCHANGED'){ feed(ce.changeType+'  '+n.type+' '+labelOf(n)); flashStatus(); } }
-function applyRelation(ce){ const r=ce&&ce.relation; if(!r) return;
+function applyRelation(ce){ if(historical) return; const r=ce&&ce.relation; if(!r) return;
   if(ce.changeType==='RELATION_DELETED') delete REL[r.id]; else REL[r.id]=r;
   scheduleRebuild();
   if(ce.changeType!=='RELATION_UNCHANGED'){ feed(ce.changeType+'  '+r.type); flashStatus(); } }
@@ -319,10 +403,10 @@ function connect(){
   try{ ws=new WebSocket(wsURL(),'graphql-transport-ws'); }catch(e){ fallback(); return; }
   ws.onopen=()=>ws.send(JSON.stringify({type:'connection_init'}));
   ws.onmessage=ev=>{ let m; try{ m=JSON.parse(ev.data); }catch{ return; }
-    if(m.type==='connection_ack'){ acked=true; retry=0; stopPolling(); setStatus('live','live (ws)');
+    if(m.type==='connection_ack'){ acked=true; retry=0; stopPolling();
       ws.send(JSON.stringify({id:'ent',type:'subscribe',payload:{query:ENT_SUB}}));
       ws.send(JSON.stringify({id:'rel',type:'subscribe',payload:{query:REL_SUB}}));
-      loadFull(); }
+      if(!historical){ setStatus('live','live (ws)'); loadFull(); } }
     else if(m.type==='ping'){ ws.send(JSON.stringify({type:'pong'})); }
     else if(m.type==='next'){ const d=m.payload&&m.payload.data; if(!d) return;
       if(d.entityChanged) applyEntity(d.entityChanged);
@@ -348,8 +432,13 @@ tnInput.addEventListener('change',()=>{ const v=tnInput.value.trim(); const p=ne
   if(v) p.set('tenant',v); else p.delete('tenant'); location.search=p.toString(); });
 const attrInput=document.getElementById('attr');
 attrInput.addEventListener('input',()=>{ attrQuery=attrInput.value; rebuild(); });
-document.getElementById('resync').onclick=loadFull;
+document.getElementById('resync').onclick=()=>{ if(historical){ const t=tlInstant(); if(t){ loadAsOf(t.toISOString()); return; } } loadFull(); };
 document.getElementById('fit').onclick=()=>net.fit({animation:true});
+document.getElementById('relayout').onclick=()=>settle(2600);
+const tlWin=document.getElementById('tlWin'); tlWin.value=tlWindow;
+tlWin.onchange=()=>{ tlWindow=tlWin.value; localStorage.setItem('toise_viz_window',tlWindow); onTimeline(); };
+tlRange().addEventListener('input',onTimeline);
+document.getElementById('tlLive').onclick=returnLive;
 loadFull().then(connect);
 </script>
 </body>
