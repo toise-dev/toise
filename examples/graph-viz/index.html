@@ -103,6 +103,8 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
 .timeline select{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;padding:.05rem .2rem;}
 #tlLive{color:var(--ok);border-color:var(--ok);}
 #tlLive.hist{color:var(--warn);border-color:var(--warn);}
+#tlPlay{width:2rem;text-align:center;}
+#tlPlay.on{color:var(--accent);border-color:var(--accent);}
 #tlLabel{min-width:12.5rem;text-align:right;color:var(--fg);font-variant-numeric:tabular-nums;}
 </style>
 </head>
@@ -138,6 +140,9 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
 </main>
 <footer class="timeline">
   <button id="tlLive" title="Jump back to the live view">● LIVE</button>
+  <button id="tlPlay" title="Replay history forward from the cursor (fast-forward, like scrubbing a video)">▶</button>
+  <select id="tlSpeed" title="Replay speed">
+    <option value="10">1×</option><option value="35" selected>4×</option><option value="90">12×</option></select>
   <div class="tlwrap">
     <div class="tlruler" id="tlRuler"></div>
     <input type="range" id="tlRange" min="0" max="1000" value="1000" step="1"
@@ -365,14 +370,19 @@ const RULER={
   '24h':[[24*_H,'−24h'],[18*_H,'−18h'],[12*_H,'−12h'],[6*_H,'−6h'],[0,'now']],
   '7d':[[7*_D,'−7d'],[5*_D,'−5d'],[3*_D,'−3d'],[1*_D,'−1d'],[0,'now']]
 };
-const MINORS={'1h':12,'6h':12,'24h':24,'7d':14};   // number of small divisions
+// Minor ticks land on a "nice" round interval (…5m, 10m, 15m, 30m, 1h, 2h…)
+// picked so the window shows ~12-20 of them — a real graduated scale, not an
+// arbitrary count. Unlabelled; the majors above carry the labels.
+const NICE=[_M,2*_M,5*_M,10*_M,15*_M,30*_M,_H,2*_H,3*_H,6*_H,12*_H,_D,2*_D];
+function niceStep(W,target){ for(const s of NICE){ if(W/s<=target) return s; } return NICE[NICE.length-1]; }
 function renderRuler(){
   const el=document.getElementById('tlRuler'); if(!el) return; el.innerHTML='';
   const W=WINDOWS[tlWindow]||WINDOWS['24h'];
   const add=(cls,pos,txt)=>{ const d=document.createElement('div'); d.className=cls;
     d.style.left=pos+'%'; if(txt!=null) d.textContent=txt; el.appendChild(d); };
   add('base',0);
-  const n=MINORS[tlWindow]||24; for(let i=0;i<=n;i++) add('tick min', i/n*100);
+  const step=niceStep(W,20);
+  for(let o=0;o<=W+1;o+=step) add('tick min',(1-o/W)*100);
   for(const [off,lab] of (RULER[tlWindow]||RULER['24h'])){ const pos=(1-off/W)*100;
     add('tick maj',pos); add('lab',pos,lab); }
 }
@@ -392,7 +402,7 @@ async function loadAsOf(iso){
     rebuild(); settle();
   }catch(e){ err.textContent='⚠ '+e.message+' (before the retention horizon? drag toward now)'; }
 }
-function returnLive(){ historical=false; tlRange().value=1000;
+function returnLive(){ playing=false; clearTimeout(playTimer); syncPlayBtn(); historical=false; tlRange().value=1000;
   document.getElementById('tlLabel').textContent='now';
   document.getElementById('tlLive').classList.remove('hist');
   setStatus(acked?'live':'poll', acked?'live (ws)':'polling (ws off)');
@@ -407,6 +417,29 @@ function onTimeline(){ clearTimeout(tlTimer); tlTimer=setTimeout(()=>{
   setStatus('poll','as-of '+t.toLocaleString());
   loadAsOf(t.toISOString());
 },180); }
+
+// --- replay: play history forward from the cursor, fast-forwarding like scrubbing
+// a video to hunt for a moment. Each frame nudges the cursor forward (by the speed)
+// and loads that instant; frames wait for the query so the server is never flooded.
+let playing=false, playTimer=null;
+function syncPlayBtn(){ const b=document.getElementById('tlPlay');
+  b.textContent=playing?'❚❚':'▶'; b.classList.toggle('on',playing); }
+function pausePlay(){ playing=false; clearTimeout(playTimer); syncPlayBtn(); }
+async function playFrame(){
+  if(!playing) return;
+  const v=+tlRange().value + (+document.getElementById('tlSpeed').value);
+  if(v>=1000){ pausePlay(); returnLive(); return; }   // reached now -> resume live
+  tlRange().value=v; historical=true;
+  const t=tlInstant();
+  document.getElementById('tlLive').classList.add('hist');
+  document.getElementById('tlLabel').textContent=t.toLocaleString();
+  setStatus('poll','▶ replay '+t.toLocaleString());
+  await loadAsOf(t.toISOString());
+  if(playing) playTimer=setTimeout(playFrame,250);
+}
+function play(){ if(playing) return;
+  if(+tlRange().value>=1000) tlRange().value=0;   // at now -> start from the window's oldest edge
+  playing=true; historical=true; syncPlayBtn(); playFrame(); }
 
 function feed(txt){ const f=document.getElementById('feed'); if(!f) return; const d=document.createElement('div');
   d.textContent=new Date().toLocaleTimeString()+'  '+txt; f.prepend(d);
@@ -481,9 +514,10 @@ document.getElementById('fit').onclick=()=>net.fit({animation:true});
 document.getElementById('relayout').onclick=()=>settle(2600);
 const tlWin=document.getElementById('tlWin'); tlWin.value=tlWindow;
 tlWin.onchange=()=>{ tlWindow=tlWin.value; localStorage.setItem('toise_viz_window',tlWindow); renderRuler(); updateCursorLabel(); onTimeline(); };
-tlRange().addEventListener('input',()=>{ updateCursorLabel(); onTimeline(); });
-renderRuler();
+tlRange().addEventListener('input',()=>{ if(playing) pausePlay(); updateCursorLabel(); onTimeline(); });
+renderRuler(); syncPlayBtn();
 document.getElementById('tlLive').onclick=returnLive;
+document.getElementById('tlPlay').onclick=()=>{ playing?pausePlay():play(); };
 loadFull().then(connect);
 </script>
 </body>
