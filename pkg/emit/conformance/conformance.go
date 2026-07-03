@@ -123,7 +123,10 @@ func checkRecord(where string, lr plog.LogRecord) []Problem {
 		if desc.Type() != pcommon.ValueTypeMap {
 			bad("entity.description must be a map, got %s", desc.Type())
 		} else {
-			checkScalarMap(&out, where, "entity.description", desc.Map())
+			// Unlike identity, entity.description carries the full AnyValue since
+			// 0.9.0 (#259): arrays and nested maps are ingested faithfully. Only an
+			// empty key or an unsupported leaf (bytes/empty) is a problem.
+			checkDescriptionMap(&out, where, "entity.description", desc.Map())
 		}
 	}
 
@@ -166,10 +169,10 @@ func checkRecord(where string, lr plog.LogRecord) []Problem {
 	return out
 }
 
-// checkScalarMap flags empty keys and non-scalar values: the contract is flat
-// scalar maps with non-empty keys. Toise rejects an empty key in every mode
-// (strict and accept_unknown_types alike) and drops non-scalar values with a
-// warning.
+// checkScalarMap flags empty keys and non-scalar values: identity is a flat
+// scalar map with non-empty keys (ADR 0018). Toise rejects an empty key in every
+// mode (strict and accept_unknown_types alike) and, for identity, drops a
+// non-scalar value with a warning.
 func checkScalarMap(out *[]Problem, where, field string, m pcommon.Map) {
 	m.Range(func(k string, v pcommon.Value) bool {
 		if k == "" {
@@ -182,4 +185,33 @@ func checkScalarMap(out *[]Problem, where, field string, m pcommon.Map) {
 		}
 		return true
 	})
+}
+
+// checkDescriptionMap validates entity.description, which carries the full
+// AnyValue since 0.9.0 (#259): scalars, arrays, and nested maps are all fine and
+// ingested faithfully. Only an empty key (rejected in every mode) or an
+// unsupported leaf (bytes/empty, which Toise drops) is flagged.
+func checkDescriptionMap(out *[]Problem, where, field string, m pcommon.Map) {
+	m.Range(func(k string, v pcommon.Value) bool {
+		if k == "" {
+			*out = append(*out, Problem{Record: where, Issue: fmt.Sprintf("%s has an empty attribute key; Toise rejects it in every mode", field)})
+		}
+		checkDescriptionValue(out, where, field+"."+k, v)
+		return true
+	})
+}
+
+func checkDescriptionValue(out *[]Problem, where, path string, v pcommon.Value) {
+	switch v.Type() {
+	case pcommon.ValueTypeStr, pcommon.ValueTypeInt, pcommon.ValueTypeDouble, pcommon.ValueTypeBool:
+	case pcommon.ValueTypeSlice:
+		sl := v.Slice()
+		for i := 0; i < sl.Len(); i++ {
+			checkDescriptionValue(out, where, fmt.Sprintf("%s[%d]", path, i), sl.At(i))
+		}
+	case pcommon.ValueTypeMap:
+		checkDescriptionMap(out, where, path, v.Map())
+	default: // bytes, empty — unsupported leaves Toise drops
+		*out = append(*out, Problem{Record: where, Issue: fmt.Sprintf("%s is %s; unsupported leaf (Toise keeps scalars, arrays, and nested maps but drops this)", path, v.Type())})
+	}
 }
