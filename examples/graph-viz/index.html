@@ -141,6 +141,7 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
     <button id="filterMode" title="Search behaviour: dim the non-matching nodes, or show only the matches">match: dim</button>
     <label class="muted" for="tn">tenant<input id="tn" spellcheck="false" autocomplete="off" placeholder="default" title="X-Scope-OrgID — sent as a header on queries and as ?tenant= on the subscription" style="background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;padding:.1rem .35rem;width:8rem;margin-left:.3rem;"></label>
     <button id="labels" title="Toggle node labels: human-readable names vs technical ids">labels: names</button>
+    <button id="edgemode" title="Edges: faint (default), with type labels, or hidden — to declutter a dense graph">edges: on</button>
     <button id="inferred" title="Overlay derived (not stored) edges linking IP-bearing entities to their network.address hub">inferred: off</button>
     <button id="static" title="Static layout: keep node positions fixed and don't replay the layout animation on updates">layout: animated</button>
     <button id="relayout" title="Re-run the force layout, then freeze it">relayout</button>
@@ -204,9 +205,10 @@ let fitted=false;
 
 const net=new vis.Network(document.getElementById('net'),{nodes,edges},{
   nodes:{shape:'dot',size:14,font:{color:'#c9d1d9',face:'ui-monospace, monospace',size:12,strokeWidth:3,strokeColor:'#0d1117'},borderWidth:2},
-  edges:{color:{color:'#30363d',highlight:'#58a6ff'},font:{color:'#8b949e',size:10,strokeWidth:3,strokeColor:'#0d1117',align:'middle'},
-         arrows:{to:{enabled:true,scaleFactor:.5}},smooth:{type:'dynamic'}},
-  physics:{barnesHut:{gravitationalConstant:-26000,centralGravity:0.12,springLength:200,springConstant:.03,damping:.6,avoidOverlap:0.2},stabilization:{iterations:400}},
+  edges:{color:{color:'rgba(110,118,129,0.20)',highlight:'#58a6ff',hover:'#58a6ff'},
+         font:{color:'#8b949e',size:10,strokeWidth:3,strokeColor:'#0d1117',align:'middle'},
+         arrows:{to:{enabled:true,scaleFactor:.45}},smooth:false,width:0.7},
+  physics:{barnesHut:{gravitationalConstant:-26000,centralGravity:0.12,springLength:200,springConstant:.03,damping:.6,avoidOverlap:0.2},stabilization:{iterations:1500}},
   interaction:{hover:true,tooltipDelay:120,multiselect:true}
 });
 
@@ -275,6 +277,7 @@ function inferredEdges(visible){
 // (matched against keys and values). It is a read-time view over the data already
 // fetched — no query change — so it works on whatever attributes producers emit.
 let attrQuery='', filterOnly=false;
+let showEdges=true, edgeLabels=false;   // edges: shown faint / with type labels / hidden
 let staticLayout=localStorage.getItem('toise_viz_static')==='1';   // keep the layout fixed, don't re-animate on updates
 function attrMatch(n){
   const q=attrQuery.trim().toLowerCase(); if(!q) return true;
@@ -332,10 +335,12 @@ function rebuild(){
   const ai=document.getElementById('attr'); if(ai) ai.style.color=(q&&matched===0)?'var(--warn)':'var(--fg)';
   nodes.getIds().forEach(id=>{ if(!nodeIds.has(id)) nodes.remove(id); });
   const edgeIds=new Set(), eUp=[];
-  Object.values(REL).forEach(r=>{ if(nodeIds.has(r.fromId)&&nodeIds.has(r.toId)){ edgeIds.add(r.id);
-    eUp.push({id:r.id,from:r.fromId,to:r.toId,label:r.type}); } });
-  const realCount=edgeIds.size;
-  if(inferred) inferredEdges(nodeIds).forEach(e=>{ if(!edgeIds.has(e.id)){ edgeIds.add(e.id); eUp.push(e); } });
+  let realCount=Object.values(REL).filter(r=>nodeIds.has(r.fromId)&&nodeIds.has(r.toId)).length;
+  if(showEdges){
+    Object.values(REL).forEach(r=>{ if(nodeIds.has(r.fromId)&&nodeIds.has(r.toId)){ edgeIds.add(r.id);
+      const ed={id:r.id,from:r.fromId,to:r.toId,title:r.type}; if(edgeLabels) ed.label=r.type; eUp.push(ed); } });
+    if(inferred) inferredEdges(nodeIds).forEach(e=>{ if(!edgeIds.has(e.id)){ edgeIds.add(e.id); eUp.push(e); } });
+  }
   edges.update(eUp);
   edges.getIds().forEach(id=>{ if(!edgeIds.has(id)) edges.remove(id); });
   document.getElementById('nNodes').textContent=nodeIds.size;
@@ -355,7 +360,7 @@ function rebuild(){
   // First data render: lay the graph out ONCE while the canvas is hidden, then reveal
   // it already-settled (no visible fly-in). Reveal + fit happen on stabilizationIterationsDone.
   if(!fitted && nodeIds.size){ fitted=true; net.setOptions({physics:{enabled:true}}); net.stabilize();
-    setTimeout(()=>{ const nv=document.getElementById('net'); if(nv) nv.classList.remove('laying'); },5000); }  // safety reveal
+    setTimeout(()=>{ const nv=document.getElementById('net'); if(nv) nv.classList.remove('laying'); },12000); }  // safety reveal
 }
 
 // The server caps every connection page at 200 items, so a single
@@ -613,6 +618,10 @@ const inferredBtn=document.getElementById('inferred');
 function syncInferredBtn(){ inferredBtn.textContent='inferred: '+(inferred?'on':'off'); inferredBtn.style.color=inferred?'#d29922':''; }
 syncInferredBtn();
 inferredBtn.onclick=()=>{ inferred=!inferred; localStorage.setItem('toise_viz_inferred',inferred?'1':'0'); syncInferredBtn(); rebuild(); };
+const emBtn=document.getElementById('edgemode');   // cycle: on (faint) -> labels -> off
+function syncEmBtn(){ emBtn.textContent='edges: '+(!showEdges?'off':(edgeLabels?'labels':'on')); emBtn.style.color=(!showEdges||edgeLabels)?'var(--accent)':''; }
+syncEmBtn();
+emBtn.onclick=()=>{ if(showEdges&&!edgeLabels){ edgeLabels=true; } else if(showEdges&&edgeLabels){ edgeLabels=false; showEdges=false; } else { showEdges=true; edgeLabels=false; } syncEmBtn(); rebuild(); };
 const tnInput=document.getElementById('tn'); tnInput.value=TENANT;
 tnInput.addEventListener('change',()=>{ const v=tnInput.value.trim(); const p=new URLSearchParams(location.search);
   if(v) p.set('tenant',v); else p.delete('tenant'); location.search=p.toString(); });
