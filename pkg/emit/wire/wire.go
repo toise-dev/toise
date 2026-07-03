@@ -59,7 +59,23 @@ const (
 	RelTargetType = AttrEntityType
 	// RelTargetID is the target entity's identity map.
 	RelTargetID = AttrEntityID
+	// RelConfidence and RelBasis are the belief attributes of an identity-alias
+	// (same_as) relationship, the one exception to embedded edges being
+	// attribute-free: Confidence is a scalar in [0,1] that the two entities are
+	// the same real thing, Basis names the evidence (e.g. "ifPhysAddress",
+	// "lldp_chassis"). The read-time canonical overlay collapses same_as edges at
+	// or above a confidence threshold (ADR 0020); a same_as edge without a valid
+	// confidence never collapses anything, so it is inert. Ignored on any other
+	// relationship type.
+	RelConfidence = "confidence"
+	RelBasis      = "basis"
 )
+
+// RelTypeSameAs is the identity-belief relationship type ("these two entities are
+// the same real thing"), the sole edge that carries RelConfidence/RelBasis. It
+// mirrors internal/model.RelSameAs; the SDK cannot import the engine's vocabulary,
+// so the constant is duplicated here and pinned by a cross-check test.
+const RelTypeSameAs = "same_as"
 
 // OTLP Resource attribute keys on a ResourceLogs carrying entity events.
 const (

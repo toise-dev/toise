@@ -163,10 +163,39 @@ func checkRecord(where string, lr plog.LogRecord) []Problem {
 				if v, ok := m.Get(wire.RelTargetID); !ok || v.Type() != pcommon.ValueTypeMap || v.Map().Len() == 0 {
 					out = append(out, Problem{Record: rw, Issue: "missing, non-map, or empty target entity.id"})
 				}
+				if rt, _ := m.Get(wire.RelType); rt.Str() == wire.RelTypeSameAs {
+					out = append(out, checkSameAsBelief(rw, m)...)
+				}
 			}
 		}
 	}
 	return out
+}
+
+// checkSameAsBelief advises on a same_as edge's belief attributes. A same_as
+// edge exists to feed the read-time canonical overlay (ADR 0020), which collapses
+// only edges whose confidence is a number in [0,1] at or above the threshold. A
+// missing or out-of-range confidence is not a rejection — Toise stores the edge —
+// but the overlay ignores it, so the belief is inert. Advisory, so a producer
+// catches a same_as that will never merge anything.
+func checkSameAsBelief(where string, m pcommon.Map) []Problem {
+	v, ok := m.Get(wire.RelConfidence)
+	if !ok {
+		return []Problem{{Record: where, Issue: "same_as edge has no confidence; the canonical overlay collapses only edges with a confidence in [0,1], so this belief is inert", Advisory: true}}
+	}
+	var c float64
+	switch v.Type() {
+	case pcommon.ValueTypeDouble:
+		c = v.Double()
+	case pcommon.ValueTypeInt:
+		c = float64(v.Int())
+	default:
+		return []Problem{{Record: where, Issue: fmt.Sprintf("same_as confidence is %s; it must be a number in [0,1] or the canonical overlay ignores the belief", v.Type()), Advisory: true}}
+	}
+	if c < 0 || c > 1 {
+		return []Problem{{Record: where, Issue: fmt.Sprintf("same_as confidence %g is outside [0,1]; the canonical overlay ignores it", c), Advisory: true}}
+	}
+	return nil
 }
 
 // checkScalarMap flags empty keys and non-scalar values: identity is a flat
