@@ -631,11 +631,13 @@ document.getElementById('tlPlay').onclick=()=>{ playing?pausePlay():play(); };
   const saved=parseInt(localStorage.getItem('toise_viz_aside')||'',10);
   if(saved>=280 && saved<=900) aside.style.width=saved+'px';
   let x0=0, w0=0, dragging=false;
+  // Resizing the canvas + redrawing 100s of nodes on every mousemove freezes the drag,
+  // so only the (cheap) panel width changes live; the network is resized once on release.
   const redraw=()=>{ try{ net.setSize('100%','100%'); net.redraw(); }catch(_){} };
   rz.addEventListener('mousedown',ev=>{ dragging=true; x0=ev.clientX; w0=aside.getBoundingClientRect().width;
     rz.classList.add('drag'); document.body.style.userSelect='none'; ev.preventDefault(); });
   window.addEventListener('mousemove',ev=>{ if(!dragging) return;
-    aside.style.width=Math.max(280,Math.min(900, w0+(x0-ev.clientX)))+'px'; redraw(); });
+    aside.style.width=Math.max(280,Math.min(900, w0+(x0-ev.clientX)))+'px'; });
   window.addEventListener('mouseup',()=>{ if(!dragging) return; dragging=false; rz.classList.remove('drag');
     document.body.style.userSelect=''; localStorage.setItem('toise_viz_aside', String(Math.round(aside.getBoundingClientRect().width))); redraw(); }); })();
 loadFull().then(connect);
