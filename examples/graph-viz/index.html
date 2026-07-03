@@ -68,11 +68,13 @@ header a:hover{text-decoration:underline;}
 @keyframes p{from{box-shadow:0 0 0 0 var(--accent);}to{box-shadow:0 0 0 14px rgba(88,166,255,0);}}
 main{flex:1;display:flex;min-height:0;}
 #net{flex:1;min-width:0;}
-aside{width:320px;border-left:1px solid var(--line);background:var(--panel);overflow:auto;padding:.8rem;}
+aside{width:360px;flex:none;border-left:1px solid var(--line);background:var(--panel);overflow-y:auto;overflow-x:hidden;padding:.8rem;}
 aside h2{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;margin:.2rem 0 .6rem;}
-aside table{border-collapse:collapse;width:100%;}
-aside td{padding:.25rem .4rem;border-bottom:1px solid var(--line);vertical-align:top;word-break:break-word;}
-aside td.k{color:var(--dim);white-space:nowrap;}
+/* table-layout:fixed + wrap-anywhere keeps long ids/values inside the panel instead
+   of overflowing and getting clipped. */
+aside table{border-collapse:collapse;width:100%;table-layout:fixed;}
+aside td{padding:.25rem .4rem;border-bottom:1px solid var(--line);vertical-align:top;overflow-wrap:anywhere;word-break:break-word;}
+aside td.k{color:var(--dim);width:40%;}
 .legend{display:flex;flex-wrap:wrap;gap:.4rem .8rem;padding:.5rem 1rem;background:var(--panel);border-bottom:1px solid var(--line);font-size:12px;}
 .legend span{display:flex;align-items:center;gap:.3rem;cursor:pointer;opacity:.85;}
 .legend span.off{opacity:.3;text-decoration:line-through;}
@@ -548,10 +550,13 @@ net.on('click',p=>{
   if(!p.nodes.length){ panel.innerHTML='<div class="empty">Click a node to inspect its identity &amp; attributes.</div>'+head; return; }
   const n=ENT[p.nodes[0]]; if(!n) return;
   const rows=a=>(a||[]).map(x=>'<tr><td class="k">'+esc(x.key)+'</td><td>'+esc(x.value)+'</td></tr>').join('')||'<tr><td class="muted" colspan=2>—</td></tr>';
-  panel.innerHTML='<h2>'+esc(n.type)+(n.deleted?' <span class="muted">(deleted)</span>':'')+'</h2>'
+  panel.innerHTML='<button id="panelClose" title="Close" style="float:right">×</button>'
+    +'<h2>'+esc(n.type)+(n.deleted?' <span class="muted">(deleted)</span>':'')+'</h2>'
     +'<h2>Identity</h2><table>'+rows(n.identity)+'</table>'
     +'<h2>Attributes</h2><table>'+rows(n.attributes)+'</table>'
     +'<h2>id</h2><div class="muted" style="word-break:break-all">'+esc(n.id)+'</div>'+head;
+  const cb=document.getElementById('panelClose');
+  if(cb) cb.onclick=()=>{ panel.innerHTML='<div class="empty">Click a node to inspect its identity &amp; attributes.</div>'+head; };
 });
 
 // Realtime: graphql-transport-ws subscriptions, with polling fallback.
