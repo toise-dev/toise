@@ -277,7 +277,10 @@ function inferredEdges(visible){
 // (matched against keys and values). It is a read-time view over the data already
 // fetched — no query change — so it works on whatever attributes producers emit.
 let attrQuery='', filterOnly=false;
-let showEdges=true, edgeLabels=false;   // edges: shown faint / with type labels / hidden
+// edges: shown faint / with type labels / hidden. Default hides edges on a big graph
+// (they're an unreadable web) unless the user set a preference; small graphs keep them.
+const edgePref=localStorage.getItem('toise_viz_edges');   // 'on' | 'labels' | 'off' | null
+let showEdges=edgePref!=='off', edgeLabels=edgePref==='labels';
 let staticLayout=localStorage.getItem('toise_viz_static')==='1';   // keep the layout fixed, don't re-animate on updates
 function attrMatch(n){
   const q=attrQuery.trim().toLowerCase(); if(!q) return true;
@@ -336,11 +339,13 @@ function rebuild(){
   nodes.getIds().forEach(id=>{ if(!nodeIds.has(id)) nodes.remove(id); });
   const edgeIds=new Set(), eUp=[];
   let realCount=Object.values(REL).filter(r=>nodeIds.has(r.fromId)&&nodeIds.has(r.toId)).length;
-  if(showEdges){
-    Object.values(REL).forEach(r=>{ if(nodeIds.has(r.fromId)&&nodeIds.has(r.toId)){ edgeIds.add(r.id);
-      const ed={id:r.id,from:r.fromId,to:r.toId,title:r.type}; if(edgeLabels) ed.label=r.type; eUp.push(ed); } });
-    if(inferred) inferredEdges(nodeIds).forEach(e=>{ if(!edgeIds.has(e.id)){ edgeIds.add(e.id); eUp.push(e); } });
-  }
+  // Edges are ALWAYS added (the springs are what lay the graph out); "off" only makes
+  // them invisible, so hiding them can't fling the nodes apart.
+  const vis=showEdges?{color:{color:'rgba(110,118,129,0.20)',highlight:'#58a6ff',hover:'#58a6ff'},arrows:{to:{enabled:true,scaleFactor:.45}}}
+                     :{color:{color:'rgba(0,0,0,0)',highlight:'rgba(0,0,0,0)',hover:'rgba(0,0,0,0)'},arrows:{to:{enabled:false}}};
+  Object.values(REL).forEach(r=>{ if(nodeIds.has(r.fromId)&&nodeIds.has(r.toId)){ edgeIds.add(r.id);
+    eUp.push({id:r.id,from:r.fromId,to:r.toId,title:r.type,label:(showEdges&&edgeLabels)?r.type:undefined,...vis}); } });
+  if(showEdges && inferred) inferredEdges(nodeIds).forEach(e=>{ if(!edgeIds.has(e.id)){ edgeIds.add(e.id); eUp.push(e); } });
   edges.update(eUp);
   edges.getIds().forEach(id=>{ if(!edgeIds.has(id)) edges.remove(id); });
   document.getElementById('nNodes').textContent=nodeIds.size;
@@ -621,7 +626,8 @@ inferredBtn.onclick=()=>{ inferred=!inferred; localStorage.setItem('toise_viz_in
 const emBtn=document.getElementById('edgemode');   // cycle: on (faint) -> labels -> off
 function syncEmBtn(){ emBtn.textContent='edges: '+(!showEdges?'off':(edgeLabels?'labels':'on')); emBtn.style.color=(!showEdges||edgeLabels)?'var(--accent)':''; }
 syncEmBtn();
-emBtn.onclick=()=>{ if(showEdges&&!edgeLabels){ edgeLabels=true; } else if(showEdges&&edgeLabels){ edgeLabels=false; showEdges=false; } else { showEdges=true; edgeLabels=false; } syncEmBtn(); rebuild(); };
+emBtn.onclick=()=>{ if(showEdges&&!edgeLabels){ edgeLabels=true; } else if(showEdges&&edgeLabels){ edgeLabels=false; showEdges=false; } else { showEdges=true; edgeLabels=false; }
+  localStorage.setItem('toise_viz_edges', !showEdges?'off':(edgeLabels?'labels':'on')); syncEmBtn(); rebuild(); };
 const tnInput=document.getElementById('tn'); tnInput.value=TENANT;
 tnInput.addEventListener('change',()=>{ const v=tnInput.value.trim(); const p=new URLSearchParams(location.search);
   if(v) p.set('tenant',v); else p.delete('tenant'); location.search=p.toString(); });
