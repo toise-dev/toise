@@ -86,8 +86,9 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
 .timeline{display:flex;align-items:center;gap:.7rem;padding:.35rem 1rem .45rem;background:var(--panel);border-top:1px solid var(--line);font-size:12px;}
 .tlwrap{flex:1;min-width:200px;display:flex;flex-direction:column;gap:2px;}
 /* change-density profile behind the ruler: darker = more changes; drag to zoom */
-.tlprofile{position:relative;height:16px;cursor:crosshair;background:rgba(127,127,127,.06);border-radius:2px;overflow:hidden;}
-.tlprofile .cell{position:absolute;top:0;bottom:0;}
+.tlprofile{position:relative;min-height:16px;cursor:crosshair;background:rgba(127,127,127,.05);border-radius:2px;overflow:hidden;}
+.tlprofile .cell{position:absolute;}
+.tlprofile .rowlab{position:absolute;left:2px;font-size:8px;line-height:8px;opacity:.9;pointer-events:none;white-space:nowrap;text-shadow:0 0 3px #000,0 0 3px #000,0 0 3px #000;}
 .tlprofile .brush{position:absolute;top:0;bottom:0;background:rgba(88,166,255,.22);border-left:1px solid var(--accent);border-right:1px solid var(--accent);pointer-events:none;}
 .tlaxis{position:relative;height:24px;}
 /* a real graduated ruler: flat baseline + major (labelled) and minor ticks */
@@ -404,41 +405,52 @@ function setSpan(a,b){ if(b-a<60000) return;
   renderRuler(); loadProfile();
   setStatus('poll','as-of '+new Date(b).toLocaleString()); loadAsOf(new Date(b).toISOString()); }
 
-// --- change-density profile: how many changes fell in each slice of the span, as a
-// heat strip behind the ruler, so busy periods jump out. Bucketed from the global
-// recentChanges feed by eventTime; best-effort and capped.
-const PROFILE_BUCKETS=64;
+// --- change-density profile: a heatmap with one row per entity type, columns being
+// slices of the span, cell colour = that type's colour, intensity = how many changes
+// it saw — so which kind of thing churned, and when, jumps out. Built from the global
+// recentChanges feed (heartbeats excluded); paged but rendered progressively as pages
+// arrive so it fills in instead of blocking, and best-effort capped.
+const PROFILE_BUCKETS=64, PROFILE_ROW=7;
 let profileGen=0;
 async function loadProfile(){
   const el=document.getElementById('tlProfile'); if(!el) return;
   const gen=++profileGen;   // supersede any in-flight profile load
   const [s,e]=spanBounds(); const durS=Math.max(1,Math.ceil((Date.now()-s)/1000));
-  const bins=new Array(PROFILE_BUCKETS).fill(0); let after=null, guard=0;
+  const grid=new Map();     // entity type -> counts[PROFILE_BUCKETS]
+  const bump=(ty,i)=>{ let a=grid.get(ty); if(!a){ a=new Array(PROFILE_BUCKETS).fill(0); grid.set(ty,a); } a[i]++; };
+  let after=null, guard=0;
   try{
     do{
-      // MEANINGFUL changes only — entity.unchanged/relation.unchanged heartbeats are
-      // not changes and would drown the signal, so they are filtered out.
-      const q=`{ recentChanges(window:${JSON.stringify(durS+'s')}, first:200${after?`, after:${JSON.stringify(after)}`:''}){ edges{ node{ eventTime changeType } } pageInfo{ hasNextPage endCursor } } }`;
+      // MEANINGFUL entity changes only — heartbeats (entity.unchanged) are not changes
+      // and would drown the signal; relation changes have no entity type, so skip them.
+      const q=`{ recentChanges(window:${JSON.stringify(durS+'s')}, first:200${after?`, after:${JSON.stringify(after)}`:''}){ edges{ node{ eventTime changeType entity{ type } } } pageInfo{ hasNextPage endCursor } } }`;
       const r=await fetch(withTenant(API),{method:'POST',headers:gqlHeaders(),credentials:'same-origin',body:JSON.stringify({query:q})});
       const j=await r.json(); if(j.errors) throw new Error(j.errors[0].message);
       if(gen!==profileGen) return;   // a newer load started; drop this one
       const c=j.data.recentChanges;
-      for(const ed of c.edges){ if(ed.node.changeType.endsWith('UNCHANGED')) continue;
-        const t=Date.parse(ed.node.eventTime);
-        if(t>=s && t<=e){ const i=Math.min(PROFILE_BUCKETS-1,Math.floor((t-s)/(e-s)*PROFILE_BUCKETS)); bins[i]++; } }
+      for(const ed of c.edges){ const n=ed.node; if(n.changeType.endsWith('UNCHANGED') || !n.entity) continue;
+        const t=Date.parse(n.eventTime);
+        if(t>=s && t<=e){ const i=Math.min(PROFILE_BUCKETS-1,Math.floor((t-s)/(e-s)*PROFILE_BUCKETS)); bump(n.entity.type,i); } }
       after=c.pageInfo.hasNextPage?c.pageInfo.endCursor:null;
+      if((guard&3)===0) renderProfile(grid);   // progressive fill (every 4 pages)
     }while(after && ++guard<40);
-    if(gen===profileGen) renderProfile(bins);
+    if(gen===profileGen) renderProfile(grid);
   }catch(_){ /* the profile is a hint, not critical */ }
 }
-function renderProfile(bins){
+function renderProfile(grid){
   const el=document.getElementById('tlProfile'); if(!el) return;
-  el.querySelectorAll('.cell').forEach(c=>c.remove());
-  const max=Math.max(1,...bins);
-  for(let i=0;i<bins.length;i++){ const n=bins[i], d=document.createElement('div'); d.className='cell';
-    d.style.left=(i/bins.length*100)+'%'; d.style.width=(100/bins.length+0.2)+'%';
-    if(n){ d.style.background='rgba(210,153,34,'+(0.18+0.72*(n/max)).toFixed(3)+')'; d.title=n+' change'+(n>1?'s':''); }
-    el.appendChild(d); }
+  el.querySelectorAll('.cell,.rowlab').forEach(x=>x.remove());
+  const types=[...grid.keys()].sort();
+  el.style.height=Math.max(16,types.length*PROFILE_ROW)+'px';
+  let max=1; for(const a of grid.values()) for(const v of a) if(v>max) max=v;
+  types.forEach((ty,ri)=>{ const a=grid.get(ty), col=colorFor(ty);
+    for(let i=0;i<a.length;i++){ if(!a[i]) continue; const d=document.createElement('div'); d.className='cell';
+      d.style.left=(i/a.length*100)+'%'; d.style.width=(100/a.length+0.3)+'%';
+      d.style.top=(ri*PROFILE_ROW)+'px'; d.style.height=(PROFILE_ROW-1)+'px';
+      d.style.background=col; d.style.opacity=(0.22+0.78*(a[i]/max)).toFixed(2);
+      d.title=ty+' · '+a[i]+' change'+(a[i]>1?'s':''); el.appendChild(d); }
+    const lab=document.createElement('div'); lab.className='rowlab'; lab.textContent=ty;
+    lab.style.top=(ri*PROFILE_ROW)+'px'; lab.style.color=col; el.appendChild(lab); });
 }
 // Immediate cursor readout: the exact timestamp under the handle, updated on every
 // move so you always know where the cursor is; the as-of query stays debounced.
