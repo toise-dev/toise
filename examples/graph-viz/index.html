@@ -84,11 +84,22 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
 #feed div{padding:.15rem 0;border-bottom:1px solid var(--line);}
 #err{color:var(--warn);font-size:12px;}
 .timeline{display:flex;align-items:center;gap:.7rem;padding:.35rem 1rem .45rem;background:var(--panel);border-top:1px solid var(--line);font-size:12px;}
-.tlwrap{flex:1;min-width:140px;display:flex;flex-direction:column;gap:1px;}
-.tlwrap input[type=range]{width:100%;margin:0;accent-color:var(--accent);cursor:pointer;}
-.tlruler{position:relative;height:13px;}
-.tlruler span{position:absolute;top:0;transform:translateX(-50%);font-size:10px;line-height:1;color:var(--dim);white-space:nowrap;}
-.tlruler span::after{content:'';position:absolute;left:50%;top:11px;width:1px;height:4px;background:var(--line);}
+.tlwrap{flex:1;min-width:170px;position:relative;height:30px;}
+/* a real graduated ruler: flat baseline + major (labelled) and minor ticks */
+.tlruler{position:absolute;left:0;right:0;bottom:0;height:24px;pointer-events:none;}
+.tlruler .base{position:absolute;bottom:0;left:0;right:0;height:1px;background:var(--line);}
+.tlruler .tick{position:absolute;bottom:0;width:1px;background:var(--line);}
+.tlruler .tick.min{height:5px;opacity:.55;}
+.tlruler .tick.maj{height:10px;background:var(--dim);}
+.tlruler .lab{position:absolute;bottom:12px;transform:translateX(-50%);font-size:10px;line-height:1;color:var(--dim);white-space:nowrap;}
+/* the range input is the moving cursor over the ruler — a thin needle, no fill */
+.tlwrap input[type=range]{position:absolute;left:0;bottom:0;width:100%;height:24px;margin:0;background:transparent;-webkit-appearance:none;appearance:none;cursor:pointer;}
+.tlwrap input[type=range]:focus{outline:none;}
+.tlwrap input[type=range]::-webkit-slider-runnable-track{height:24px;background:transparent;border:none;}
+.tlwrap input[type=range]::-moz-range-track{height:24px;background:transparent;}
+.tlwrap input[type=range]::-moz-range-progress{height:24px;background:transparent;}
+.tlwrap input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:3px;height:24px;margin-top:0;background:var(--accent);border:none;border-radius:1px;box-shadow:0 0 5px var(--accent);}
+.tlwrap input[type=range]::-moz-range-thumb{width:3px;height:24px;background:var(--accent);border:none;border-radius:1px;box-shadow:0 0 5px var(--accent);}
 .timeline select{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;padding:.05rem .2rem;}
 #tlLive{color:var(--ok);border-color:var(--ok);}
 #tlLive.hist{color:var(--warn);border-color:var(--warn);}
@@ -354,13 +365,16 @@ const RULER={
   '24h':[[24*_H,'−24h'],[18*_H,'−18h'],[12*_H,'−12h'],[6*_H,'−6h'],[0,'now']],
   '7d':[[7*_D,'−7d'],[5*_D,'−5d'],[3*_D,'−3d'],[1*_D,'−1d'],[0,'now']]
 };
+const MINORS={'1h':12,'6h':12,'24h':24,'7d':14};   // number of small divisions
 function renderRuler(){
   const el=document.getElementById('tlRuler'); if(!el) return; el.innerHTML='';
   const W=WINDOWS[tlWindow]||WINDOWS['24h'];
-  for(const [off,lab] of (RULER[tlWindow]||RULER['24h'])){
-    const s=document.createElement('span'); s.textContent=lab; s.style.left=((1-off/W)*100)+'%';
-    el.appendChild(s);
-  }
+  const add=(cls,pos,txt)=>{ const d=document.createElement('div'); d.className=cls;
+    d.style.left=pos+'%'; if(txt!=null) d.textContent=txt; el.appendChild(d); };
+  add('base',0);
+  const n=MINORS[tlWindow]||24; for(let i=0;i<=n;i++) add('tick min', i/n*100);
+  for(const [off,lab] of (RULER[tlWindow]||RULER['24h'])){ const pos=(1-off/W)*100;
+    add('tick maj',pos); add('lab',pos,lab); }
 }
 // Immediate cursor readout: the exact timestamp under the handle, updated on every
 // move so you always know where the cursor is; the as-of query stays debounced.
