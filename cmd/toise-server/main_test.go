@@ -258,6 +258,45 @@ func httpBody(t *testing.T, url string) string {
 // TestCheckpointSubcommand pins the operator backup path (#115): every tenant
 // is checkpointed into <dst>/<tenant>, and the copy is a complete, replayable
 // store.
+// TestDeleteTenantGuardsLiveServer pins the fix: delete-tenant must take the
+// tenant's Pebble lock before RemoveAll, so it fails cleanly while a server
+// holds that tenant open instead of deleting files under a live DB.
+func TestDeleteTenantGuardsLiveServer(t *testing.T) {
+	dataDir := t.TempDir()
+	reg, err := registry.Open(dataDir, store.DefaultConfig(), 0, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+	if _, ferr := reg.For("acme"); ferr != nil { // opens & locks acme's store
+		t.Fatal(ferr)
+	}
+
+	// The registry is still open, so acme's lock is held: delete must refuse.
+	err = runDeleteTenant([]string{"--data-dir", dataDir, "acme"}, func(string) string { return "" })
+	if err == nil || !strings.Contains(err.Error(), "in use") {
+		t.Fatalf("delete against a live tenant = %v, want an in-use error", err)
+	}
+	if _, serr := os.Stat(filepath.Join(dataDir, "acme")); serr != nil {
+		t.Fatal("tenant dir was removed despite the held lock")
+	}
+
+	// Refusing the default tenant needs no lock dance.
+	if derr := runDeleteTenant([]string{"--data-dir", dataDir, "default"}, func(string) string { return "" }); derr == nil {
+		t.Error("deleting the default tenant must be refused")
+	}
+
+	// Once the server releases the lock, delete succeeds and removes the dir.
+	if cerr := reg.Close(); cerr != nil {
+		t.Fatal(cerr)
+	}
+	if derr := runDeleteTenant([]string{"--data-dir", dataDir, "acme"}, func(string) string { return "" }); derr != nil {
+		t.Fatalf("delete after close = %v, want nil", derr)
+	}
+	if _, serr := os.Stat(filepath.Join(dataDir, "acme")); !os.IsNotExist(serr) {
+		t.Fatal("tenant dir still present after a successful delete")
+	}
+}
+
 func TestCheckpointSubcommand(t *testing.T) {
 	dataDir := t.TempDir()
 	reg, err := registry.Open(dataDir, store.DefaultConfig(), 0, slog.New(slog.DiscardHandler))
