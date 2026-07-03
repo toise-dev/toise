@@ -206,7 +206,7 @@ const net=new vis.Network(document.getElementById('net'),{nodes,edges},{
   nodes:{shape:'dot',size:14,font:{color:'#c9d1d9',face:'ui-monospace, monospace',size:12,strokeWidth:3,strokeColor:'#0d1117'},borderWidth:2},
   edges:{color:{color:'#30363d',highlight:'#58a6ff'},font:{color:'#8b949e',size:10,strokeWidth:3,strokeColor:'#0d1117',align:'middle'},
          arrows:{to:{enabled:true,scaleFactor:.5}},smooth:{type:'dynamic'}},
-  physics:{barnesHut:{gravitationalConstant:-9000,springLength:130,springConstant:.03,damping:.5},stabilization:{iterations:180}},
+  physics:{barnesHut:{gravitationalConstant:-26000,centralGravity:0.12,springLength:200,springConstant:.03,damping:.6,avoidOverlap:0.2},stabilization:{iterations:400}},
   interaction:{hover:true,tooltipDelay:120,multiselect:true}
 });
 
