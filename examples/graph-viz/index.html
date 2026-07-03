@@ -408,21 +408,27 @@ function setSpan(a,b){ if(b-a<60000) return;
 // heat strip behind the ruler, so busy periods jump out. Bucketed from the global
 // recentChanges feed by eventTime; best-effort and capped.
 const PROFILE_BUCKETS=64;
+let profileGen=0;
 async function loadProfile(){
   const el=document.getElementById('tlProfile'); if(!el) return;
+  const gen=++profileGen;   // supersede any in-flight profile load
   const [s,e]=spanBounds(); const durS=Math.max(1,Math.ceil((Date.now()-s)/1000));
   const bins=new Array(PROFILE_BUCKETS).fill(0); let after=null, guard=0;
   try{
     do{
-      const q=`{ recentChanges(window:${JSON.stringify(durS+'s')}, first:200${after?`, after:${JSON.stringify(after)}`:''}){ edges{ node{ eventTime } } pageInfo{ hasNextPage endCursor } } }`;
+      // MEANINGFUL changes only — entity.unchanged/relation.unchanged heartbeats are
+      // not changes and would drown the signal, so they are filtered out.
+      const q=`{ recentChanges(window:${JSON.stringify(durS+'s')}, first:200${after?`, after:${JSON.stringify(after)}`:''}){ edges{ node{ eventTime changeType } } pageInfo{ hasNextPage endCursor } } }`;
       const r=await fetch(withTenant(API),{method:'POST',headers:gqlHeaders(),credentials:'same-origin',body:JSON.stringify({query:q})});
       const j=await r.json(); if(j.errors) throw new Error(j.errors[0].message);
+      if(gen!==profileGen) return;   // a newer load started; drop this one
       const c=j.data.recentChanges;
-      for(const ed of c.edges){ const t=Date.parse(ed.node.eventTime);
+      for(const ed of c.edges){ if(ed.node.changeType.endsWith('UNCHANGED')) continue;
+        const t=Date.parse(ed.node.eventTime);
         if(t>=s && t<=e){ const i=Math.min(PROFILE_BUCKETS-1,Math.floor((t-s)/(e-s)*PROFILE_BUCKETS)); bins[i]++; } }
       after=c.pageInfo.hasNextPage?c.pageInfo.endCursor:null;
-    }while(after && ++guard<12);
-    renderProfile(bins);
+    }while(after && ++guard<40);
+    if(gen===profileGen) renderProfile(bins);
   }catch(_){ /* the profile is a hint, not critical */ }
 }
 function renderProfile(bins){
@@ -559,7 +565,7 @@ tnInput.addEventListener('change',()=>{ const v=tnInput.value.trim(); const p=ne
   if(v) p.set('tenant',v); else p.delete('tenant'); location.search=p.toString(); });
 const attrInput=document.getElementById('attr');
 attrInput.addEventListener('input',()=>{ attrQuery=attrInput.value; rebuild(); });
-document.getElementById('resync').onclick=()=>{ if(historical){ const t=tlInstant(); if(t){ loadAsOf(t.toISOString()); return; } } loadFull(); };
+document.getElementById('resync').onclick=()=>{ loadProfile(); if(historical){ const t=tlInstant(); if(t){ loadAsOf(t.toISOString()); return; } } loadFull(); };
 document.getElementById('fit').onclick=()=>net.fit({animation:true});
 document.getElementById('relayout').onclick=()=>settle(2600);
 const tlWin=document.getElementById('tlWin'); tlWin.value=tlWindow;
@@ -567,7 +573,7 @@ tlWin.onchange=()=>{ tlWindow=tlWin.value; localStorage.setItem('toise_viz_windo
   spanEnd=null; spanMs=WINDOWS[tlWindow]||WINDOWS['24h']; renderRuler(); loadProfile(); updateCursorLabel(); onTimeline(); };
 tlRange().addEventListener('input',()=>{ if(playing) pausePlay(); updateCursorLabel(); onTimeline(); });
 renderRuler(); syncPlayBtn(); loadProfile();
-setInterval(()=>{ if(isLiveSpan() && !playing) loadProfile(); }, 20000);   // keep the live profile fresh
+setInterval(()=>{ if(isLiveSpan() && !playing && !historical) loadProfile(); }, 60000);   // keep the live profile fresh
 document.getElementById('tlLive').onclick=returnLive;
 document.getElementById('tlPlay').onclick=()=>{ playing?pausePlay():play(); };
 // Brush the density profile to zoom into a period.
