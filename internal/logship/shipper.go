@@ -71,8 +71,18 @@ func (sh *Shipper) Ship(ctx context.Context, tenant string, src EventSource) (in
 		return 0, nil
 	}
 
+	seg, err := encodeSegment(events)
+	if err != nil {
+		return 0, err
+	}
 	name := segmentName(tenant, from, current)
-	if err := sh.sink.Put(ctx, name, encodeSegment(events)); err != nil {
+	if err := sh.sink.Put(ctx, name, seg); err != nil {
+		// The Put may have landed despite the error (ambiguous sink failure).
+		// Drop the cached cursor so the next Ship re-derives it from the sink,
+		// picking up a possibly-landed segment instead of overlapping it.
+		sh.mu.Lock()
+		delete(sh.cursor, tenant)
+		sh.mu.Unlock()
 		return 0, err
 	}
 	sh.mu.Lock()
@@ -83,14 +93,34 @@ func (sh *Shipper) Ship(ctx context.Context, tenant string, src EventSource) (in
 
 // Replay reads every segment for a tenant in sequence order and calls apply for
 // each event — the building block of restore (the caller persists them, e.g.
-// via store.Append into a fresh data dir). Contiguity is guaranteed by Ship, so
-// the events arrive in the original order with no gaps or overlap.
+// via store.Append into a fresh data dir). Ship writes contiguous (from, to]
+// ranges, but the sink can be mutated out from under us (lifecycle expiry, a
+// lost object, a partial mirror, two shippers racing one sink), so Replay
+// validates the chain — first segment from 0, each segment resuming exactly
+// where the previous ended — and hard-errors on a gap or overlap rather than
+// silently reconstructing a divergent log.
 func (sh *Shipper) Replay(ctx context.Context, tenant string, apply func(model.Event) error) error {
 	names, err := sh.segments(ctx, tenant)
 	if err != nil {
 		return err
 	}
+	sort.Slice(names, func(i, j int) bool {
+		fi, _, _ := parseSegmentName(names[i])
+		fj, _, _ := parseSegmentName(names[j])
+		return fi < fj
+	})
+	var next uint64 // expected `from` of the next segment; the log starts at 0
 	for _, name := range names {
+		from, to, ok := parseSegmentName(name)
+		if !ok {
+			return fmt.Errorf("logship: unparseable segment name %q for tenant %s", name, tenant)
+		}
+		if from != next {
+			if from < next {
+				return fmt.Errorf("logship: overlapping segment %q for tenant %s: begins at %d, expected %d", name, tenant, from, next)
+			}
+			return fmt.Errorf("logship: gap before segment %q for tenant %s: begins at %d, expected %d (a segment is missing)", name, tenant, from, next)
+		}
 		data, err := sh.sink.Get(ctx, name)
 		if err != nil {
 			return err
@@ -104,6 +134,7 @@ func (sh *Shipper) Replay(ctx context.Context, tenant string, apply func(model.E
 				return err
 			}
 		}
+		next = to
 	}
 	return nil
 }
@@ -201,17 +232,22 @@ func parseSegmentName(name string) (from, to uint64, ok bool) {
 }
 
 // encodeSegment frames events length-delimited (uint32 big-endian length, then
-// the marshaled proto), the same wire shape the projection snapshot uses.
-func encodeSegment(events []model.Event) []byte {
+// the marshaled proto), the same wire shape the projection snapshot uses. A
+// marshal failure is surfaced, never silently framed as a zero-length record —
+// a corrupt segment would otherwise only surface (if at all) at restore time.
+func encodeSegment(events []model.Event) ([]byte, error) {
 	var buf []byte
 	var lenbuf [4]byte
 	for i := range events {
-		b, _ := proto.Marshal(events[i].ToProto())
+		b, err := proto.Marshal(events[i].ToProto())
+		if err != nil {
+			return nil, fmt.Errorf("logship: marshaling event %d of segment: %w", i, err)
+		}
 		binary.BigEndian.PutUint32(lenbuf[:], uint32(len(b)))
 		buf = append(buf, lenbuf[:]...)
 		buf = append(buf, b...)
 	}
-	return buf
+	return buf, nil
 }
 
 func decodeSegment(data []byte) ([]model.Event, error) {
