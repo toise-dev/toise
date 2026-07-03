@@ -17,6 +17,9 @@ import (
 type relDesc struct {
 	relType, toType string
 	toID            map[string]string
+	// belief attributes for same_as edges; emitted only when set.
+	confidence float64
+	basis      string
 }
 
 // embeddedRecord builds an entity-state LogRecord carrying an embedded
@@ -41,6 +44,12 @@ func embeddedRecord(srcType string, srcID map[string]string, rels []relDesc) plo
 			tid := m.PutEmptyMap(relDescEntityID)
 			for k, v := range d.toID {
 				tid.PutStr(k, v)
+			}
+			if d.confidence != 0 {
+				m.PutDouble(relDescConfidence, d.confidence)
+			}
+			if d.basis != "" {
+				m.PutStr(relDescBasis, d.basis)
 			}
 		}
 	}
@@ -78,6 +87,52 @@ func TestEmbeddedReconcilerAddsAndRemoves(t *testing.T) {
 	}
 	if g := f.lastRelation; g.Type != "runs_on" || g.From.Type != "service.instance" || g.To.Type != "host" {
 		t.Errorf("removed relation = %+v, want runs_on service.instance->host", g)
+	}
+}
+
+// TestEmbeddedReconcilerCarriesSameAsBelief proves confidence and basis reach the
+// relation observation for a same_as edge — the input the canonical overlay (ADR
+// 0020) needs. Without this the overlay was inert: no producer could feed a belief.
+func TestEmbeddedReconcilerCarriesSameAsBelief(t *testing.T) {
+	r := newEmbeddedReconciler()
+	f := &fakeEngine{}
+	dev := map[string]string{"name": "sw1"}
+	sameAs := []relDesc{{
+		relType: model.RelSameAs, toType: "network.device",
+		toID:       map[string]string{"mac": "00:11:22:33:44:55"},
+		confidence: 0.95, basis: "ifPhysAddress",
+	}}
+	if _, err := r.handle(f, embeddedRecord("network.device", dev, sameAs)); err != nil {
+		t.Fatal(err)
+	}
+	attrs := map[string]model.Value{}
+	for _, kv := range f.lastRelation.Attributes {
+		attrs[kv.Key] = kv.Value
+	}
+	if c, ok := attrs["confidence"]; !ok || c.Kind() != model.KindDouble || c.Double() != 0.95 {
+		t.Errorf("confidence attribute = %v, want double 0.95", attrs["confidence"])
+	}
+	if b, ok := attrs["basis"]; !ok || b.Display() != "ifPhysAddress" {
+		t.Errorf("basis attribute = %v, want ifPhysAddress", attrs["basis"])
+	}
+}
+
+// TestEmbeddedReconcilerBeliefOnlyOnSameAs pins that belief attributes are carried
+// only on same_as edges: a runs_on descriptor that happens to carry confidence
+// gets none, keeping ordinary embedded edges attribute-free (ADR 0022).
+func TestEmbeddedReconcilerBeliefOnlyOnSameAs(t *testing.T) {
+	r := newEmbeddedReconciler()
+	f := &fakeEngine{}
+	svc := map[string]string{"service.instance.id": "s1"}
+	runsOn := []relDesc{{
+		relType: "runs_on", toType: "host", toID: map[string]string{"host.id": "h1"},
+		confidence: 0.9, basis: "nonsense",
+	}}
+	if _, err := r.handle(f, embeddedRecord("service.instance", svc, runsOn)); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.lastRelation.Attributes) != 0 {
+		t.Errorf("runs_on carried %d belief attributes, want 0", len(f.lastRelation.Attributes))
 	}
 }
 

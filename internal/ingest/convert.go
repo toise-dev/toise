@@ -51,6 +51,8 @@ const (
 	relDescType             = wire.RelType
 	relDescEntityType       = wire.RelTargetType
 	relDescEntityID         = wire.RelTargetID
+	relDescConfidence       = wire.RelConfidence
+	relDescBasis            = wire.RelBasis
 )
 
 // Entity lifecycle events are identified by the LogRecord EventName (OTel spec),

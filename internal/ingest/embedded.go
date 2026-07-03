@@ -194,15 +194,43 @@ func embeddedRelations(attrs pcommon.Map, source change.EndpointRef, when time.T
 			dropped = append(dropped, key+"."+relDescEntityID)
 			continue
 		}
-		rels = append(rels, change.RelationObservation{
+		obs := change.RelationObservation{
 			Type:           relType,
 			From:           source,
 			To:             change.EndpointRef{Type: toType, Identity: toID},
 			EventTime:      when,
 			SourceInterval: srcInterval,
-		})
+		}
+		// Belief attributes (confidence, basis) are carried only on same_as edges
+		// (ADR 0020): they are the input the read-time canonical overlay collapses
+		// on. On any other edge type they are meaningless and left off, keeping
+		// embedded edges attribute-free.
+		if relType == model.RelSameAs {
+			obs.Attributes = beliefAttributes(m)
+		}
+		rels = append(rels, obs)
 	}
 	return rels, dropped, err
+}
+
+// beliefAttributes extracts a same_as descriptor's confidence and basis into
+// relation attributes. Confidence keeps its numeric type (double or int); the
+// canonical overlay validates the [0,1] range at read time (ADR 0022 stores the
+// value as-is). A missing or non-scalar value is simply not carried.
+func beliefAttributes(m pcommon.Map) []model.KeyValue {
+	var out []model.KeyValue
+	if v, ok := m.Get(relDescConfidence); ok {
+		switch v.Type() {
+		case pcommon.ValueTypeDouble:
+			out = append(out, model.KeyValue{Key: relDescConfidence, Value: model.DoubleValue(v.Double())})
+		case pcommon.ValueTypeInt:
+			out = append(out, model.KeyValue{Key: relDescConfidence, Value: model.IntValue(v.Int())})
+		}
+	}
+	if v, ok := m.Get(relDescBasis); ok && v.Type() == pcommon.ValueTypeStr && v.Str() != "" {
+		out = append(out, model.KeyValue{Key: relDescBasis, Value: model.StringValue(v.Str())})
+	}
+	return out
 }
 
 func strFromMap(m pcommon.Map, key string) (string, bool) {
