@@ -83,12 +83,16 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
 #feed{font-size:11px;color:var(--dim);max-height:30vh;overflow:auto;margin-top:.4rem;}
 #feed div{padding:.15rem 0;border-bottom:1px solid var(--line);}
 #err{color:var(--warn);font-size:12px;}
-.timeline{display:flex;align-items:center;gap:.7rem;padding:.45rem 1rem;background:var(--panel);border-top:1px solid var(--line);font-size:12px;}
-.timeline input[type=range]{flex:1;min-width:120px;accent-color:var(--accent);cursor:pointer;}
+.timeline{display:flex;align-items:center;gap:.7rem;padding:.35rem 1rem .45rem;background:var(--panel);border-top:1px solid var(--line);font-size:12px;}
+.tlwrap{flex:1;min-width:140px;display:flex;flex-direction:column;gap:1px;}
+.tlwrap input[type=range]{width:100%;margin:0;accent-color:var(--accent);cursor:pointer;}
+.tlruler{position:relative;height:13px;}
+.tlruler span{position:absolute;top:0;transform:translateX(-50%);font-size:10px;line-height:1;color:var(--dim);white-space:nowrap;}
+.tlruler span::after{content:'';position:absolute;left:50%;top:11px;width:1px;height:4px;background:var(--line);}
 .timeline select{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;padding:.05rem .2rem;}
 #tlLive{color:var(--ok);border-color:var(--ok);}
 #tlLive.hist{color:var(--warn);border-color:var(--warn);}
-#tlLabel{min-width:12rem;text-align:right;color:var(--fg);}
+#tlLabel{min-width:12.5rem;text-align:right;color:var(--fg);font-variant-numeric:tabular-nums;}
 </style>
 </head>
 <body>
@@ -123,10 +127,11 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
 </main>
 <footer class="timeline">
   <button id="tlLive" title="Jump back to the live view">● LIVE</button>
-  <span class="muted">past</span>
-  <input type="range" id="tlRange" min="0" max="1000" value="1000" step="1"
-    title="Drag left to view the topology as it was at a past instant (event-time). Far right = live.">
-  <span class="muted">now</span>
+  <div class="tlwrap">
+    <div class="tlruler" id="tlRuler"></div>
+    <input type="range" id="tlRange" min="0" max="1000" value="1000" step="1"
+      title="Drag left to view the topology as it was at a past instant (event-time). Far right = live.">
+  </div>
   <label class="muted">window <select id="tlWin">
     <option value="1h">1h</option><option value="6h">6h</option>
     <option value="24h">24h</option><option value="7d">7d</option></select></label>
@@ -339,6 +344,31 @@ let tlWindow=localStorage.getItem('toise_viz_window')||'24h';
 const tlRange=()=>document.getElementById('tlRange');
 function tlInstant(){ const v=+tlRange().value; if(v>=1000) return null;
   return new Date(Date.now() - (WINDOWS[tlWindow]||WINDOWS['24h'])*(1000-v)/1000); }
+
+// Graduated ruler: fixed tick marks per window, each placed at its fraction of the
+// window so the slider reads as a time scale (…−12h…−6h…now).
+const _M=60000,_H=3600000,_D=86400000;
+const RULER={
+  '1h':[[60*_M,'−1h'],[45*_M,'−45m'],[30*_M,'−30m'],[15*_M,'−15m'],[0,'now']],
+  '6h':[[6*_H,'−6h'],[4*_H,'−4h'],[2*_H,'−2h'],[0,'now']],
+  '24h':[[24*_H,'−24h'],[18*_H,'−18h'],[12*_H,'−12h'],[6*_H,'−6h'],[0,'now']],
+  '7d':[[7*_D,'−7d'],[5*_D,'−5d'],[3*_D,'−3d'],[1*_D,'−1d'],[0,'now']]
+};
+function renderRuler(){
+  const el=document.getElementById('tlRuler'); if(!el) return; el.innerHTML='';
+  const W=WINDOWS[tlWindow]||WINDOWS['24h'];
+  for(const [off,lab] of (RULER[tlWindow]||RULER['24h'])){
+    const s=document.createElement('span'); s.textContent=lab; s.style.left=((1-off/W)*100)+'%';
+    el.appendChild(s);
+  }
+}
+// Immediate cursor readout: the exact timestamp under the handle, updated on every
+// move so you always know where the cursor is; the as-of query stays debounced.
+function updateCursorLabel(){
+  const t=tlInstant(), lbl=document.getElementById('tlLabel'), live=document.getElementById('tlLive');
+  if(!t){ lbl.textContent='now'; live.classList.remove('hist'); }
+  else{ lbl.textContent=t.toLocaleString(); live.classList.add('hist'); }
+}
 async function loadAsOf(iso){
   const err=document.getElementById('err'); err.textContent='';
   try{
@@ -436,8 +466,9 @@ document.getElementById('resync').onclick=()=>{ if(historical){ const t=tlInstan
 document.getElementById('fit').onclick=()=>net.fit({animation:true});
 document.getElementById('relayout').onclick=()=>settle(2600);
 const tlWin=document.getElementById('tlWin'); tlWin.value=tlWindow;
-tlWin.onchange=()=>{ tlWindow=tlWin.value; localStorage.setItem('toise_viz_window',tlWindow); onTimeline(); };
-tlRange().addEventListener('input',onTimeline);
+tlWin.onchange=()=>{ tlWindow=tlWin.value; localStorage.setItem('toise_viz_window',tlWindow); renderRuler(); updateCursorLabel(); onTimeline(); };
+tlRange().addEventListener('input',()=>{ updateCursorLabel(); onTimeline(); });
+renderRuler();
 document.getElementById('tlLive').onclick=returnLive;
 loadFull().then(connect);
 </script>
