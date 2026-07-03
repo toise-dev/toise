@@ -84,7 +84,12 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
 #feed div{padding:.15rem 0;border-bottom:1px solid var(--line);}
 #err{color:var(--warn);font-size:12px;}
 .timeline{display:flex;align-items:center;gap:.7rem;padding:.35rem 1rem .45rem;background:var(--panel);border-top:1px solid var(--line);font-size:12px;}
-.tlwrap{flex:1;min-width:170px;position:relative;height:30px;}
+.tlwrap{flex:1;min-width:200px;display:flex;flex-direction:column;gap:2px;}
+/* change-density profile behind the ruler: darker = more changes; drag to zoom */
+.tlprofile{position:relative;height:16px;cursor:crosshair;background:rgba(127,127,127,.06);border-radius:2px;overflow:hidden;}
+.tlprofile .cell{position:absolute;top:0;bottom:0;}
+.tlprofile .brush{position:absolute;top:0;bottom:0;background:rgba(88,166,255,.22);border-left:1px solid var(--accent);border-right:1px solid var(--accent);pointer-events:none;}
+.tlaxis{position:relative;height:24px;}
 /* a real graduated ruler: flat baseline + major (labelled) and minor ticks */
 .tlruler{position:absolute;left:0;right:0;bottom:0;height:24px;pointer-events:none;}
 .tlruler .base{position:absolute;bottom:0;left:0;right:0;height:1px;background:var(--line);}
@@ -144,9 +149,12 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
   <select id="tlSpeed" title="Replay speed">
     <option value="10">1×</option><option value="35" selected>4×</option><option value="90">12×</option></select>
   <div class="tlwrap">
-    <div class="tlruler" id="tlRuler"></div>
-    <input type="range" id="tlRange" min="0" max="1000" value="1000" step="1"
-      title="Drag left to view the topology as it was at a past instant (event-time). Far right = live.">
+    <div class="tlprofile" id="tlProfile" title="Change density — darker means more changes. Drag across to zoom into that period."></div>
+    <div class="tlaxis">
+      <div class="tlruler" id="tlRuler"></div>
+      <input type="range" id="tlRange" min="0" max="1000" value="1000" step="1"
+        title="Drag left to view the topology as it was at a past instant (event-time). Far right = live.">
+    </div>
   </div>
   <label class="muted">window <select id="tlWin">
     <option value="1h">1h</option><option value="6h">6h</option>
@@ -358,33 +366,73 @@ let historical=false;
 const WINDOWS={'1h':3600e3,'6h':6*3600e3,'24h':86400e3,'7d':604800e3};
 let tlWindow=localStorage.getItem('toise_viz_window')||'24h';
 const tlRange=()=>document.getElementById('tlRange');
-function tlInstant(){ const v=+tlRange().value; if(v>=1000) return null;
-  return new Date(Date.now() - (WINDOWS[tlWindow]||WINDOWS['24h'])*(1000-v)/1000); }
 
-// Graduated ruler: fixed tick marks per window, each placed at its fraction of the
-// window so the slider reads as a time scale (…−12h…−6h…now).
+// Timeline span [start,end]. Live while spanEnd is null (end tracks "now"); a brush
+// selection on the density profile zooms to an arbitrary past [start,end].
+let spanEnd=null, spanMs=WINDOWS[tlWindow]||WINDOWS['24h'];
+function spanBounds(){ const e=spanEnd?+spanEnd:Date.now(); return [e-spanMs,e]; }
+const isLiveSpan=()=>spanEnd===null;
+function tlInstant(){ const v=+tlRange().value; const [s,e]=spanBounds();
+  if(isLiveSpan() && v>=1000) return null;
+  return new Date(s+(e-s)*v/1000); }
+
+// A graduated ruler with absolute time labels on "nice" round boundaries, so the
+// scale stays meaningful at any window and when zoomed to a past period.
 const _M=60000,_H=3600000,_D=86400000;
-const RULER={
-  '1h':[[60*_M,'−1h'],[45*_M,'−45m'],[30*_M,'−30m'],[15*_M,'−15m'],[0,'now']],
-  '6h':[[6*_H,'−6h'],[4*_H,'−4h'],[2*_H,'−2h'],[0,'now']],
-  '24h':[[24*_H,'−24h'],[18*_H,'−18h'],[12*_H,'−12h'],[6*_H,'−6h'],[0,'now']],
-  '7d':[[7*_D,'−7d'],[5*_D,'−5d'],[3*_D,'−3d'],[1*_D,'−1d'],[0,'now']]
-};
-// Minor ticks land on a "nice" round interval (…5m, 10m, 15m, 30m, 1h, 2h…)
-// picked so the window shows ~12-20 of them — a real graduated scale, not an
-// arbitrary count. Unlabelled; the majors above carry the labels.
-const NICE=[_M,2*_M,5*_M,10*_M,15*_M,30*_M,_H,2*_H,3*_H,6*_H,12*_H,_D,2*_D];
+const NICE=[_M,2*_M,5*_M,10*_M,15*_M,30*_M,_H,2*_H,3*_H,6*_H,12*_H,_D,2*_D,7*_D];
 function niceStep(W,target){ for(const s of NICE){ if(W/s<=target) return s; } return NICE[NICE.length-1]; }
+const _p=n=>String(n).padStart(2,'0');
+function fmtAbs(d,W){ const hm=_p(d.getHours())+':'+_p(d.getMinutes());
+  if(W>2*_D) return _p(d.getDate())+'/'+_p(d.getMonth()+1);
+  if(W>12*_H) return _p(d.getDate())+'/'+_p(d.getMonth()+1)+' '+hm;
+  return hm; }
 function renderRuler(){
   const el=document.getElementById('tlRuler'); if(!el) return; el.innerHTML='';
-  const W=WINDOWS[tlWindow]||WINDOWS['24h'];
-  const add=(cls,pos,txt)=>{ const d=document.createElement('div'); d.className=cls;
-    d.style.left=pos+'%'; if(txt!=null) d.textContent=txt; el.appendChild(d); };
+  const [s,e]=spanBounds(), W=e-s;
+  const add=(cls,frac,txt)=>{ const d=document.createElement('div'); d.className=cls;
+    d.style.left=(frac*100)+'%'; if(txt!=null) d.textContent=txt; el.appendChild(d); };
   add('base',0);
-  const step=niceStep(W,20);
-  for(let o=0;o<=W+1;o+=step) add('tick min',(1-o/W)*100);
-  for(const [off,lab] of (RULER[tlWindow]||RULER['24h'])){ const pos=(1-off/W)*100;
-    add('tick maj',pos); add('lab',pos,lab); }
+  const minor=niceStep(W,26); for(let t=Math.ceil(s/minor)*minor;t<=e;t+=minor) add('tick min',(t-s)/W);
+  const major=Math.max(niceStep(W,6),minor);
+  for(let t=Math.ceil(s/major)*major;t<=e;t+=major){ const f=(t-s)/W; add('tick maj',f); add('lab',f,fmtAbs(new Date(t),W)); }
+}
+// Zoom the timeline to a selected [a,b] period (ms since epoch).
+function setSpan(a,b){ if(b-a<60000) return;
+  spanMs=b-a; spanEnd=new Date(b); historical=true; tlRange().value=1000;
+  document.getElementById('tlLabel').textContent=new Date(b).toLocaleString();
+  document.getElementById('tlLive').classList.add('hist');
+  renderRuler(); loadProfile();
+  setStatus('poll','as-of '+new Date(b).toLocaleString()); loadAsOf(new Date(b).toISOString()); }
+
+// --- change-density profile: how many changes fell in each slice of the span, as a
+// heat strip behind the ruler, so busy periods jump out. Bucketed from the global
+// recentChanges feed by eventTime; best-effort and capped.
+const PROFILE_BUCKETS=64;
+async function loadProfile(){
+  const el=document.getElementById('tlProfile'); if(!el) return;
+  const [s,e]=spanBounds(); const durS=Math.max(1,Math.ceil((Date.now()-s)/1000));
+  const bins=new Array(PROFILE_BUCKETS).fill(0); let after=null, guard=0;
+  try{
+    do{
+      const q=`{ recentChanges(window:${JSON.stringify(durS+'s')}, first:200${after?`, after:${JSON.stringify(after)}`:''}){ edges{ node{ eventTime } } pageInfo{ hasNextPage endCursor } } }`;
+      const r=await fetch(withTenant(API),{method:'POST',headers:gqlHeaders(),credentials:'same-origin',body:JSON.stringify({query:q})});
+      const j=await r.json(); if(j.errors) throw new Error(j.errors[0].message);
+      const c=j.data.recentChanges;
+      for(const ed of c.edges){ const t=Date.parse(ed.node.eventTime);
+        if(t>=s && t<=e){ const i=Math.min(PROFILE_BUCKETS-1,Math.floor((t-s)/(e-s)*PROFILE_BUCKETS)); bins[i]++; } }
+      after=c.pageInfo.hasNextPage?c.pageInfo.endCursor:null;
+    }while(after && ++guard<12);
+    renderProfile(bins);
+  }catch(_){ /* the profile is a hint, not critical */ }
+}
+function renderProfile(bins){
+  const el=document.getElementById('tlProfile'); if(!el) return;
+  el.querySelectorAll('.cell').forEach(c=>c.remove());
+  const max=Math.max(1,...bins);
+  for(let i=0;i<bins.length;i++){ const n=bins[i], d=document.createElement('div'); d.className='cell';
+    d.style.left=(i/bins.length*100)+'%'; d.style.width=(100/bins.length+0.2)+'%';
+    if(n){ d.style.background='rgba(210,153,34,'+(0.18+0.72*(n/max)).toFixed(3)+')'; d.title=n+' change'+(n>1?'s':''); }
+    el.appendChild(d); }
 }
 // Immediate cursor readout: the exact timestamp under the handle, updated on every
 // move so you always know where the cursor is; the as-of query stays debounced.
@@ -402,9 +450,11 @@ async function loadAsOf(iso){
     rebuild(); settle();
   }catch(e){ err.textContent='⚠ '+e.message+' (before the retention horizon? drag toward now)'; }
 }
-function returnLive(){ playing=false; clearTimeout(playTimer); syncPlayBtn(); historical=false; tlRange().value=1000;
+function returnLive(){ playing=false; clearTimeout(playTimer); syncPlayBtn(); historical=false;
+  spanEnd=null; spanMs=WINDOWS[tlWindow]||WINDOWS['24h']; tlRange().value=1000;
   document.getElementById('tlLabel').textContent='now';
   document.getElementById('tlLive').classList.remove('hist');
+  renderRuler(); loadProfile();
   setStatus(acked?'live':'poll', acked?'live (ws)':'polling (ws off)');
   loadFull(); }
 let tlTimer=null;
@@ -513,11 +563,23 @@ document.getElementById('resync').onclick=()=>{ if(historical){ const t=tlInstan
 document.getElementById('fit').onclick=()=>net.fit({animation:true});
 document.getElementById('relayout').onclick=()=>settle(2600);
 const tlWin=document.getElementById('tlWin'); tlWin.value=tlWindow;
-tlWin.onchange=()=>{ tlWindow=tlWin.value; localStorage.setItem('toise_viz_window',tlWindow); renderRuler(); updateCursorLabel(); onTimeline(); };
+tlWin.onchange=()=>{ tlWindow=tlWin.value; localStorage.setItem('toise_viz_window',tlWindow);
+  spanEnd=null; spanMs=WINDOWS[tlWindow]||WINDOWS['24h']; renderRuler(); loadProfile(); updateCursorLabel(); onTimeline(); };
 tlRange().addEventListener('input',()=>{ if(playing) pausePlay(); updateCursorLabel(); onTimeline(); });
-renderRuler(); syncPlayBtn();
+renderRuler(); syncPlayBtn(); loadProfile();
+setInterval(()=>{ if(isLiveSpan() && !playing) loadProfile(); }, 20000);   // keep the live profile fresh
 document.getElementById('tlLive').onclick=returnLive;
 document.getElementById('tlPlay').onclick=()=>{ playing?pausePlay():play(); };
+// Brush the density profile to zoom into a period.
+(function(){ const strip=document.getElementById('tlProfile'); let x0=null, brush=null;
+  const frac=ev=>{ const r=strip.getBoundingClientRect(); return Math.max(0,Math.min(1,(ev.clientX-r.left)/r.width)); };
+  strip.addEventListener('mousedown',ev=>{ x0=frac(ev); brush=document.createElement('div'); brush.className='brush';
+    brush.style.left=(x0*100)+'%'; brush.style.width='0'; strip.appendChild(brush); ev.preventDefault(); });
+  window.addEventListener('mousemove',ev=>{ if(x0==null) return; const x=frac(ev), a=Math.min(x0,x), b=Math.max(x0,x);
+    brush.style.left=(a*100)+'%'; brush.style.width=((b-a)*100)+'%'; });
+  window.addEventListener('mouseup',ev=>{ if(x0==null) return; const x=frac(ev), a=Math.min(x0,x), b=Math.max(x0,x);
+    if(brush){ brush.remove(); brush=null; } x0=null;
+    if(b-a>0.02){ const [s,e]=spanBounds(), W=e-s; setSpan(s+a*W, s+b*W); } }); })();
 loadFull().then(connect);
 </script>
 </body>
