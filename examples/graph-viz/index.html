@@ -319,11 +319,14 @@ function rebuild(){
   const prevNodeIds=new Set(nodes.getIds());
   const allTypes=new Set(), nodeIds=new Set(), nUp=[];
   const q=attrQuery.trim(); let matched=0;
+  const firstLoad=!fitted;   // scatter new nodes on the very first layout so stabilisation spreads them
   Object.values(ENT).forEach(n=>{ allTypes.add(n.type); if(hidden.has(n.type)) return;
     const ok=attrMatch(n); if(q && !ok && filterOnly) return;   // "only" mode: hide non-matching outright
     nodeIds.add(n.id); if(q&&ok) matched++;
-    nUp.push({id:n.id,label:labelOf(n),title:titleOf(n),opacity:n.deleted?0.45:(q&&!ok?0.12:1),
-              color:{background:colorFor(n.type),border:n.deleted?'#d29922':'#0d1117'}}); });
+    const node={id:n.id,label:labelOf(n),title:titleOf(n),opacity:n.deleted?0.45:(q&&!ok?0.12:1),
+              color:{background:colorFor(n.type),border:n.deleted?'#d29922':'#0d1117'}};
+    if(firstLoad){ node.x=Math.random()*1600-800; node.y=Math.random()*1600-800; }
+    nUp.push(node); });
   nodes.update(nUp);
   const ms=document.getElementById('matchStat'); ms.textContent=q?('· '+matched+' match'):'';
   const ai=document.getElementById('attr'); if(ai) ai.style.color=(q&&matched===0)?'var(--warn)':'var(--fg)';
