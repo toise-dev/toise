@@ -94,13 +94,16 @@ func (vr *Verifier) Verify(ctx context.Context, rawToken string) (tenantID, role
 	}
 	out := RoleFull
 	if vr.cfg.RoleClaim != "" {
-		if rs, _ := claims[vr.cfg.RoleClaim].(string); rs != "" {
-			switch Role(rs) {
-			case RoleFull, RoleRead, RoleIngest:
-				out = Role(rs)
-			default:
-				return "", "", false // an unrecognized role is a hard reject, never a silent widen
-			}
+		rs, _ := claims[vr.cfg.RoleClaim].(string)
+		switch Role(rs) {
+		case RoleFull, RoleRead, RoleIngest:
+			out = Role(rs)
+		default:
+			// A configured role claim that is absent, empty, or unrecognized is a
+			// hard reject — never a silent grant of full. Once the operator opts
+			// into role claims, a token without a valid one is untrusted, not an
+			// implicit admin.
+			return "", "", false
 		}
 	}
 	return san, string(out), true
