@@ -84,13 +84,19 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
 #feed div{padding:.15rem 0;border-bottom:1px solid var(--line);}
 #err{color:var(--warn);font-size:12px;}
 .timeline{display:flex;align-items:center;gap:.7rem;padding:.35rem 1rem .45rem;background:var(--panel);border-top:1px solid var(--line);font-size:12px;}
-.tlwrap{flex:1;min-width:200px;display:flex;flex-direction:column;gap:2px;}
-/* change-density profile behind the ruler: darker = more changes; drag to zoom */
-.tlprofile{position:relative;min-height:16px;cursor:crosshair;background:rgba(127,127,127,.05);border-radius:2px;overflow:hidden;}
-.tlprofile .cell{position:absolute;}
-.tlprofile .rowlab{position:absolute;left:2px;font-size:8px;line-height:8px;opacity:.9;pointer-events:none;white-space:nowrap;text-shadow:0 0 3px #000,0 0 3px #000,0 0 3px #000;}
+.tlwrap{flex:1;min-width:260px;display:flex;flex-direction:column;gap:3px;}
+/* change-density heatmap: one row per entity type, a grid of cells (empty = faint
+   grey), colour = the type's colour, intensity = change count. Type names sit in a
+   left gutter so they never overlap the grid; drag the grid to zoom. */
+.tlprofrow{display:flex;align-items:stretch;}
+.tlgutter{width:96px;flex:none;position:relative;}
+.tlgutter .rowlab{position:absolute;right:6px;font-size:9px;line-height:9px;white-space:nowrap;opacity:.9;}
+.tlprofile{flex:1;position:relative;min-height:14px;cursor:crosshair;}
+.tlprofile .cell{position:absolute;border-radius:2px;}
 .tlprofile .brush{position:absolute;top:0;bottom:0;background:rgba(88,166,255,.22);border-left:1px solid var(--accent);border-right:1px solid var(--accent);pointer-events:none;}
-.tlaxis{position:relative;height:24px;}
+.tlaxisrow{display:flex;align-items:stretch;}
+.tlspacer{width:96px;flex:none;}
+.tlaxis{flex:1;position:relative;height:24px;}
 /* a real graduated ruler: flat baseline + major (labelled) and minor ticks */
 .tlruler{position:absolute;left:0;right:0;bottom:0;height:24px;pointer-events:none;}
 .tlruler .base{position:absolute;bottom:0;left:0;right:0;height:1px;background:var(--line);}
@@ -150,11 +156,17 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
   <select id="tlSpeed" title="Replay speed">
     <option value="10">1×</option><option value="35" selected>4×</option><option value="90">12×</option></select>
   <div class="tlwrap">
-    <div class="tlprofile" id="tlProfile" title="Change density — darker means more changes. Drag across to zoom into that period."></div>
-    <div class="tlaxis">
-      <div class="tlruler" id="tlRuler"></div>
-      <input type="range" id="tlRange" min="0" max="1000" value="1000" step="1"
-        title="Drag left to view the topology as it was at a past instant (event-time). Far right = live.">
+    <div class="tlprofrow">
+      <div class="tlgutter" id="tlGutter"></div>
+      <div class="tlprofile" id="tlProfile" title="Change density per entity type — coloured cells are changes, faint cells are none. Drag across to zoom into that period."></div>
+    </div>
+    <div class="tlaxisrow">
+      <div class="tlspacer"></div>
+      <div class="tlaxis">
+        <div class="tlruler" id="tlRuler"></div>
+        <input type="range" id="tlRange" min="0" max="1000" value="1000" step="1"
+          title="Drag left to view the topology as it was at a past instant (event-time). Far right = live.">
+      </div>
     </div>
   </div>
   <label class="muted">window <select id="tlWin">
@@ -405,19 +417,19 @@ function setSpan(a,b){ if(b-a<60000) return;
   renderRuler(); loadProfile();
   setStatus('poll','as-of '+new Date(b).toLocaleString()); loadAsOf(new Date(b).toISOString()); }
 
-// --- change-density profile: a heatmap with one row per entity type, columns being
-// slices of the span, cell colour = that type's colour, intensity = how many changes
-// it saw — so which kind of thing churned, and when, jumps out. Built from the global
-// recentChanges feed (heartbeats excluded); paged but rendered progressively as pages
-// arrive so it fills in instead of blocking, and best-effort capped.
-const PROFILE_BUCKETS=64, PROFILE_ROW=7;
+// --- change-density heatmap: one row per entity type, a grid of small cells across
+// the span (empty cells drawn faint grey, like a contribution graph), cell colour =
+// the type's colour and intensity = how many changes it saw — so which kind of thing
+// churned and when jumps out. Type names live in the left gutter, off the grid. Built
+// from the global recentChanges feed (heartbeats excluded), rendered progressively as
+// pages arrive so it fills in instead of blocking.
+const CELL_PX=9, GAP_PX=2, ROW_PX=11;
 let profileGen=0;
 async function loadProfile(){
   const el=document.getElementById('tlProfile'); if(!el) return;
   const gen=++profileGen;   // supersede any in-flight profile load
   const [s,e]=spanBounds(); const durS=Math.max(1,Math.ceil((Date.now()-s)/1000));
-  const grid=new Map();     // entity type -> counts[PROFILE_BUCKETS]
-  const bump=(ty,i)=>{ let a=grid.get(ty); if(!a){ a=new Array(PROFILE_BUCKETS).fill(0); grid.set(ty,a); } a[i]++; };
+  const data=new Map();     // entity type -> [event timestamps within the span]
   let after=null, guard=0;
   try{
     do{
@@ -430,27 +442,34 @@ async function loadProfile(){
       const c=j.data.recentChanges;
       for(const ed of c.edges){ const n=ed.node; if(n.changeType.endsWith('UNCHANGED') || !n.entity) continue;
         const t=Date.parse(n.eventTime);
-        if(t>=s && t<=e){ const i=Math.min(PROFILE_BUCKETS-1,Math.floor((t-s)/(e-s)*PROFILE_BUCKETS)); bump(n.entity.type,i); } }
+        if(t>=s && t<=e){ let arr=data.get(n.entity.type); if(!arr){ arr=[]; data.set(n.entity.type,arr); } arr.push(t); } }
       after=c.pageInfo.hasNextPage?c.pageInfo.endCursor:null;
-      if((guard&3)===0) renderProfile(grid);   // progressive fill (every 4 pages)
+      if((guard&3)===0) renderProfile(data,s,e);   // progressive fill (every 4 pages)
     }while(after && ++guard<40);
-    if(gen===profileGen) renderProfile(grid);
+    if(gen===profileGen) renderProfile(data,s,e);
   }catch(_){ /* the profile is a hint, not critical */ }
 }
-function renderProfile(grid){
-  const el=document.getElementById('tlProfile'); if(!el) return;
-  el.querySelectorAll('.cell,.rowlab').forEach(x=>x.remove());
-  const types=[...grid.keys()].sort();
-  el.style.height=Math.max(16,types.length*PROFILE_ROW)+'px';
-  let max=1; for(const a of grid.values()) for(const v of a) if(v>max) max=v;
-  types.forEach((ty,ri)=>{ const a=grid.get(ty), col=colorFor(ty);
-    for(let i=0;i<a.length;i++){ if(!a[i]) continue; const d=document.createElement('div'); d.className='cell';
-      d.style.left=(i/a.length*100)+'%'; d.style.width=(100/a.length+0.3)+'%';
-      d.style.top=(ri*PROFILE_ROW)+'px'; d.style.height=(PROFILE_ROW-1)+'px';
-      d.style.background=col; d.style.opacity=(0.22+0.78*(a[i]/max)).toFixed(2);
-      d.title=ty+' · '+a[i]+' change'+(a[i]>1?'s':''); el.appendChild(d); }
+function renderProfile(data,s,e){
+  const el=document.getElementById('tlProfile'), gut=document.getElementById('tlGutter');
+  if(!el||!gut) return;
+  el.querySelectorAll('.cell').forEach(x=>x.remove()); gut.innerHTML='';
+  const types=[...data.keys()].sort(); const W=e-s||1;
+  const B=Math.max(24,Math.min(160,Math.round((el.clientWidth||600)/(CELL_PX+GAP_PX))));
+  el.style.height=Math.max(14,types.length*ROW_PX)+'px';
+  const grid=types.map(ty=>{ const a=new Array(B).fill(0);
+    for(const t of data.get(ty)) a[Math.min(B-1,Math.max(0,Math.floor((t-s)/W*B)))]++; return a; });
+  let max=1; for(const a of grid) for(const v of a) if(v>max) max=v;
+  const cw=100/B;
+  types.forEach((ty,ri)=>{ const a=grid[ri], col=colorFor(ty);
+    for(let i=0;i<B;i++){ const n=a[i], d=document.createElement('div'); d.className='cell';
+      d.style.left=(i*cw)+'%'; d.style.width='calc('+cw+'% - '+GAP_PX+'px)';
+      d.style.top=(ri*ROW_PX)+'px'; d.style.height=(ROW_PX-GAP_PX)+'px';
+      if(n){ d.style.background=col; d.style.opacity=(0.3+0.7*(n/max)).toFixed(2);
+        d.title=ty+' · '+n+' change'+(n>1?'s':''); }
+      else d.style.background='rgba(180,190,205,.06)';   // empty = faint grey square
+      el.appendChild(d); }
     const lab=document.createElement('div'); lab.className='rowlab'; lab.textContent=ty;
-    lab.style.top=(ri*PROFILE_ROW)+'px'; lab.style.color=col; el.appendChild(lab); });
+    lab.style.top=(ri*ROW_PX)+'px'; lab.style.color=col; gut.appendChild(lab); });
 }
 // Immediate cursor readout: the exact timestamp under the handle, updated on every
 // move so you always know where the cursor is; the as-of query stays debounced.
