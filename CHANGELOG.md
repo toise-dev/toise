@@ -9,6 +9,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
+## [0.9.1] - 2026-07-03
+
+**Correctness and hardening from a full engineering review.** A patch release that
+closes a silent time-travel data bug, an audit-attribution bug, and a cluster of
+durability, tenant-lifecycle, and security residuals, and completes the `same_as`
+identity-belief path end to end. Every change is additive and backward compatible:
+existing producers, consumers, and deployments keep working unchanged; no wire-contract
+break, no data migration. The producer SDK moves to `pkg/emit/v0.4.0`.
+
+### Added
+
+- **`same_as` confidence and basis, end to end** (SDK `pkg/emit/v0.4.0`). A producer
+  can now assert an identity belief — "these two nodes are the same real thing,
+  confidence 0.95, basis `ifPhysAddress`" — via `Relationship.Confidence`/`.Basis` on
+  the SDK and `confidence`/`basis` on the `same_as` descriptor at ingest. The read-time
+  canonical overlay (ADR 0020) collapses those beliefs; until now it had no way to be
+  fed and was inert. Belief attributes ride only on `same_as` edges; other embedded
+  edges stay attribute-free. The conformance kit advises on a `same_as` edge whose
+  confidence is missing or out of `[0,1]`.
+
+### Fixed
+
+- **As-of queries silently dropped live entities past the retention horizon.** After
+  pruning, an as-of fold for an instant between the retention horizon and now could omit
+  a still-live entity whose only surviving event was a recent heartbeat — returning a
+  graph missing real infrastructure, with no error, to LLM and GraphQL callers alike.
+  Retention now re-materializes a baseline event at the horizon for such entities
+  (self-cleaning, no unbounded growth). ADR 0013 amended.
+- **Operator writes were audited under the wrong tenant.** Every `annotate_entity` was
+  recorded as tenant `default` (and a derive-only scoped token's write was misattributed)
+  because the resolved tenant was never stamped into the request context. Fixed at the
+  tenant router, so the audit trail attributes every write to the tenant it targeted.
+- **A gapped or overlapping shipped log was replayed silently.** Log restore now
+  validates segment contiguity and hard-errors on a gap or overlap instead of rebuilding
+  a wrong graph; a marshal error on ship is surfaced, and the cursor cache is invalidated
+  on a failed put.
+- **Tenant lifecycle.** `MaxTenants` is enforced atomically under concurrent first-use
+  (no over-mint past the cap), and `delete-tenant` refuses to run against a live server
+  (it takes the pebble lock) instead of removing an open store's files.
+- **A mass expiry no longer stalls ingestion.** When a producer dies and its whole
+  subtree lapses at once, the sweep commits every expiry in one durable batch (one
+  fsync) instead of one per entity and edge.
+- **The conformance kit rejected the AnyValue `entity.description` Toise itself emits**
+  since 0.9.0, and a producer-guide snippet told producers to retry a permanent
+  `PartialError`. Both corrected.
+
+### Security
+
+- **OIDC/JWT role claim.** A configured-but-absent, empty, or unrecognized role claim is
+  now a hard reject instead of a silent grant of the full role.
+- **`ingest_mtls_only`.** A configuration that would leave the read surface open (no read
+  authenticator, or `derive-only` tenancy a client certificate cannot carry) is refused
+  at startup rather than silently serving reads unauthenticated.
+
 ## [0.9.0] - 2026-07-01
 
 **Strict OpenTelemetry entity-events (1.58.0) alignment and read-surface security.**
@@ -713,7 +767,8 @@ contract converged with the senhub-agent reference producer.
   default and are intended for trusted networks only; the WebSocket subscription
   endpoint enforces an origin check.
 
-[Unreleased]: https://github.com/toise-dev/toise/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/toise-dev/toise/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/toise-dev/toise/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/toise-dev/toise/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/toise-dev/toise/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/toise-dev/toise/compare/v0.6.0...v0.7.0
