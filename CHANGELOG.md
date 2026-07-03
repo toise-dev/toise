@@ -9,6 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
+## [0.9.2] - 2026-07-03
+
+**Graph viewer overhaul (example only).** This release changes only the
+`examples/graph-viz` consumer — a standalone, dependency-free page that reads the
+GraphQL API. The server and the `pkg/emit` SDK are unchanged, so the binaries are
+functionally identical to 0.9.1; no wire-contract change, no data migration.
+
+### Added
+
+- **Time-travel timeline.** A graduated ruler with absolute time labels on nice
+  boundaries and a cursor whose exact timestamp follows the drag; view the topology
+  as-of any past instant via the `entities(asOf:)` / `relations(asOf:)` arguments, plus
+  a **replay / fast-forward** mode to scrub through history like a video.
+- **Change-density heatmap** behind the timeline: one row per entity type, a
+  contribution-graph grid whose cell colour and intensity show how many changes that
+  type saw in each slice of the span, so busy periods stand out at a glance. **Drag
+  across it to zoom** the timeline into a period.
+- **Display options**: a static-layout toggle (fixed positions, no re-animation on
+  updates), an edges **on / labels / off** toggle to declutter, and a **search filter**
+  that hides everything whose identity/attributes don't contain the query (to isolate,
+  e.g., an application).
+- A **resizable detail panel** for a clicked entity, with a close button.
+
+### Changed
+
+- The layout now **settles into legible star/hub clusters** and freezes there — computed
+  with the canvas hidden and revealed already laid out, instead of a drifting hairball
+  that flies in. Edges are faint and label-free by default so large graphs stay readable.
+
+### Fixed
+
+- Long identity/attribute values no longer overflow and clip in the detail panel; the
+  density profile counts real changes (heartbeats excluded), not the heartbeat flood.
+
 ## [0.9.1] - 2026-07-03
 
 **Correctness and hardening from a full engineering review.** A patch release that
@@ -767,7 +801,8 @@ contract converged with the senhub-agent reference producer.
   default and are intended for trusted networks only; the WebSocket subscription
   endpoint enforces an origin check.
 
-[Unreleased]: https://github.com/toise-dev/toise/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/toise-dev/toise/compare/v0.9.2...HEAD
+[0.9.2]: https://github.com/toise-dev/toise/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/toise-dev/toise/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/toise-dev/toise/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/toise-dev/toise/compare/v0.7.0...v0.8.0
