@@ -85,6 +85,8 @@ func TestVerify(t *testing.T) {
 		{"unknown signing key", mintJWT(t, other, testIssuer, testAudience, future, map[string]any{"tenant": "acme"})},
 		{"missing tenant claim", mintJWT(t, priv, testIssuer, testAudience, future, map[string]any{"role": "read"})},
 		{"unknown role", mintJWT(t, priv, testIssuer, testAudience, future, map[string]any{"tenant": "acme", "role": "superuser"})},
+		{"role claim configured but absent", mintJWT(t, priv, testIssuer, testAudience, future, map[string]any{"tenant": "acme"})},
+		{"role claim configured but empty", mintJWT(t, priv, testIssuer, testAudience, future, map[string]any{"tenant": "acme", "role": ""})},
 		{"non-canonical tenant", mintJWT(t, priv, testIssuer, testAudience, future, map[string]any{"tenant": "../etc"})},
 		{"garbage", "not.a.jwt"},
 	}

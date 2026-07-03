@@ -51,6 +51,31 @@ snapshot stub interface leave room for both.
 
 Storage growth is estimated in `docs/operations/storage-sizing.md`.
 
+**Horizon baselines (as-of correctness).** Age pruning keeps each live entity's
+and relation's latest event, but under heartbeat coalescing that survivor sits
+at `event_time = now`, later than the retention horizon (the prune cutoff).
+Once the entity's older events are deleted, an as-of fold for an instant `t` in
+`[horizon, now)` would find no surviving event at or before `t` and silently
+drop a still-live entity. To close this, `PruneOlderThan` re-materializes, just
+before advancing the horizon, a **baseline event** at `event_time = cutoff` for
+every live entity/relation that existed at or before the cutoff yet whose only
+survivor is newer than it. Semantics:
+
+- The graph as-of any instant at or after the horizon is the pruned-state
+  snapshot including these baselines; an instant strictly before the horizon is
+  refused (the events that old are gone).
+- Baselines are appended **before** the horizon-advancing commit, so no fold can
+  ever observe the advanced horizon without the baselines already durable.
+- A thing born after the cutoff gets no baseline — it must not be back-dated
+  into a past it did not exist in.
+- Baselines are self-cleaning: the next prune round treats them like any event,
+  so a superseded baseline falls out of the keep set and is pruned. There is at
+  most one baseline per live entity/relation; they do not accumulate.
+- Known residual: an entity alive at the cutoff but deleted between the cutoff
+  and now is not in the keep set, so it gets no baseline and is invisible for
+  `t` in `[cutoff, delete_time)`. Reconstructing "alive-at-cutoff" for
+  since-deleted entities is deferred.
+
 ## Consequences
 
 - Heartbeat-dominated workloads stay bounded: the cost of an idle but

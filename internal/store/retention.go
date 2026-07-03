@@ -99,6 +99,19 @@ func (s *Store) CoalesceHeartbeats() (int, error) {
 // recorded old fact is not immediately pruned. An asKnownAt query before the
 // retention horizon necessarily returns a truncated view — see
 // docs/operations/configuration.md.
+//
+// Horizon baselines (the as-of keep-set hole). Pruning keeps a live entity's
+// latest event, but under heartbeat coalescing that latest event sits at
+// event_time = now, later than the retention horizon. Once the entity's older
+// events (its creation, earlier heartbeats) are deleted, an as-of fold for an
+// instant t in [horizon, now) would see no surviving event at or before t and
+// silently drop a still-live entity. Before advancing the horizon, this method
+// re-materializes a baseline event at event_time = cutoff for every live
+// entity/relation that existed at or before the cutoff yet whose only surviving
+// event is now newer than it — so any fold at or after the horizon sees it. The
+// next prune round treats baselines like any event: superseded ones fall out of
+// the keep set and are pruned, so they are self-cleaning and never accumulate.
+// See ADR 0013.
 func (s *Store) PruneOlderThan(cutoff time.Time) (events int, bytes int64, err error) {
 	s.maintMu.Lock()
 	defer s.maintMu.Unlock()
@@ -111,20 +124,34 @@ func (s *Store) PruneOlderThan(cutoff time.Time) (events int, bytes int64, err e
 	snap := s.db.NewSnapshot()
 	defer func() { _ = snap.Close() }()
 
+	cutoffNano := cutoff.UnixNano()
+
 	// Pass 1 — the keep set: the latest seq of every still-live entity and
-	// relation. A delete/remove as the last event means it is not live.
+	// relation. A delete/remove as the last event means it is not live. Alongside
+	// it, keep the latest event itself and whether the thing existed at or before
+	// the cutoff, so a horizon baseline can be re-materialized for the ones whose
+	// only survivor is newer than the horizon.
 	type last struct {
-		seq   uint64
-		alive bool
+		seq        uint64
+		alive      bool
+		ev         model.Event
+		evNano     int64
+		bornBefore bool // saw any event with event_time <= cutoff
 	}
 	entLast := map[model.EntityID]last{}
 	relLast := map[model.RelationID]last{}
 	if serr := snapshotScan(snap, func(seq uint64, _ []byte, ev model.Event) error {
 		switch {
 		case ev.Entity != nil:
-			entLast[ev.Entity.Entity.ID] = last{seq, ev.Entity.ChangeType != model.EntityDeleted}
+			id := ev.Entity.Entity.ID
+			n := ev.Entity.EventTime.UnixNano()
+			entLast[id] = last{seq, ev.Entity.ChangeType != model.EntityDeleted, ev, n,
+				entLast[id].bornBefore || n <= cutoffNano}
 		case ev.Relation != nil:
-			relLast[ev.Relation.Relation.ID] = last{seq, ev.Relation.ChangeType != model.RelationRemoved}
+			id := ev.Relation.Relation.ID
+			n := ev.Relation.EventTime.UnixNano()
+			relLast[id] = last{seq, ev.Relation.ChangeType != model.RelationRemoved, ev, n,
+				relLast[id].bornBefore || n <= cutoffNano}
 		}
 		return nil
 	}); serr != nil {
@@ -169,6 +196,32 @@ func (s *Store) PruneOlderThan(cutoff time.Time) (events int, bytes int64, err e
 	if events == 0 {
 		return 0, 0, nil
 	}
+
+	// Re-materialize horizon baselines BEFORE the delete+horizon commit, through
+	// the normal append path. Appending first guarantees no fold can ever observe
+	// the advanced horizon without the baselines already durable: until the
+	// horizon bump commits below, the original older events still answer folds at
+	// t in [cutoff, now); after it, the baselines do. A baseline is minted only
+	// for a live thing that existed at/before cutoff whose surviving event is now
+	// newer than the horizon (a brand-new entity created after cutoff correctly
+	// gets none — it must not be back-dated into a past it did not exist in).
+	var baselines []model.Event
+	for _, l := range entLast {
+		if l.alive && l.bornBefore && l.evNano > cutoffNano {
+			baselines = append(baselines, baselineEvent(l.ev, cutoff))
+		}
+	}
+	for _, l := range relLast {
+		if l.alive && l.bornBefore && l.evNano > cutoffNano {
+			baselines = append(baselines, baselineEvent(l.ev, cutoff))
+		}
+	}
+	if len(baselines) > 0 {
+		if aerr := s.Append(baselines...); aerr != nil {
+			return 0, 0, fmt.Errorf("appending %d horizon baselines: %w", len(baselines), aerr)
+		}
+	}
+
 	// Record the horizon in the same durable batch: an as-of read older than
 	// the cutoff can no longer be answered completely (#135).
 	if berr := batch.Set(metaPruneHorizonKey, encodeU64(uint64(cutoff.UnixNano())), nil); berr != nil {
@@ -185,6 +238,30 @@ func (s *Store) PruneOlderThan(cutoff time.Time) (events int, bytes int64, err e
 	}
 	s.mu.Unlock()
 	return events, bytes, nil
+}
+
+// baselineEvent clones the latest surviving event of a live entity/relation into
+// a fresh event pinned at event_time = cutoff (the retention horizon), so an
+// as-of fold at or after the horizon reconstructs it. It carries the same state
+// (the clone is shallow — only the timestamp/id scalars are rewritten, the
+// identity/attribute slices are read-only here), a new event id, and recorded_at
+// = cutoff so the next prune round ages it out once it is superseded. ChangedKeys
+// is cleared: a baseline asserts current state, it is not a diff.
+func baselineEvent(ev model.Event, cutoff time.Time) model.Event {
+	if ev.Entity != nil {
+		e := *ev.Entity
+		e.EventID = model.NewEventID()
+		e.EventTime = cutoff
+		e.RecordedAt = cutoff
+		e.ChangedKeys = nil
+		return model.Event{Entity: &e}
+	}
+	r := *ev.Relation
+	r.EventID = model.NewEventID()
+	r.EventTime = cutoff
+	r.RecordedAt = cutoff
+	r.ChangedKeys = nil
+	return model.Event{Relation: &r}
 }
 
 // snapshotScan visits every event in append order on a stable snapshot of the

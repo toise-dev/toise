@@ -2,6 +2,7 @@ package registry
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -309,6 +310,51 @@ func TestLimitsBoundTenantMinting(t *testing.T) {
 	}
 	if _, serr := os.Stat(filepath.Join(dir3, "ghost")); !os.IsNotExist(serr) {
 		t.Error("Peek created a tenant directory")
+	}
+}
+
+// TestConcurrentMintsRespectCap pins the MaxTenants TOCTOU fix: a burst of
+// concurrent mints of DISTINCT ids must not overshoot the cap. Before the fix
+// the allows() check and the singleflight-slot insert were in separate critical
+// sections, so many goroutines could each pass the check before any registered.
+func TestConcurrentMintsRespectCap(t *testing.T) {
+	// cap 3: the default tenant counts for 1, leaving room for exactly 2 mints.
+	reg, err := OpenWithLimits(t.TempDir(), store.DefaultConfig(), 0,
+		Limits{AutoCreate: true, MaxTenants: 3}, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reg.Close() })
+
+	const N = 24
+	errs := make([]error, N)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			_, errs[i] = reg.For(fmt.Sprintf("t%02d", i))
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	if got := reg.TenantCount(); got > 3 {
+		t.Fatalf("open tenants = %d, want <= 3 — cap overshoot (TOCTOU)", got)
+	}
+	minted := 0
+	for _, e := range errs {
+		switch {
+		case e == nil:
+			minted++
+		case !errors.Is(e, tenant.ErrNotAllowed):
+			t.Errorf("unexpected mint error: %v", e)
+		}
+	}
+	if minted != 2 {
+		t.Errorf("successful mints = %d, want exactly 2 (cap 3 minus the default)", minted)
 	}
 }
 
