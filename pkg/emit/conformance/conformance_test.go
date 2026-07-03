@@ -67,6 +67,45 @@ func TestCheckCatchesContractViolations(t *testing.T) {
 		}
 	}
 
+	// A same_as edge with a valid confidence is fully conformant.
+	okSameAs := mk(func(lr plog.LogRecord) {
+		lr.Attributes().PutStr("entity.type", "network.device")
+		lr.Attributes().PutEmptyMap("entity.id").PutStr("name", "sw1")
+		d := lr.Attributes().PutEmptySlice("entity.relationships").AppendEmpty().SetEmptyMap()
+		d.PutStr("relationship.type", "same_as")
+		d.PutStr("entity.type", "network.device")
+		d.PutEmptyMap("entity.id").PutStr("mac", "aa:bb")
+		d.PutDouble("confidence", 0.9)
+	})
+	for _, p := range Check(okSameAs) {
+		if !p.Advisory {
+			t.Errorf("valid same_as flagged: %v", p)
+		}
+	}
+
+	// A same_as edge missing confidence is an advisory (inert belief), not a
+	// rejection.
+	noConf := mk(func(lr plog.LogRecord) {
+		lr.Attributes().PutStr("entity.type", "network.device")
+		lr.Attributes().PutEmptyMap("entity.id").PutStr("name", "sw1")
+		d := lr.Attributes().PutEmptySlice("entity.relationships").AppendEmpty().SetEmptyMap()
+		d.PutStr("relationship.type", "same_as")
+		d.PutStr("entity.type", "network.device")
+		d.PutEmptyMap("entity.id").PutStr("mac", "aa:bb")
+	})
+	foundAdvisory := false
+	for _, p := range Check(noConf) {
+		if p.Advisory && strings.Contains(p.Issue, "no confidence") {
+			foundAdvisory = true
+		}
+		if !p.Advisory {
+			t.Errorf("same_as without confidence must not be a rejection: %v", p)
+		}
+	}
+	if !foundAdvisory {
+		t.Error("same_as without confidence should raise an advisory")
+	}
+
 	// A plain log record is not an entity event: ignored, like Toise does.
 	plain := plog.NewLogs()
 	plain.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty().Body().SetStr("hello")
