@@ -67,7 +67,8 @@ header a:hover{text-decoration:underline;}
 .pulse{animation:p 1.2s ease-out;}
 @keyframes p{from{box-shadow:0 0 0 0 var(--accent);}to{box-shadow:0 0 0 14px rgba(88,166,255,0);}}
 main{flex:1;display:flex;min-height:0;}
-#net{flex:1;min-width:0;}
+#net{flex:1;min-width:0;transition:opacity .25s ease;}
+#net.laying{opacity:0;}   /* hidden while the initial layout is computed, then revealed */
 .resizer{flex:none;width:6px;cursor:col-resize;background:var(--line);opacity:.35;}
 .resizer:hover,.resizer.drag{opacity:1;background:var(--accent);}
 aside{width:360px;flex:none;border-left:1px solid var(--line);background:var(--panel);overflow-y:auto;overflow-x:hidden;padding:.8rem;}
@@ -136,10 +137,12 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
     <span><b id="nNodes">0</b> entities</span>
     <span><b id="nEdges">0</b> relations</span>
     <span id="matchStat" class="muted"></span>
-    <label class="muted" for="attr">attr<input id="attr" spellcheck="false" autocomplete="off" placeholder="key or key=value" title="Highlight nodes whose identity/attributes match; dims the rest. e.g. service.criticality=critical, entity.owner.team, or a free substring." style="background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;padding:.1rem .35rem;width:11rem;margin-left:.3rem;"></label>
+    <label class="muted" for="attr">attr<input id="attr" spellcheck="false" autocomplete="off" placeholder="key, key=value, or text" title="Match nodes whose identity/attributes contain the text (a key, key=value, or a free substring). Use the toggle to dim the rest or hide them entirely." style="background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;padding:.1rem .35rem;width:11rem;margin-left:.3rem;"></label>
+    <button id="filterMode" title="Search behaviour: dim the non-matching nodes, or show only the matches">match: dim</button>
     <label class="muted" for="tn">tenant<input id="tn" spellcheck="false" autocomplete="off" placeholder="default" title="X-Scope-OrgID — sent as a header on queries and as ?tenant= on the subscription" style="background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;padding:.1rem .35rem;width:8rem;margin-left:.3rem;"></label>
     <button id="labels" title="Toggle node labels: human-readable names vs technical ids">labels: names</button>
     <button id="inferred" title="Overlay derived (not stored) edges linking IP-bearing entities to their network.address hub">inferred: off</button>
+    <button id="static" title="Static layout: keep node positions fixed and don't replay the layout animation on updates">layout: animated</button>
     <button id="relayout" title="Re-run the force layout, then freeze it">relayout</button>
     <button id="resync">resync</button>
     <button id="fit">fit</button>
@@ -147,7 +150,7 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
 </header>
 <div class="legend" id="legend"></div>
 <main>
-  <div id="net"></div>
+  <div id="net" class="laying"></div>
   <div class="resizer" id="resizer" title="Drag to resize the panel"></div>
   <aside id="panel">
     <div class="empty">Click a node to inspect its identity &amp; attributes.</div>
@@ -217,7 +220,10 @@ let freezeTimer=null;
 function freeze(){ clearTimeout(freezeTimer); freezeTimer=null; net.setOptions({physics:{enabled:false}}); }
 function settle(ms=1600){ net.setOptions({physics:{enabled:true}}); clearTimeout(freezeTimer);
   freezeTimer=setTimeout(freeze, ms); }
-net.on('stabilizationIterationsDone',freeze);   // initial layout done -> freeze
+net.on('stabilizationIterationsDone',()=>{ freeze();   // layout done -> freeze, fit, reveal
+  if(!fitted) return;   // the empty-graph init pass, before any data — nothing to reveal yet
+  try{ net.fit({animation:false}); }catch(_){}
+  const nv=document.getElementById('net'); if(nv) nv.classList.remove('laying'); });
 
 // Node labels: a toggle between human-readable names and raw technical ids.
 // Identities are opaque (host.id is a UUID, a listener is <host-uuid>:port); name
@@ -268,7 +274,8 @@ function inferredEdges(visible){
 // Type a key (matches nodes carrying it), key=value (exact), or a free substring
 // (matched against keys and values). It is a read-time view over the data already
 // fetched — no query change — so it works on whatever attributes producers emit.
-let attrQuery='';
+let attrQuery='', filterOnly=false;
+let staticLayout=localStorage.getItem('toise_viz_static')==='1';   // keep the layout fixed, don't re-animate on updates
 function attrMatch(n){
   const q=attrQuery.trim().toLowerCase(); if(!q) return true;
   const kvs=[...(n.identity||[]),...(n.attributes||[])];
@@ -312,8 +319,9 @@ function rebuild(){
   const prevNodeIds=new Set(nodes.getIds());
   const allTypes=new Set(), nodeIds=new Set(), nUp=[];
   const q=attrQuery.trim(); let matched=0;
-  Object.values(ENT).forEach(n=>{ allTypes.add(n.type); if(hidden.has(n.type)) return; nodeIds.add(n.id);
-    const ok=attrMatch(n); if(q&&ok) matched++;
+  Object.values(ENT).forEach(n=>{ allTypes.add(n.type); if(hidden.has(n.type)) return;
+    const ok=attrMatch(n); if(q && !ok && filterOnly) return;   // "only" mode: hide non-matching outright
+    nodeIds.add(n.id); if(q&&ok) matched++;
     nUp.push({id:n.id,label:labelOf(n),title:titleOf(n),opacity:n.deleted?0.45:(q&&!ok?0.12:1),
               color:{background:colorFor(n.type),border:n.deleted?'#d29922':'#0d1117'}}); });
   nodes.update(nUp);
@@ -340,8 +348,11 @@ function rebuild(){
   // away), then freeze — never on a plain attribute/heartbeat update.
   let structural = nodeIds.size!==prevNodeIds.size;
   if(!structural){ for(const id of nodeIds){ if(!prevNodeIds.has(id)){ structural=true; break; } } }
-  if(structural && fitted) settle();
-  if(!fitted && nodeIds.size){ fitted=true; setTimeout(()=>net.fit({animation:false}),300); }
+  if(structural && fitted && !staticLayout) settle();
+  // First data render: lay the graph out ONCE while the canvas is hidden, then reveal
+  // it already-settled (no visible fly-in). Reveal + fit happen on stabilizationIterationsDone.
+  if(!fitted && nodeIds.size){ fitted=true; net.setOptions({physics:{enabled:true}}); net.stabilize();
+    setTimeout(()=>{ const nv=document.getElementById('net'); if(nv) nv.classList.remove('laying'); },5000); }  // safety reveal
 }
 
 // The server caps every connection page at 200 items, so a single
@@ -489,7 +500,7 @@ async function loadAsOf(iso){
     const [ents,rels]=await Promise.all([fetchAll('entities',ENT_FIELDS,iso),fetchAll('relations',REL_FIELDS,iso)]);
     for(const k in ENT) delete ENT[k]; for(const k in REL) delete REL[k];
     ents.forEach(n=>ENT[n.id]=n); rels.forEach(n=>REL[n.id]=n);
-    rebuild(); settle();
+    rebuild(); if(!staticLayout) settle();
   }catch(e){ err.textContent='⚠ '+e.message+' (before the retention horizon? drag toward now)'; }
 }
 function returnLive(){ playing=false; clearTimeout(playTimer); syncPlayBtn(); historical=false;
@@ -604,6 +615,14 @@ tnInput.addEventListener('change',()=>{ const v=tnInput.value.trim(); const p=ne
   if(v) p.set('tenant',v); else p.delete('tenant'); location.search=p.toString(); });
 const attrInput=document.getElementById('attr');
 attrInput.addEventListener('input',()=>{ attrQuery=attrInput.value; rebuild(); });
+const fmBtn=document.getElementById('filterMode');
+fmBtn.onclick=()=>{ filterOnly=!filterOnly; fmBtn.textContent='match: '+(filterOnly?'only':'dim');
+  fmBtn.style.color=filterOnly?'var(--accent)':''; rebuild(); };
+const stBtn=document.getElementById('static');
+function syncStaticBtn(){ stBtn.textContent='layout: '+(staticLayout?'static':'animated'); stBtn.style.color=staticLayout?'var(--accent)':''; }
+syncStaticBtn();
+stBtn.onclick=()=>{ staticLayout=!staticLayout; localStorage.setItem('toise_viz_static',staticLayout?'1':'0');
+  syncStaticBtn(); if(staticLayout) freeze(); };
 document.getElementById('resync').onclick=()=>{ loadProfile(); if(historical){ const t=tlInstant(); if(t){ loadAsOf(t.toISOString()); return; } } loadFull(); };
 document.getElementById('fit').onclick=()=>net.fit({animation:true});
 document.getElementById('relayout').onclick=()=>settle(2600);
