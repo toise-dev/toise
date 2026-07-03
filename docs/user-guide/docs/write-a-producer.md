@@ -141,10 +141,31 @@ survive jitter and a missed beat.
 ## Relationships
 
 Relationships ride **embedded** on the source entity (the one that carries them
-in `Relationships`); removal is by absence on the next `State`. There are **no
-edge attributes** — anything describing *how* two things relate becomes an entity
+in `Relationships`); removal is by absence on the next `State`. Embedded edges are
+**attribute-free** — anything describing *how* two things relate becomes an entity
 (a port is a `network.interface`, a route a `network.route`). See
 [Ingesting data](ingestion.md#relationships-are-embedded).
+
+**The one exception: `same_as` identity beliefs.** When one source cannot be sure
+two nodes are the same real thing (a network device seen as `name:sw1` by SNMP and
+as `mac:…` in another device's address table), it asserts a `same_as` edge with a
+`Confidence` in `[0,1]` and a `Basis` naming the evidence, instead of pre-merging:
+
+```go
+Relationships: []emit.Relationship{{
+    Type:       "same_as",
+    TargetType: "network.device",
+    TargetID:   map[string]string{"mac": "00:11:22:33:44:55"},
+    Confidence: 0.95,           // 0..1; higher = stronger belief
+    Basis:      "ifPhysAddress", // what evidence justifies it
+}}
+```
+
+Toise never merges the nodes; it derives a **canonical (logical-device) view** at
+read time by collapsing `same_as` edges at or above a confidence threshold, leaving
+the underlying exact nodes and any low-confidence evidence intact (ADR 0020). A
+`same_as` edge with no valid confidence collapses nothing — the conformance kit
+flags it as an advisory. `Confidence`/`Basis` are ignored on any other edge type.
 
 ## Auth, TLS, and multi-tenancy
 
