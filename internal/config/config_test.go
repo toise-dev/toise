@@ -261,12 +261,26 @@ func TestValidateRejectsSilentMisconfigurations(t *testing.T) {
 	if err := warn.Validate(); err != nil {
 		t.Errorf("log_level \"warning\" must validate (SlogLevel maps it): %v", err)
 	}
-	// ingest_mtls_only is valid once a verified client cert exists (full TLS + CA).
+	// ingest_mtls_only is valid with a verified client cert AND a read
+	// authenticator: decoupling ingest auth from read auth must not leave reads open.
 	mtls := base
 	mtls.TLSCertFile, mtls.TLSKeyFile, mtls.TLSClientCAFile = "/x/cert.pem", "/x/key.pem", "/x/ca.pem"
 	mtls.IngestMTLSOnly = true
+	mtls.ReadTokens = []string{"r3ad"}
 	if err := mtls.Validate(); err != nil {
-		t.Errorf("ingest_mtls_only with full mTLS must validate: %v", err)
+		t.Errorf("ingest_mtls_only with mTLS + a read token must validate: %v", err)
+	}
+	// ...but with no read authenticator the read surfaces are open — reject.
+	noRead := mtls
+	noRead.ReadTokens = nil
+	if err := noRead.Validate(); err == nil {
+		t.Error("ingest_mtls_only with no read authenticator must be rejected (reads would be open)")
+	}
+	// ...and it is incompatible with derive-only (a client cert carries no tenant).
+	derive := mtls
+	derive.TenantTrustMode = "derive-only"
+	if err := derive.Validate(); err == nil {
+		t.Error("ingest_mtls_only + derive-only must be rejected (ingest cannot enforce per-tenant isolation)")
 	}
 }
 

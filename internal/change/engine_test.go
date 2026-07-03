@@ -601,6 +601,54 @@ func (f *failingAppender) Append(evs ...model.Event) error {
 	return nil
 }
 
+// TestSweepExpiresInOneAppend pins C1/C5: a mass expiry (many entities and their
+// edges lapse in the same sweep) commits through a single durable batch — one
+// fsync — instead of one append per expired record, so the sweep can't stall
+// ingestion in proportion to how much died at once.
+func TestSweepExpiresInOneAppend(t *testing.T) {
+	g := projection.New()
+	ap := &countingAppender{}
+	now := t0
+	e := New(g, ap, WithClock(func() time.Time { return now }), WithLogger(slog.New(slog.DiscardHandler)))
+
+	const hosts = 5
+	for i := 0; i < hosts; i++ {
+		hid := fmt.Sprintf("h%d", i)
+		hostRef := EndpointRef{Type: model.TypeHost, Identity: []model.KeyValue{kv("host.id", hid)}}
+		procRef := EndpointRef{Type: model.TypeProcess, Identity: []model.KeyValue{kv("host.id", hid), kv("process.pid", "1")}}
+		if _, err := e.ObserveEntity(EntityObservation{Type: model.TypeHost, Identity: hostRef.Identity, Interval: time.Minute, EventTime: now}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.ObserveEntity(EntityObservation{Type: model.TypeProcess, Identity: procRef.Identity, Interval: time.Minute, EventTime: now}); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := e.ObserveRelation(RelationObservation{Type: model.RelRunsOn, From: procRef, To: hostRef, EventTime: now}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// All liveness intervals lapse together; the whole graph expires in one sweep.
+	now = now.Add(2 * time.Minute)
+	ap.calls, ap.events = 0, 0
+	n, err := e.Sweep()
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if ap.calls != 1 {
+		t.Errorf("Append calls = %d, want 1 (one fsync for the whole mass expiry)", ap.calls)
+	}
+	// 2*hosts entity.deleted + hosts relation.removed.
+	if want := 3 * hosts; ap.events != want {
+		t.Errorf("events appended = %d, want %d", ap.events, want)
+	}
+	if n != 3*hosts {
+		t.Errorf("expired count = %d, want %d", n, 3*hosts)
+	}
+	if g.EntityCount() != 0 || g.RelationCount() != 0 {
+		t.Errorf("graph after sweep = %d entities, %d relations, want 0 and 0", g.EntityCount(), g.RelationCount())
+	}
+}
+
 // TestSweepReturnsCommitError pins #166: Sweep no longer swallows a failed
 // expiry — it logs and keeps going (resilient), but returns the error so the
 // maintenance metric's "error" outcome is reachable instead of impossible.

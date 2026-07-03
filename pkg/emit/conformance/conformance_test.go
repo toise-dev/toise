@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 )
 
@@ -67,11 +68,96 @@ func TestCheckCatchesContractViolations(t *testing.T) {
 		}
 	}
 
+	// A same_as edge with a valid confidence is fully conformant.
+	okSameAs := mk(func(lr plog.LogRecord) {
+		lr.Attributes().PutStr("entity.type", "network.device")
+		lr.Attributes().PutEmptyMap("entity.id").PutStr("name", "sw1")
+		d := lr.Attributes().PutEmptySlice("entity.relationships").AppendEmpty().SetEmptyMap()
+		d.PutStr("relationship.type", "same_as")
+		d.PutStr("entity.type", "network.device")
+		d.PutEmptyMap("entity.id").PutStr("mac", "aa:bb")
+		d.PutDouble("confidence", 0.9)
+	})
+	for _, p := range Check(okSameAs) {
+		if !p.Advisory {
+			t.Errorf("valid same_as flagged: %v", p)
+		}
+	}
+
+	// A same_as edge missing confidence is an advisory (inert belief), not a
+	// rejection.
+	noConf := mk(func(lr plog.LogRecord) {
+		lr.Attributes().PutStr("entity.type", "network.device")
+		lr.Attributes().PutEmptyMap("entity.id").PutStr("name", "sw1")
+		d := lr.Attributes().PutEmptySlice("entity.relationships").AppendEmpty().SetEmptyMap()
+		d.PutStr("relationship.type", "same_as")
+		d.PutStr("entity.type", "network.device")
+		d.PutEmptyMap("entity.id").PutStr("mac", "aa:bb")
+	})
+	foundAdvisory := false
+	for _, p := range Check(noConf) {
+		if p.Advisory && strings.Contains(p.Issue, "no confidence") {
+			foundAdvisory = true
+		}
+		if !p.Advisory {
+			t.Errorf("same_as without confidence must not be a rejection: %v", p)
+		}
+	}
+	if !foundAdvisory {
+		t.Error("same_as without confidence should raise an advisory")
+	}
+
 	// A plain log record is not an entity event: ignored, like Toise does.
 	plain := plog.NewLogs()
 	plain.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty().Body().SetStr("hello")
 	if problems := Check(plain); len(problems) != 0 {
 		t.Errorf("plain log record flagged: %v", problems)
+	}
+}
+
+// TestDescriptionAllowsAnyValue pins that entity.description accepts the full
+// AnyValue (arrays, nested maps) since 0.9.0 — the conformance kit must not
+// reject the RichAttributes output the SDK itself emits (#259). Identity stays
+// strict-scalar; only an unsupported leaf (bytes) in a description is flagged.
+func TestDescriptionAllowsAnyValue(t *testing.T) {
+	mk := func(build func(desc pcommon.Map)) plog.Logs {
+		ld := plog.NewLogs()
+		rl := ld.ResourceLogs().AppendEmpty()
+		rl.Resource().Attributes().PutStr("service.instance.id", "p1") // avoid the unrelated advisory
+		lr := rl.ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
+		lr.SetEventName("entity.state")
+		lr.Attributes().PutStr("entity.type", "host")
+		lr.Attributes().PutEmptyMap("entity.id").PutStr("host.id", "h")
+		build(lr.Attributes().PutEmptyMap("entity.description"))
+		return ld
+	}
+
+	// A rich description: scalars, an array, and a nested map — all accepted.
+	rich := mk(func(d pcommon.Map) {
+		d.PutStr("os", "linux")
+		arr := d.PutEmptySlice("tags")
+		arr.AppendEmpty().SetStr("web")
+		arr.AppendEmpty().SetStr("prod")
+		nested := d.PutEmptyMap("labels")
+		nested.PutStr("team", "infra")
+		nested.PutInt("tier", 1)
+	})
+	if problems := Check(rich); len(problems) != 0 {
+		t.Errorf("rich AnyValue description was flagged (must be accepted since 0.9.0): %v", problems)
+	}
+
+	// An unsupported leaf (bytes) is still flagged — Toise drops it.
+	withBytes := mk(func(d pcommon.Map) {
+		d.PutEmptyBytes("blob").Append(1, 2, 3)
+	})
+	found := false
+	for _, p := range Check(withBytes) {
+		if strings.Contains(p.Issue, "unsupported leaf") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("a bytes leaf in a description should be flagged as unsupported")
 	}
 }
 

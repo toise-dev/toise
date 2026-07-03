@@ -774,6 +774,17 @@ func runDeleteTenant(args []string, getenv func(string) string) error {
 	if _, serr := os.Stat(dir); serr != nil {
 		return fmt.Errorf("tenant %q not found under %s: %w", id, cfg.DataDir, serr)
 	}
+	// Take the tenant's Pebble lock before removing anything: a running server
+	// holds it, so this fails cleanly instead of deleting files out from under
+	// an open DB (which would leave a phantom in-memory tenant and a corrupt dir).
+	// Same guard the checkpoint / drop-snapshot subcommands use.
+	lock, lerr := store.Open(dir, store.DefaultConfig())
+	if lerr != nil {
+		return fmt.Errorf("tenant %q is in use (is the server running?): %w", id, lerr)
+	}
+	if cerr := lock.Close(); cerr != nil {
+		return fmt.Errorf("releasing tenant %q lock: %w", id, cerr)
+	}
 	if rerr := os.RemoveAll(dir); rerr != nil {
 		return fmt.Errorf("removing tenant %q: %w", id, rerr)
 	}

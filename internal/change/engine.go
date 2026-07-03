@@ -546,6 +546,16 @@ func (e *Engine) Sweep() (int, error) {
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()
 
+	// Stage every expiry into one durable batch: a mass expiry (a producer dies
+	// and its whole subtree lapses at once) otherwise costs one fsync per entity
+	// and edge, stalling ingestion for the duration. commit() sees the staged
+	// slot and buffers instead of appending per event (C1/C5). Liveness
+	// bookkeeping (refs, relDeadlines) is mutated directly below and, per the
+	// Batch contract, is not rolled back on a flush failure — the next Sweep
+	// self-heals from the still-live projection.
+	st := newStaged()
+	e.staged = st
+
 	now := e.now()
 	n := 0
 	var errs []error
@@ -634,9 +644,18 @@ func (e *Engine) Sweep() (int, error) {
 		n++
 	}
 
+	if ferr := e.flushStaged(st); ferr != nil {
+		// The batch is atomic: on a failed flush nothing was persisted or applied,
+		// so nothing was expired. Report zero and let the next sweep retry against
+		// the still-live projection.
+		errs = append(errs, ferr)
+		n = 0
+	}
+
 	// Bound the resurrection grace window in time: drop tombstones a producer
 	// did not return to claim (#183). Not counted in n (no event is emitted —
-	// the entity was already soft-deleted).
+	// the entity was already soft-deleted). Runs after the flush so it judges the
+	// tombstones this sweep just applied.
 	e.graph.PruneTombstones()
 	return n, errors.Join(errs...)
 }
@@ -869,24 +888,32 @@ func (e *Engine) Batch(fn func(*Batch)) error {
 	st := newStaged()
 	e.staged = st
 	fn(&Batch{e})
-	e.staged = nil
+	return e.flushStaged(st)
+}
 
-	if len(st.events) > 0 {
-		evs := make([]model.Event, len(st.events))
-		for i := range st.events {
-			evs[i] = st.events[i].ev
+// flushStaged clears the staged slot, then durably appends the staged events in
+// one batch (one fsync) and applies+notifies them in order. On append failure it
+// runs the batch's rollbacks (most recent first) and leaves the projection
+// matching the log. The caller must hold obsMu and have installed st as e.staged.
+func (e *Engine) flushStaged(st *staged) error {
+	e.staged = nil
+	if len(st.events) == 0 {
+		return nil
+	}
+	evs := make([]model.Event, len(st.events))
+	for i := range st.events {
+		evs[i] = st.events[i].ev
+	}
+	if err := e.appender.Append(evs...); err != nil {
+		// Undo side state advanced during the batch, most recent first.
+		for i := len(st.rollbacks) - 1; i >= 0; i-- {
+			st.rollbacks[i]()
 		}
-		if err := e.appender.Append(evs...); err != nil {
-			// Undo side state advanced during the batch, most recent first.
-			for i := len(st.rollbacks) - 1; i >= 0; i-- {
-				st.rollbacks[i]()
-			}
-			return fmt.Errorf("flushing batch append: %w", err)
-		}
-		for i := range st.events {
-			e.graph.Apply(st.events[i].ev)
-			e.notify(st.events[i].ev, st.events[i].hp)
-		}
+		return fmt.Errorf("flushing batch append: %w", err)
+	}
+	for i := range st.events {
+		e.graph.Apply(st.events[i].ev)
+		e.notify(st.events[i].ev, st.events[i].hp)
 	}
 	return nil
 }

@@ -123,7 +123,10 @@ func checkRecord(where string, lr plog.LogRecord) []Problem {
 		if desc.Type() != pcommon.ValueTypeMap {
 			bad("entity.description must be a map, got %s", desc.Type())
 		} else {
-			checkScalarMap(&out, where, "entity.description", desc.Map())
+			// Unlike identity, entity.description carries the full AnyValue since
+			// 0.9.0 (#259): arrays and nested maps are ingested faithfully. Only an
+			// empty key or an unsupported leaf (bytes/empty) is a problem.
+			checkDescriptionMap(&out, where, "entity.description", desc.Map())
 		}
 	}
 
@@ -160,16 +163,45 @@ func checkRecord(where string, lr plog.LogRecord) []Problem {
 				if v, ok := m.Get(wire.RelTargetID); !ok || v.Type() != pcommon.ValueTypeMap || v.Map().Len() == 0 {
 					out = append(out, Problem{Record: rw, Issue: "missing, non-map, or empty target entity.id"})
 				}
+				if rt, _ := m.Get(wire.RelType); rt.Str() == wire.RelTypeSameAs {
+					out = append(out, checkSameAsBelief(rw, m)...)
+				}
 			}
 		}
 	}
 	return out
 }
 
-// checkScalarMap flags empty keys and non-scalar values: the contract is flat
-// scalar maps with non-empty keys. Toise rejects an empty key in every mode
-// (strict and accept_unknown_types alike) and drops non-scalar values with a
-// warning.
+// checkSameAsBelief advises on a same_as edge's belief attributes. A same_as
+// edge exists to feed the read-time canonical overlay (ADR 0020), which collapses
+// only edges whose confidence is a number in [0,1] at or above the threshold. A
+// missing or out-of-range confidence is not a rejection — Toise stores the edge —
+// but the overlay ignores it, so the belief is inert. Advisory, so a producer
+// catches a same_as that will never merge anything.
+func checkSameAsBelief(where string, m pcommon.Map) []Problem {
+	v, ok := m.Get(wire.RelConfidence)
+	if !ok {
+		return []Problem{{Record: where, Issue: "same_as edge has no confidence; the canonical overlay collapses only edges with a confidence in [0,1], so this belief is inert", Advisory: true}}
+	}
+	var c float64
+	switch v.Type() {
+	case pcommon.ValueTypeDouble:
+		c = v.Double()
+	case pcommon.ValueTypeInt:
+		c = float64(v.Int())
+	default:
+		return []Problem{{Record: where, Issue: fmt.Sprintf("same_as confidence is %s; it must be a number in [0,1] or the canonical overlay ignores the belief", v.Type()), Advisory: true}}
+	}
+	if c < 0 || c > 1 {
+		return []Problem{{Record: where, Issue: fmt.Sprintf("same_as confidence %g is outside [0,1]; the canonical overlay ignores it", c), Advisory: true}}
+	}
+	return nil
+}
+
+// checkScalarMap flags empty keys and non-scalar values: identity is a flat
+// scalar map with non-empty keys (ADR 0018). Toise rejects an empty key in every
+// mode (strict and accept_unknown_types alike) and, for identity, drops a
+// non-scalar value with a warning.
 func checkScalarMap(out *[]Problem, where, field string, m pcommon.Map) {
 	m.Range(func(k string, v pcommon.Value) bool {
 		if k == "" {
@@ -182,4 +214,33 @@ func checkScalarMap(out *[]Problem, where, field string, m pcommon.Map) {
 		}
 		return true
 	})
+}
+
+// checkDescriptionMap validates entity.description, which carries the full
+// AnyValue since 0.9.0 (#259): scalars, arrays, and nested maps are all fine and
+// ingested faithfully. Only an empty key (rejected in every mode) or an
+// unsupported leaf (bytes/empty, which Toise drops) is flagged.
+func checkDescriptionMap(out *[]Problem, where, field string, m pcommon.Map) {
+	m.Range(func(k string, v pcommon.Value) bool {
+		if k == "" {
+			*out = append(*out, Problem{Record: where, Issue: fmt.Sprintf("%s has an empty attribute key; Toise rejects it in every mode", field)})
+		}
+		checkDescriptionValue(out, where, field+"."+k, v)
+		return true
+	})
+}
+
+func checkDescriptionValue(out *[]Problem, where, path string, v pcommon.Value) {
+	switch v.Type() {
+	case pcommon.ValueTypeStr, pcommon.ValueTypeInt, pcommon.ValueTypeDouble, pcommon.ValueTypeBool:
+	case pcommon.ValueTypeSlice:
+		sl := v.Slice()
+		for i := 0; i < sl.Len(); i++ {
+			checkDescriptionValue(out, where, fmt.Sprintf("%s[%d]", path, i), sl.At(i))
+		}
+	case pcommon.ValueTypeMap:
+		checkDescriptionMap(out, where, path, v.Map())
+	default: // bytes, empty — unsupported leaves Toise drops
+		*out = append(*out, Problem{Record: where, Issue: fmt.Sprintf("%s is %s; unsupported leaf (Toise keeps scalars, arrays, and nested maps but drops this)", path, v.Type())})
+	}
 }

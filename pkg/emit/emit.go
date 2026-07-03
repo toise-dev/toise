@@ -65,6 +65,16 @@ type Relationship struct {
 	Type       string
 	TargetType string
 	TargetID   map[string]string
+	// Confidence and Basis are the belief attributes of an identity-alias
+	// (same_as) relationship — the probability in [0,1] that source and target are
+	// the same real thing, and the evidence that justifies it (e.g. "ifPhysAddress",
+	// "lldp_chassis"). They are emitted only when set and are meaningful only on a
+	// same_as relationship: Toise's canonical overlay collapses same_as edges at or
+	// above a confidence threshold (ADR 0020), and a same_as edge with no valid
+	// confidence collapses nothing. On any other relationship type they are ignored.
+	// A Confidence outside [0,1] is rejected at Build.
+	Confidence float64
+	Basis      string
 }
 
 // Options configure a Client.
@@ -243,10 +253,24 @@ func (c *Client) Build(eventName string, entities []Entity) (plog.Logs, error) {
 				if r.Type == "" || r.TargetType == "" || len(r.TargetID) == 0 {
 					return plog.Logs{}, fmt.Errorf("emit: entity %d (%s) relationship %d is incomplete (need Type, TargetType, TargetID)", i, e.Type, j)
 				}
+				if r.Confidence < 0 || r.Confidence > 1 {
+					return plog.Logs{}, fmt.Errorf("emit: entity %d (%s) relationship %d confidence %g is out of [0,1]", i, e.Type, j, r.Confidence)
+				}
 				m := slc.AppendEmpty().SetEmptyMap()
 				m.PutStr(wire.RelType, r.Type)
 				m.PutStr(wire.RelTargetType, r.TargetType)
 				putSorted(m.PutEmptyMap(wire.RelTargetID), r.TargetID)
+				// Belief attributes ride on same_as edges only (ADR 0020). Emit
+				// Confidence when the producer set a positive belief, and Basis
+				// alongside it; on other edge types they are silently omitted.
+				if r.Type == wire.RelTypeSameAs {
+					if r.Confidence > 0 {
+						m.PutDouble(wire.RelConfidence, r.Confidence)
+					}
+					if r.Basis != "" {
+						m.PutStr(wire.RelBasis, r.Basis)
+					}
+				}
 			}
 		}
 	}
