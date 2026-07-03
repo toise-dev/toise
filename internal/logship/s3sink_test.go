@@ -5,6 +5,9 @@ import (
 	"context"
 	"os"
 	"testing"
+
+	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
 // TestS3SinkKeyPrefix pins the pure key-composition and prefix-normalization
@@ -60,6 +63,24 @@ func TestS3SinkRoundTrip(t *testing.T) {
 		t.Fatalf("NewS3Sink: %v", err)
 	}
 	ctx := context.Background()
+
+	// Self-cleaning: remove every object written under this run's prefix so the
+	// test is safe to run against a shared or production bucket without leaving
+	// cruft, whatever it asserts.
+	cleanup, cerr := minio.New(cfg.Endpoint, &minio.Options{
+		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
+		Secure: cfg.UseSSL,
+	})
+	if cerr != nil {
+		t.Fatalf("cleanup client: %v", cerr)
+	}
+	t.Cleanup(func() {
+		for obj := range cleanup.ListObjects(context.Background(), cfg.Bucket, minio.ListObjectsOptions{Prefix: cfg.Prefix + "/", Recursive: true}) {
+			if obj.Err == nil {
+				_ = cleanup.RemoveObject(context.Background(), cfg.Bucket, obj.Key, minio.RemoveObjectOptions{})
+			}
+		}
+	})
 
 	// Put out of lexical order; List must still return them sorted.
 	segs := map[string][]byte{
