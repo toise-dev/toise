@@ -166,11 +166,11 @@ emit.New(emit.Options{
 ## Handle partial rejections
 
 If the server accepts the export but rejects some records as permanent contract
-violations, `State`/`Delete` return a `*emit.PartialError`. **Do not retry it** —
-fix the producer:
+violations, `State`/`Delete` return an `emit.PartialError` (by value). **Do not
+retry it** — fix the producer:
 
 ```go
-var pe *emit.PartialError
+var pe emit.PartialError
 if err := client.State(ctx, entities...); errors.As(err, &pe) {
     log.Printf("rejected %d record(s): %s", pe.Rejected, pe.Message)
 } else if err != nil {
