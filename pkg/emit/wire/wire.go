@@ -77,6 +77,30 @@ const (
 // so the constant is duplicated here and pinned by a cross-check test.
 const RelTypeSameAs = "same_as"
 
+// RelTypeDependsOn is the durable dependency relationship a producer asserts from
+// one of its own entities toward a remote network endpoint it observed itself
+// connecting to — the outbound, client-side edge of the connection-topology model
+// (ADR 0032). It is an open-enum type with no belief attributes. It mirrors
+// internal/model.RelDependsOn and is pinned by the same cross-check as RelTypeSameAs.
+const RelTypeDependsOn = "depends_on"
+
+// TypeNetworkEndpoint is the observable remote-endpoint entity type — the target of
+// a depends_on edge, keyed on what a producer can actually see from a socket
+// ({server.address, server.port, network.transport}), never the peer's host.id
+// (the data-model MUST-NOT rule). It mirrors internal/model.TypeNetworkEndpoint.
+const TypeNetworkEndpoint = "network.endpoint"
+
+// Identity keys of a network.endpoint entity. A producer that keys an endpoint by
+// hand MUST use exactly these spellings so that both ends of a hop derive the same
+// identity — the continuity invariant that lets an outbound edge join the remote
+// side's own emission (ADR 0032). The port is written in its string form, matching
+// exact-match identity (a port is "443", not the int 443; see emit.Entity.ID).
+const (
+	EndpointServerAddress    = "server.address"
+	EndpointServerPort       = "server.port"
+	EndpointNetworkTransport = "network.transport"
+)
+
 // OTLP Resource attribute keys on a ResourceLogs carrying entity events.
 const (
 	// ResServiceName names the producing service (informational).
