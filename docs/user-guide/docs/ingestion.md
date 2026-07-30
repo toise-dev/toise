@@ -113,6 +113,22 @@ Liveness uses two mechanisms:
    `entity.delete`. Use `0` for entities whose absence is only ever asserted, not
    inferred from silence.
 
+Whichever mechanism removed something, the change feed says **who authored the
+disappearance**: every `entity.deleted` / `relation.removed` carries a
+`delete_source` (`producer` — explicit delete or removal-by-absence;
+`liveness_expiry` — the interval backstop; `cascade` — an endpoint died and took
+the edge), exposed on MCP `recent_changes` / `entity_history` / `graph_diff` and
+GraphQL `ChangeEvent.deleteSource`. It is consumer-authored provenance, distinct
+from the producer's `delete.reason`; events recorded before 0.10.0 read back with
+an unknown source.
+
+**Sizing the interval:** apply the ×3 slack to the **effective re-emission
+cadence** — the longest gap between two `entity.state` events the consumer can
+see (for an agent that suppresses unchanged state, the suppression cadence) —
+not the internal heartbeat tick. A tick of 60s with suppression at 120s sized as
+`3 × 60 = 180s` has a real slack of ×1.5 and expires mechanically on the first
+missed re-emission; size it `3 × 120 = 360s`.
+
 !!! warning "Heartbeat faster than your interval"
     A producer must re-assert its entities **more often** than the
     `entity.report.interval` it declares, or the sweeper will expire them between
