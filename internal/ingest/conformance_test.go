@@ -135,6 +135,22 @@ func buildConformanceLogs() plog.Logs {
 	entity(evEntityState, model.TypeNetworkDevice, sw2, map[string]any{"device.role": "switch", "sys.name": "core-sw-02", "mgmt.ip": "10.0.0.2"},
 		embRel{model.RelHasInterface, model.TypeNetworkInterface, portb})
 
+	// 13-14: a HOST-SCOPED network.endpoint (ADR 0032 addendum): a loopback
+	// address is host-scope, so its identity carries a fourth key — the
+	// observing host's id, byte-identical to the host entity identity. The
+	// port is a string (exact-match identity); descriptive attributes are none
+	// by design. The agent then asserts its depends_on toward it (endpoint
+	// first, per the endpoints-before-edges rule); runs_on is re-asserted so
+	// removal-by-absence does not drop it.
+	loopbackEp := map[string]any{
+		"server.address": "127.0.0.1", "server.port": "6379",
+		"network.transport": "tcp", "host.id": "h-001",
+	}
+	entity(evEntityState, model.TypeNetworkEndpoint, loopbackEp, nil)
+	entity(evEntityState, model.TypeServiceInstance, agentID, agentAttrs,
+		embRel{model.RelRunsOn, model.TypeHost, hostID},
+		embRel{model.RelDependsOn, model.TypeNetworkEndpoint, loopbackEp})
+
 	return logs
 }
 
@@ -209,15 +225,15 @@ func TestConformanceFixture(t *testing.T) {
 	}
 
 	// Final live graph: host, service.instance, the two network.devices (serial:… and
-	// mac:…), their two network.interface ports, and one network.route; the db was
-	// deleted.
-	if got := graph.EntityCount(); got != 7 {
-		t.Errorf("EntityCount = %d, want 7", got)
+	// mac:…), their two network.interface ports, one network.route, and the
+	// host-scoped loopback network.endpoint; the db was deleted.
+	if got := graph.EntityCount(); got != 8 {
+		t.Errorf("EntityCount = %d, want 8", got)
 	}
 	counts := graph.CountByType()
 	for typ, want := range map[string]int{
 		model.TypeHost: 1, model.TypeServiceInstance: 1, model.TypeNetworkDevice: 2,
-		model.TypeNetworkInterface: 2, model.TypeNetworkRoute: 1,
+		model.TypeNetworkInterface: 2, model.TypeNetworkRoute: 1, model.TypeNetworkEndpoint: 1,
 	} {
 		if counts[typ] != want {
 			t.Errorf("live %s = %d, want %d", typ, counts[typ], want)
@@ -226,9 +242,13 @@ func TestConformanceFixture(t *testing.T) {
 	if counts[model.TypeDatabase] != 0 {
 		t.Errorf("db should be deleted, but %d live", counts[model.TypeDatabase])
 	}
-	// runs_on (embedded) + 2× has_interface + connected_to + has_route; monitors was removed.
-	if got := graph.RelationCount(); got != 5 {
-		t.Errorf("RelationCount = %d, want 5", got)
+	// runs_on (embedded) + 2× has_interface + connected_to + has_route +
+	// depends_on (agent -> host-scoped endpoint); monitors was removed.
+	if got := graph.RelationCount(); got != 6 {
+		t.Errorf("RelationCount = %d, want 6", got)
+	}
+	if n := len(graph.ListRelations(model.RelDependsOn, "", "")); n != 1 {
+		t.Errorf("depends_on relations = %d, want 1 (agent depends on the loopback endpoint)", n)
 	}
 	if n := len(graph.ListRelations(model.RelRunsOn, "", "")); n != 1 {
 		t.Errorf("runs_on relations = %d, want 1 (agent runs on the host)", n)
