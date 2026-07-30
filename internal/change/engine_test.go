@@ -1010,8 +1010,8 @@ func TestDeleteSourceProvenance(t *testing.T) {
 
 	// Liveness expiry of an entity, and the cascade on its incident edge.
 	mustObserve(t, e, model.TypeProcess, procRef.Identity)
-	if _, err := e.ObserveEntity(EntityObservation{Type: model.TypeHost, Identity: hostRef.Identity, Interval: time.Minute, EventTime: t0}); err != nil {
-		t.Fatal(err)
+	if _, oerr := e.ObserveEntity(EntityObservation{Type: model.TypeHost, Identity: hostRef.Identity, Interval: time.Minute, EventTime: t0}); oerr != nil {
+		t.Fatal(oerr)
 	}
 	if _, em, rerr := e.ObserveRelation(RelationObservation{Type: model.RelRunsOn, From: procRef, To: hostRef, EventTime: t0}); rerr != nil || !em {
 		t.Fatalf("relation add: emitted=%v err=%v", em, rerr)
