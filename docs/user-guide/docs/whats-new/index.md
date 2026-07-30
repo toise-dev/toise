@@ -12,6 +12,12 @@ below. See the [API stability policy](../api-stability.md).
 
 ## Releases
 
+- [**0.10.0**](0.10.0.md) — 2026-07-30 — **delete provenance & host-scoped
+  endpoints**: `delete_source` says who authored every disappearance (producer /
+  liveness expiry / cascade) on MCP and GraphQL; loopback/link-local endpoints gain
+  a fourth identity key (`host.id`) with scope-honoring resolution; `telemetry.relay.*`
+  contract keys and the effective-cadence interval sizing rule; grpc/Go security
+  bumps. *(No wire-contract break, no data migration; all additive.)*
 - [**0.9.0**](0.9.0.md) — 2026-07-01 — **strict spec alignment & read-surface
   security**: full `AnyValue` in `entity.description`, `entity.delete.reason`,
   `entity.report.interval == 0` = no cadence, and `ingest_mtls_only` decoupling ingest

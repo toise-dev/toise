@@ -9,6 +9,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
+## [0.10.0] - 2026-07-30
+
+**Delete provenance and host-scoped endpoints — the producer-alignment release.**
+Ratifies the 2026-07 alignment round with the reference producer (senhub-agent
+#454/#698/#239/#222): the change feed now says **who authored every
+disappearance**, and loopback/link-local endpoints stop collapsing across hosts.
+Every change is additive and backward compatible: no wire-contract break, no data
+migration; newly written events carry schema version `1.1`, older events read back
+unchanged. Field-validated end to end on a live instance before merge (all three
+provenance values, non-retroactivity, resurrection continuity, cross-host
+resolution isolation).
+
+### Added
+
+- **`delete_source` — consumer-authored provenance on disappearance events**
+  (ADR 0033). An expired entity and a reason-less producer delete were
+  indistinguishable, and `relation.removed` covered three origins with no
+  discriminant — exactly the triage question a flapping incident asks ("did my
+  agent delete this, or did Toise reap it?"). Every `entity.deleted` /
+  `relation.removed` now carries its author: `producer` (explicit delete or
+  removal-by-absence), `liveness_expiry` (no heartbeat within
+  `entity.report.interval`), or `cascade` (an endpoint died and took the edge).
+  Exposed as `delete_source` on MCP `recent_changes` / `entity_history` /
+  `graph_diff` (including the `entities_transient` flap bucket) and as
+  `deleteSource` on GraphQL `ChangeEvent`. `delete_reason` stays producer-supplied
+  verbatim in both directions — Toise never writes it, and never derives from it.
+  Events recorded before 0.10.0 read back with an **unknown** source, never
+  re-labeled `producer`.
+- **Host-scoped loopback/link-local endpoints** (ADR 0032 addendum). A
+  `network.endpoint` whose address scope is narrower than the observation domain —
+  exactly `127.0.0.0/8`, `::1`, `169.254.0.0/16`, `fe80::/10` — now carries the
+  observing host's id as a **fourth identity key** (`host.id`), so every host's
+  `127.0.0.1:5432` is its own node instead of one silently merged lie. Routable
+  ranges (including RFC1918 and CGNAT) keep the 3-key form and their cross-observer
+  join. The MCP read-time resolution honors the scope: a scoped endpoint resolves
+  only against its own host's listeners (or the host), never through the
+  fleet-wide bind scan. The conformance fixture pins the 4-key form, and the
+  contract freezes address canonicalization (explicit-prefix zeroed-host CIDR,
+  RFC 5952 for IPv6 identity values).
+- **`telemetry.relay.*` relayed-span provenance keys** (contract). The
+  vendor-neutral spelling for "this telemetry passed through this agent on this
+  host": `telemetry.relay.host.id` / `.host.name` / `.instance.id`, first-relay-wins
+  with atomic set insertion, provisional pending upstream semconv#759.
+- **Producer sizing rule made explicit** (contract): the recommended ×3 slack on
+  `entity.report.interval` applies to the **effective re-emission cadence** (what
+  the consumer can observe, e.g. the unchanged-state suppression cadence), not the
+  internal heartbeat tick — the base error behind the senhub-agent #454 mechanical
+  flap.
+
+### Changed
+
+- Toise event schema version `1.0` → `1.1` (additive: the protobuf gains the
+  `delete_source` field; pre-1.1 logs and snapshots replay unchanged).
+
+### Security
+
+- **grpc v1.82.1** (GO-2026-6061) and **Go toolchain 1.26.5** (GO-2026-5856,
+  `crypto/tls`), in both the server and the `pkg/emit` module. `govulncheck` is
+  symbol-clean again on both. The SDK-side bump reaches producers with
+  `pkg/emit/v0.5.1`.
+
 ## [0.9.2] - 2026-07-03
 
 **Graph viewer overhaul (example only).** This release changes only the
@@ -801,7 +862,8 @@ contract converged with the senhub-agent reference producer.
   default and are intended for trusted networks only; the WebSocket subscription
   endpoint enforces an origin check.
 
-[Unreleased]: https://github.com/toise-dev/toise/compare/v0.9.2...HEAD
+[Unreleased]: https://github.com/toise-dev/toise/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/toise-dev/toise/compare/v0.9.2...v0.10.0
 [0.9.2]: https://github.com/toise-dev/toise/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/toise-dev/toise/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/toise-dev/toise/compare/v0.8.0...v0.9.0
