@@ -2,7 +2,7 @@ module github.com/toise-dev/toise
 
 go 1.26
 
-toolchain go1.26.4
+toolchain go1.26.5
 
 require (
 	github.com/99designs/gqlgen v0.17.90
@@ -18,7 +18,7 @@ require (
 	github.com/toise-dev/toise/pkg/emit v0.5.0
 	github.com/vektah/gqlparser/v2 v2.5.33
 	go.opentelemetry.io/collector/pdata v1.59.0
-	google.golang.org/grpc v1.81.1
+	google.golang.org/grpc v1.82.1
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
 )
