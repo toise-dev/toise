@@ -115,7 +115,7 @@ in the change taxonomy (`stateKeys` → `entity.state_changed` vs
 | `network.device` | `hw.vendor`, `hw.model`, `hw.firmware_version` (hardware semconv); `sysName` and `sysDescr` (SNMP, raw/descriptive); mgmt address (descriptive, **mutable**) | — (reachability / admin status is a metric) |
 | `compute.vm` | `host.name` (vm name); guest `os.type` / `os.version` when the hypervisor reports it; `guest.host.id` when the hypervisor surfaces the guest machine-id (evidence for the `same_as` overlay, not identity); configured capacity reusing the AT10 keys — `host.cpu.logical.count` (vCPUs) and `host.memory.total` (By) — as **config**, not utilization; `host.virtualization` for the hypervisor platform (the AT11 value set: `hyperv`/`vmware`/`kvm`/…) | power state (`running` / `stopped` / `suspended`) |
 | `service.listener` | `process.executable.name`, `process.pid`, `network.transport`, `listen.address`, `port` (the port is also encoded in the `service.endpoint` identity) | — |
-| `network.endpoint` | **none by design** — the observer sees only the identity (`server.address`, `server.port`, `network.transport`) and resolves to a canonical entity at read time (#184); populating more would mint a false identity | — |
+| `network.endpoint` | **none by design** — the observer sees only the identity (`server.address`, `server.port`, `network.transport`) and resolves to a canonical entity at read time (#184); populating more would mint a false identity. **Host-local and link-local addresses only** (`127.0.0.0/8`, `::1`, `169.254.0.0/16`, `fe80::/10`) carry a **fourth identity key `host.id`** (the observing host's id, byte-identical to the `host` entity identity) — their scope is narrower than the observation domain, so the 3-key join would falsely merge distinct endpoints (ADR 0032 addendum). Everything else, including RFC1918 and CGNAT, stays 3-key. | — |
 
 - **AT1 — version key.** `service.version` (semconv) for services; `db.system.version`
   for databases (consistent with the `db.system.*` namespace). The technology name is a
@@ -269,9 +269,18 @@ interface carries:
 
 `event_time` = LogRecord `Timestamp`; `recorded_at` stamped by Toise. Liveness uses
 **both**: an explicit **`entity.delete`** as the primary signal **and**
-`entity.report.interval` (seconds, sized with slack — the agent emits 3× its
-heartbeat cadence) as a TTL backstop for missed deletes (`kill -9`, crash, host off, net
-partition). Toise expires entities not re-asserted within their interval.
+`entity.report.interval` (seconds) as a TTL backstop for missed deletes (`kill -9`,
+crash, host off, net partition). Toise expires entities not re-asserted within
+their interval — **exactly, with no hidden grace** (plus at most one sweep tick).
+
+**Interval sizing (corrected after the #454 flapping incident): the ×3 slack
+applies to the EFFECTIVE re-emission cadence, not the heartbeat tick.** The
+cadence that matters is the longest gap between two `entity.state` events the
+consumer can see; with unchanged-state suppression at 2× the tick, that is the
+suppression cadence. Concretely: tick 60 s, suppression 120 s →
+`interval = 3 × 120 = 360 s` (absorbs two consecutive missed re-emissions).
+Announcing `3 × 60 = 180 s` gave a real slack of ×1.5 and zero tolerance to the
+first miss — the mechanical flap of #454.
 
 **Edge liveness is derived from endpoints (decided Q2 = Option A):** deleting an
 entity (explicitly or by expiry) **cascades `relation.removed`** for its incident
@@ -295,6 +304,36 @@ anonymous producer.
 **observer-independent** attributes (system name, version…). Anything per-observer
 ("this agent monitors this db") is a distinct **`monitors` relation** per agent,
 never an entity attribute (which would flap last-writer-wins).
+
+### Relayed-span provenance — `telemetry.relay.*` (agreed 2026-07, senhub-agent#698)
+
+An agent that relays third-party spans stamps the relaying agent's context on
+them, so a consumer can later join "relayed-by" onto the `host` entity. The
+keys are **vendor-neutral by contract rule**: the fact ("this telemetry passed
+through this agent on this host") is generic to any collector/agent/gateway,
+and a shared-contract key must not require knowing a vendor to read it.
+Semconv has no convention for a relaying intermediary (only `telemetry.sdk.*`
+/ `telemetry.distro.*`); the need is posed upstream in
+[semconv#759](https://github.com/open-telemetry/semantic-conventions/issues/759),
+still open. These keys are **provisional** (same posture as the `entity.*`
+governance keys): to be co-submitted to the SIG referencing #759, renamed if
+upstream settles differently.
+
+| Key | Value constraint |
+| --- | --- |
+| `telemetry.relay.host.id` | byte-identical to the `host.id` in the relaying agent's `host` entity identity (ADR 0018 — no normalization) |
+| `telemetry.relay.host.name` | the relaying host's name (informational) |
+| `telemetry.relay.instance.id` | **the same** `service.instance.id` the agent sets on the Resource of its entity emissions (ADR 0019 — the per-producer reference key; divergence breaks the join) |
+
+Rules:
+
+- **First relay wins, atomically.** A hop inserts the **set of three** only if
+  **none** of the three is already present (insert-if-absent on the whole set) —
+  a downstream hop completing a partial set would mix the first relay's host
+  with its own instance and mint a *false* join.
+- **Toise does not ingest traces** (entity events only): these keys serve the
+  trace backend. A "relayed-by" edge in the graph must be emitted as a
+  relationship carried by an entity the agent already emits.
 
 ### Vocabulary & rollout lots
 
@@ -349,6 +388,12 @@ attributes**. So anything a producer would have hung on an edge becomes an
   `route.protocol`, and **`next_hop.ip`** ride as descriptive attributes. The next
   hop stays a scalar attribute because **`network.address` is deferred**; when it
   lands, `next_hop_via` (route→address) and `bound_to` (interface→address) follow.
+- **Address canonicalization is frozen** (identity is byte-exact, so text form IS
+  identity): `route.destination` is CIDR with the prefix **always** explicit
+  (`/32` and `/128` included), host bits zeroed (`10.20.3.0/24`, never
+  `10.20.3.7/24`), default routes `0.0.0.0/0` / `::/0`. **Every IPv6 address in
+  any identity key** is RFC 5952 text form (lowercase, single `::` compression);
+  zone indices are kept verbatim lowercased, never fabricated when absent.
 - **Provenance → instrumentation scope.** Which collection method observed a fact
   rides on the **instrumentation scope** — **one scope per source**
   (`senhub-agent/snmp-lldp`, `senhub-agent/snmp-route`, `senhub-agent/snmp-fdb`, …),

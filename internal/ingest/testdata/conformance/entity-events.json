@@ -967,6 +967,194 @@
               "body": {},
               "eventName": "entity.state",
               "timeUnixNano": "1780272660000000000"
+            },
+            {
+              "attributes": [
+                {
+                  "key": "entity.type",
+                  "value": {
+                    "stringValue": "network.endpoint"
+                  }
+                },
+                {
+                  "key": "entity.id",
+                  "value": {
+                    "kvlistValue": {
+                      "values": [
+                        {
+                          "key": "host.id",
+                          "value": {
+                            "stringValue": "h-001"
+                          }
+                        },
+                        {
+                          "key": "network.transport",
+                          "value": {
+                            "stringValue": "tcp"
+                          }
+                        },
+                        {
+                          "key": "server.address",
+                          "value": {
+                            "stringValue": "127.0.0.1"
+                          }
+                        },
+                        {
+                          "key": "server.port",
+                          "value": {
+                            "stringValue": "6379"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "body": {},
+              "eventName": "entity.state",
+              "timeUnixNano": "1780272720000000000"
+            },
+            {
+              "attributes": [
+                {
+                  "key": "entity.type",
+                  "value": {
+                    "stringValue": "service.instance"
+                  }
+                },
+                {
+                  "key": "entity.id",
+                  "value": {
+                    "kvlistValue": {
+                      "values": [
+                        {
+                          "key": "service.instance.id",
+                          "value": {
+                            "stringValue": "agent-7f3a"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "entity.description",
+                  "value": {
+                    "kvlistValue": {
+                      "values": [
+                        {
+                          "key": "service.name",
+                          "value": {
+                            "stringValue": "senhub-agent"
+                          }
+                        },
+                        {
+                          "key": "service.version",
+                          "value": {
+                            "stringValue": "1.0.0"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "entity.relationships",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "relationship.type",
+                                "value": {
+                                  "stringValue": "runs_on"
+                                }
+                              },
+                              {
+                                "key": "entity.type",
+                                "value": {
+                                  "stringValue": "host"
+                                }
+                              },
+                              {
+                                "key": "entity.id",
+                                "value": {
+                                  "kvlistValue": {
+                                    "values": [
+                                      {
+                                        "key": "host.id",
+                                        "value": {
+                                          "stringValue": "h-001"
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "relationship.type",
+                                "value": {
+                                  "stringValue": "depends_on"
+                                }
+                              },
+                              {
+                                "key": "entity.type",
+                                "value": {
+                                  "stringValue": "network.endpoint"
+                                }
+                              },
+                              {
+                                "key": "entity.id",
+                                "value": {
+                                  "kvlistValue": {
+                                    "values": [
+                                      {
+                                        "key": "host.id",
+                                        "value": {
+                                          "stringValue": "h-001"
+                                        }
+                                      },
+                                      {
+                                        "key": "network.transport",
+                                        "value": {
+                                          "stringValue": "tcp"
+                                        }
+                                      },
+                                      {
+                                        "key": "server.address",
+                                        "value": {
+                                          "stringValue": "127.0.0.1"
+                                        }
+                                      },
+                                      {
+                                        "key": "server.port",
+                                        "value": {
+                                          "stringValue": "6379"
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "body": {},
+              "eventName": "entity.state",
+              "timeUnixNano": "1780272780000000000"
             }
           ],
           "scope": {}

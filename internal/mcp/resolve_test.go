@@ -169,6 +169,82 @@ func TestResolveEndpointRejectsProtoMismatch(t *testing.T) {
 	}
 }
 
+// hostScopedGraph is two hosts; only host A carries a listener binding
+// 127.0.0.1:6379. A fleet-wide bind scan would always land on it.
+func hostScopedGraph() *fakeGraph {
+	ha := model.Entity{ID: "ha", Type: model.TypeHost,
+		Identity: []model.KeyValue{{Key: "host.id", Value: sv("ha-uuid")}}}
+	hb := model.Entity{ID: "hb", Type: model.TypeHost,
+		Identity: []model.KeyValue{{Key: "host.id", Value: sv("hb-uuid")}}}
+	lisA := model.Entity{ID: "lisA", Type: model.TypeServiceListener,
+		Identity:   []model.KeyValue{{Key: "service.endpoint", Value: sv("ha-uuid:6379/tcp")}},
+		Attributes: []model.KeyValue{{Key: "listen.address", Value: sv("127.0.0.1")}}}
+	return &fakeGraph{
+		entities: map[model.EntityID]model.Entity{ha.ID: ha, hb.ID: hb, lisA.ID: lisA},
+		deleted:  map[model.EntityID]bool{},
+		relations: []model.Relation{
+			{ID: "r1", Type: model.RelRunsOn, From: lisA.ID, To: ha.ID},
+		},
+	}
+}
+
+// hostScopedEndpoint is the ADR 0032 addendum form: a host-local address
+// carrying the observing host's id as a fourth identity key.
+func hostScopedEndpoint(hostID string) model.Entity {
+	return model.Entity{
+		ID:   "ep1",
+		Type: model.TypeNetworkEndpoint,
+		Identity: []model.KeyValue{
+			{Key: "server.address", Value: sv("127.0.0.1")},
+			{Key: "server.port", Value: sv("6379")},
+			{Key: "network.transport", Value: sv("tcp")},
+			{Key: "host.id", Value: sv(hostID)},
+		},
+	}
+}
+
+// A host-scoped endpoint must never resolve through the fleet-wide bind scan:
+// host B's 127.0.0.1:6379 with no listener on B resolves to host B itself,
+// not to host A's listener that happens to bind the same loopback tuple.
+func TestResolveEndpointHostScopedNeverFleetScans(t *testing.T) {
+	g := hostScopedGraph()
+	got, ok := resolveEndpoint(g, hostScopedEndpoint("hb-uuid"))
+	if !ok {
+		t.Fatal("host-scoped endpoint on a known host should resolve to the host")
+	}
+	if got.ID != "hb" {
+		t.Fatalf("resolved to %s, want host hb (must not bind host A's loopback listener)", got.ID)
+	}
+}
+
+// With a listener on the scoped host's port, the host-scoped endpoint resolves
+// to that listener — and to that one only, even though host A binds the same
+// loopback tuple.
+func TestResolveEndpointHostScopedToOwnListener(t *testing.T) {
+	g := hostScopedGraph()
+	lisB := model.Entity{ID: "lisB", Type: model.TypeServiceListener,
+		Identity:   []model.KeyValue{{Key: "service.endpoint", Value: sv("hb-uuid:6379/tcp")}},
+		Attributes: []model.KeyValue{{Key: "listen.address", Value: sv("127.0.0.1")}}}
+	g.entities[lisB.ID] = lisB
+	g.relations = append(g.relations, model.Relation{ID: "r2", Type: model.RelRunsOn, From: lisB.ID, To: "hb"})
+
+	got, ok := resolveEndpoint(g, hostScopedEndpoint("hb-uuid"))
+	if !ok || got.ID != "lisB" {
+		t.Fatalf("host-scoped resolution: got %q ok=%v, want lisB", got.ID, ok)
+	}
+}
+
+// A host-scoped endpoint whose host is unknown resolves to nothing — never to
+// another host's matching bind. The honest gap beats a fabricated join.
+func TestResolveEndpointHostScopedUnknownHost(t *testing.T) {
+	g := hostScopedGraph()
+	ep := hostScopedEndpoint("hb-uuid")
+	ep.Identity[3].Value = sv("nope-uuid")
+	if got, ok := resolveEndpoint(g, ep); ok {
+		t.Fatalf("unknown scoped host must not resolve, got %s", got.ID)
+	}
+}
+
 // A soft-deleted listener must not be handed back as the resolution: with lisB
 // deleted, resolution falls through to the host rather than returning a dead
 // entity.

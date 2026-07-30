@@ -138,3 +138,51 @@ different endpoints merged into one, erasing a real hop).
   an observable mapping, or is flagged as a gap; nothing is merged or dropped without
   an observable basis. Consistent with ADR 0018 (exact identity, no fuzzy merge) and
   ADR 0022 (only asserted facts in the engine; everything else is a projection).
+
+## Addendum (2026-07-30): host-scoped identity for host-local and link-local endpoints
+
+Agreed with the senhub-agent maintainer (senhub-agent's loopback/Docker
+anti-collapse follow-up; replaces its producer-side guard).
+
+The 3-key endpoint identity `{server.address, server.port, network.transport}`
+encodes the continuity invariant: two observers dialing the same routable
+address land on the same node. That presumes the address's **scope** is at
+least as wide as the observation domain. Two families break that presumption
+structurally — loopback (`127.0.0.0/8`, `::1`, host scope) and link-local
+(`169.254.0.0/16`, `fe80::/10`, link scope) — so today every host's
+`127.0.0.1:5432` collapses into one node: a silent lie of the decision-2 kind.
+
+**Decision: for exactly those four ranges, the endpoint identity gains a
+fourth identity key** — `{server.address, server.port, network.transport,
+host.id}` — where `host.id` is the *observing* host's id, byte-identical to
+the `host` entity identity (ADR 0018). Exact-match identity keeps the scoped
+and routable forms disjoint by construction. Encoding `host:port` inside
+`server.address` was rejected: it puts a non-address value in a
+semconv-shaped key and destroys the join with the host entity.
+
+Rules:
+
+1. **The range list is exhaustive and scope-based, not privacy-based.**
+   RFC1918 and CGNAT (`100.64.0.0/10`) keep the 3-key form: they are routable
+   within an observation domain, so two observers can legitimately denote the
+   same endpoint, and scoping them would break real joins. The criterion is
+   *address scope narrower than the observation domain*.
+2. **IPv6 zone indices are kept verbatim, lowercased, never fabricated.** No
+   cross-OS canonicalization (`%eth0` vs `%12`): host-scoping removes the need
+   for two producers to join on a link-local address, so the only consistency
+   that matters is a producer with itself. All IPv6 identity values follow
+   RFC 5952 text form (lowercase, single `::` compression).
+3. **Accepted trade-off on link-local:** a link-local address has *link*
+   scope, not host scope — two agents on one segment seeing the same `fe80::`
+   peer now produce two nodes (honest fragmentation) instead of one false
+   merge. Consistent with decision 5: an honest gap beats a fabricated seam.
+   A link/segment identity would be the real fix if a concrete case warrants
+   it.
+4. **Consumer first.** The read-time endpoint resolution must honor the
+   scope — an endpoint carrying `host.id` resolves only against that host's
+   listeners (or the host itself), never through a fleet-wide bind search —
+   and must ship BEFORE producers adopt the 4-key form, or the read overlay
+   re-merges exactly what the identity made distinct.
+5. **Producer rollout is an identity break** for existing loopback endpoints
+   (old deleted, new created): group it with a producer version bump and
+   release-note the churn.
