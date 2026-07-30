@@ -92,6 +92,66 @@ func (ChangeType) EnumDescriptor() ([]byte, []int) {
 	return file_toise_v1_events_proto_rawDescGZIP(), []int{0}
 }
 
+// DeleteSource attributes the AUTHOR of a disappearance event: the producer
+// (explicit delete, or an edge removed by absence on re-emit), Toise's liveness
+// expiry (no heartbeat within entity.report.interval), or the cascade that
+// removes incident edges when a node dies. It is consumer-authored provenance,
+// deliberately distinct from delete_reason (which stays producer-supplied,
+// verbatim): without it an expiry and a reason-less producer delete are
+// indistinguishable on every read surface. UNSPECIFIED marks events written
+// before this field existed — read it as "unknown", never as "producer".
+type DeleteSource int32
+
+const (
+	DeleteSource_DELETE_SOURCE_UNSPECIFIED     DeleteSource = 0
+	DeleteSource_DELETE_SOURCE_PRODUCER        DeleteSource = 1
+	DeleteSource_DELETE_SOURCE_LIVENESS_EXPIRY DeleteSource = 2
+	DeleteSource_DELETE_SOURCE_CASCADE         DeleteSource = 3
+)
+
+// Enum value maps for DeleteSource.
+var (
+	DeleteSource_name = map[int32]string{
+		0: "DELETE_SOURCE_UNSPECIFIED",
+		1: "DELETE_SOURCE_PRODUCER",
+		2: "DELETE_SOURCE_LIVENESS_EXPIRY",
+		3: "DELETE_SOURCE_CASCADE",
+	}
+	DeleteSource_value = map[string]int32{
+		"DELETE_SOURCE_UNSPECIFIED":     0,
+		"DELETE_SOURCE_PRODUCER":        1,
+		"DELETE_SOURCE_LIVENESS_EXPIRY": 2,
+		"DELETE_SOURCE_CASCADE":         3,
+	}
+)
+
+func (x DeleteSource) Enum() *DeleteSource {
+	p := new(DeleteSource)
+	*p = x
+	return p
+}
+
+func (x DeleteSource) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (DeleteSource) Descriptor() protoreflect.EnumDescriptor {
+	return file_toise_v1_events_proto_enumTypes[1].Descriptor()
+}
+
+func (DeleteSource) Type() protoreflect.EnumType {
+	return &file_toise_v1_events_proto_enumTypes[1]
+}
+
+func (x DeleteSource) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use DeleteSource.Descriptor instead.
+func (DeleteSource) EnumDescriptor() ([]byte, []int) {
+	return file_toise_v1_events_proto_rawDescGZIP(), []int{1}
+}
+
 // Value is a typed attribute value mirroring the OpenTelemetry AnyValue:
 // the four scalars (string, int64, double, bool) plus recursive array and
 // kvlist forms. Descriptive attributes (entity.description) carry the full
@@ -593,7 +653,10 @@ type EntityEvent struct {
 	// (entity.delete.reason), an OPEN enum (free string, never a closed set on
 	// Toise's side). Empty for non-delete events and for deletes that carried no
 	// reason. See the OTel entity-events spec (1.58.0).
-	DeleteReason  string `protobuf:"bytes,8,opt,name=delete_reason,json=deleteReason,proto3" json:"delete_reason,omitempty"`
+	DeleteReason string `protobuf:"bytes,8,opt,name=delete_reason,json=deleteReason,proto3" json:"delete_reason,omitempty"`
+	// delete_source attributes the author of an entity_deleted event. Only
+	// meaningful on deletes; UNSPECIFIED elsewhere and on pre-1.1 events.
+	DeleteSource  DeleteSource `protobuf:"varint,9,opt,name=delete_source,json=deleteSource,proto3,enum=toise.v1.DeleteSource" json:"delete_source,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -684,6 +747,13 @@ func (x *EntityEvent) GetDeleteReason() string {
 	return ""
 }
 
+func (x *EntityEvent) GetDeleteSource() DeleteSource {
+	if x != nil {
+		return x.DeleteSource
+	}
+	return DeleteSource_DELETE_SOURCE_UNSPECIFIED
+}
+
 // RelationEvent is a classified change about a relation. Bi-temporal: ADR 0005.
 type RelationEvent struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
@@ -694,8 +764,13 @@ type RelationEvent struct {
 	RecordedAtUnixNano int64                  `protobuf:"varint,5,opt,name=recorded_at_unix_nano,json=recordedAtUnixNano,proto3" json:"recorded_at_unix_nano,omitempty"`
 	SchemaVersion      string                 `protobuf:"bytes,6,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
 	ChangedKeys        []string               `protobuf:"bytes,7,rep,name=changed_keys,json=changedKeys,proto3" json:"changed_keys,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// delete_source attributes the author of a relation_removed event: an
+	// explicit/absence removal by the producer, the cascade of a dying endpoint,
+	// or a per-edge liveness expiry. Relations previously had NO discriminant at
+	// all — the same relation_removed covered all three origins.
+	DeleteSource  DeleteSource `protobuf:"varint,8,opt,name=delete_source,json=deleteSource,proto3,enum=toise.v1.DeleteSource" json:"delete_source,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RelationEvent) Reset() {
@@ -775,6 +850,13 @@ func (x *RelationEvent) GetChangedKeys() []string {
 		return x.ChangedKeys
 	}
 	return nil
+}
+
+func (x *RelationEvent) GetDeleteSource() DeleteSource {
+	if x != nil {
+		return x.DeleteSource
+	}
+	return DeleteSource_DELETE_SOURCE_UNSPECIFIED
 }
 
 // Event is the envelope stored in the append-only event log.
@@ -905,7 +987,7 @@ const file_toise_v1_events_proto_rawDesc = "" +
 	"attributes\x12\x1e\n" +
 	"\n" +
 	"structural\x18\x06 \x01(\bR\n" +
-	"structural\"\xdc\x02\n" +
+	"structural\"\x99\x03\n" +
 	"\vEntityEvent\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x125\n" +
 	"\vchange_type\x18\x02 \x01(\x0e2\x14.toise.v1.ChangeTypeR\n" +
@@ -915,7 +997,8 @@ const file_toise_v1_events_proto_rawDesc = "" +
 	"\x15recorded_at_unix_nano\x18\x05 \x01(\x03R\x12recordedAtUnixNano\x12%\n" +
 	"\x0eschema_version\x18\x06 \x01(\tR\rschemaVersion\x12!\n" +
 	"\fchanged_keys\x18\a \x03(\tR\vchangedKeys\x12#\n" +
-	"\rdelete_reason\x18\b \x01(\tR\fdeleteReason\"\xbf\x02\n" +
+	"\rdelete_reason\x18\b \x01(\tR\fdeleteReason\x12;\n" +
+	"\rdelete_source\x18\t \x01(\x0e2\x16.toise.v1.DeleteSourceR\fdeleteSource\"\xfc\x02\n" +
 	"\rRelationEvent\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x125\n" +
 	"\vchange_type\x18\x02 \x01(\x0e2\x14.toise.v1.ChangeTypeR\n" +
@@ -924,7 +1007,8 @@ const file_toise_v1_events_proto_rawDesc = "" +
 	"\x14event_time_unix_nano\x18\x04 \x01(\x03R\x11eventTimeUnixNano\x121\n" +
 	"\x15recorded_at_unix_nano\x18\x05 \x01(\x03R\x12recordedAtUnixNano\x12%\n" +
 	"\x0eschema_version\x18\x06 \x01(\tR\rschemaVersion\x12!\n" +
-	"\fchanged_keys\x18\a \x03(\tR\vchangedKeys\"\x8e\x01\n" +
+	"\fchanged_keys\x18\a \x03(\tR\vchangedKeys\x12;\n" +
+	"\rdelete_source\x18\b \x01(\x0e2\x16.toise.v1.DeleteSourceR\fdeleteSource\"\x8e\x01\n" +
 	"\x05Event\x12:\n" +
 	"\fentity_event\x18\x01 \x01(\v2\x15.toise.v1.EntityEventH\x00R\ventityEvent\x12@\n" +
 	"\x0erelation_event\x18\x02 \x01(\v2\x17.toise.v1.RelationEventH\x00R\rrelationEventB\a\n" +
@@ -940,7 +1024,12 @@ const file_toise_v1_events_proto_rawDesc = "" +
 	"\x1cCHANGE_TYPE_ENTITY_UNCHANGED\x10\x06\x12\x1e\n" +
 	"\x1aCHANGE_TYPE_RELATION_ADDED\x10\a\x12 \n" +
 	"\x1cCHANGE_TYPE_RELATION_REMOVED\x10\b\x12*\n" +
-	"&CHANGE_TYPE_RELATION_ATTRIBUTE_CHANGED\x10\tB3Z1github.com/toise-dev/toise/proto/toise/v1;toisev1b\x06proto3"
+	"&CHANGE_TYPE_RELATION_ATTRIBUTE_CHANGED\x10\t*\x87\x01\n" +
+	"\fDeleteSource\x12\x1d\n" +
+	"\x19DELETE_SOURCE_UNSPECIFIED\x10\x00\x12\x1a\n" +
+	"\x16DELETE_SOURCE_PRODUCER\x10\x01\x12!\n" +
+	"\x1dDELETE_SOURCE_LIVENESS_EXPIRY\x10\x02\x12\x19\n" +
+	"\x15DELETE_SOURCE_CASCADE\x10\x03B3Z1github.com/toise-dev/toise/proto/toise/v1;toisev1b\x06proto3"
 
 var (
 	file_toise_v1_events_proto_rawDescOnce sync.Once
@@ -954,40 +1043,43 @@ func file_toise_v1_events_proto_rawDescGZIP() []byte {
 	return file_toise_v1_events_proto_rawDescData
 }
 
-var file_toise_v1_events_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_toise_v1_events_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
 var file_toise_v1_events_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_toise_v1_events_proto_goTypes = []any{
 	(ChangeType)(0),       // 0: toise.v1.ChangeType
-	(*Value)(nil),         // 1: toise.v1.Value
-	(*ArrayValue)(nil),    // 2: toise.v1.ArrayValue
-	(*KeyValueList)(nil),  // 3: toise.v1.KeyValueList
-	(*KeyValue)(nil),      // 4: toise.v1.KeyValue
-	(*Entity)(nil),        // 5: toise.v1.Entity
-	(*Relation)(nil),      // 6: toise.v1.Relation
-	(*EntityEvent)(nil),   // 7: toise.v1.EntityEvent
-	(*RelationEvent)(nil), // 8: toise.v1.RelationEvent
-	(*Event)(nil),         // 9: toise.v1.Event
+	(DeleteSource)(0),     // 1: toise.v1.DeleteSource
+	(*Value)(nil),         // 2: toise.v1.Value
+	(*ArrayValue)(nil),    // 3: toise.v1.ArrayValue
+	(*KeyValueList)(nil),  // 4: toise.v1.KeyValueList
+	(*KeyValue)(nil),      // 5: toise.v1.KeyValue
+	(*Entity)(nil),        // 6: toise.v1.Entity
+	(*Relation)(nil),      // 7: toise.v1.Relation
+	(*EntityEvent)(nil),   // 8: toise.v1.EntityEvent
+	(*RelationEvent)(nil), // 9: toise.v1.RelationEvent
+	(*Event)(nil),         // 10: toise.v1.Event
 }
 var file_toise_v1_events_proto_depIdxs = []int32{
-	2,  // 0: toise.v1.Value.array_value:type_name -> toise.v1.ArrayValue
-	3,  // 1: toise.v1.Value.kvlist_value:type_name -> toise.v1.KeyValueList
-	1,  // 2: toise.v1.ArrayValue.values:type_name -> toise.v1.Value
-	4,  // 3: toise.v1.KeyValueList.values:type_name -> toise.v1.KeyValue
-	1,  // 4: toise.v1.KeyValue.value:type_name -> toise.v1.Value
-	4,  // 5: toise.v1.Entity.identity:type_name -> toise.v1.KeyValue
-	4,  // 6: toise.v1.Entity.attributes:type_name -> toise.v1.KeyValue
-	4,  // 7: toise.v1.Relation.attributes:type_name -> toise.v1.KeyValue
+	3,  // 0: toise.v1.Value.array_value:type_name -> toise.v1.ArrayValue
+	4,  // 1: toise.v1.Value.kvlist_value:type_name -> toise.v1.KeyValueList
+	2,  // 2: toise.v1.ArrayValue.values:type_name -> toise.v1.Value
+	5,  // 3: toise.v1.KeyValueList.values:type_name -> toise.v1.KeyValue
+	2,  // 4: toise.v1.KeyValue.value:type_name -> toise.v1.Value
+	5,  // 5: toise.v1.Entity.identity:type_name -> toise.v1.KeyValue
+	5,  // 6: toise.v1.Entity.attributes:type_name -> toise.v1.KeyValue
+	5,  // 7: toise.v1.Relation.attributes:type_name -> toise.v1.KeyValue
 	0,  // 8: toise.v1.EntityEvent.change_type:type_name -> toise.v1.ChangeType
-	5,  // 9: toise.v1.EntityEvent.entity:type_name -> toise.v1.Entity
-	0,  // 10: toise.v1.RelationEvent.change_type:type_name -> toise.v1.ChangeType
-	6,  // 11: toise.v1.RelationEvent.relation:type_name -> toise.v1.Relation
-	7,  // 12: toise.v1.Event.entity_event:type_name -> toise.v1.EntityEvent
-	8,  // 13: toise.v1.Event.relation_event:type_name -> toise.v1.RelationEvent
-	14, // [14:14] is the sub-list for method output_type
-	14, // [14:14] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	6,  // 9: toise.v1.EntityEvent.entity:type_name -> toise.v1.Entity
+	1,  // 10: toise.v1.EntityEvent.delete_source:type_name -> toise.v1.DeleteSource
+	0,  // 11: toise.v1.RelationEvent.change_type:type_name -> toise.v1.ChangeType
+	7,  // 12: toise.v1.RelationEvent.relation:type_name -> toise.v1.Relation
+	1,  // 13: toise.v1.RelationEvent.delete_source:type_name -> toise.v1.DeleteSource
+	8,  // 14: toise.v1.Event.entity_event:type_name -> toise.v1.EntityEvent
+	9,  // 15: toise.v1.Event.relation_event:type_name -> toise.v1.RelationEvent
+	16, // [16:16] is the sub-list for method output_type
+	16, // [16:16] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_toise_v1_events_proto_init() }
@@ -1012,7 +1104,7 @@ func file_toise_v1_events_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_toise_v1_events_proto_rawDesc), len(file_toise_v1_events_proto_rawDesc)),
-			NumEnums:      1,
+			NumEnums:      2,
 			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   0,

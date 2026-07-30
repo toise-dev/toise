@@ -91,6 +91,14 @@ type ChangeEvent struct {
 	// `scaled_down`) kept verbatim. Null when none was given or for non-delete
 	// events.
 	DeleteReason *string `json:"deleteReason,omitempty"`
+	// For entity.deleted / relation.removed, who AUTHORED the disappearance:
+	// `producer` (explicit delete or removal-by-absence), `liveness_expiry`
+	// (Toise's backstop reaped it after a missed heartbeat), or `cascade` (an
+	// endpoint died and took the edge with it). Consumer-authored provenance,
+	// distinct from deleteReason (which stays producer-supplied verbatim). Null
+	// on non-removal events and on events recorded before schema 1.1 — an absent
+	// source means UNKNOWN, never `producer`.
+	DeleteSource *string `json:"deleteSource,omitempty"`
 	// Events dropped just before this one because this subscriber could not keep
 	// up. Positive means you have a gap: re-query the current state and resume.
 	Dropped int `json:"dropped"`

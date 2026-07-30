@@ -69,6 +69,7 @@ type ComplexityRoot struct {
 		ChangeType    func(childComplexity int) int
 		ChangedKeys   func(childComplexity int) int
 		DeleteReason  func(childComplexity int) int
+		DeleteSource  func(childComplexity int) int
 		Dropped       func(childComplexity int) int
 		Entity        func(childComplexity int) int
 		EventTime     func(childComplexity int) int
@@ -275,6 +276,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ChangeEvent.DeleteReason(childComplexity), true
+	case "ChangeEvent.deleteSource":
+		if e.ComplexityRoot.ChangeEvent.DeleteSource == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ChangeEvent.DeleteSource(childComplexity), true
 	case "ChangeEvent.dropped":
 		if e.ComplexityRoot.ChangeEvent.Dropped == nil {
 			break
@@ -832,6 +839,16 @@ type ChangeEvent {
   """
   deleteReason: String
   """
+  For entity.deleted / relation.removed, who AUTHORED the disappearance:
+  ` + "`" + `producer` + "`" + ` (explicit delete or removal-by-absence), ` + "`" + `liveness_expiry` + "`" + `
+  (Toise's backstop reaped it after a missed heartbeat), or ` + "`" + `cascade` + "`" + ` (an
+  endpoint died and took the edge with it). Consumer-authored provenance,
+  distinct from deleteReason (which stays producer-supplied verbatim). Null
+  on non-removal events and on events recorded before schema 1.1 — an absent
+  source means UNKNOWN, never ` + "`" + `producer` + "`" + `.
+  """
+  deleteSource: String
+  """
   Events dropped just before this one because this subscriber could not keep
   up. Positive means you have a gap: re-query the current state and resume.
   """
@@ -1071,6 +1088,8 @@ func (ec *executionContext) childFields_ChangeEvent(ctx context.Context, field g
 		return ec.fieldContext_ChangeEvent_changedKeys(ctx, field)
 	case "deleteReason":
 		return ec.fieldContext_ChangeEvent_deleteReason(ctx, field)
+	case "deleteSource":
+		return ec.fieldContext_ChangeEvent_deleteSource(ctx, field)
 	case "dropped":
 		return ec.fieldContext_ChangeEvent_dropped(ctx, field)
 	case "entity":
@@ -2092,6 +2111,29 @@ func (ec *executionContext) _ChangeEvent_deleteReason(ctx context.Context, field
 	)
 }
 func (ec *executionContext) fieldContext_ChangeEvent_deleteReason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ChangeEvent", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ChangeEvent_deleteSource(ctx context.Context, field graphql.CollectedField, obj *ChangeEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ChangeEvent_deleteSource(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.DeleteSource, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_ChangeEvent_deleteSource(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("ChangeEvent", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
@@ -4820,6 +4862,8 @@ func (ec *executionContext) _ChangeEvent(ctx context.Context, sel ast.SelectionS
 			}
 		case "deleteReason":
 			out.Values[i] = ec._ChangeEvent_deleteReason(ctx, field, obj)
+		case "deleteSource":
+			out.Values[i] = ec._ChangeEvent_deleteSource(ctx, field, obj)
 		case "dropped":
 			out.Values[i] = ec._ChangeEvent_dropped(ctx, field, obj)
 			if out.Values[i] == graphql.Null {

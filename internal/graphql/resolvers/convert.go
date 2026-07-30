@@ -87,6 +87,10 @@ func eventToChangeGQL(ev model.Event) *generated.ChangeEvent {
 			r := ee.DeleteReason
 			ce.DeleteReason = &r
 		}
+		if ee.DeleteSource != model.DeleteSourceUnknown {
+			src := string(ee.DeleteSource)
+			ce.DeleteSource = &src
+		}
 		ce.Entity = entityToGQL(ee.Entity, ee.ChangeType == model.EntityDeleted)
 	case ev.Relation != nil:
 		re := ev.Relation
@@ -97,6 +101,10 @@ func eventToChangeGQL(ev model.Event) *generated.ChangeEvent {
 		ce.SchemaVersion = re.SchemaVersion
 		if re.ChangedKeys != nil {
 			ce.ChangedKeys = re.ChangedKeys
+		}
+		if re.DeleteSource != model.DeleteSourceUnknown {
+			src := string(re.DeleteSource)
+			ce.DeleteSource = &src
 		}
 		ce.Relation = relationToGQL(re.Relation)
 	}

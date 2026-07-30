@@ -86,6 +86,21 @@ message Relation {
   bool structural = 6;
 }
 
+// DeleteSource attributes the AUTHOR of a disappearance event: the producer
+// (explicit delete, or an edge removed by absence on re-emit), Toise's liveness
+// expiry (no heartbeat within entity.report.interval), or the cascade that
+// removes incident edges when a node dies. It is consumer-authored provenance,
+// deliberately distinct from delete_reason (which stays producer-supplied,
+// verbatim): without it an expiry and a reason-less producer delete are
+// indistinguishable on every read surface. UNSPECIFIED marks events written
+// before this field existed — read it as "unknown", never as "producer".
+enum DeleteSource {
+  DELETE_SOURCE_UNSPECIFIED = 0;
+  DELETE_SOURCE_PRODUCER = 1;
+  DELETE_SOURCE_LIVENESS_EXPIRY = 2;
+  DELETE_SOURCE_CASCADE = 3;
+}
+
 // EntityEvent is a classified change about an entity. Bi-temporal: see ADR 0005.
 message EntityEvent {
   // event_id is a ULID identifying this event.
@@ -107,6 +122,9 @@ message EntityEvent {
   // Toise's side). Empty for non-delete events and for deletes that carried no
   // reason. See the OTel entity-events spec (1.58.0).
   string delete_reason = 8;
+  // delete_source attributes the author of an entity_deleted event. Only
+  // meaningful on deletes; UNSPECIFIED elsewhere and on pre-1.1 events.
+  DeleteSource delete_source = 9;
 }
 
 // RelationEvent is a classified change about a relation. Bi-temporal: ADR 0005.
@@ -118,6 +136,11 @@ message RelationEvent {
   int64 recorded_at_unix_nano = 5;
   string schema_version = 6;
   repeated string changed_keys = 7;
+  // delete_source attributes the author of a relation_removed event: an
+  // explicit/absence removal by the producer, the cascade of a dying endpoint,
+  // or a per-edge liveness expiry. Relations previously had NO discriminant at
+  // all — the same relation_removed covered all three origins.
+  DeleteSource delete_source = 8;
 }
 
 // Event is the envelope stored in the append-only event log.

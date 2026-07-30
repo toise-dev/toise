@@ -505,6 +505,7 @@ func (e *Engine) deleteEntityLocked(obs EntityObservation) (ev model.Event, emit
 		RecordedAt:    e.now(),
 		SchemaVersion: model.SchemaVersion,
 		DeleteReason:  obs.DeleteReason,
+		DeleteSource:  model.DeleteSourceProducer,
 	}}
 	if err := e.commit(ev, false); err != nil {
 		return model.Event{}, false, err
@@ -522,7 +523,7 @@ func (e *Engine) removeIncidentRelations(id model.EntityID, when time.Time) (int
 	n := 0
 	var errs []error
 	for _, rel := range e.listRelationsTouching(id) {
-		ev := e.relationEvent(model.RelationRemoved, rel, when)
+		ev := e.relationEvent(model.RelationRemoved, rel, when, model.DeleteSourceCascade)
 		if err := e.commit(ev, rel.Structural); err != nil {
 			e.logger.Error("failed to remove edge of deleted entity", "relation_id", rel.ID, "err", err)
 			errs = append(errs, fmt.Errorf("removing edge %s of deleted %s: %w", rel.ID, id, err))
@@ -586,6 +587,7 @@ func (e *Engine) Sweep() (int, error) {
 			EventTime:     now,
 			RecordedAt:    now,
 			SchemaVersion: model.SchemaVersion,
+			DeleteSource:  model.DeleteSourceLivenessExpiry,
 		}}
 		if err := e.commit(ev, false); err != nil {
 			e.logger.Error("failed to expire stale entity", "id", id, "err", err)
@@ -632,7 +634,7 @@ func (e *Engine) Sweep() (int, error) {
 			delete(e.relDeadlines, id)
 			continue
 		}
-		ev := e.relationEvent(model.RelationRemoved, rel, now)
+		ev := e.relationEvent(model.RelationRemoved, rel, now, model.DeleteSourceLivenessExpiry)
 		if err := e.commit(ev, rel.Structural); err != nil {
 			e.logger.Error("failed to expire stale relation", "id", id, "err", err)
 			errs = append(errs, fmt.Errorf("expiring stale relation %s: %w", id, err))
@@ -728,7 +730,7 @@ func (e *Engine) observeRelationLocked(obs RelationObservation) (model.Event, bo
 		ct = model.RelationAdded
 	}
 
-	ev := e.relationEvent(ct, rel, obs.EventTime)
+	ev := e.relationEvent(ct, rel, obs.EventTime, model.DeleteSourceUnknown)
 	highPriority := rel.Structural && ct == model.RelationAdded
 	if err := e.commit(ev, highPriority); err != nil {
 		return model.Event{}, false, err
@@ -815,7 +817,7 @@ func (e *Engine) removeRelationLocked(obs RelationObservation) (ev model.Event, 
 	if !ok {
 		return model.Event{}, false, nil
 	}
-	ev = e.relationEvent(model.RelationRemoved, existing, obs.EventTime)
+	ev = e.relationEvent(model.RelationRemoved, existing, obs.EventTime, model.DeleteSourceProducer)
 	highPriority := existing.Structural
 	if err := e.commit(ev, highPriority); err != nil {
 		return model.Event{}, false, err
@@ -823,7 +825,10 @@ func (e *Engine) removeRelationLocked(obs RelationObservation) (ev model.Event, 
 	return ev, true, nil
 }
 
-func (e *Engine) relationEvent(ct model.ChangeType, rel model.Relation, eventTime time.Time) model.Event {
+// relationEvent builds a relation event; source attributes the author of a
+// RelationRemoved (producer / liveness_expiry / cascade) and is Unknown on
+// non-removal change types.
+func (e *Engine) relationEvent(ct model.ChangeType, rel model.Relation, eventTime time.Time, source model.DeleteSource) model.Event {
 	return model.Event{Relation: &model.RelationEvent{
 		EventID:       model.NewEventID(),
 		ChangeType:    ct,
@@ -831,6 +836,7 @@ func (e *Engine) relationEvent(ct model.ChangeType, rel model.Relation, eventTim
 		EventTime:     eventTime,
 		RecordedAt:    e.now(),
 		SchemaVersion: model.SchemaVersion,
+		DeleteSource:  source,
 	}}
 }
 

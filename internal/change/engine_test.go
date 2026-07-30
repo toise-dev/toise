@@ -980,3 +980,80 @@ func TestRestoreLivenessOldBlobWithoutIntervals(t *testing.T) {
 		t.Errorf("EntityCount = %d, want 0", g2.EntityCount())
 	}
 }
+
+// TestDeleteSourceProvenance pins the author attribution on every
+// disappearance path: an explicit producer delete, a liveness expiry, the
+// cascade on incident edges, and an absence-driven relation removal. Without
+// the field, an expiry and a reason-less producer delete are indistinguishable
+// on every read surface (senhub-agent #454).
+func TestDeleteSourceProvenance(t *testing.T) {
+	g := projection.New()
+	now := t0
+	e := New(g, &fakeAppender{},
+		WithClock(func() time.Time { return now }),
+		WithLogger(slog.New(slog.DiscardHandler)))
+	var recs []record
+	e.Subscribe(func(ev model.Event, hp bool) { recs = append(recs, record{ev, hp}) })
+
+	hostRef := EndpointRef{Type: model.TypeHost, Identity: []model.KeyValue{kv("host.id", "h1")}}
+	procRef := EndpointRef{Type: model.TypeProcess, Identity: []model.KeyValue{kv("process.executable.name", "nginx")}}
+
+	// Explicit producer delete.
+	mustObserve(t, e, model.TypeHost, hostRef.Identity)
+	ev, emitted, err := e.DeleteEntity(EntityObservation{Type: model.TypeHost, Identity: hostRef.Identity, EventTime: t0})
+	if err != nil || !emitted {
+		t.Fatalf("producer delete: emitted=%v err=%v", emitted, err)
+	}
+	if got := ev.Entity.DeleteSource; got != model.DeleteSourceProducer {
+		t.Errorf("producer delete source = %q, want producer", got)
+	}
+
+	// Liveness expiry of an entity, and the cascade on its incident edge.
+	mustObserve(t, e, model.TypeProcess, procRef.Identity)
+	if _, oerr := e.ObserveEntity(EntityObservation{Type: model.TypeHost, Identity: hostRef.Identity, Interval: time.Minute, EventTime: t0}); oerr != nil {
+		t.Fatal(oerr)
+	}
+	if _, em, rerr := e.ObserveRelation(RelationObservation{Type: model.RelRunsOn, From: procRef, To: hostRef, EventTime: t0}); rerr != nil || !em {
+		t.Fatalf("relation add: emitted=%v err=%v", em, rerr)
+	}
+	recs = recs[:0]
+	now = now.Add(2 * time.Minute)
+	if n, serr := e.Sweep(); serr != nil || n != 2 {
+		t.Fatalf("sweep expired %d (err=%v), want 2 (host + cascaded edge)", n, serr)
+	}
+	var sawExpiry, sawCascade bool
+	for _, r := range recs {
+		if r.ev.Entity != nil && r.ev.Entity.ChangeType == model.EntityDeleted {
+			sawExpiry = true
+			if got := r.ev.Entity.DeleteSource; got != model.DeleteSourceLivenessExpiry {
+				t.Errorf("expired entity source = %q, want liveness_expiry", got)
+			}
+			if r.ev.Entity.DeleteReason != "" {
+				t.Errorf("expiry must not fabricate a producer delete_reason, got %q", r.ev.Entity.DeleteReason)
+			}
+		}
+		if r.ev.Relation != nil && r.ev.Relation.ChangeType == model.RelationRemoved {
+			sawCascade = true
+			if got := r.ev.Relation.DeleteSource; got != model.DeleteSourceCascade {
+				t.Errorf("cascaded edge source = %q, want cascade", got)
+			}
+		}
+	}
+	if !sawExpiry || !sawCascade {
+		t.Fatalf("expected an expired entity and a cascaded edge, saw expiry=%v cascade=%v", sawExpiry, sawCascade)
+	}
+
+	// Absence/explicit relation removal is producer-authored.
+	mustObserve(t, e, model.TypeProcess, procRef.Identity)
+	mustObserve(t, e, model.TypeHost, hostRef.Identity)
+	if _, em, rerr := e.ObserveRelation(RelationObservation{Type: model.RelRunsOn, From: procRef, To: hostRef, EventTime: t0}); rerr != nil || !em {
+		t.Fatalf("relation re-add: emitted=%v err=%v", em, rerr)
+	}
+	rev, emitted, err := e.RemoveRelation(RelationObservation{Type: model.RelRunsOn, From: procRef, To: hostRef, EventTime: t0})
+	if err != nil || !emitted {
+		t.Fatalf("relation remove: emitted=%v err=%v", emitted, err)
+	}
+	if got := rev.Relation.DeleteSource; got != model.DeleteSourceProducer {
+		t.Errorf("absence removal source = %q, want producer", got)
+	}
+}
