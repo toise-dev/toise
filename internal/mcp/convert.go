@@ -50,7 +50,13 @@ type Change struct {
 	// DeleteReason is the producer's open-enum motive on an entity.delete (e.g.
 	// terminated, expired, evicted); empty when none was given or for non-delete
 	// changes. Omitted from the payload when empty.
-	DeleteReason string    `json:"delete_reason,omitempty" jsonschema:"why an entity was deleted, e.g. terminated/expired/evicted; open enum, may be empty"`
+	DeleteReason string `json:"delete_reason,omitempty" jsonschema:"why an entity was deleted, e.g. terminated/expired/evicted; open enum, may be empty"`
+	// DeleteSource attributes the AUTHOR of a disappearance: producer (explicit
+	// delete or removal-by-absence), liveness_expiry (Toise's backstop reaped it
+	// after a missed heartbeat), or cascade (an endpoint died and took the edge).
+	// Distinct from DeleteReason, which is producer-supplied verbatim. Empty =
+	// unknown (event predates provenance), never to be read as producer.
+	DeleteSource string    `json:"delete_source,omitempty" jsonschema:"who authored the disappearance: producer, liveness_expiry (missed heartbeat) or cascade (endpoint died); empty on older events"`
 	Entity       *Entity   `json:"entity,omitempty"`
 	Relation     *Relation `json:"relation,omitempty"`
 }
@@ -161,6 +167,7 @@ func changeOut(ev model.Event) Change {
 			c.ChangedKeys = ee.ChangedKeys
 		}
 		c.DeleteReason = ee.DeleteReason
+		c.DeleteSource = string(ee.DeleteSource)
 		ent := entityOut(ee.Entity, ee.ChangeType == model.EntityDeleted)
 		c.Entity = &ent
 	case ev.Relation != nil:
@@ -172,6 +179,7 @@ func changeOut(ev model.Event) Change {
 		if re.ChangedKeys != nil {
 			c.ChangedKeys = re.ChangedKeys
 		}
+		c.DeleteSource = string(re.DeleteSource)
 		rel := relationOut(re.Relation)
 		c.Relation = &rel
 	}

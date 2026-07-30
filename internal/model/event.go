@@ -8,8 +8,32 @@ import (
 )
 
 // SchemaVersion is the current Toise event schema version. It is independent of
-// the OpenTelemetry spec version. See ADR 0015.
-const SchemaVersion = "1.0"
+// the OpenTelemetry spec version. See ADR 0015. 1.1 added the consumer-authored
+// DeleteSource provenance on delete/removal events (additive; 1.0 events read
+// back with an unknown source).
+const SchemaVersion = "1.1"
+
+// DeleteSource attributes the AUTHOR of a disappearance event. It is
+// consumer-authored provenance (ADR 0033), deliberately distinct from the
+// producer-supplied DeleteReason: Toise never writes into the producer's field,
+// and the producer's open enum (which legitimately includes "expired") never
+// masquerades as Toise's own expiry. The zero value means "unknown" — an event
+// written before schema 1.1 — and must never be re-labeled as producer.
+type DeleteSource string
+
+const (
+	// DeleteSourceUnknown marks a pre-1.1 event; not a synonym for producer.
+	DeleteSourceUnknown DeleteSource = ""
+	// DeleteSourceProducer is a producer-authored disappearance: an explicit
+	// entity.delete, or an edge dropped by absence on the source's re-emit.
+	DeleteSourceProducer DeleteSource = "producer"
+	// DeleteSourceLivenessExpiry is Toise's liveness backstop: no producer
+	// re-asserted the entity/edge within its entity.report.interval.
+	DeleteSourceLivenessExpiry DeleteSource = "liveness_expiry"
+	// DeleteSourceCascade is the removal of an incident edge because one of its
+	// endpoint entities was deleted (edges die with their node).
+	DeleteSourceCascade DeleteSource = "cascade"
+)
 
 // EntityEvent is a classified change about an entity. It is bi-temporal: see
 // ADR 0005.
@@ -33,6 +57,9 @@ type EntityEvent struct {
 	// (entity.delete.reason), an open enum kept verbatim as a free string. Empty
 	// for non-delete events and for deletes that carried no reason.
 	DeleteReason string
+	// DeleteSource attributes the author of an entity_deleted event
+	// (producer / liveness_expiry / cascade); unknown on pre-1.1 events.
+	DeleteSource DeleteSource
 }
 
 // RelationEvent is a classified change about a relation. Bi-temporal: ADR 0005.
@@ -44,6 +71,9 @@ type RelationEvent struct {
 	RecordedAt    time.Time
 	SchemaVersion string
 	ChangedKeys   []string
+	// DeleteSource attributes the author of a relation_removed event
+	// (producer / liveness_expiry / cascade); unknown on pre-1.1 events.
+	DeleteSource DeleteSource
 }
 
 // Event is the envelope stored in the append-only log. Exactly one of Entity or
@@ -124,6 +154,32 @@ func timeOf(nano int64) time.Time {
 	return time.Unix(0, nano).UTC()
 }
 
+func (s DeleteSource) toProto() toisev1.DeleteSource {
+	switch s {
+	case DeleteSourceProducer:
+		return toisev1.DeleteSource_DELETE_SOURCE_PRODUCER
+	case DeleteSourceLivenessExpiry:
+		return toisev1.DeleteSource_DELETE_SOURCE_LIVENESS_EXPIRY
+	case DeleteSourceCascade:
+		return toisev1.DeleteSource_DELETE_SOURCE_CASCADE
+	default:
+		return toisev1.DeleteSource_DELETE_SOURCE_UNSPECIFIED
+	}
+}
+
+func deleteSourceFromProto(p toisev1.DeleteSource) DeleteSource {
+	switch p {
+	case toisev1.DeleteSource_DELETE_SOURCE_PRODUCER:
+		return DeleteSourceProducer
+	case toisev1.DeleteSource_DELETE_SOURCE_LIVENESS_EXPIRY:
+		return DeleteSourceLivenessExpiry
+	case toisev1.DeleteSource_DELETE_SOURCE_CASCADE:
+		return DeleteSourceCascade
+	default:
+		return DeleteSourceUnknown
+	}
+}
+
 // ToProto converts the entity event to its protobuf representation.
 func (e EntityEvent) ToProto() *toisev1.EntityEvent {
 	return &toisev1.EntityEvent{
@@ -135,6 +191,7 @@ func (e EntityEvent) ToProto() *toisev1.EntityEvent {
 		SchemaVersion:      e.SchemaVersion,
 		ChangedKeys:        e.ChangedKeys,
 		DeleteReason:       e.DeleteReason,
+		DeleteSource:       e.DeleteSource.toProto(),
 	}
 }
 
@@ -152,6 +209,7 @@ func EntityEventFromProto(p *toisev1.EntityEvent) EntityEvent {
 		SchemaVersion: p.GetSchemaVersion(),
 		ChangedKeys:   p.GetChangedKeys(),
 		DeleteReason:  p.GetDeleteReason(),
+		DeleteSource:  deleteSourceFromProto(p.GetDeleteSource()),
 	}
 }
 
@@ -165,6 +223,7 @@ func (r RelationEvent) ToProto() *toisev1.RelationEvent {
 		RecordedAtUnixNano: nanoOf(r.RecordedAt),
 		SchemaVersion:      r.SchemaVersion,
 		ChangedKeys:        r.ChangedKeys,
+		DeleteSource:       r.DeleteSource.toProto(),
 	}
 }
 
@@ -181,6 +240,7 @@ func RelationEventFromProto(p *toisev1.RelationEvent) RelationEvent {
 		RecordedAt:    timeOf(p.GetRecordedAtUnixNano()),
 		SchemaVersion: p.GetSchemaVersion(),
 		ChangedKeys:   p.GetChangedKeys(),
+		DeleteSource:  deleteSourceFromProto(p.GetDeleteSource()),
 	}
 }
 

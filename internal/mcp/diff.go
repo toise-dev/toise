@@ -70,6 +70,9 @@ type DeletedEntity struct {
 	// DeleteReason is the last delete motive seen for this entity in the window;
 	// empty when the producer gave none or the entity expired by liveness.
 	DeleteReason string `json:"delete_reason,omitempty" jsonschema:"why the entity disappeared, e.g. terminated/expired/evicted; open enum, may be empty"`
+	// DeleteSource attributes the author of the disappearance: producer,
+	// liveness_expiry, or cascade; empty when the event predates provenance.
+	DeleteSource string `json:"delete_source,omitempty" jsonschema:"who authored the disappearance: producer, liveness_expiry (missed heartbeat) or cascade; empty on older events"`
 }
 
 // entityFold accumulates one entity's events across the window.
@@ -78,9 +81,10 @@ type entityFold struct {
 	lastLifecycle model.ChangeType // last created/deleted seen (0 = none)
 	changedKeys   map[string]struct{}
 	stateChanged  bool
-	ent           model.Entity // latest payload
-	deleteReason  string       // last entity.delete.reason seen (empty if none)
-	seq           int          // arrival order, for stable output
+	ent           model.Entity       // latest payload
+	deleteReason  string             // last entity.delete.reason seen (empty if none)
+	deleteSource  model.DeleteSource // author of the last delete seen (empty = unknown)
+	seq           int                // arrival order, for stable output
 }
 
 // relationFold accumulates one relation's events across the window.
@@ -124,6 +128,7 @@ func (s *Server) graphDiff(ctx context.Context, _ *mcpsdk.CallToolRequest, in Gr
 				f.lastLifecycle = ee.ChangeType
 				if ee.ChangeType == model.EntityDeleted {
 					f.deleteReason = ee.DeleteReason
+					f.deleteSource = ee.DeleteSource
 				}
 			case model.EntityAttributeUpdated, model.EntityStateChanged:
 				for _, k := range ee.ChangedKeys {
@@ -188,10 +193,10 @@ func (s *Server) graphDiff(ctx context.Context, _ *mcpsdk.CallToolRequest, in Gr
 		out.EntitiesCreated = append(out.EntitiesCreated, entityOut(f.ent, false))
 	}
 	for _, f := range deleted.folds {
-		out.EntitiesDeleted = append(out.EntitiesDeleted, DeletedEntity{Entity: entityOut(f.ent, true), DeleteReason: f.deleteReason})
+		out.EntitiesDeleted = append(out.EntitiesDeleted, DeletedEntity{Entity: entityOut(f.ent, true), DeleteReason: f.deleteReason, DeleteSource: string(f.deleteSource)})
 	}
 	for _, f := range transient.folds {
-		out.EntitiesTransient = append(out.EntitiesTransient, DeletedEntity{Entity: entityOut(f.ent, true), DeleteReason: f.deleteReason})
+		out.EntitiesTransient = append(out.EntitiesTransient, DeletedEntity{Entity: entityOut(f.ent, true), DeleteReason: f.deleteReason, DeleteSource: string(f.deleteSource)})
 	}
 	for _, f := range changed.folds {
 		keys := make([]string, 0, len(f.changedKeys))
