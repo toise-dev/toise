@@ -20,6 +20,12 @@ import (
 //     (network.address bound_to network.interface, host has_interface), then
 //     that host's listener on the port — this covers wildcard (0.0.0.0) binds.
 //
+// A host-scoped endpoint (a fourth identity key `host.id`, the ADR 0032
+// addendum form for host-local / link-local addresses) never enters that
+// fleet-wide search: its address is only meaningful on the host that observed
+// it, so resolution is confined to that host's listeners — a fleet-wide bind
+// scan would re-merge at read time exactly what the fourth key made distinct.
+//
 // Returns the resolved entity and true; (zero, false) when the endpoint denotes
 // nothing known (an external / off-fleet peer), which is itself a useful signal.
 func resolveEndpoint(g Graph, endpoint model.Entity) (model.Entity, bool) {
@@ -29,6 +35,19 @@ func resolveEndpoint(g Graph, endpoint model.Entity) (model.Entity, bool) {
 	}
 	port := identityValue(endpoint, "server.port")
 	transport := identityValue(endpoint, "network.transport")
+
+	if hostID := identityValue(endpoint, "host.id"); hostID != "" {
+		host, ok := hostByID(g, hostID)
+		if !ok {
+			return model.Entity{}, false
+		}
+		if port != "" {
+			if l, ok := listenerOnHostPort(g, host, port, transport); ok {
+				return l, true
+			}
+		}
+		return host, true
+	}
 
 	if l, ok := listenerByBind(g, addr, port, transport); ok {
 		return l, true
@@ -118,6 +137,16 @@ func listenerByBind(g Graph, addr, port, transport string) (model.Entity, bool) 
 			continue
 		}
 		return l, true
+	}
+	return model.Entity{}, false
+}
+
+// hostByID finds the live host whose identity host.id equals id.
+func hostByID(g Graph, id string) (model.Entity, bool) {
+	for _, h := range g.ListEntities(model.TypeHost) {
+		if identityValue(h, "host.id") == id {
+			return h, true
+		}
 	}
 	return model.Entity{}, false
 }

@@ -147,9 +147,21 @@ Liveness uses **two mechanisms, not one**:
    exactly for this ("resilient to event losses"). An entity observed with an
    `entity.report.interval` (heartbeat cadence, in **seconds**) is armed with a deadline; a
    periodic sweeper (`toise-server --liveness-sweep-interval`, default 30s) expires
-   it with `entity.deleted` if it is not re-asserted within the interval. The
-   producer should **size the interval to include slack** (e.g. a few heartbeats)
-   so a single late heartbeat does not expire a live entity.
+   it with `entity.deleted` if it is not re-asserted within the interval. Toise
+   applies the announced value **exactly, with no hidden grace**: the effective
+   expiry lands in `[interval, interval + sweep-interval)`.
+
+   **Sizing rule — the slack multiplier applies to the EFFECTIVE re-emission
+   cadence, not the internal heartbeat tick.** The cadence that matters is the
+   longest gap between two `entity.state` re-emissions the consumer can see —
+   which, for a producer that suppresses unchanged state, is the *suppression*
+   cadence, not the timer that drives it. Size
+   `interval >= 3 × effective cadence`, so two consecutive missed re-emissions
+   are absorbed. Getting the base wrong is not theoretical: a producer ticking
+   at 60s but re-emitting unchanged state every 120s that announced
+   `3 × 60 = 180s` had a real slack of ×1.5 — one missed re-emission put the
+   next one at 240s and expired the whole stack mechanically (the senhub-agent
+   #454 flapping incident).
 
 Producers emit **both**: the explicit delete *and* the interval. Only entities that
 carry an interval are ever expired, so the sweeper is safe to leave on.
