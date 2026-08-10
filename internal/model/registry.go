@@ -1,14 +1,16 @@
 package model
 
+import "github.com/toise-dev/toise/pkg/emit/wire"
+
 // Phase-1 entity types. See ADR 0004. New types are added here without breaking
 // existing ones.
 const (
-	TypeHost             = "host"
-	TypeProcess          = "process"
-	TypeNetworkInterface = "network.interface"
-	TypeNetworkAddress   = "network.address"
-	TypeNetworkRoute     = "network.route"
-	TypeServiceListener  = "service.listener"
+	TypeHost             = wire.TypeHost
+	TypeProcess          = wire.TypeProcess
+	TypeNetworkInterface = wire.TypeNetworkInterface
+	TypeNetworkAddress   = wire.TypeNetworkAddress
+	TypeNetworkRoute     = wire.TypeNetworkRoute
+	TypeServiceListener  = wire.TypeServiceListener
 )
 
 // Producer-vocabulary entity types, agreed with the senhub-agent producer for
@@ -17,13 +19,13 @@ const (
 const (
 	// TypeServiceInstance is an OTel service instance (e.g. the agent itself, or
 	// a monitored service). Identity: a single service.instance.id.
-	TypeServiceInstance = "service.instance"
+	TypeServiceInstance = wire.TypeServiceInstance
 	// TypeDatabase is a database instance. Identity SHOULD be a single composite
 	// immutable key (e.g. db.instance.id). See the contract doc and ADR 0018
 	// (exact identity matching).
-	TypeDatabase = "db"
+	TypeDatabase = wire.TypeDatabase
 	// TypeNetworkDevice is a discovered network asset (switch, router, …).
-	TypeNetworkDevice = "network.device"
+	TypeNetworkDevice = wire.TypeNetworkDevice
 	// TypeNetworkEndpoint is a remote network endpoint observed by a producer
 	// (e.g. the foreign end of an outbound TCP connection) but not canonically
 	// identifiable by the observer. Identity is what the observer can see:
@@ -31,7 +33,7 @@ const (
 	// to the canonical host/service.listener at read time (#184), per the OTel
 	// data-model rule "emit a different entity type keyed on what you can
 	// reliably obtain" — see docs/design/netstat-connection-topology.md.
-	TypeNetworkEndpoint = "network.endpoint"
+	TypeNetworkEndpoint = wire.TypeNetworkEndpoint
 	// TypeComputeVM is a virtual machine as seen FROM its hypervisor, where only
 	// the hypervisor's vmid is available, not the guest's machine-id. Identity:
 	// {host.id (the hypervisor node), vmid}. It is deliberately NOT a `host`: a
@@ -39,20 +41,20 @@ const (
 	// permanent identity and would duplicate the in-guest host. The in-guest view
 	// (an agent inside the VM) is the `host` {machine-id}; the two are distinct
 	// facets reconciled later by a same_as overlay, never merged.
-	TypeComputeVM = "compute.vm"
+	TypeComputeVM = wire.TypeComputeVM
 	// TypeContainer is an OCI/Docker container: a compute resource, not a service
 	// instance (it may run a service, but the container is the thing). Identity: a
 	// single container.id.
-	TypeContainer = "container"
+	TypeContainer = wire.TypeContainer
 )
 
 // Phase-1 relation types. See ADR 0004.
 const (
-	RelRunsOn       = "runs_on"
-	RelHasInterface = "has_interface"
-	RelBoundTo      = "bound_to"
-	RelNextHopVia   = "next_hop_via"
-	RelListensOn    = "listens_on"
+	RelRunsOn       = wire.RelTypeRunsOn
+	RelHasInterface = wire.RelTypeHasInterface
+	RelBoundTo      = wire.RelTypeBoundTo
+	RelNextHopVia   = wire.RelTypeNextHopVia
+	RelListensOn    = wire.RelTypeListensOn
 )
 
 // Producer-vocabulary relation types (senhub-agent integration). The From/To
@@ -64,18 +66,18 @@ const (
 // sourced from a `host` (Lot 4: a host's own routing/ARP tables link it to
 // discovered network.devices).
 const (
-	RelMonitors = "monitors" // a service.instance monitors a target entity
+	RelMonitors = wire.RelTypeMonitors // a service.instance monitors a target entity
 	// RelHasRoute attaches a routing-table entry to the device that holds it,
 	// mirroring has_interface (device -> port). The route's metric/protocol ride on
 	// the network.route entity (topology-as-entities, ADR 0022); next_hop_via links
 	// it onward.
-	RelHasRoute = "has_route"
+	RelHasRoute = wire.RelTypeHasRoute
 	// RelConnectedTo is the bare, port-to-port link-layer adjacency in the
 	// topology-as-entities model (ADR 0022): ports are network.interface entities,
 	// so the edge carries no attributes (the ports do). It is the standard, spec-
 	// embeddable form that supersedes adjacent_to + port attributes; device-level
 	// adjacency is derived from it at read time, not stored.
-	RelConnectedTo = "connected_to"
+	RelConnectedTo = wire.RelTypeConnectedTo
 
 	// RelDependsOn is a durable dependency a producer asserts from one of its own
 	// entities to a remote endpoint it depends on (the foreign end of a
@@ -83,7 +85,7 @@ const (
 	// model; the target is a network.endpoint the consumer resolves. "depends_on"
 	// is a sanctioned example type in the merged OTel entity spec but has no
 	// normative semantics yet — treat as transitional (#184).
-	RelDependsOn = "depends_on"
+	RelDependsOn = wire.RelTypeDependsOn
 
 	// RelSameAs is a producer-asserted identity belief: "these two entities are
 	// the same real thing", with edge attributes confidence (0-1) and basis (e.g.
@@ -91,7 +93,7 @@ const (
 	// failure impact (ImpactNone); the canonical collapse over high-confidence
 	// same_as edges is a deferred read-time overlay (ADR 0020, Lot B). The
 	// producer states evidence it can justify; it never pre-merges (ADR 0018/0020).
-	RelSameAs = "same_as"
+	RelSameAs = wire.RelTypeSameAs
 
 	// Legacy device-level edges — superseded under topology-as-entities (ADR 0022)
 	// and NOT to be emitted by producers: routes_via is replaced by network.route +
@@ -99,9 +101,9 @@ const (
 	// (FDB) by connected_to to the learned port. They remain registered (so the
 	// boundary still accepts them) but the contract derives the device-level views at
 	// read time. See docs/data-model/otel-mapping.md.
-	RelRoutesVia  = "routes_via"  // legacy: use network.route + has_route + next_hop_via
-	RelForwardsTo = "forwards_to" // legacy: use connected_to to the learned port
-	RelAdjacentTo = "adjacent_to" // legacy: use port-to-port connected_to
+	RelRoutesVia  = wire.RelTypeRoutesVia  // legacy: use network.route + has_route + next_hop_via
+	RelForwardsTo = wire.RelTypeForwardsTo // legacy: use connected_to to the learned port
+	RelAdjacentTo = wire.RelTypeAdjacentTo // legacy: use port-to-port connected_to
 )
 
 // ImpactFlow says in which direction a failure propagates across a relation
