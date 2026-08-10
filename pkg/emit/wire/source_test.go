@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -18,11 +19,20 @@ import (
 // forgot to list stays invisible to it, which is exactly how a vocabulary drifts
 // from the code that uses it. This one goes the other way — source to list — so
 // forgetting is a build failure rather than a silent hole.
+//
+// It parses the whole package rather than one named file on purpose: a scan
+// narrower than the thing it audits reintroduces the blind spot it exists to
+// close.
 func TestEveryDeclaredTypeIsListed(t *testing.T) {
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "wire.go", nil, 0)
+	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool {
+		return !strings.HasSuffix(fi.Name(), "_test.go")
+	}, 0)
 	if err != nil {
-		t.Fatalf("parsing wire.go: %v", err)
+		t.Fatalf("parsing the package: %v", err)
+	}
+	if len(pkgs) == 0 {
+		t.Fatal("no package source parsed — the scan would pass vacuously")
 	}
 
 	listed := map[string]bool{}
@@ -31,7 +41,13 @@ func TestEveryDeclaredTypeIsListed(t *testing.T) {
 	}
 
 	declared := 0
-	for _, decl := range file.Decls {
+	var decls []ast.Decl
+	for _, pkg := range pkgs {
+		for _, file := range pkg.Files {
+			decls = append(decls, file.Decls...)
+		}
+	}
+	for _, decl := range decls {
 		gen, ok := decl.(*ast.GenDecl)
 		if !ok || gen.Tok != token.CONST {
 			continue
