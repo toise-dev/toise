@@ -24,14 +24,30 @@ import (
 // narrower than the thing it audits reintroduces the blind spot it exists to
 // close.
 func TestEveryDeclaredTypeIsListed(t *testing.T) {
-	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool {
-		return !strings.HasSuffix(fi.Name(), "_test.go")
-	}, 0)
+	// The directory is walked by hand rather than with parser.ParseDir, which is
+	// deprecated, and rather than with x/tools: this package promises to stay
+	// stdlib-only, and a test dependency still lands in the module graph a
+	// producer resolves.
+	entries, err := os.ReadDir(".")
 	if err != nil {
-		t.Fatalf("parsing the package: %v", err)
+		t.Fatalf("reading the package directory: %v", err)
 	}
-	if len(pkgs) == 0 {
+	fset := token.NewFileSet()
+	var decls []ast.Decl
+	parsed := 0
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, perr := parser.ParseFile(fset, name, nil, 0)
+		if perr != nil {
+			t.Fatalf("parsing %s: %v", name, perr)
+		}
+		decls = append(decls, file.Decls...)
+		parsed++
+	}
+	if parsed == 0 {
 		t.Fatal("no package source parsed — the scan would pass vacuously")
 	}
 
@@ -41,12 +57,6 @@ func TestEveryDeclaredTypeIsListed(t *testing.T) {
 	}
 
 	declared := 0
-	var decls []ast.Decl
-	for _, pkg := range pkgs {
-		for _, file := range pkg.Files {
-			decls = append(decls, file.Decls...)
-		}
-	}
 	for _, decl := range decls {
 		gen, ok := decl.(*ast.GenDecl)
 		if !ok || gen.Tok != token.CONST {
