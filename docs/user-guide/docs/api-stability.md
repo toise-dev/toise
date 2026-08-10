@@ -27,6 +27,34 @@ can build on.
 - **No silent retyping or renaming** of an existing field — that is a breaking
   change and follows the deprecation path.
 
+## Who owns what
+
+A producer and Toise each hold one half of the contract, and the split follows a
+single rule: **each side owns what it can verify.**
+
+| Belongs to Toise | Belongs to the producer |
+|------------------|-------------------------|
+| The **vocabulary** — entity and relation types, attribute keys, identity rules | The **transport** — batching, backpressure, retries, tenant propagation |
+| The **wire form** — the record shape, pinned by the conformance fixture | **Verifying its own emission** matches that form |
+
+Toise holds the vocabulary because it is the only side that sees every producer
+at once, and it publishes it in `pkg/emit/wire` — stdlib-only, so importing the
+vocabulary never drags a protocol stack into a producer's module graph.
+
+A producer holds the transport because that is where its operational guarantees
+live. A producer whose own export pipeline already owns batching, backpressure,
+retries and tenant headers should **not** adopt the SDK's client at runtime:
+routing entity events through a second path would cost it those four properties
+to gain nothing. Importing `pkg/emit/wire` for the vocabulary, or the SDK's
+encoder in a **differential test** that fails the build when its own encoding
+drifts from ours, gets the guarantee without the coupling.
+
+The corollary matters for anyone pinning to `pkg/emit`: it is the supported Go
+surface, so it follows the change rules above — additive within a series,
+deprecate before removing — and, as the pre-1.0 note says, a break remains
+possible before 1.0 but only announced in the preceding release and recorded in
+the changelog.
+
 ## Following the upstream entity-events spec
 
 The producer wire contract follows the OpenTelemetry **entity-events**
