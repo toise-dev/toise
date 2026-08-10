@@ -38,7 +38,31 @@ question without a second lookup.
 | `entity_history(entity_id, since, until, ...)` | an entity's timeline from the event log (bi-temporal), heartbeats excluded by default, bounded by `limit`, with a per-type digest |
 | `recent_changes(window, kind, change_type, ...)` | recent qualified changes across the graph — same budget and digest contract; `window` defaults to 1h |
 | `graph_diff(window | from/to, limit)` | the folded **net** difference between two instants: created / deleted / changed / **transient** (flapping) entities and relations, churn collapsed away |
-| `telemetry_keys(entity_id)` | the OTel resource attributes that locate this entity's metrics and logs in observability backends — own and 1-hop-inherited keys, each with its flattened metric-label spelling and usage caveats |
+| `telemetry_keys(entity_id)` | the OTel attributes that locate this entity's metrics and logs in observability backends — its own keys plus those of the entity that **owns** it, each with its flattened metric-label spelling and usage caveats |
+
+**Pivoting to telemetry.** `telemetry_keys` walks one hop to the entity that
+**owns** the one you asked about and inherits its keys — a listener gains its
+host's `host.id` through `runs_on`, a route gains its device's through
+`has_route`. Observation and peer relations are not followed: what *monitors* an
+entity, or what it *depends on*, describes something else, and inheriting through
+them would hand back another machine's telemetry as if it were the subject's. An
+empty result therefore means **no key exists**, not that none was found — some
+types legitimately have none, an address or a route being a graph fact with no
+measurements of its own.
+
+Where the join then holds depends on how the telemetry reached the backend, and
+the tool says so rather than implying a uniform guarantee:
+
+| Path | Round trip |
+|------|------------|
+| OTLP rail into a metrics/logs backend | **guaranteed** — the keys travel as resource or per-datapoint attributes |
+| Prometheus-family backend fed by a collector | holds where that collector flattens resource attributes into labels — a deployment choice, not a property of the wire |
+| A producer's own scrape endpoint | **not guaranteed** — there is no resource there, so resource-borne keys are absent |
+
+A remote target the producer polled — a database, an SNMP device — has no
+resource of its own, so its identity rides each datapoint instead. Those keys are
+absent from any label set derived by flattening resource attributes, and the tool
+notes it on the key itself.
 
 **Time travel.** Every graph-reading tool takes `as_of` (RFC 3339): the answer
 is the graph as it was at that instant, rebuilt from the event log — "show me

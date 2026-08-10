@@ -29,19 +29,36 @@ liveness interval, and optional relationships:
 
 ```go
 type Entity struct {
-    Type          string            // e.g. "host", "service.listener"
-    ID            map[string]string // identity — every key/value counts (exact match)
-    Attributes    map[string]string // descriptive, non-identifying
-    Interval      time.Duration     // liveness backstop; re-assert at least this often
-    Relationships []Relationship    // edges this entity owns
+    Type           string            // a wire.Type* constant, e.g. wire.TypeHost
+    ID             map[string]string // identity — every key/value counts (exact match)
+    RichAttributes map[string]any    // descriptive, each value keeping its own type
+    Attributes     map[string]string // shortcut for values that really are strings
+    Interval       time.Duration     // liveness backstop; re-assert at least this often
+    Relationships  []Relationship    // edges this entity owns
 }
 
 type Relationship struct {
-    Type       string            // e.g. "runs_on"
+    Type       string            // a wire.RelType* constant, e.g. wire.RelTypeRunsOn
     TargetType string            // the target entity's type
     TargetID   map[string]string // the target entity's identity
 }
 ```
+
+**Name the types from the vocabulary, not from memory.** The entity and relation
+types are a registered set: one Toise does not know is refused at the boundary
+under the default strict vocabulary. `pkg/emit/wire` exports the whole set —
+`wire.TypeHost`, `wire.TypeServiceListener`, `wire.RelTypeRunsOn`, and so on,
+with `wire.EntityTypes()` / `wire.RelationTypes()` if you want to validate a
+value you did not write yourself. Deriving from them turns a typo or an invented
+type into a compile error instead of a batch rejected at runtime. The package is
+deliberately stdlib-only, so importing it pulls no protocol stack into your
+module graph.
+
+**Descriptive values keep their type.** A capacity, a frequency or a flag is a
+number or a boolean, and stays one on the wire — put it in `RichAttributes`.
+`Attributes` is the shortcut for the case where every value genuinely is a
+string; both land in the same place. A value type the SDK cannot encode is
+rejected at `Build`, naming the key, never silently stringified.
 
 ## A complete minimal producer
 
@@ -57,6 +74,7 @@ import (
     "time"
 
     "github.com/toise-dev/toise/pkg/emit"
+    "github.com/toise-dev/toise/pkg/emit/wire"
 )
 
 func main() {
@@ -71,19 +89,23 @@ func main() {
     defer client.Close()
 
     host := emit.Entity{
-        Type:       "host",
-        ID:         map[string]string{"host.id": "srv-001"},
-        Attributes: map[string]string{"host.name": "web-1", "os.type": "linux"},
-        Interval:   60 * time.Second,
+        Type: wire.TypeHost,
+        ID:   map[string]string{"host.id": "srv-001"},
+        RichAttributes: map[string]any{
+            "host.name":              "web-1",
+            "os.type":                "linux",
+            "host.cpu.logical.count": 8,    // an int stays an int
+        },
+        Interval: 60 * time.Second,
     }
     svc := emit.Entity{
-        Type:       "service.listener",
+        Type:       wire.TypeServiceListener,
         ID:         map[string]string{"host.id": "srv-001", "server.port": "443"},
         Attributes: map[string]string{"server.address": "10.0.0.1"},
         Interval:   60 * time.Second,
         Relationships: []emit.Relationship{{
-            Type:       "runs_on",
-            TargetType: "host",
+            Type:       wire.RelTypeRunsOn,
+            TargetType: wire.TypeHost,
             TargetID:   map[string]string{"host.id": "srv-001"},
         }},
     }
