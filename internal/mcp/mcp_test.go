@@ -1441,3 +1441,97 @@ func TestDescribeType(t *testing.T) {
 		t.Errorf("unknown type error = %v", gerr)
 	}
 }
+
+// TestTelemetryKeysOwnershipOnly pins #312: a join key may only be inherited
+// from the entity that OWNS this one. Observation (monitors) and peer
+// (depends_on) hops must contribute nothing — inheriting through them hands
+// back the observer's or the peer's telemetry as if it described the subject,
+// which is how a `db` entity came to report the monitoring agent's
+// service.name in production.
+func TestTelemetryKeysOwnershipOnly(t *testing.T) {
+	agent := model.Entity{
+		ID:         "01AGENT",
+		Type:       "service.instance",
+		Identity:   []model.KeyValue{{Key: "service.instance.id", Value: model.StringValue("agent-1")}},
+		Attributes: []model.KeyValue{{Key: "service.name", Value: model.StringValue("senhub-agent")}},
+	}
+	database := model.Entity{
+		ID:       "01DB",
+		Type:     "db",
+		Identity: []model.KeyValue{{Key: "db.instance.id", Value: model.StringValue("postgresql:7459")}},
+	}
+	endpoint := model.Entity{
+		ID:       "01EP",
+		Type:     "network.endpoint",
+		Identity: []model.KeyValue{{Key: "server.address", Value: model.StringValue("10.0.0.9")}},
+	}
+	device := model.Entity{
+		ID:       "01DEV",
+		Type:     "network.device",
+		Identity: []model.KeyValue{{Key: "network.device.id", Value: model.StringValue("engine:1")}},
+	}
+	route := model.Entity{
+		ID:       "01ROUTE",
+		Type:     "network.route",
+		Identity: []model.KeyValue{{Key: "route.destination", Value: model.StringValue("10.0.0.0/8")}},
+	}
+	g := &fakeGraph{
+		entities: map[model.EntityID]model.Entity{
+			agent.ID: agent, database.ID: database, endpoint.ID: endpoint,
+			device.ID: device, route.ID: route,
+		},
+		deleted: map[model.EntityID]bool{},
+		relations: []model.Relation{
+			{ID: "r-mon", Type: model.RelMonitors, From: agent.ID, To: database.ID, Structural: true},
+			{ID: "r-dep", Type: model.RelDependsOn, From: agent.ID, To: endpoint.ID, Structural: true},
+			{ID: "r-route", Type: model.RelHasRoute, From: device.ID, To: route.ID, Structural: true},
+		},
+	}
+	s := New(g, &fakeStore{})
+	ctx := context.Background()
+
+	keysOf := func(id string) map[string]TelemetryKey {
+		t.Helper()
+		_, out, err := s.telemetryKeys(ctx, nil, TelemetryKeysInput{EntityID: id})
+		if err != nil {
+			t.Fatalf("telemetryKeys(%s): %v", id, err)
+		}
+		by := map[string]TelemetryKey{}
+		for _, k := range out.Keys {
+			by[k.Key] = k
+		}
+		return by
+	}
+
+	// Observation: the database keeps its own key and inherits nothing.
+	dbKeys := keysOf("01DB")
+	if _, leaked := dbKeys["service.name"]; leaked {
+		t.Error("db inherited the observing agent's service.name through monitors")
+	}
+	if _, leaked := dbKeys["service.instance.id"]; leaked {
+		t.Error("db inherited the observing agent's service.instance.id through monitors")
+	}
+	own, ok := dbKeys["db.instance.id"]
+	if !ok || own.Source != "identity" {
+		t.Errorf("db must report its own db.instance.id from identity, got %+v", dbKeys)
+	}
+	if own.Note == "" {
+		t.Error("db.instance.id must carry the per-datapoint caveat")
+	}
+
+	// Peer: the endpoint is not described by the service that depends on it.
+	if epKeys := keysOf("01EP"); len(epKeys) != 0 {
+		t.Errorf("network.endpoint inherited keys through depends_on: %+v", epKeys)
+	}
+
+	// Ownership, incoming direction: the route does inherit from the device
+	// that holds it.
+	routeKeys := keysOf("01ROUTE")
+	devID, ok := routeKeys["network.device.id"]
+	if !ok {
+		t.Fatalf("route must inherit its device's network.device.id, got %+v", routeKeys)
+	}
+	if !strings.Contains(devID.Source, "via has_route") {
+		t.Errorf("network.device.id source = %q, want inherited via has_route", devID.Source)
+	}
+}
