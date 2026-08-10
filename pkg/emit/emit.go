@@ -29,24 +29,31 @@ import (
 
 // Entity is one entity observation to emit.
 type Entity struct {
-	// Type is the entity type, e.g. "host" or "service.listener".
+	// Type is the entity type. Prefer a wire.Type* constant over a literal: the
+	// vocabulary is registered, and a type Toise does not know is refused at the
+	// boundary under the default strict vocabulary.
 	Type string
 	// ID is the identifying attribute set. Exact-match identity: every key and
 	// value counts (ADR 0018 on the consumer side). Values are strings by
 	// deliberate choice — matching is byte-exact over strings, so a port is the
-	// string "443", not an int; typed identity values would only invite
-	// hash-mismatch ambiguity for no gain.
+	// string "443", not an int. Typed identity values would give one identity two
+	// spellings that hash differently, which is the silent divergence exact
+	// matching exists to prevent.
 	ID map[string]string
-	// Attributes are descriptive (non-identifying) attributes with scalar string
-	// values — the common, flat case.
-	Attributes map[string]string
-	// RichAttributes are descriptive attributes whose values are the full OTel
-	// AnyValue (scalars, arrays, nested maps), for the rarer structured case that
-	// Toise's entity.description accepts. Native Go types map to OTLP: string,
-	// bool, int/int8…int64, uint/…/uint32, float32/float64, []any, and
-	// map[string]any (recursively). A key here must NOT also appear in Attributes,
-	// and unsupported value types are rejected at Build — no silent loss.
+	// RichAttributes are the descriptive (non-identifying) attributes, each
+	// keeping its own type. This is the normal path: a capacity, a frequency or a
+	// flag is a number or a boolean, and stays one on the wire rather than being
+	// stringified. Native Go types map to OTLP AnyValue — string, bool, the int
+	// and uint families, float32/float64 — and, for the occasional structured
+	// value Toise's entity.description also accepts, []any and map[string]any
+	// recursively. An unsupported value type is rejected at Build, naming the
+	// key: never a silent loss.
 	RichAttributes map[string]any
+	// Attributes is a shortcut for attributes that genuinely are strings, so a
+	// producer with nothing typed to say need not write map[string]any. It lands
+	// in the same place on the wire as RichAttributes; a key set in both is an
+	// error at Build.
+	Attributes map[string]string
 	// Interval, when > 0, arms the consumer's liveness backstop: re-assert the
 	// entity at least this often or it is expired. Size it with slack for
 	// jitter and a missed heartbeat.
