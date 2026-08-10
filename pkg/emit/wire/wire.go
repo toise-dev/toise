@@ -71,24 +71,124 @@ const (
 	RelBasis      = "basis"
 )
 
-// RelTypeSameAs is the identity-belief relationship type ("these two entities are
-// the same real thing"), the sole edge that carries RelConfidence/RelBasis. It
-// mirrors internal/model.RelSameAs; the SDK cannot import the engine's vocabulary,
-// so the constant is duplicated here and pinned by a cross-check test.
-const RelTypeSameAs = "same_as"
+// Entity types — the registered vocabulary. Toise's boundary accepts these and
+// refuses the rest under the default strict vocabulary, so a producer that
+// spells a type by hand can only be right by luck. Deriving from these makes a
+// unilaterally invented type a compile error instead of a rejected batch.
+//
+// Adding a type is additive and never breaks an existing one (ADR 0004).
+const (
+	// TypeHost is a machine, keyed by its machine-id.
+	TypeHost = "host"
+	// TypeProcess is a running process, keyed by {process.pid,
+	// process.creation.time}: a recycled pid is a different entity.
+	TypeProcess = "process"
+	// TypeNetworkInterface is a network interface — a host NIC or a device port.
+	TypeNetworkInterface = "network.interface"
+	// TypeNetworkAddress is an IP address as a first-class node. It is the join
+	// point between a host's routing view and SNMP-discovered topology, and is
+	// deliberately NOT host-scoped: a LAN address is shared by construction.
+	TypeNetworkAddress = "network.address"
+	// TypeNetworkRoute is one routing-table entry (topology-as-entities, ADR 0022).
+	TypeNetworkRoute = "network.route"
+	// TypeServiceListener is a listening socket, keyed by service.endpoint.
+	TypeServiceListener = "service.listener"
+	// TypeServiceInstance is an OTel service instance: the producer itself, or a
+	// service it observes. Keyed by a single service.instance.id.
+	TypeServiceInstance = "service.instance"
+	// TypeDatabase is a database instance. Its identity SHOULD be an id the
+	// technology reports and persists across restarts, never a network address
+	// (ADR 0018): an address names the path to the thing, not the thing.
+	TypeDatabase = "db"
+	// TypeNetworkDevice is a discovered network asset — switch, router, and so on.
+	TypeNetworkDevice = "network.device"
+	// TypeNetworkEndpoint is the observable remote-endpoint entity type — the
+	// target of a depends_on edge, keyed on what a producer can actually see from
+	// a socket ({server.address, server.port, network.transport}), never the
+	// peer's host.id (the data-model MUST-NOT rule). A host-local address adds
+	// host.id as a fourth key (ADR 0032). The consumer resolves it to the
+	// canonical listener or host at read time (#184).
+	TypeNetworkEndpoint = "network.endpoint"
+	// TypeComputeVM is a virtual machine seen FROM its hypervisor, keyed by
+	// {host.id of the hypervisor, vmid}. It is deliberately not a host: the
+	// in-guest view is a separate entity, reconciled by same_as, never merged.
+	TypeComputeVM = "compute.vm"
+	// TypeContainer is an OCI/Docker container, keyed by a single container.id.
+	TypeContainer = "container"
+)
 
-// RelTypeDependsOn is the durable dependency relationship a producer asserts from
-// one of its own entities toward a remote network endpoint it observed itself
-// connecting to — the outbound, client-side edge of the connection-topology model
-// (ADR 0032). It is an open-enum type with no belief attributes. It mirrors
-// internal/model.RelDependsOn and is pinned by the same cross-check as RelTypeSameAs.
-const RelTypeDependsOn = "depends_on"
+// Relation types. The From/To pairings are canonical but advisory: they are not
+// enforced at the boundary, so a relation may legitimately connect other
+// registered types.
+const (
+	// RelTypeRunsOn attaches a process, service.instance, compute.vm or container
+	// to the host it runs on.
+	RelTypeRunsOn = "runs_on"
+	// RelTypeHasInterface attaches an interface to the host or device that has it.
+	RelTypeHasInterface = "has_interface"
+	// RelTypeBoundTo attaches an address to the interface it is bound to.
+	RelTypeBoundTo = "bound_to"
+	// RelTypeNextHopVia links a route onward to its next-hop address.
+	RelTypeNextHopVia = "next_hop_via"
+	// RelTypeListensOn attaches a listener to the interface it listens on.
+	RelTypeListensOn = "listens_on"
+	// RelTypeMonitors records that a service.instance observes a target entity.
+	// It is an observation, not ownership: nothing about the observer describes
+	// the observed.
+	RelTypeMonitors = "monitors"
+	// RelTypeHasRoute attaches a routing-table entry to the device that holds it.
+	RelTypeHasRoute = "has_route"
+	// RelTypeConnectedTo is bare port-to-port link-layer adjacency (ADR 0022).
+	// The edge carries no attributes; the ports do.
+	RelTypeConnectedTo = "connected_to"
+	// RelTypeDependsOn is the durable dependency relationship a producer asserts
+	// from one of its own entities toward a remote network endpoint it observed
+	// itself connecting to — the outbound, client-side edge of the
+	// connection-topology model (ADR 0032). Open-enum, no belief attributes.
+	RelTypeDependsOn = "depends_on"
+	// RelTypeSameAs is the identity-belief relationship type ("these two entities
+	// are the same real thing"), the sole edge that carries
+	// RelConfidence/RelBasis. It does NOT merge the entities: the canonical
+	// collapse is a read-time overlay (ADR 0020).
+	RelTypeSameAs = "same_as"
+)
 
-// TypeNetworkEndpoint is the observable remote-endpoint entity type — the target of
-// a depends_on edge, keyed on what a producer can actually see from a socket
-// ({server.address, server.port, network.transport}), never the peer's host.id
-// (the data-model MUST-NOT rule). It mirrors internal/model.TypeNetworkEndpoint.
-const TypeNetworkEndpoint = "network.endpoint"
+// Legacy relation types, superseded under topology-as-entities (ADR 0022) and
+// NOT to be emitted by new producers. They stay registered so the boundary keeps
+// accepting existing emitters; the device-level views they expressed are derived
+// at read time instead.
+const (
+	// RelTypeRoutesVia is superseded by network.route + has_route + next_hop_via.
+	RelTypeRoutesVia = "routes_via"
+	// RelTypeForwardsTo is superseded by connected_to to the learned port.
+	RelTypeForwardsTo = "forwards_to"
+	// RelTypeAdjacentTo is superseded by port-to-port connected_to.
+	RelTypeAdjacentTo = "adjacent_to"
+)
+
+// EntityTypes returns every registered entity type. A producer can use it to
+// validate a type before emitting; Toise's own cross-check test uses it to prove
+// this list and the engine registry are the same set, so neither can gain a type
+// the other does not know.
+func EntityTypes() []string {
+	return []string{
+		TypeHost, TypeProcess, TypeNetworkInterface, TypeNetworkAddress,
+		TypeNetworkRoute, TypeServiceListener, TypeServiceInstance, TypeDatabase,
+		TypeNetworkDevice, TypeNetworkEndpoint, TypeComputeVM, TypeContainer,
+	}
+}
+
+// RelationTypes returns every registered relation type, legacy ones included:
+// the boundary still accepts them, so a vocabulary that omitted them would be
+// incomplete.
+func RelationTypes() []string {
+	return []string{
+		RelTypeRunsOn, RelTypeHasInterface, RelTypeBoundTo, RelTypeNextHopVia,
+		RelTypeListensOn, RelTypeMonitors, RelTypeHasRoute, RelTypeConnectedTo,
+		RelTypeDependsOn, RelTypeSameAs,
+		RelTypeRoutesVia, RelTypeForwardsTo, RelTypeAdjacentTo,
+	}
+}
 
 // Identity keys of a network.endpoint entity. A producer that keys an endpoint by
 // hand MUST use exactly these spellings so that both ends of a hop derive the same
