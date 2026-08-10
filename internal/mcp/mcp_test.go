@@ -852,7 +852,7 @@ func TestFindPathAndNeighborEdges(t *testing.T) {
 }
 
 // TestTelemetryKeys pins the graph-to-telemetry pivot (#115): join keys from
-// the entity's own attributes plus those inherited from direct neighbors, with
+// the entity's own attributes plus those inherited from the entity that owns it,
 // the metric-label spelling and the usage caveats — the host.id lesson from
 // the recette, encoded as a tool.
 func TestTelemetryKeys(t *testing.T) {

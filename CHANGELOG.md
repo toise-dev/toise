@@ -9,6 +9,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
+### Added
+
+- **The entity and relation type vocabulary is exported from `pkg/emit/wire`**
+  (#313): twelve entity types and thirteen relation types, legacy ones included,
+  plus `EntityTypes()` / `RelationTypes()`. A producer no longer spells types by
+  hand — the vocabulary lived in `internal/model`, which is not importable, so
+  every producer kept private constants and one product could spell the same type
+  two ways with nothing failing. Naming follows the constants already published
+  (`TypeHost`, `RelTypeRunsOn`); `RelTypeSameAs`, `RelTypeDependsOn` and
+  `TypeNetworkEndpoint` keep their names and values.
+- **Who owns what** is recorded in the API stability policy (#314): Toise holds
+  the vocabulary and the wire form, a producer holds the transport and the
+  verification of its own emission — each side owns what it can verify.
+
+### Changed
+
+- **`Entity.RichAttributes` is presented first**, as the normal path for
+  descriptive attributes: a capacity, a frequency or a flag is a number or a
+  boolean and stays one on the wire. `Attributes` follows as the shortcut for
+  values that genuinely are strings. Declaring the string map first and calling
+  the typed one "the rarer structured case" led a producer to conclude the SDK
+  could not carry typed values at all. No wire change — both maps always landed
+  in the same place.
+
+### Fixed
+
+- **`telemetry_keys` inherits join keys only from the entity that owns the one
+  asked about** (#312). It previously walked one hop over *every* relation, so an
+  entity with no key of its own reported the identity of whatever happened to
+  touch it: a `db` seen only through `monitors` returned the monitoring agent's
+  `service.name`, and a consumer trusting the answer queried the wrong machine's
+  telemetry. Inheritance is now restricted to ownership hops and is directional;
+  `monitors`, `depends_on`, `connected_to` and `next_hop_via` contribute nothing.
+  Graph traversal is unchanged — only key derivation was at fault.
+- `db.instance.id` joins the telemetry join-key set, noting with
+  `network.device.id` that a remote target's identity rides each datapoint rather
+  than the producer's resource.
+- `telemetry_keys` guidance now states where the round trip holds — guaranteed on
+  the OTLP rail, dependent on the collector's resource-to-label conversion on a
+  Prometheus-family backend, absent from a producer's own scrape endpoint — and
+  an empty result reads as "no key exists" rather than "none found yet".
+
 ## [0.10.0] - 2026-07-30
 
 **Delete provenance and host-scoped endpoints — the producer-alignment release.**

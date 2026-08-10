@@ -262,11 +262,13 @@ func (s *Server) register(srv *mcpsdk.Server) {
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name: "telemetry_keys",
 		Description: "Derive the join keys that locate an entity's metrics and logs in telemetry " +
-			"backends: the OTel resource attributes on the entity itself plus those inherited " +
-			"from its direct neighbors (a listener gains its host's host.id via runs_on). Each " +
-			"key comes with its Prometheus-style flattened label form and usage caveats " +
-			"(ephemeral pids, name-vs-identity). Use this to pivot from the graph to " +
-			"observability data.",
+			"backends: the OTel attributes on the entity itself plus those inherited from the " +
+			"entity that OWNS it (a listener gains its host's host.id via runs_on). Observation " +
+			"and peer relations are not followed: what monitors an entity, or what it depends " +
+			"on, describes something else. Each key comes with its Prometheus-style flattened " +
+			"label form and usage caveats (ephemeral pids, name-vs-identity, per-datapoint " +
+			"identities of remote targets). An empty result means no key exists, not that none " +
+			"was found. Use this to pivot from the graph to observability data.",
 	}, observe(s, "telemetry_keys", s.telemetryKeys))
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
