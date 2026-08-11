@@ -115,6 +115,14 @@ const (
 	TypeComputeVM = "compute.vm"
 	// TypeContainer is an OCI/Docker container, keyed by a single container.id.
 	TypeContainer = "container"
+	// TypePod is a Kubernetes pod: the unit of scheduling and of failure, keyed
+	// by the UID Kubernetes assigns it — never namespace/name, which is mutable
+	// and reused. It sits between its containers and the node: a container
+	// runs_on its pod, the pod runs_on its host, so a node failing takes the
+	// pods, which take the containers. It owns the telemetry its containers
+	// cannot: the network namespace is shared per pod, so pod-scoped network
+	// measurements belong to it and to nothing else.
+	TypePod = "pod"
 )
 
 // Relation types. The From/To pairings are canonical but advisory: they are not
@@ -175,6 +183,7 @@ func EntityTypes() []string {
 		TypeHost, TypeProcess, TypeNetworkInterface, TypeNetworkAddress,
 		TypeNetworkRoute, TypeServiceListener, TypeServiceInstance, TypeDatabase,
 		TypeNetworkDevice, TypeNetworkEndpoint, TypeComputeVM, TypeContainer,
+		TypePod,
 	}
 }
 
