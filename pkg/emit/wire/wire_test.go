@@ -18,7 +18,8 @@ func TestVocabularyLists(t *testing.T) {
 			list: EntityTypes(),
 			want: []string{TypeHost, TypeProcess, TypeNetworkInterface, TypeNetworkAddress,
 				TypeNetworkRoute, TypeServiceListener, TypeServiceInstance, TypeDatabase,
-				TypeNetworkDevice, TypeNetworkEndpoint, TypeComputeVM, TypeContainer},
+				TypeNetworkDevice, TypeNetworkEndpoint, TypeComputeVM, TypeContainer,
+				TypePod},
 		},
 		{
 			what: "relation type",
