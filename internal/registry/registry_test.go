@@ -445,8 +445,8 @@ func TestOpenStackRestoresLivenessMemento(t *testing.T) {
 	if !hasHost(st2.Graph, "h-memento") {
 		t.Fatal("snapshot did not restore the entity")
 	}
-	if n, _ := st2.Engine.Sweep(); n != 0 {
-		t.Fatalf("first sweep after boot expired %d, want 0 (producer is fresh)", n)
+	if n, _ := st2.Engine.Sweep(); n.Total() != 0 {
+		t.Fatalf("first sweep after boot expired %d, want 0 (producer is fresh)", n.Total())
 	}
 	_, emitted, derr := st2.Engine.DeleteEntity(change.EntityObservation{
 		Type: model.TypeHost, Identity: ident, Producer: "p2", EventTime: time.Now(),
@@ -561,8 +561,8 @@ func TestOpenStackFloorsRestoredDeadlines(t *testing.T) {
 	}
 
 	// At boot, now == boot < boot+interval (the floor): nothing reaped.
-	if n, _ := st2.Engine.Sweep(); n != 0 {
-		t.Fatalf("sweep right after boot expired %d, want 0 (deadline floored to boot+interval)", n)
+	if n, _ := st2.Engine.Sweep(); n.Total() != 0 {
+		t.Fatalf("sweep right after boot expired %d, want 0 (deadline floored to boot+interval)", n.Total())
 	}
 	if !hasHost(st2.Graph, "h-floor") {
 		t.Fatal("entity reaped by the boot-time sweep despite the grace floor")
@@ -570,8 +570,8 @@ func TestOpenStackFloorsRestoredDeadlines(t *testing.T) {
 
 	// Advance strictly past the floored deadline: the silent producer is reaped.
 	clk.Store(boot.Add(interval + time.Millisecond).UnixNano())
-	if n, _ := st2.Engine.Sweep(); n != 1 {
-		t.Fatalf("post-grace sweep expired %d, want 1", n)
+	if n, _ := st2.Engine.Sweep(); n.Total() != 1 {
+		t.Fatalf("post-grace sweep expired %d, want 1", n.Total())
 	}
 	if hasHost(st2.Graph, "h-floor") {
 		t.Error("silent producer's entity survived past the floored deadline")

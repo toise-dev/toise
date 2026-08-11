@@ -37,8 +37,8 @@ func TestResurrectionReclaimsIDWithinGraceWindow(t *testing.T) {
 
 	// The producer goes silent past its interval; the sweeper soft-deletes it.
 	now = now.Add(90 * time.Second)
-	if n, _ := e.Sweep(); n != 1 {
-		t.Fatalf("expected 1 expiry, swept %d", n)
+	if n, _ := e.Sweep(); n.Total() != 1 {
+		t.Fatalf("expected 1 expiry, swept %d", n.Total())
 	}
 	if _, found := g.MatchIdentity(model.TypeHost, host); found {
 		t.Fatal("entity should be soft-deleted after the sweep")
@@ -89,8 +89,8 @@ func TestResurrectionMintsNewIDPastGraceWindow(t *testing.T) {
 	id1 := observe().Entity.Entity.ID
 
 	now = now.Add(90 * time.Second)
-	if n, _ := e.Sweep(); n != 1 {
-		t.Fatalf("expected 1 expiry, swept %d", n)
+	if n, _ := e.Sweep(); n.Total() != 1 {
+		t.Fatalf("expected 1 expiry, swept %d", n.Total())
 	}
 
 	// Beyond the 15m grace window; a sweep prunes the stale tombstone.
