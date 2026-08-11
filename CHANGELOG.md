@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
+## [0.11.0] - 2026-08-11
+
+**Vocabulary and correlation — the contract-hygiene release.** Fixes a read-surface
+answer that was quietly wrong, and gives producers the type vocabulary they were
+previously obliged to retype by hand. No wire-contract break, no data migration.
+
 ### Added
 
 - **The entity and relation type vocabulary is exported from `pkg/emit/wire`**
@@ -904,7 +910,8 @@ contract converged with the senhub-agent reference producer.
   default and are intended for trusted networks only; the WebSocket subscription
   endpoint enforces an origin check.
 
-[Unreleased]: https://github.com/toise-dev/toise/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/toise-dev/toise/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/toise-dev/toise/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/toise-dev/toise/compare/v0.9.2...v0.10.0
 [0.9.2]: https://github.com/toise-dev/toise/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/toise-dev/toise/compare/v0.9.0...v0.9.1
