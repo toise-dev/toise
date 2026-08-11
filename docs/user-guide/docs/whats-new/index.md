@@ -12,6 +12,11 @@ below. See the [API stability policy](../api-stability.md).
 
 ## Releases
 
+- [**0.12.0**](0.12.0.md) — 2026-08-11 — **the pod**: a thirteenth entity type for
+  the Kubernetes unit of scheduling and of failure, identified by the UID
+  Kubernetes assigns, composing from the existing vocabulary as
+  `container runs_on pod runs_on host`. Ships to producers as `wire.TypePod` in
+  `pkg/emit/v0.7.0`.
 - [**0.11.0**](0.11.0.md) — 2026-08-11 — **vocabulary & correlation**:
   `telemetry_keys` stops inheriting join keys through observation and peer
   relations, so an entity no longer answers with its observer's identity, and an
