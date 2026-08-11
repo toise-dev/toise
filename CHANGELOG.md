@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
+## [0.12.0] - 2026-08-11
+
+**The pod.** A thirteenth entity type, and the first vocabulary addition since the
+type set became something producers import rather than retype. Additive: nothing
+about existing types, relations or events changes.
+
+### Added
+
+- **`pod` entity type** — a Kubernetes pod, the unit of scheduling and of failure,
+  identified by the **UID Kubernetes assigns** and never by `namespace/name`, which
+  is mutable and reused. Relations compose from the existing vocabulary:
+  `container` runs_on `pod` runs_on `host`. No new relation type — `runs_on`'s
+  From/To pairing is advisory and its impact flows target to source, so a node
+  failing takes its pods, which take their containers, transitively.
+
+  A pod is not a container and modelling it as one would collide or triple-count.
+  Leaving it out and keeping the pod name as a container attribute was the other
+  option considered, and it fails for a reason met before in this project: an
+  attribute you have to string-match on is not a join. The argument that settles it
+  is telemetry — the network namespace is shared per pod, so pod-scoped network
+  measurements describe the pod and nothing else, and a type that owns telemetry
+  needs an entity to attach it to.
+
+  Ships for producers as `wire.TypePod` in **`pkg/emit/v0.7.0`**; the engine
+  registry derives from that constant. Both versions are needed and are not
+  interchangeable: the SDK tag lets a producer compile, this release lets it emit,
+  since the boundary refuses unknown types under the default strict vocabulary.
+
 ## [0.11.0] - 2026-08-11
 
 **Vocabulary and correlation — the contract-hygiene release.** Fixes a read-surface
@@ -910,7 +938,8 @@ contract converged with the senhub-agent reference producer.
   default and are intended for trusted networks only; the WebSocket subscription
   endpoint enforces an origin check.
 
-[Unreleased]: https://github.com/toise-dev/toise/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/toise-dev/toise/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/toise-dev/toise/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/toise-dev/toise/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/toise-dev/toise/compare/v0.9.2...v0.10.0
 [0.9.2]: https://github.com/toise-dev/toise/compare/v0.9.1...v0.9.2

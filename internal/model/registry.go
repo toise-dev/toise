@@ -46,6 +46,12 @@ const (
 	// instance (it may run a service, but the container is the thing). Identity: a
 	// single container.id.
 	TypeContainer = wire.TypeContainer
+	// TypePod is a Kubernetes pod, keyed by the UID Kubernetes assigns it. It sits
+	// between its containers and the node — a container runs_on its pod, the pod
+	// runs_on its host — so failure propagates transitively without a new relation
+	// type. It carries the pod-scoped telemetry no single container can own: the
+	// network namespace is shared per pod.
+	TypePod = wire.TypePod
 )
 
 // Phase-1 relation types. See ADR 0004.
@@ -62,7 +68,7 @@ const (
 // enforced at runtime, so a relation may legitimately connect other registered
 // types: `monitors`' target may be a host, db, network.device, compute.vm, or
 // container; `runs_on`'s source may be a process, service.instance, compute.vm,
-// or container (all `runs_on` a host); and `routes_via`/`adjacent_to` may be
+// container or pod, and a container's `runs_on` target is its pod when one exists; and `routes_via`/`adjacent_to` may be
 // sourced from a `host` (Lot 4: a host's own routing/ARP tables link it to
 // discovered network.devices).
 const (
@@ -154,6 +160,7 @@ var entityTypes = map[string]struct{}{
 	TypeNetworkEndpoint: {},
 	TypeComputeVM:       {},
 	TypeContainer:       {},
+	TypePod:             {},
 }
 
 var relationTypes = map[string]RelationTypeDef{

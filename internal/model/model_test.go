@@ -199,13 +199,15 @@ func TestRegistry(t *testing.T) {
 	if def, ok := RelationDef(RelListensOn); !ok || def.From != TypeServiceListener || def.To != TypeNetworkInterface {
 		t.Error("relation def wrong")
 	}
-	if len(EntityTypes()) != 12 || len(RelationTypes()) != 13 {
+	if len(EntityTypes()) != 13 || len(RelationTypes()) != 13 {
 		t.Errorf("registry counts: %d entity, %d relation", len(EntityTypes()), len(RelationTypes()))
 	}
-	// compute.vm (hypervisor-discovered VM) and container are registered compute
-	// resources, accepted under the strict vocabulary without --accept-unknown-types.
-	if !IsKnownEntityType(TypeComputeVM) || !IsKnownEntityType(TypeContainer) {
-		t.Error("compute.vm and container must be known entity types")
+	// compute.vm (hypervisor-discovered VM), container and pod are registered
+	// compute resources, accepted under the strict vocabulary without
+	// --accept-unknown-types. A pod that reached the boundary and was refused
+	// would be a producer emitting against a Toise too old to know the type.
+	if !IsKnownEntityType(TypeComputeVM) || !IsKnownEntityType(TypeContainer) || !IsKnownEntityType(TypePod) {
+		t.Error("compute.vm, container and pod must be known entity types")
 	}
 	// depends_on (connection topology, #184) targets an observable network.endpoint.
 	if def, ok := RelationDef(RelDependsOn); !ok || def.From != TypeServiceInstance || def.To != TypeNetworkEndpoint {
