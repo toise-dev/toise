@@ -12,6 +12,12 @@ below. See the [API stability policy](../api-stability.md).
 
 ## Releases
 
+- [**0.11.0**](0.11.0.md) — 2026-08-11 — **vocabulary & correlation**:
+  `telemetry_keys` stops inheriting join keys through observation and peer
+  relations, so an entity no longer answers with its observer's identity, and an
+  empty answer now means *no key exists*; the entity and relation type vocabulary
+  is exported from `pkg/emit/wire` (`pkg/emit/v0.6.0`), with Toise's own registry
+  derived from it; typed descriptive attributes become the documented normal path.
 - [**0.10.0**](0.10.0.md) — 2026-07-30 — **delete provenance & host-scoped
   endpoints**: `delete_source` says who authored every disappearance (producer /
   liveness expiry / cascade) on MCP and GraphQL; loopback/link-local endpoints gain
