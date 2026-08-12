@@ -87,6 +87,51 @@ type Entity {
 }
 
 """
+One entity in a canonical group: an alias asserted to be the same real thing as
+the entity queried.
+"""
+type CanonicalMember {
+  "Logical id of the alias."
+  id: ID!
+  "Its entity type, or empty if the alias is unknown or deleted."
+  type: String!
+  "A readable rendering (`type key=value …`), or empty if unknown or deleted."
+  label: String!
+}
+
+"""
+One supporting `same_as` belief edge, with the producer's provenance.
+"""
+type SameAsLink {
+  "Logical id of the source entity."
+  from: ID!
+  "Logical id of the target entity."
+  to: ID!
+  "The producer's stated probability that the endpoints are the same thing."
+  confidence: Float!
+  "The evidence given for the belief, e.g. `hyperv-kvp` (may be empty)."
+  basis: String!
+}
+
+"""
+The read-time identity overlay of ADR 0020: the entities that high-confidence
+`same_as` edges assert are the same real thing as the one queried, plus the
+edges justifying it.
+
+It is never stored. The exact entities stay separate in the graph, and evidence
+below the server's confidence threshold is kept but does not collapse anything —
+a wrong merge answers confidently about the wrong machine, which is worse than a
+visible gap. The same walk and threshold back the MCP `get_entity` overlay, so
+both surfaces answer identically.
+"""
+type CanonicalGroup {
+  "The other entities in the group, sorted by id (never includes the entity queried)."
+  aliases: [CanonicalMember!]!
+  "The `same_as` edges supporting the group, sorted by endpoint."
+  links: [SameAsLink!]!
+}
+
+"""
 A single operator annotation: a key paired with a free-text value. Unlike an
 `Attribute`, an annotation value is always a string and carries no `ValueType`.
 """
@@ -285,6 +330,18 @@ type Query {
   `15m`, `2h`, `24h`), newest-first, with Relay pagination.
   """
   recentChanges(window: String!, first: Int = 100, after: String): ChangeConnection!
+
+  """
+  The canonical group of an entity: everything believed to be the same real
+  thing as it, over `same_as` edges at or above the server's confidence
+  threshold, transitively. Returns null when the entity is unknown or has no
+  qualifying alias — an entity that is only itself has no group.
+
+  It is a top-level query rather than a field on `Entity` so that `asOf`
+  (RFC 3339) selects the graph the belief is read from: a group is derived from
+  edges, and those edges change over time like any other.
+  """
+  canonical(id: ID!, asOf: String): CanonicalGroup
 }
 
 """

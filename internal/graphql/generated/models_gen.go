@@ -56,6 +56,33 @@ type AttributeMatch struct {
 	Value string `json:"value"`
 }
 
+// The read-time identity overlay of ADR 0020: the entities that high-confidence
+// `same_as` edges assert are the same real thing as the one queried, plus the
+// edges justifying it.
+//
+// It is never stored. The exact entities stay separate in the graph, and evidence
+// below the server's confidence threshold is kept but does not collapse anything —
+// a wrong merge answers confidently about the wrong machine, which is worse than a
+// visible gap. The same walk and threshold back the MCP `get_entity` overlay, so
+// both surfaces answer identically.
+type CanonicalGroup struct {
+	// The other entities in the group, sorted by id (never includes the entity queried).
+	Aliases []CanonicalMember `json:"aliases"`
+	// The `same_as` edges supporting the group, sorted by endpoint.
+	Links []SameAsLink `json:"links"`
+}
+
+// One entity in a canonical group: an alias asserted to be the same real thing as
+// the entity queried.
+type CanonicalMember struct {
+	// Logical id of the alias.
+	ID string `json:"id"`
+	// Its entity type, or empty if the alias is unknown or deleted.
+	Type string `json:"type"`
+	// A readable rendering (`type key=value …`), or empty if unknown or deleted.
+	Label string `json:"label"`
+}
+
 // A paginated list of change events.
 type ChangeConnection struct {
 	Edges      []ChangeEdge `json:"edges"`
@@ -219,6 +246,18 @@ type RelationFilter struct {
 	FromID *string `json:"fromId,omitempty"`
 	// Restrict to relations targeting this entity id.
 	ToID *string `json:"toId,omitempty"`
+}
+
+// One supporting `same_as` belief edge, with the producer's provenance.
+type SameAsLink struct {
+	// Logical id of the source entity.
+	From string `json:"from"`
+	// Logical id of the target entity.
+	To string `json:"to"`
+	// The producer's stated probability that the endpoints are the same thing.
+	Confidence float64 `json:"confidence"`
+	// The evidence given for the belief, e.g. `hyperv-kvp` (may be empty).
+	Basis string `json:"basis"`
 }
 
 type Subscription struct {

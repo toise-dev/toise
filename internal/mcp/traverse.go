@@ -6,6 +6,7 @@ import (
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/toise-dev/toise/internal/canonical"
 	"github.com/toise-dev/toise/internal/model"
 )
 
@@ -107,7 +108,7 @@ func (s *Server) findPath(ctx context.Context, _ *mcpsdk.CallToolRequest, in Fin
 				// at/above the confidence threshold — a weak alias must not create a
 				// spurious route. A strong one does, and shows as a same_as hop.
 				if e.rel.Type == model.RelSameAs {
-					if c, ok := relConfidence(e.rel); !ok || c < s.idThr {
+					if c, ok := canonical.Confidence(e.rel); !ok || c < s.idThr {
 						continue
 					}
 				}

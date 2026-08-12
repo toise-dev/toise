@@ -54,6 +54,17 @@ type ComplexityRoot struct {
 		Value func(childComplexity int) int
 	}
 
+	CanonicalGroup struct {
+		Aliases func(childComplexity int) int
+		Links   func(childComplexity int) int
+	}
+
+	CanonicalMember struct {
+		ID    func(childComplexity int) int
+		Label func(childComplexity int) int
+		Type  func(childComplexity int) int
+	}
+
 	ChangeConnection struct {
 		Edges      func(childComplexity int) int
 		PageInfo   func(childComplexity int) int
@@ -110,6 +121,7 @@ type ComplexityRoot struct {
 	}
 
 	Query struct {
+		Canonical     func(childComplexity int, id string, asOf *string) int
 		Entities      func(childComplexity int, filter *EntityFilter, first *int, after *string, asOf *string) int
 		Entity        func(childComplexity int, id string, asOf *string) int
 		EntityHistory func(childComplexity int, id string, since *string, until *string, asKnownAt *string, first *int, after *string) int
@@ -137,6 +149,13 @@ type ComplexityRoot struct {
 		Node   func(childComplexity int) int
 	}
 
+	SameAsLink struct {
+		Basis      func(childComplexity int) int
+		Confidence func(childComplexity int) int
+		From       func(childComplexity int) int
+		To         func(childComplexity int) int
+	}
+
 	Subscription struct {
 		EntityChanged   func(childComplexity int, filter *ChangeFilter) int
 		RelationChanged func(childComplexity int, filter *ChangeFilter) int
@@ -155,6 +174,7 @@ type QueryResolver interface {
 	Relations(ctx context.Context, filter *RelationFilter, first *int, after *string, asOf *string) (*RelationConnection, error)
 	EntityHistory(ctx context.Context, id string, since *string, until *string, asKnownAt *string, first *int, after *string) (*ChangeConnection, error)
 	RecentChanges(ctx context.Context, window string, first *int, after *string) (*ChangeConnection, error)
+	Canonical(ctx context.Context, id string, asOf *string) (*CanonicalGroup, error)
 }
 type SubscriptionResolver interface {
 	EntityChanged(ctx context.Context, filter *ChangeFilter) (<-chan *ChangeEvent, error)
@@ -225,6 +245,38 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Attribute.Value(childComplexity), true
+
+	case "CanonicalGroup.aliases":
+		if e.ComplexityRoot.CanonicalGroup.Aliases == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CanonicalGroup.Aliases(childComplexity), true
+	case "CanonicalGroup.links":
+		if e.ComplexityRoot.CanonicalGroup.Links == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CanonicalGroup.Links(childComplexity), true
+
+	case "CanonicalMember.id":
+		if e.ComplexityRoot.CanonicalMember.ID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CanonicalMember.ID(childComplexity), true
+	case "CanonicalMember.label":
+		if e.ComplexityRoot.CanonicalMember.Label == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CanonicalMember.Label(childComplexity), true
+	case "CanonicalMember.type":
+		if e.ComplexityRoot.CanonicalMember.Type == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CanonicalMember.Type(childComplexity), true
 
 	case "ChangeConnection.edges":
 		if e.ComplexityRoot.ChangeConnection.Edges == nil {
@@ -425,6 +477,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.PageInfo.HasNextPage(childComplexity), true
 
+	case "Query.canonical":
+		if e.ComplexityRoot.Query.Canonical == nil {
+			break
+		}
+
+		args, err := ec.field_Query_canonical_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.Canonical(childComplexity, args["id"].(string), args["asOf"].(*string)), true
 	case "Query.entities":
 		if e.ComplexityRoot.Query.Entities == nil {
 			break
@@ -550,6 +613,31 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.RelationEdge.Node(childComplexity), true
+
+	case "SameAsLink.basis":
+		if e.ComplexityRoot.SameAsLink.Basis == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SameAsLink.Basis(childComplexity), true
+	case "SameAsLink.confidence":
+		if e.ComplexityRoot.SameAsLink.Confidence == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SameAsLink.Confidence(childComplexity), true
+	case "SameAsLink.from":
+		if e.ComplexityRoot.SameAsLink.From == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SameAsLink.From(childComplexity), true
+	case "SameAsLink.to":
+		if e.ComplexityRoot.SameAsLink.To == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SameAsLink.To(childComplexity), true
 
 	case "Subscription.entityChanged":
 		if e.ComplexityRoot.Subscription.EntityChanged == nil {
@@ -768,6 +856,51 @@ type Entity {
 }
 
 """
+One entity in a canonical group: an alias asserted to be the same real thing as
+the entity queried.
+"""
+type CanonicalMember {
+  "Logical id of the alias."
+  id: ID!
+  "Its entity type, or empty if the alias is unknown or deleted."
+  type: String!
+  "A readable rendering (` + "`" + `type key=value …` + "`" + `), or empty if unknown or deleted."
+  label: String!
+}
+
+"""
+One supporting ` + "`" + `same_as` + "`" + ` belief edge, with the producer's provenance.
+"""
+type SameAsLink {
+  "Logical id of the source entity."
+  from: ID!
+  "Logical id of the target entity."
+  to: ID!
+  "The producer's stated probability that the endpoints are the same thing."
+  confidence: Float!
+  "The evidence given for the belief, e.g. ` + "`" + `hyperv-kvp` + "`" + ` (may be empty)."
+  basis: String!
+}
+
+"""
+The read-time identity overlay of ADR 0020: the entities that high-confidence
+` + "`" + `same_as` + "`" + ` edges assert are the same real thing as the one queried, plus the
+edges justifying it.
+
+It is never stored. The exact entities stay separate in the graph, and evidence
+below the server's confidence threshold is kept but does not collapse anything —
+a wrong merge answers confidently about the wrong machine, which is worse than a
+visible gap. The same walk and threshold back the MCP ` + "`" + `get_entity` + "`" + ` overlay, so
+both surfaces answer identically.
+"""
+type CanonicalGroup {
+  "The other entities in the group, sorted by id (never includes the entity queried)."
+  aliases: [CanonicalMember!]!
+  "The ` + "`" + `same_as` + "`" + ` edges supporting the group, sorted by endpoint."
+  links: [SameAsLink!]!
+}
+
+"""
 A single operator annotation: a key paired with a free-text value. Unlike an
 ` + "`" + `Attribute` + "`" + `, an annotation value is always a string and carries no ` + "`" + `ValueType` + "`" + `.
 """
@@ -966,6 +1099,18 @@ type Query {
   ` + "`" + `15m` + "`" + `, ` + "`" + `2h` + "`" + `, ` + "`" + `24h` + "`" + `), newest-first, with Relay pagination.
   """
   recentChanges(window: String!, first: Int = 100, after: String): ChangeConnection!
+
+  """
+  The canonical group of an entity: everything believed to be the same real
+  thing as it, over ` + "`" + `same_as` + "`" + ` edges at or above the server's confidence
+  threshold, transitively. Returns null when the entity is unknown or has no
+  qualifying alias — an entity that is only itself has no group.
+
+  It is a top-level query rather than a field on ` + "`" + `Entity` + "`" + ` so that ` + "`" + `asOf` + "`" + `
+  (RFC 3339) selects the graph the belief is read from: a group is derived from
+  edges, and those edges change over time like any other.
+  """
+  canonical(id: ID!, asOf: String): CanonicalGroup
 }
 
 """
@@ -1048,6 +1193,28 @@ func (ec *executionContext) childFields_Attribute(ctx context.Context, field gra
 		return ec.fieldContext_Attribute_type(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type Attribute", field.Name)
+}
+
+func (ec *executionContext) childFields_CanonicalGroup(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "aliases":
+		return ec.fieldContext_CanonicalGroup_aliases(ctx, field)
+	case "links":
+		return ec.fieldContext_CanonicalGroup_links(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CanonicalGroup", field.Name)
+}
+
+func (ec *executionContext) childFields_CanonicalMember(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "id":
+		return ec.fieldContext_CanonicalMember_id(ctx, field)
+	case "type":
+		return ec.fieldContext_CanonicalMember_type(ctx, field)
+	case "label":
+		return ec.fieldContext_CanonicalMember_label(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CanonicalMember", field.Name)
 }
 
 func (ec *executionContext) childFields_ChangeConnection(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -1190,6 +1357,20 @@ func (ec *executionContext) childFields_RelationEdge(ctx context.Context, field 
 		return ec.fieldContext_RelationEdge_node(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type RelationEdge", field.Name)
+}
+
+func (ec *executionContext) childFields_SameAsLink(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "from":
+		return ec.fieldContext_SameAsLink_from(ctx, field)
+	case "to":
+		return ec.fieldContext_SameAsLink_to(ctx, field)
+	case "confidence":
+		return ec.fieldContext_SameAsLink_confidence(ctx, field)
+	case "basis":
+		return ec.fieldContext_SameAsLink_basis(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type SameAsLink", field.Name)
 }
 
 func (ec *executionContext) childFields___Directive(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -1341,6 +1522,28 @@ func (ec *executionContext) field_Query___type_args(ctx context.Context, rawArgs
 		return nil, err
 	}
 	args["name"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_canonical_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "id",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNID2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["id"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "asOf",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["asOf"] = arg1
 	return args, nil
 }
 
@@ -1809,6 +2012,139 @@ func (ec *executionContext) _Attribute_type(ctx context.Context, field graphql.C
 }
 func (ec *executionContext) fieldContext_Attribute_type(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("Attribute", field, false, false, errors.New("field of type ValueType does not have child fields"))
+}
+
+func (ec *executionContext) _CanonicalGroup_aliases(ctx context.Context, field graphql.CollectedField, obj *CanonicalGroup) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_CanonicalGroup_aliases(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Aliases, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []CanonicalMember) graphql.Marshaler {
+			return ec.marshalNCanonicalMember2ᚕgithubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐCanonicalMemberᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_CanonicalGroup_aliases(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CanonicalGroup",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_CanonicalMember(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _CanonicalGroup_links(ctx context.Context, field graphql.CollectedField, obj *CanonicalGroup) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_CanonicalGroup_links(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Links, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []SameAsLink) graphql.Marshaler {
+			return ec.marshalNSameAsLink2ᚕgithubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐSameAsLinkᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_CanonicalGroup_links(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CanonicalGroup",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_SameAsLink(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _CanonicalMember_id(ctx context.Context, field graphql.CollectedField, obj *CanonicalMember) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_CanonicalMember_id(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNID2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_CanonicalMember_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("CanonicalMember", field, false, false, errors.New("field of type ID does not have child fields"))
+}
+
+func (ec *executionContext) _CanonicalMember_type(ctx context.Context, field graphql.CollectedField, obj *CanonicalMember) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_CanonicalMember_type(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Type, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_CanonicalMember_type(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("CanonicalMember", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _CanonicalMember_label(ctx context.Context, field graphql.CollectedField, obj *CanonicalMember) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_CanonicalMember_label(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Label, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_CanonicalMember_label(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("CanonicalMember", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
 func (ec *executionContext) _ChangeConnection_edges(ctx context.Context, field graphql.CollectedField, obj *ChangeConnection) (ret graphql.Marshaler) {
@@ -2864,6 +3200,50 @@ func (ec *executionContext) fieldContext_Query_recentChanges(ctx context.Context
 	return fc, nil
 }
 
+func (ec *executionContext) _Query_canonical(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_canonical(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().Canonical(ctx, fc.Args["id"].(string), fc.Args["asOf"].(*string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *CanonicalGroup) graphql.Marshaler {
+			return ec.marshalOCanonicalGroup2ᚖgithubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐCanonicalGroup(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_Query_canonical(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_CanonicalGroup(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_canonical_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Query___type(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -3227,6 +3607,98 @@ func (ec *executionContext) fieldContext_RelationEdge_node(_ context.Context, fi
 		},
 	}
 	return fc, nil
+}
+
+func (ec *executionContext) _SameAsLink_from(ctx context.Context, field graphql.CollectedField, obj *SameAsLink) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_SameAsLink_from(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.From, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNID2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_SameAsLink_from(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("SameAsLink", field, false, false, errors.New("field of type ID does not have child fields"))
+}
+
+func (ec *executionContext) _SameAsLink_to(ctx context.Context, field graphql.CollectedField, obj *SameAsLink) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_SameAsLink_to(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.To, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNID2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_SameAsLink_to(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("SameAsLink", field, false, false, errors.New("field of type ID does not have child fields"))
+}
+
+func (ec *executionContext) _SameAsLink_confidence(ctx context.Context, field graphql.CollectedField, obj *SameAsLink) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_SameAsLink_confidence(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Confidence, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v float64) graphql.Marshaler {
+			return ec.marshalNFloat2float64(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_SameAsLink_confidence(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("SameAsLink", field, false, false, errors.New("field of type Float does not have child fields"))
+}
+
+func (ec *executionContext) _SameAsLink_basis(ctx context.Context, field graphql.CollectedField, obj *SameAsLink) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_SameAsLink_basis(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Basis, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_SameAsLink_basis(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("SameAsLink", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
 func (ec *executionContext) _Subscription_entityChanged(ctx context.Context, field graphql.CollectedField) (ret func(ctx context.Context) graphql.Marshaler) {
@@ -4726,6 +5198,99 @@ func (ec *executionContext) _Attribute(ctx context.Context, sel ast.SelectionSet
 	return out
 }
 
+var canonicalGroupImplementors = []string{"CanonicalGroup"}
+
+func (ec *executionContext) _CanonicalGroup(ctx context.Context, sel ast.SelectionSet, obj *CanonicalGroup) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, canonicalGroupImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("CanonicalGroup")
+		case "aliases":
+			out.Values[i] = ec._CanonicalGroup_aliases(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "links":
+			out.Values[i] = ec._CanonicalGroup_links(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var canonicalMemberImplementors = []string{"CanonicalMember"}
+
+func (ec *executionContext) _CanonicalMember(ctx context.Context, sel ast.SelectionSet, obj *CanonicalMember) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, canonicalMemberImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("CanonicalMember")
+		case "id":
+			out.Values[i] = ec._CanonicalMember_id(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "type":
+			out.Values[i] = ec._CanonicalMember_type(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "label":
+			out.Values[i] = ec._CanonicalMember_label(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var changeConnectionImplementors = []string{"ChangeConnection"}
 
 func (ec *executionContext) _ChangeConnection(ctx context.Context, sel ast.SelectionSet, obj *ChangeConnection) graphql.Marshaler {
@@ -5302,6 +5867,25 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "canonical":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_canonical(ctx, field)
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
 		case "__type":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Query___type(ctx, field)
@@ -5464,6 +6048,60 @@ func (ec *executionContext) _RelationEdge(ctx context.Context, sel ast.Selection
 			}
 		case "node":
 			out.Values[i] = ec._RelationEdge_node(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var sameAsLinkImplementors = []string{"SameAsLink"}
+
+func (ec *executionContext) _SameAsLink(ctx context.Context, sel ast.SelectionSet, obj *SameAsLink) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, sameAsLinkImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("SameAsLink")
+		case "from":
+			out.Values[i] = ec._SameAsLink_from(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "to":
+			out.Values[i] = ec._SameAsLink_to(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "confidence":
+			out.Values[i] = ec._SameAsLink_confidence(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "basis":
+			out.Values[i] = ec._SameAsLink_basis(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -5942,6 +6580,26 @@ func (ec *executionContext) marshalNBoolean2bool(ctx context.Context, sel ast.Se
 	return res
 }
 
+func (ec *executionContext) marshalNCanonicalMember2githubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐCanonicalMember(ctx context.Context, sel ast.SelectionSet, v CanonicalMember) graphql.Marshaler {
+	return ec._CanonicalMember(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNCanonicalMember2ᚕgithubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐCanonicalMemberᚄ(ctx context.Context, sel ast.SelectionSet, v []CanonicalMember) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNCanonicalMember2githubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐCanonicalMember(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
 func (ec *executionContext) marshalNChangeConnection2githubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐChangeConnection(ctx context.Context, sel ast.SelectionSet, v ChangeConnection) graphql.Marshaler {
 	return ec._ChangeConnection(ctx, sel, &v)
 }
@@ -6044,6 +6702,22 @@ func (ec *executionContext) marshalNEntityEdge2ᚕgithubᚗcomᚋtoiseᚑdevᚋt
 	return ret
 }
 
+func (ec *executionContext) unmarshalNFloat2float64(ctx context.Context, v any) (float64, error) {
+	res, err := graphql.UnmarshalFloatContext(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNFloat2float64(ctx context.Context, sel ast.SelectionSet, v float64) graphql.Marshaler {
+	_ = sel
+	res := graphql.MarshalFloatContext(v)
+	if res == graphql.Null {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+	}
+	return graphql.WrapContextMarshaler(ctx, res)
+}
+
 func (ec *executionContext) unmarshalNID2string(ctx context.Context, v any) (string, error) {
 	res, err := graphql.UnmarshalID(v)
 	return res, graphql.ErrorOnPath(ctx, err)
@@ -6119,6 +6793,26 @@ func (ec *executionContext) marshalNRelationEdge2ᚕgithubᚗcomᚋtoiseᚑdev�
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
 		return ec.marshalNRelationEdge2githubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐRelationEdge(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNSameAsLink2githubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐSameAsLink(ctx context.Context, sel ast.SelectionSet, v SameAsLink) graphql.Marshaler {
+	return ec._SameAsLink(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNSameAsLink2ᚕgithubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐSameAsLinkᚄ(ctx context.Context, sel ast.SelectionSet, v []SameAsLink) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNSameAsLink2githubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐSameAsLink(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -6380,6 +7074,13 @@ func (ec *executionContext) marshalOBoolean2ᚖbool(ctx context.Context, sel ast
 	_ = ctx
 	res := graphql.MarshalBoolean(*v)
 	return res
+}
+
+func (ec *executionContext) marshalOCanonicalGroup2ᚖgithubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐCanonicalGroup(ctx context.Context, sel ast.SelectionSet, v *CanonicalGroup) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._CanonicalGroup(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalOChangeFilter2ᚖgithubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐChangeFilter(ctx context.Context, v any) (*ChangeFilter, error) {

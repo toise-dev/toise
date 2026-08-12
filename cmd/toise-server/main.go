@@ -316,7 +316,11 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	// one handler per tenant on first use, bound to that tenant's stack, and
 	// dispatches by the X-Scope-OrgID header (ADR 0025).
 	graphqlRouter := newTenantRouter(reg, logger, func(st *registry.Stack) (http.Handler, error) {
-		res := &resolvers.Resolver{Graph: st.Graph, Store: st.Store, Engine: st.Engine, Annotations: st.Annotations, Audit: auditor}
+		res := &resolvers.Resolver{
+			Graph: st.Graph, Store: st.Store, Engine: st.Engine,
+			Annotations: st.Annotations, Audit: auditor,
+			IdentityThreshold: cfg.IdentityThreshold,
+		}
 		return graphql.NewHandler(res, graphql.Config{
 			AllowedOrigins:       cfg.AllowedOrigins,
 			DisableIntrospection: !cfg.GraphQLIntrospection,
