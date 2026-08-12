@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
+### Added
+
+- **GraphQL `canonical(id, asOf)` query** — the ADR 0020 identity overlay, until now
+  reachable only over MCP. It returns the entities that high-confidence `same_as`
+  edges assert are the same real thing as the one queried, transitively, plus the
+  links justifying it; null when nothing qualifies. Gated by the same configured
+  `identity_confidence_threshold` as MCP.
+
+  A GraphQL consumer previously had to walk `same_as` itself and pick its own
+  threshold, which is how two read surfaces come to disagree about whether two
+  entities are one machine. The walk now lives in one place (`internal/canonical`)
+  and both surfaces call it, so they cannot drift.
+
+  It is a top-level query rather than a field on `Entity` so `asOf` selects the
+  graph the belief is read from: a group is derived from edges, and edges change
+  over time like anything else.
+
 ### Fixed
 
 - **The liveness sweep counts entities and relations apart** (#309). It logged

@@ -11,6 +11,7 @@ import (
 
 	"github.com/toise-dev/toise/internal/annotations"
 	"github.com/toise-dev/toise/internal/audit"
+	"github.com/toise-dev/toise/internal/canonical"
 	"github.com/toise-dev/toise/internal/change"
 	"github.com/toise-dev/toise/internal/graphql/generated"
 	"github.com/toise-dev/toise/internal/model"
@@ -34,6 +35,7 @@ type Graph interface {
 	GetEntity(id model.EntityID) (model.Entity, bool, bool)
 	ListEntities(typ string) []model.Entity
 	ListRelations(typ string, from, to model.EntityID) []model.Relation
+	RelationsTouching(id model.EntityID, relType string) []model.Relation
 }
 
 // Resolver wires the GraphQL API to the projection, the log, and the change
@@ -45,6 +47,18 @@ type Resolver struct {
 	Annotations *annotations.Store
 	Audit       *audit.Auditor // nil/disabled = no audit records (ADR 0028)
 	Now         func() time.Time
+	// IdentityThreshold is the same_as confidence at or above which an alias
+	// joins the canonical view (ADR 0020). Zero means canonical.DefaultThreshold,
+	// so a Resolver built without it still answers like the MCP surface rather
+	// than collapsing on every belief.
+	IdentityThreshold float64
+}
+
+func (r *Resolver) identityThreshold() float64 {
+	if r.IdentityThreshold > 0 {
+		return r.IdentityThreshold
+	}
+	return canonical.DefaultThreshold
 }
 
 func (r *Resolver) now() time.Time {

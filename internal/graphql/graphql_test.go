@@ -476,3 +476,124 @@ func TestSubscriptionFiltersAndGapSignal(t *testing.T) {
 		t.Fatalf("structural stream = %+v, want the runs_on add", rev)
 	}
 }
+
+// TestCanonicalQuery pins the ADR 0020 identity overlay on GraphQL, which until
+// now only MCP exposed: a consumer reading over GraphQL had to reimplement the
+// same_as walk and pick its own threshold, and two implementations of "is this
+// the same machine?" is exactly the disagreement the overlay exists to prevent.
+func TestCanonicalQuery(t *testing.T) {
+	s := newStack(t)
+	c := s.client(t)
+
+	alias, err := s.engine.ObserveEntity(change.EntityObservation{
+		Type: model.TypeHost, Identity: []model.KeyValue{kv("host.id", "h1-alias")}, EventTime: t0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliasID := alias.Entity.Entity.ID
+
+	const q = `query($id:ID!,$asOf:String){ canonical(id:$id,asOf:$asOf){ aliases{ id type label } links{ from to confidence basis } } }`
+	var resp struct {
+		Canonical *struct {
+			Aliases []struct{ ID, Type, Label string }
+			Links   []struct {
+				From, To, Basis string
+				Confidence      float64
+			}
+		}
+	}
+
+	// No same_as yet: an entity that is only itself has no group.
+	c.MustPost(q, &resp, client.Var("id", string(s.hostID)))
+	if resp.Canonical != nil {
+		t.Fatalf("canonical = %+v, want null before any same_as edge", resp.Canonical)
+	}
+
+	if _, _, oerr := s.engine.ObserveRelation(change.RelationObservation{
+		Type: model.RelSameAs,
+		From: change.EndpointRef{Type: model.TypeHost, Identity: []model.KeyValue{kv("host.id", "h1")}},
+		To:   change.EndpointRef{Type: model.TypeHost, Identity: []model.KeyValue{kv("host.id", "h1-alias")}},
+		Attributes: []model.KeyValue{
+			{Key: "confidence", Value: model.DoubleValue(0.97)},
+			{Key: "basis", Value: model.StringValue("hyperv-kvp")},
+		},
+		EventTime: t0.Add(5 * time.Minute),
+	}); oerr != nil {
+		t.Fatal(oerr)
+	}
+
+	c.MustPost(q, &resp, client.Var("id", string(s.hostID)))
+	if resp.Canonical == nil {
+		t.Fatal("canonical = null, want the alias group")
+	}
+	if len(resp.Canonical.Aliases) != 1 || resp.Canonical.Aliases[0].ID != string(aliasID) {
+		t.Fatalf("aliases = %+v, want just the alias (never the entity queried)", resp.Canonical.Aliases)
+	}
+	if got := resp.Canonical.Aliases[0].Label; got != "host host.id=h1-alias" {
+		t.Errorf("label = %q, want the identity rendering", got)
+	}
+	if len(resp.Canonical.Links) != 1 || resp.Canonical.Links[0].Confidence != 0.97 {
+		t.Fatalf("links = %+v, want the supporting edge with its confidence", resp.Canonical.Links)
+	}
+	if got := resp.Canonical.Links[0].Basis; got != "hyperv-kvp" {
+		t.Errorf("basis = %q, want the plain producer value", got)
+	}
+
+	// The group is symmetric: asking from the alias returns the host.
+	resp.Canonical = nil
+	c.MustPost(q, &resp, client.Var("id", string(aliasID)))
+	if resp.Canonical == nil || len(resp.Canonical.Aliases) != 1 || resp.Canonical.Aliases[0].ID != string(s.hostID) {
+		t.Fatalf("from the alias, canonical = %+v, want the host", resp.Canonical)
+	}
+
+	// asOf reads the belief as it stood then — the reason this is a top-level
+	// query rather than a field on Entity.
+	resp.Canonical = nil
+	c.MustPost(q, &resp, client.Var("id", string(s.hostID)), client.Var("asOf", t0.Add(time.Minute).Format(time.RFC3339)))
+	if resp.Canonical != nil {
+		t.Fatalf("canonical asOf before the edge = %+v, want null", resp.Canonical)
+	}
+
+	// An unknown entity is null, not an error.
+	resp.Canonical = nil
+	c.MustPost(q, &resp, client.Var("id", "no-such-entity"))
+	if resp.Canonical != nil {
+		t.Fatalf("canonical of an unknown id = %+v, want null", resp.Canonical)
+	}
+}
+
+// TestCanonicalThresholdGate: a weak belief stays in the graph and collapses
+// nothing. GraphQL must gate on the same configured confidence as MCP.
+func TestCanonicalThresholdGate(t *testing.T) {
+	s := newStack(t)
+	if _, err := s.engine.ObserveEntity(change.EntityObservation{
+		Type: model.TypeHost, Identity: []model.KeyValue{kv("host.id", "h1-weak")}, EventTime: t0}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.engine.ObserveRelation(change.RelationObservation{
+		Type:       model.RelSameAs,
+		From:       change.EndpointRef{Type: model.TypeHost, Identity: []model.KeyValue{kv("host.id", "h1")}},
+		To:         change.EndpointRef{Type: model.TypeHost, Identity: []model.KeyValue{kv("host.id", "h1-weak")}},
+		Attributes: []model.KeyValue{{Key: "confidence", Value: model.DoubleValue(0.5)}},
+		EventTime:  t0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	const q = `query($id:ID!){ canonical(id:$id){ aliases{ id } } }`
+	var resp struct {
+		Canonical *struct{ Aliases []struct{ ID string } }
+	}
+
+	client.New(graphql.NewHandler(s.res, graphql.Config{})).MustPost(q, &resp, client.Var("id", string(s.hostID)))
+	if resp.Canonical != nil {
+		t.Fatalf("canonical = %+v, want null: 0.5 is below the default 0.9", resp.Canonical)
+	}
+
+	// The same edge collapses for a deployment that lowered the bar.
+	s.res.IdentityThreshold = 0.4
+	client.New(graphql.NewHandler(s.res, graphql.Config{})).MustPost(q, &resp, client.Var("id", string(s.hostID)))
+	if resp.Canonical == nil || len(resp.Canonical.Aliases) != 1 {
+		t.Fatalf("canonical = %+v, want the alias at threshold 0.4", resp.Canonical)
+	}
+}

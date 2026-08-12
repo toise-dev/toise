@@ -3,6 +3,7 @@ package mcp
 import (
 	"sort"
 
+	"github.com/toise-dev/toise/internal/canonical"
 	"github.com/toise-dev/toise/internal/model"
 )
 
@@ -35,7 +36,7 @@ type CanonicalGroup struct {
 // transitively, and returns the other group members plus the supporting links.
 // Returns nil when no qualifying same_as edge touches the entity.
 func (s *Server) canonicalGroup(g Graph, root model.EntityID) *CanonicalGroup {
-	members, links := s.walkSameAs(g, root)
+	members, links := canonical.Walk(g, root, s.idThr)
 	if len(members) <= 1 {
 		return nil
 	}
@@ -54,86 +55,17 @@ func (s *Server) canonicalGroup(g Graph, root model.EntityID) *CanonicalGroup {
 		return nil
 	}
 	sort.Slice(aliases, func(i, j int) bool { return aliases[i].ID < aliases[j].ID })
-	sort.Slice(links, func(i, j int) bool {
-		if links[i].From != links[j].From {
-			return links[i].From < links[j].From
-		}
-		return links[i].To < links[j].To
-	})
-	return &CanonicalGroup{Aliases: aliases, Links: links}
+	out := make([]SameAsLink, len(links))
+	for i, l := range links {
+		out[i] = SameAsLink{From: l.From, To: l.To, Confidence: l.Confidence, Basis: l.Basis}
+	}
+	return &CanonicalGroup{Aliases: aliases, Links: out}
 }
 
 // canonicalMemberIDs returns the entity's canonical group as ids — itself plus
 // every entity reachable over same_as edges at/above the threshold, transitively.
 // A single-element slice (just root) means no qualifying alias.
 func (s *Server) canonicalMemberIDs(g Graph, root model.EntityID) []model.EntityID {
-	members, _ := s.walkSameAs(g, root)
+	members, _ := canonical.Walk(g, root, s.idThr)
 	return members
-}
-
-// walkSameAs is the shared BFS over same_as edges with confidence >= threshold.
-// It returns the connected group (root first) and the supporting links.
-func (s *Server) walkSameAs(g Graph, root model.EntityID) ([]model.EntityID, []SameAsLink) {
-	seen := map[model.EntityID]bool{root: true}
-	seenLink := map[model.RelationID]bool{}
-	members := []model.EntityID{root}
-	queue := []model.EntityID{root}
-	var links []SameAsLink
-
-	for len(queue) > 0 {
-		cur := queue[0]
-		queue = queue[1:]
-		for _, r := range g.RelationsTouching(cur, model.RelSameAs) {
-			conf, ok := relConfidence(r)
-			if !ok || conf < s.idThr {
-				continue // missing/low-confidence belief does not collapse (conservative)
-			}
-			if !seenLink[r.ID] {
-				seenLink[r.ID] = true
-				links = append(links, SameAsLink{From: string(r.From), To: string(r.To), Confidence: conf, Basis: relBasis(r)})
-			}
-			other := r.To
-			if other == cur {
-				other = r.From
-			}
-			if seen[other] {
-				continue
-			}
-			seen[other] = true
-			members = append(members, other)
-			queue = append(queue, other)
-		}
-	}
-	return members, links
-}
-
-// relConfidence reads the same_as edge's confidence attribute as a number in
-// [0,1]; ok is false when it is absent or not numeric (per ADR 0022 the value is
-// stored as-is and only validated here, at read time, when it is consumed).
-func relConfidence(r model.Relation) (float64, bool) {
-	for _, kv := range r.Attributes {
-		if kv.Key != "confidence" {
-			continue
-		}
-		switch kv.Value.Kind() {
-		case model.KindDouble:
-			c := kv.Value.Double()
-			return c, c >= 0 && c <= 1
-		case model.KindInt:
-			c := float64(kv.Value.Int())
-			return c, c >= 0 && c <= 1
-		default:
-			return 0, false
-		}
-	}
-	return 0, false
-}
-
-func relBasis(r model.Relation) string {
-	for _, kv := range r.Attributes {
-		if kv.Key == "basis" {
-			return kv.Value.Display()
-		}
-	}
-	return ""
 }

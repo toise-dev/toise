@@ -151,10 +151,6 @@ github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 github.com/tinylib/msgp v1.6.1 h1:ESRv8eL3u+DNHUoSAAQRE50Hm162zqAnBoGv9PzScPY=
 github.com/tinylib/msgp v1.6.1/go.mod h1:RSp0LW9oSxFut3KzESt5Voq4GVWyS+PSulT77roAqEA=
-github.com/toise-dev/toise/pkg/emit v0.5.0 h1:0oQlXKs/J4Y8l+gzSHBSUqKZ+v/xP+OuV0SEhQUJHGs=
-github.com/toise-dev/toise/pkg/emit v0.5.0/go.mod h1:p7O2ay9SVPvLf0VXZs3pGo6+4S4XsPNSikZmPvVkc/s=
-github.com/toise-dev/toise/pkg/emit v0.6.0 h1:3RwVQTbSvM+YVZdNfrhPxegYpWpVFz8ArrJ7zT40T9M=
-github.com/toise-dev/toise/pkg/emit v0.6.0/go.mod h1:2xfejtxJb0nRuEZk+HdnZUIizuZmjqEKILnx5FMcvQI=
 github.com/toise-dev/toise/pkg/emit v0.7.0 h1:tc4flmdIHaAzkEm8AY2+RVURG/WhoHmLvsov+DyeBVc=
 github.com/toise-dev/toise/pkg/emit v0.7.0/go.mod h1:2xfejtxJb0nRuEZk+HdnZUIizuZmjqEKILnx5FMcvQI=
 github.com/vektah/gqlparser/v2 v2.5.33 h1:lRp8aIeNUNbimf/axZd7ETg24q06hBtPaas+TcvI/7E=

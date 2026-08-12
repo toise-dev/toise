@@ -38,6 +38,7 @@ curl -s http://127.0.0.1:8080/graphql \
 | `relations(filter, first = 50, after)` | `RelationConnection!` | current relations, paginated |
 | `entityHistory(id!, since, until, asKnownAt, first = 100, after)` | `ChangeConnection!` | one entity's change timeline (bi-temporal) |
 | `recentChanges(window!, first = 100, after)` | `ChangeConnection!` | changes across all entities within a window |
+| `canonical(id!, asOf)` | `CanonicalGroup` | what is believed to be the same real thing as this entity (null if nothing is) |
 
 ### Subscriptions
 
@@ -96,6 +97,14 @@ type ChangeEvent {
   entity: Entity            # set for entity events
   relation: Relation        # set for relation events
 }
+
+type CanonicalGroup {    # read-time identity overlay — derived, never stored
+  aliases: [CanonicalMember!]!  # sorted by id, never includes the entity queried
+  links: [SameAsLink!]!         # the same_as edges that justify the group
+}
+
+type CanonicalMember { id: ID!, type: String!, label: String! }
+type SameAsLink { from: ID!, to: ID!, confidence: Float!, basis: String! }
 
 type Attribute { key: String!, value: String!, type: ValueType! }  # ValueType: STRING|INT|DOUBLE|BOOL
 ```
@@ -208,6 +217,52 @@ subscription {
   entityChanged { changeType eventTime entity { id type } }
 }
 ```
+
+## Aliases — when one machine is observed twice
+
+Two producers can describe the same real machine from different vantage points:
+a hypervisor reports a `compute.vm`, an in-guest agent reports a `host`. Neither
+knows the other's identifier, so Toise stores **two entities** — and it keeps
+storing two, because merging them would destroy the ability to say which
+producer saw what.
+
+When a producer *can* justify the link, it asserts it as a `same_as` edge
+carrying a `confidence` and a `basis` (the evidence — `hyperv-kvp`,
+`serial_match`). That edge is producer truth, stored like any other. What Toise
+derives at read time is the grouping:
+
+```graphql
+query WhoElseIsThis($id: ID!) {
+  entity(id: $id) { type identity { key value } }
+  canonical(id: $id) {
+    aliases { id type label }
+    links { from to confidence basis }
+  }
+}
+```
+
+`canonical` is null when nothing qualifies — an entity that is only itself has
+no group. Otherwise `aliases` holds every entity reachable over `same_as` edges
+at or above the server's `identity_confidence_threshold` (default `0.9`),
+**transitively**: if A is B and B is C, then C is in A's group even though no
+producer asserted A = C. `links` shows the edges that justify it, so a consumer
+can always see *why* two things were grouped and decide it disagrees.
+
+Below-threshold evidence stays in the graph — query it with
+`relations(filter: { type: "same_as" })` — but collapses nothing. A wrong merge
+answers confidently about the wrong machine, which is worse than a visible gap.
+
+Two properties worth knowing:
+
+- **The group is symmetric.** `same_as` is stored as a directed edge, but asking
+  from either end returns the same group.
+- **`asOf` applies.** A group is derived from edges, and edges change; reading
+  `canonical(id: $id, asOf: "…")` gives the belief as it stood then, not today's
+  belief projected backwards.
+
+The MCP surface exposes the same overlay on `get_entity`, computed by the same
+walk against the same threshold, so both surfaces answer identically. See
+[ADR 0020](https://github.com/toise-dev/toise/blob/main/docs/architecture/adr/0020-weighted-multi-source-identity.md).
 
 ## Guardrails and limits
 
