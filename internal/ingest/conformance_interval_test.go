@@ -70,8 +70,11 @@ func TestConformanceIntervalZeroNeverExpires(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
-	if n != 1 {
-		t.Fatalf("Sweep expired %d entities, want exactly 1 (only the armed host)", n)
+	// The counters are split, so this can assert what it always meant: exactly one
+	// ENTITY expired, and no edge cascaded with it.
+	if n.Entities != 1 || n.Relations != 0 {
+		t.Fatalf("Sweep expired %d entities and %d relations, want exactly 1 entity (only the armed host)",
+			n.Entities, n.Relations)
 	}
 	hostID := func(v string) []model.KeyValue {
 		return []model.KeyValue{{Key: "host.id", Value: model.StringValue(v)}}
@@ -89,7 +92,7 @@ func TestConformanceIntervalZeroNeverExpires(t *testing.T) {
 	// A second sweep, arbitrarily later still, must remain a no-op for the
 	// cadence-less hosts: interval==0 is permanent, not a one-shot reprieve.
 	now = now.Add(365 * 24 * time.Hour)
-	if n, err := eng.Sweep(); err != nil || n != 0 {
+	if n, err := eng.Sweep(); err != nil || n.Total() != 0 {
 		t.Fatalf("re-sweep = (%d, %v), want (0, nil): cadence-less entities must stay live", n, err)
 	}
 }

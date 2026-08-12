@@ -89,16 +89,16 @@ func TestSDKIntervalArmsLiveness(t *testing.T) {
 	}
 
 	clk.Advance(30 * time.Second)
-	if n, _ := eng.Sweep(); n != 0 {
-		t.Fatalf("sweep inside the interval expired %d, want 0", n)
+	if n, _ := eng.Sweep(); n.Total() != 0 {
+		t.Fatalf("sweep inside the interval expired %d, want 0", n.Total())
 	}
 	if g.EntityCount() != 1 {
 		t.Fatal("entity expired inside its declared interval")
 	}
 
 	clk.Advance(time.Minute) // 90s since the emit: past the 60s interval
-	if n, _ := eng.Sweep(); n != 1 {
-		t.Fatalf("sweep past the interval expired %d, want 1 — the SDK interval did not arm the engine's liveness backstop", n)
+	if n, _ := eng.Sweep(); n.Total() != 1 {
+		t.Fatalf("sweep past the interval expired %d, want 1 — the SDK interval did not arm the engine's liveness backstop", n.Total())
 	}
 	if g.EntityCount() != 0 {
 		t.Fatal("stale entity survived the sweep")
@@ -134,8 +134,8 @@ func TestPerProducerReferenceCounting(t *testing.T) {
 
 	// A goes silent past its interval; B still references the entity.
 	clk.Advance(5 * time.Minute)
-	if n, _ := eng.Sweep(); n != 0 {
-		t.Fatalf("sweep expired %d, want 0 — producer A's lapse must only release A's reference", n)
+	if n, _ := eng.Sweep(); n.Total() != 0 {
+		t.Fatalf("sweep expired %d, want 0 — producer A's lapse must only release A's reference", n.Total())
 	}
 	if g.EntityCount() != 1 {
 		t.Fatal("entity deleted while producer B still references it — per-producer reference counting collapsed (ADR 0019)")

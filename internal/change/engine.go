@@ -535,15 +535,27 @@ func (e *Engine) removeIncidentRelations(id model.EntityID, when time.Time) (int
 	return n, errors.Join(errs...)
 }
 
+// SweepResult reports what one liveness pass expired, entities and edges kept
+// apart. The ratio is itself a triage signal: a pass that expired one entity and
+// cascaded twenty edges reads nothing like one that expired twenty entities, and
+// a single total hides which of the two happened (#309).
+type SweepResult struct {
+	Entities  int
+	Relations int
+}
+
+// Total is the number of things expired, both kinds together.
+func (r SweepResult) Total() int { return r.Entities + r.Relations }
+
 // Sweep expires entities whose liveness backstop has lapsed: an entity observed
 // or edge with an interval that has not been re-asserted within it is soft-deleted
 // (entity.deleted / relation.removed), as a safety net for missed explicit deletes
-// (crash, host off, network partition). It returns the number of entities and
-// edges expired, and any commit errors joined: a failed commit is logged and
-// skipped (the pass stays resilient and retries next tick) but also returned, so
-// the maintenance metric's error outcome is reachable instead of structurally
-// impossible. Drive it from a periodic ticker.
-func (e *Engine) Sweep() (int, error) {
+// (crash, host off, network partition). It returns the entities and edges
+// expired counted separately, and any commit errors joined: a failed commit is
+// logged and skipped (the pass stays resilient and retries next tick) but also
+// returned, so the maintenance metric's error outcome is reachable instead of
+// structurally impossible. Drive it from a periodic ticker.
+func (e *Engine) Sweep() (SweepResult, error) {
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()
 
@@ -558,7 +570,7 @@ func (e *Engine) Sweep() (int, error) {
 	e.staged = st
 
 	now := e.now()
-	n := 0
+	var res SweepResult
 	var errs []error
 
 	// Drop each producer reference whose interval has lapsed; an entity with no
@@ -597,9 +609,9 @@ func (e *Engine) Sweep() (int, error) {
 		delete(e.refs, id)
 		e.logger.Warn("expired stale entity: no producer heartbeat within its interval",
 			"entity_type", ent.Type, "entity_id", id)
-		n++
+		res.Entities++
 		rn, rerr := e.removeIncidentRelations(id, now) // edges die with their node
-		n += rn
+		res.Relations += rn
 		if rerr != nil {
 			errs = append(errs, rerr)
 		}
@@ -643,7 +655,7 @@ func (e *Engine) Sweep() (int, error) {
 		delete(e.relDeadlines, id)
 		e.logger.Warn("expired stale relation: not re-asserted within its interval",
 			"relation_type", rel.Type, "relation_id", id)
-		n++
+		res.Relations++
 	}
 
 	if ferr := e.flushStaged(st); ferr != nil {
@@ -651,15 +663,15 @@ func (e *Engine) Sweep() (int, error) {
 		// so nothing was expired. Report zero and let the next sweep retry against
 		// the still-live projection.
 		errs = append(errs, ferr)
-		n = 0
+		res = SweepResult{}
 	}
 
 	// Bound the resurrection grace window in time: drop tombstones a producer
-	// did not return to claim (#183). Not counted in n (no event is emitted —
-	// the entity was already soft-deleted). Runs after the flush so it judges the
+	// did not return to claim (#183). Not counted (no event is emitted — the
+	// entity was already soft-deleted). Runs after the flush so it judges the
 	// tombstones this sweep just applied.
 	e.graph.PruneTombstones()
-	return n, errors.Join(errs...)
+	return res, errors.Join(errs...)
 }
 
 // ObserveRelation classifies an observed relation. It emits relation.added for a
