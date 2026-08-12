@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
+### Fixed
+
+- **The liveness sweep counts entities and relations apart** (#309). It logged
+  `liveness sweep expired stale entities count=14` for a pass that expired 7
+  entities and cascaded 7 relations: the label said entities, the number was both.
+  During a flap triage that ratio is the signal — a pass that expired one entity
+  and cascaded twenty edges reads nothing like one that expired twenty entities.
+
+  **Log format change**, worth knowing if you parse these lines: the message is
+  now `liveness sweep expired stale records` with `entities=` and `relations=`
+  instead of a single `count=`.
+
 ## [0.12.0] - 2026-08-11
 
 **The pod.** A thirteenth entity type, and the first vocabulary addition since the
