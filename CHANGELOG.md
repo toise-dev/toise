@@ -11,6 +11,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The conformance kit fails on a mis-rendered `host.id`.** `/etc/machine-id` holds
+  32 hex digits with no separator; a library that formats the same bytes yields a
+  hyphenated UUID. Same machine, two strings, and under exact identity that is two
+  entities with nothing in the graph saying they are one. The kit now rejects the
+  raw 32-hex form and a hyphenated UUID carrying uppercase hex, **wherever `host.id`
+  appears** — a `host` identity, a `compute.vm`'s hypervisor id, a host-local
+  `network.endpoint`'s fourth key, a relationship target.
+
+  A failure rather than an advisory, because the defect is silent and surfaces
+  months later against an entity everything already points at. **If your producer
+  already emits another rendering in production, coordinate the change rather than
+  switching on upgrade** — your graph is keyed on that form, and aligning re-keys
+  every host. The check's message says so.
+
+  Consumed via `pkg/emit/conformance`, so it reaches producers with the next SDK tag.
+
+- **The `db.instance.id` fallback is written into the contract** as
+  `<db.system.name>:<port>@<host.id>`, reusing the `@<host.id>` shape already
+  defined for `service.instance`. The tier was missing — the contract stopped at
+  "an operator-configured logical instance name" — and MariaDB and Redis expose no
+  stable identifier, so a producer reasonably invented `address:port`. That value is
+  byte-identical on every machine, collapsing every local database into one entity
+  whose attributes flip between servers.
+
+  A consequence for operators: local databases were held back by the
+  host-local-literal anti-collapse rule and had no `runs_on` at all. With a unique
+  identity they gain one, so a local database enters its host's impact radius for
+  the first time.
+
 - **GraphQL `canonical(id, asOf)` query** — the ADR 0020 identity overlay, until now
   reachable only over MCP. It returns the entities that high-confidence `same_as`
   edges assert are the same real thing as the one queried, transitively, plus the
