@@ -202,3 +202,91 @@ func TestAdvisoryServiceInstanceID(t *testing.T) {
 		t.Errorf("conformant record with instance id: problems = %v, want none", probs)
 	}
 }
+
+// TestHostIDSpelling pins the check that stops the duplicate-per-host defect at
+// the producer rather than months later in the graph: the same machine-id
+// written two ways is two entities, and nothing in the graph says they are one.
+func TestHostIDSpelling(t *testing.T) {
+	mk := func(typ, hostID string) plog.Logs {
+		ld := plog.NewLogs()
+		rl := ld.ResourceLogs().AppendEmpty()
+		rl.Resource().Attributes().PutStr("service.instance.id", "agent-1")
+		lr := rl.ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
+		lr.SetEventName("entity.state")
+		lr.Attributes().PutStr("entity.type", typ)
+		lr.Attributes().PutEmptyMap("entity.id").PutStr("host.id", hostID)
+		return ld
+	}
+
+	t.Run("raw machine-id fails", func(t *testing.T) {
+		got := Check(mk("host", "8b86170405bc4382b0577eac3df5e730"))
+		if len(got) != 1 {
+			t.Fatalf("problems = %v, want exactly one", got)
+		}
+		if got[0].Advisory {
+			t.Error("the raw machine-id must fail, not advise: the defect is silent and permanent")
+		}
+		if !strings.Contains(got[0].Issue, "lowercase hyphenated UUID") {
+			t.Errorf("issue = %q, want the expected rendering named", got[0].Issue)
+		}
+		if !strings.Contains(got[0].Issue, "re-keys every host") {
+			t.Errorf("issue = %q, want the migration caveat: telling a live producer to switch renderings is destructive", got[0].Issue)
+		}
+	})
+
+	t.Run("uppercase UUID fails", func(t *testing.T) {
+		got := Check(mk("host", "8B861704-05BC-4382-B057-7EAC3DF5E730"))
+		if len(got) != 1 || got[0].Advisory {
+			t.Fatalf("problems = %v, want one non-advisory problem", got)
+		}
+	})
+
+	t.Run("the contract rendering passes", func(t *testing.T) {
+		if got := Check(mk("host", "8b861704-05bc-4382-b057-7eac3df5e730")); len(got) != 0 {
+			t.Fatalf("problems = %v, want none", got)
+		}
+	})
+
+	t.Run("checked wherever host.id appears", func(t *testing.T) {
+		// compute.vm carries the hypervisor's host.id, and a host-local
+		// network.endpoint carries the observing host's as a fourth key. Same key,
+		// same rule — a per-type check would have missed both.
+		for _, typ := range []string{"compute.vm", "network.endpoint"} {
+			if got := Check(mk(typ, "8b86170405bc4382b0577eac3df5e730")); len(got) != 1 {
+				t.Errorf("%s: problems = %v, want the spelling flagged", typ, got)
+			}
+		}
+	})
+
+	t.Run("checked on a relationship target", func(t *testing.T) {
+		ld := plog.NewLogs()
+		rl := ld.ResourceLogs().AppendEmpty()
+		rl.Resource().Attributes().PutStr("service.instance.id", "agent-1")
+		lr := rl.ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
+		lr.SetEventName("entity.state")
+		lr.Attributes().PutStr("entity.type", "process")
+		lr.Attributes().PutEmptyMap("entity.id").PutStr("process.pid", "100")
+		d := lr.Attributes().PutEmptySlice("entity.relationships").AppendEmpty().SetEmptyMap()
+		d.PutStr("relationship.type", "runs_on")
+		d.PutStr("entity.type", "host")
+		d.PutEmptyMap("entity.id").PutStr("host.id", "8b86170405bc4382b0577eac3df5e730")
+
+		got := Check(ld)
+		if len(got) != 1 {
+			t.Fatalf("problems = %v, want the target spelling flagged", got)
+		}
+		if !strings.Contains(got[0].Record, "entity.relationships[0]") {
+			t.Errorf("record = %q, want the descriptor located", got[0].Record)
+		}
+	})
+
+	t.Run("a non-machine-id host.id is left alone", func(t *testing.T) {
+		// A cloud instance id is a legitimate host.id and looks nothing like a
+		// machine-id; flagging it would make the check noise.
+		for _, id := range []string{"i-0abcdef1234567890", "h-1", "3990048576770958836"} {
+			if got := Check(mk("host", id)); len(got) != 0 {
+				t.Errorf("%q: problems = %v, want none", id, got)
+			}
+		}
+	})
+}

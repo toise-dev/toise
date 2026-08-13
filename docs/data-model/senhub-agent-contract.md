@@ -91,13 +91,53 @@ leased IP) in the identity — those are descriptive attributes. Agreed identiti
 
 | Entity | Identity (`entity.id`) | Notes |
 | ------ | --------------------------- | ----- |
-| `host` | `{host.id}` (machine-id) | `host.name` descriptive |
+| `host` | `{host.id}` (machine-id) | `host.name` descriptive. **The rendering is normative: a lowercase hyphenated UUID (8-4-4-4-12).** `/etc/machine-id` holds the same bytes as 32 hex digits with no separator, so a producer reading the file directly and one going through a library that formats it emit two spellings of one machine — a silent, permanent duplicate of every host. The conformance kit **fails** (not advises) on the raw form and on uppercase hex, wherever `host.id` appears: a `host` identity, a `compute.vm`'s hypervisor id, a host-local `network.endpoint`'s fourth key, a relationship target. A producer already emitting another rendering in production must **coordinate** the change — it re-keys every host — rather than switch on upgrade. |
 | `service.instance` | `{service.instance.id}` | the agent itself, or a monitored non-DB service (Kafka, RabbitMQ, NATS, Nginx, HAProxy, …). The id is a **stable** technology-reported identifier, else `<service.name>@<host.id>` — **never** `scheme://host:port`. `service.name` is descriptive. Datastores are `db`, not this; per the boundary rule, anything OTel semconv gives a `db.system.name` is a `db`. |
 | `process` | `{process.pid, process.creation.time}` — the OTel semconv identity (the creation time disambiguates PID reuse) | a restart = a new process (delete + create), not an update; `process.executable.name` is descriptive |
-| `db` | `{db.instance.id}` — a **stable source identifier**: PostgreSQL `system_identifier`, MySQL `server_uuid`, else an operator-configured logical instance name | **never network-derived** — `server.address`/`server.port` are mutable (DHCP/failover/VIP) so they stay descriptive attributes |
+| `db` | `{db.instance.id}` — a **stable source identifier**: PostgreSQL `system_identifier`, MySQL `server_uuid`, else an operator-configured logical instance name, else the **host-scoped fallback** `<db.system.name>:<port>@<host.id>` | **never network-derived** — `server.address`/`server.port` are mutable (DHCP/failover/VIP) so they stay descriptive attributes. See the fallback rules below. |
 | `network.device` | `{network.device.id}` — a single subtype-prefixed value by **precedence**: `serial:` (ENTITY-MIB `entPhysicalSerialNum`) > `engine:` (`snmpEngineID`) > `mac:` (LLDP chassis-id) > `name:` (`sysName`) > `mgmt:` (mgmt IP) | **anchored on SNMP-immutable facts, not LLDP** (often disabled); `mgmt:` is mutable last-resort. Producer canonicalizes (Toise is byte-exact); raw parts descriptive. Endpoints resolved to the canonical id via `ifPhysAddress` before emitting edges. Frozen for Lot 5 — see [`otel-mapping.md`](./otel-mapping.md#networkdevice-identity--snmp-topology-lot-5-frozen). |
 | `compute.vm` | `{host.id, vmid}` — the **hypervisor node's** `host.id` plus the hypervisor's vm id | a VM seen **from the hypervisor**, where the guest machine-id is unavailable. **Not** a `host` (a vmid is not a machine-id). `runs_on` the hypervisor `host`. The in-guest `host` (machine-id) is a separate facet, reconciled later by a `same_as` overlay (ADR 0020), never merged. **If the hypervisor *does* surface the guest machine-id (e.g. Hyper-V KVP), carry it as the descriptive attribute `guest.host.id` — evidence, never identity (the id stays `{host.id, vmid}`) — and still do not emit a `host` facet or merge.** That attribute is the `same_as` join key the overlay will consume; per ADR 0020 the producer asserts `same_as` (basis/confidence) once that layer lands, but until it does (`same_as` is not yet a registered relation type) the evidence rides as `guest.host.id`. Same pattern as AT8 (redfish/ibmi carry `hw.serial_number` on both facets). |
 | `container` | `{container.id}` | an OCI/Docker container — a compute resource, not a `service.instance`. `image`/`name` descriptive; `status` is a **state key** (see below); `runs_on` its `host`. |
+
+#### `db.instance.id` — the host-scoped fallback
+
+MariaDB and Redis expose no stable instance identifier (Redis's `run_id` changes
+at every restart), and most operators never configure a logical name, so the
+fallback is the common case rather than the exception. It must still not be
+network-derived: a bare `127.0.0.1:3306` is byte-identical on every machine, so
+every local database in the estate collapses into **one** entity whose attributes
+flip between servers — measured in production as 118 attribute updates in six
+hours, with telemetry join keys pointing at one machine while the attributes
+described another.
+
+The fallback is therefore **`<db.system.name>:<port>@<host.id>`**:
+
+```
+mysql:3306@8b861704-05bc-4382-b057-7eac3df5e730
+redis:6379@8b861704-05bc-4382-b057-7eac3df5e730
+```
+
+- The `@<host.id>` form is the one this contract already uses for
+  `service.instance` (`<service.name>@<host.id>`). The question "how do you name
+  a local thing that has no stable id" gets **one** answer, not one per type.
+- The **system name is required** for the scoped form. Without it, fall back to
+  the raw `address:port` rather than emitting `:3306@<host.id>`, which would name
+  a port on a machine and nothing else.
+- The port is a **discriminant within a host** (two Redis on one machine), not
+  the basis of the identity. Changing a listening port re-keys the entity, which
+  is a deliberate and rare operation.
+- Any scheme prefix a producer carries on the remote form (`mssql://`) is
+  **dropped** on the local form, where the system name already says it. It stays
+  on the remote form, where it is what separates this identifier from another
+  product reachable at the same address and port.
+- **Routable addresses are left alone.** They already distinguish the target, and
+  rewriting them would re-key every remote database without fixing anything.
+
+Because the identity is now unique per machine, the anti-collapse rule below
+(host-local literals are never a shared identity) stops holding local databases
+back, and each one gains its `runs_on`. A local database was previously in no
+host's impact radius at all — that was a hole in the graph, not a modelling
+nicety.
 
 ### Descriptive attributes — vocabulary & state semantics (toise#216)
 

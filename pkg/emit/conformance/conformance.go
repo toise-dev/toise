@@ -117,6 +117,7 @@ func checkRecord(where string, lr plog.LogRecord) []Problem {
 		bad("entity.id is empty — identity is required")
 	default:
 		checkScalarMap(&out, where, "entity.id", id.Map())
+		checkHostID(&out, where, "entity.id", id.Map())
 	}
 
 	if desc, ok := attrs.Get(wire.AttrEntityDescription); ok {
@@ -162,6 +163,11 @@ func checkRecord(where string, lr plog.LogRecord) []Problem {
 				}
 				if v, ok := m.Get(wire.RelTargetID); !ok || v.Type() != pcommon.ValueTypeMap || v.Map().Len() == 0 {
 					out = append(out, Problem{Record: rw, Issue: "missing, non-map, or empty target entity.id"})
+				} else {
+					// An edge names its target by identity, so a mis-rendered host.id
+					// here points at a host that does not exist rather than at the
+					// wrong one — the edge is parked, then dropped.
+					checkHostID(&out, rw, "entity.id", v.Map())
 				}
 				if rt, _ := m.Get(wire.RelType); rt.Str() == wire.RelTypeSameAs {
 					out = append(out, checkSameAsBelief(rw, m)...)
@@ -196,6 +202,83 @@ func checkSameAsBelief(where string, m pcommon.Map) []Problem {
 		return []Problem{{Record: where, Issue: fmt.Sprintf("same_as confidence %g is outside [0,1]; the canonical overlay ignores it", c), Advisory: true}}
 	}
 	return nil
+}
+
+// checkHostID flags a host.id whose rendering is not the contract's. Not
+// advisory: the failure it prevents is silent and permanent — the same machine
+// written two ways is two entities under exact identity (ADR 0018), and nothing
+// in the graph says they are one. It surfaces months later against an entity
+// everything already points at, which is why it must stop a producer before it
+// ships rather than warn once and be filed away.
+//
+// Two renderings are flagged, both unambiguous:
+//
+//   - the raw 32-hex contents of /etc/machine-id, which a producer reading the
+//     file directly emits while one going through a library that formats it
+//     emits the hyphenated UUID of the same bytes;
+//   - a hyphenated UUID carrying uppercase hex, which differs from the same id
+//     in lowercase by nothing a reader would notice.
+func checkHostID(out *[]Problem, where, field string, m pcommon.Map) {
+	v, ok := m.Get(wire.IdentityHostID)
+	if !ok || v.Type() != pcommon.ValueTypeStr {
+		return
+	}
+	s := v.Str()
+	switch {
+	case isRawMachineID(s):
+		*out = append(*out, Problem{Record: where, Issue: fmt.Sprintf(
+			"%s.%s is the raw 32-hex machine-id; the contract spells it as a lowercase hyphenated UUID (8-4-4-4-12). "+
+				"A producer already emitting this form in production must coordinate the change — it re-keys every host — "+
+				"rather than switch renderings on upgrade", field, wire.IdentityHostID)})
+	case isUUIDWithUppercase(s):
+		*out = append(*out, Problem{Record: where, Issue: fmt.Sprintf(
+			"%s.%s carries uppercase hex; the contract spells host.id lowercase, and the same id in two cases is two entities. "+
+				"A producer already emitting this form in production must coordinate the change — it re-keys every host",
+			field, wire.IdentityHostID)})
+	}
+}
+
+// isRawMachineID reports whether s is 32 hex digits with no separator — the
+// literal contents of /etc/machine-id.
+func isRawMachineID(s string) bool {
+	if len(s) != 32 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if !isHexDigit(s[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// isUUIDWithUppercase reports whether s is an 8-4-4-4-12 hyphenated UUID holding
+// at least one uppercase hex letter.
+func isUUIDWithUppercase(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	upper := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if c != '-' {
+				return false
+			}
+			continue
+		}
+		if !isHexDigit(c) {
+			return false
+		}
+		if c >= 'A' && c <= 'F' {
+			upper = true
+		}
+	}
+	return upper
+}
+
+func isHexDigit(c byte) bool {
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
 }
 
 // checkScalarMap flags empty keys and non-scalar values: identity is a flat
