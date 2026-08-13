@@ -30,7 +30,13 @@ attach.
 
 - With the reconciliation buffer **enabled** (default), an edge whose endpoint
   hasn't arrived yet is **parked** and retried, and dropped with a `Warn` only
-  after `relation_buffer_ttl`. Out-of-order delivery is fine.
+  once the hold expires. Out-of-order delivery is fine.
+- **The hold is not `relation_buffer_ttl` alone.** It is the greater of that TTL
+  and the **source's own re-emit interval** when the producer reports one, so a
+  parked edge always gets at least one full cycle for its endpoint to arrive.
+  With a producer re-emitting every 360s and the default 30s TTL, the hold is
+  360s — a derived value, not a constant: lower the producer's interval and the
+  hold shortens with it.
 - With it **disabled** (`relation_buffer_ttl: 0`), a missing endpoint is a
   retriable ingest error.
 
