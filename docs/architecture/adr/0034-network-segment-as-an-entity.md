@@ -88,12 +88,59 @@ not "the cluster network". It waits for a cluster that actually has one.
 
 ### The relation
 
-`attached_to`, from the workload to the segment. **Structural**: a service
-leaving a segment is topology worth alerting on. Impact flows **target to
-source** — the segment failing takes what is attached to it — the same
-direction as `runs_on`.
+`attached_to`, **from the entity that holds the network namespace the attachment
+belongs to**, to the segment. Concretely a `container` on Docker and Swarm, and
+a `pod` on Kubernetes — the namespace is shared per pod, which is the argument
+that made `pod` a type in the first place. Not the workload: a Swarm service is
+not an entity Toise models, so an edge from one would have no source.
+
+The first draft said "from the workload", which had no producer able to emit it.
+The correction came from the reference producer's maintainer, whose Swarm probe
+emits the cluster as a `service.instance` and nothing per service; the real
+attachment lives on the container, where the runtime actually reports it.
 
 Subnet, internal flag and ingress marker are **descriptive**, never identity.
+
+### Segments and attachments come from different producers
+
+A cluster manager sees the segments; the nodes see which containers are attached
+to them. So a complete picture needs **both** probes running, and Toise's
+per-producer reference counting (ADR 0019) already handles the convergence: each
+producer asserts what it observes, and the entity survives as long as any of them
+does.
+
+The consequence is operational and belongs here rather than being discovered by
+the first integrator: **running only the manager probe yields segments with no
+attachments**, which is a legitimate and stable state, not a defect. Toise has no
+entity-level orphan rule — an entity with no edges lives as long as a producer
+keeps asserting it. Only a relation whose *endpoint* is missing is parked and
+eventually dropped, which is a different mechanism.
+
+### What the impact direction promises, and what it does not
+
+Impact flows **target to source** — the segment failing takes what is attached
+to it — the same direction as `runs_on`. That direction is a statement about
+dependency, and it is correct.
+
+It is **not** a promise that a failure event will arrive. An overlay is a
+control-plane construct: it does not fail on its own. What fails is a node or the
+underlying transport, and **no producer can currently mark a segment down** —
+attached-task counts and subnet saturation are metrics, not health, and neither
+belongs in a state key.
+
+Both readings therefore have to be written, or the semantics look richer than
+they are:
+
+- `impact_of` on a segment stays meaningful, because it is defined over a
+  **hypothetically** failing entity. *If this overlay broke, what would go with
+  it* is a real question during a network migration or a fabric change, and it is
+  exactly what a blast radius is for.
+- **Nothing will propagate from a segment at runtime.** Do not build an alert on
+  segment-failure propagation; it will never fire.
+
+The alert-worthy event exists, but it is on the **edge**, not the node: a
+container losing its overlay attachment is observable, is reported by the
+runtime, and is why `attached_to` is **structural**.
 
 ### What the edge does not say
 
