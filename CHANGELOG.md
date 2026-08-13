@@ -47,6 +47,12 @@ identity the contract never specified. No wire-contract break, no data migration
   identity they gain one, so a local database enters its host's impact radius for
   the first time.
 
+  The contract also documents **how to migrate an identity** — an unconditional
+  explicit delete of the old one, and a one-cycle `same_as` bridging the two — and
+  the trap that follows: the cascade removes the bridge with the deleted entity, so
+  a current-state query for `same_as` reads **zero** after the cutover and looks
+  like a failure to emit. Verify with a dated read at the cutover instant.
+
 - **GraphQL `canonical(id, asOf)` query** — the ADR 0020 identity overlay, until now
   reachable only over MCP. It returns the entities that high-confidence `same_as`
   edges assert are the same real thing as the one queried, transitively, plus the

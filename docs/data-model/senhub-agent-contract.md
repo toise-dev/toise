@@ -139,6 +139,30 @@ back, and each one gains its `runs_on`. A local database was previously in no
 host's impact radius at all — that was a hole in the graph, not a modelling
 nicety.
 
+**Migrating an identity — what to emit, and how to verify it.** A producer
+changing how it spells an existing identity should emit two things alongside the
+new entity, both **unconditionally**, with no persisted state to decide:
+
+1. An **explicit `entity.delete` of the old identity**. Without it the old entity
+   dies by liveness expiry and the change feed reads `delete_source=liveness_expiry`
+   — "the producer went silent" — when the truth is "someone decided". A delete
+   naming an identity that never existed is a complete no-op: no event, no error,
+   nothing in the change feed or the OTLP response.
+2. A **`same_as` from the new identity to the old**, `basis="rekey"`,
+   `confidence=1.0`, for one cycle. History is never rewritten, so the merged
+   entity stays visible as deleted with its timeline intact; the edge is what keeps
+   the two timelines joinable. On a fresh install, where the old identity never
+   existed, the edge is simply parked and dropped — no event, no ingest error,
+   nothing returned to the producer, at the cost of one `Warn` on the Toise side.
+
+!!! warning "After the cutover the bridging edge reads as absent"
+    The cascade removes every edge touching a deleted entity, so once the old
+    identity is gone, a current-state query for `same_as` returns nothing and
+    `canonical` on the survivor returns null. That is correct — an edge to a
+    deleted entity is meaningless in the present — but it means the obvious
+    verification reads zero and looks like a failure to emit. **Verify with a
+    dated read at the cutover instant**, which shows both entities and the link.
+
 ### Descriptive attributes — vocabulary & state semantics (toise#216)
 
 Identity is settled above; this fixes the **descriptive** attribute vocabulary and
