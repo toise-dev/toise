@@ -92,8 +92,14 @@ emit endpoint `entity.state` events before the entity that embeds an edge to
 them, but ordering is **not required**: with the reconciliation buffer enabled
 (`relation_buffer_ttl`, on by default), an edge whose endpoint hasn't arrived yet
 is **parked** and retried, and dropped with a `Warn` only if its endpoints never
-appear within the TTL. OTLP guarantees no inter-batch order, so this keeps
-out-of-order delivery from silently losing edges.
+appear within the hold — the greater of that TTL and the source's own re-emit
+interval, so a parked edge always gets at least one full cycle. OTLP guarantees
+no inter-batch order, so this keeps out-of-order delivery from silently losing
+edges.
+
+An edge whose endpoint will *never* arrive — a `same_as` naming an identity that
+no longer exists, for instance — costs one `Warn` per edge once the hold expires
+and nothing else: no event, no ingest error, nothing returned to the producer.
 
 ## Liveness — explicit delete, interval backstop
 
