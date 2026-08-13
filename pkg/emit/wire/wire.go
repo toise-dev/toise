@@ -210,6 +210,17 @@ const (
 	EndpointNetworkTransport = "network.transport"
 )
 
+// IdentityHostID is the identity key naming a machine. It appears on a host, on
+// a compute.vm (the hypervisor's), and as the fourth key of a host-local
+// network.endpoint, so its spelling must be identical everywhere: identity is
+// byte-exact (ADR 0018), and the same machine written two ways is two entities.
+//
+// The contract pins the rendering to a lowercase hyphenated UUID (8-4-4-4-12).
+// The raw 32-hex contents of /etc/machine-id are the same bytes and a different
+// string, so a producer reading the file directly and one going through a
+// library that formats it produce a silent, permanent duplicate of every host.
+const IdentityHostID = "host.id"
+
 // OTLP Resource attribute keys on a ResourceLogs carrying entity events.
 const (
 	// ResServiceName names the producing service (informational).
