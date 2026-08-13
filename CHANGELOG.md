@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
+## [0.13.0] - 2026-08-13
+
+**One answer per question — the identity release.** Three places where the same
+question had two answers, or none: a `same_as` group answered differently on MCP
+and GraphQL, a `host.id` spelled two ways by two producers, and a `db` fallback
+identity the contract never specified. No wire-contract break, no data migration.
+
 ### Added
 
 - **The conformance kit fails on a mis-rendered `host.id`.** `/etc/machine-id` holds

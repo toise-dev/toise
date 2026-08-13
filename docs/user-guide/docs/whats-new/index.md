@@ -12,6 +12,12 @@ below. See the [API stability policy](../api-stability.md).
 
 ## Releases
 
+- [**0.13.0**](0.13.0.md) — 2026-08-13 — **one answer per question**: the ADR 0020
+  `same_as` identity overlay reaches GraphQL as `canonical(id, asOf)`, computed by
+  the same walk and threshold as MCP so the two surfaces cannot disagree; the
+  `host.id` rendering is pinned and the conformance kit **fails** on a raw
+  machine-id, which silently duplicates every host; and the `db.instance.id`
+  fallback is specified as `<db.system.name>:<port>@<host.id>`.
 - [**0.12.0**](0.12.0.md) — 2026-08-11 — **the pod**: a thirteenth entity type for
   the Kubernetes unit of scheduling and of failure, identified by the UID
   Kubernetes assigns, composing from the existing vocabulary as
