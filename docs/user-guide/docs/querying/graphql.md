@@ -264,6 +264,33 @@ The MCP surface exposes the same overlay on `get_entity`, computed by the same
 walk against the same threshold, so both surfaces answer identically. See
 [ADR 0020](https://github.com/toise-dev/toise/blob/main/docs/architecture/adr/0020-weighted-multi-source-identity.md).
 
+### Bridging a re-key — and why the edge then reads as absent
+
+A producer changing how it spells an entity's identity can emit a `same_as`
+between the old identity and the new one, so the two timelines stay joinable
+without anything being merged. It is the honest way to survive a re-key: history
+is never rewritten, and a dated read at the cutover shows both entities *and* the
+link between them.
+
+!!! warning "The bridging edge disappears from the current view, by design"
+    Once the old entity is gone, the cascade removes every edge touching it —
+    including the bridge. So after the cutover,
+    `relations(filter: { type: "same_as" })` returns **nothing**, and
+    `canonical` on the surviving entity returns null.
+
+    That is correct behaviour, not a lost edge: an edge to a deleted entity is
+    meaningless in the present. But someone verifying a migration with the
+    obvious query will read zero and conclude nothing was ever emitted. **Verify
+    with a dated read at the cutover instant instead:**
+
+    ```graphql
+    query BridgeAtCutover($t: String!) {
+      relations(filter: { type: "same_as" }, asOf: $t) {
+        edges { node { fromId toId attributes { key value } } }
+      }
+    }
+    ```
+
 ## Guardrails and limits
 
 The server is hardened against expensive or hostile queries:
