@@ -111,10 +111,45 @@ does.
 
 The consequence is operational and belongs here rather than being discovered by
 the first integrator: **running only the manager probe yields segments with no
-attachments**, which is a legitimate and stable state, not a defect. Toise has no
-entity-level orphan rule — an entity with no edges lives as long as a producer
-keeps asserting it. Only a relation whose *endpoint* is missing is parked and
-eventually dropped, which is a different mechanism.
+attachments**, which is a legitimate and stable state on the consumer side.
+Toise has no entity-level orphan rule — an entity with no edges lives as long as
+a producer keeps asserting it. Only a relation whose *endpoint* is missing is
+parked and eventually dropped, which is a different mechanism.
+
+### A segment is never emitted as an isolated node
+
+That consumer-side tolerance is not enough, because it says nothing about what a
+producer will actually put on the wire. The reference producer's emitter drops an
+entity before emission unless it is a `host`, carries an outgoing edge, or is
+targeted by another entity — a reasonable guard against emitting things nothing
+refers to. A manager-only deployment would therefore emit **no segments at all**,
+not segments without attachments: the guard would take them before the wire and
+the consumer would see a graph that is empty on this point rather than merely
+incomplete.
+
+Rather than ask a producer to exempt the type, the segment carries an edge that
+is **true**: an overlay belongs to the cluster that declares it, and is scoped to
+it.
+
+```
+network.segment --runs_on--> service.instance   (the cluster)
+container       --attached_to--> network.segment
+```
+
+**No new relation type.** `runs_on`'s From/To pairing is advisory and its impact
+already flows target to source, so the cluster failing takes its segments with
+it, which is what one wants. This is the same composition the `pod` decision
+used, and for the same reason: a vocabulary that composes is worth more than one
+that grows.
+
+"Runs on" reads oddly for a network segment taken literally. It is read here as
+*is hosted by, is scoped to* — the sense it already carries for a pod, which is
+scheduled onto a host rather than executing on it.
+
+The rule this fixes for producers generally: **a segment is emitted with its
+cluster edge or not at all.** That is not a workaround for one producer's guard;
+it is what makes a segment's provenance explicit — a segment nobody can say
+whose it is has no business in the graph.
 
 ### What the impact direction promises, and what it does not
 
@@ -155,8 +190,9 @@ membership says almost nothing about reachability.
 
 ## Consequences
 
-- A fourteenth entity type and a fourteenth relation type. Both additive:
-  existing types, relations and stored events are untouched (ADR 0030).
+- A fourteenth entity type and a fourteenth relation type — `attached_to` only;
+  the cluster edge reuses `runs_on`. Both additive: existing types, relations and
+  stored events are untouched (ADR 0030).
 - The usual ordering applies, met twice before: the SDK is tagged first, the
   engine registers the type second, the producer emits third. The root module
   resolves `pkg/emit` by published version, so a constant cannot be registered
