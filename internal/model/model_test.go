@@ -199,7 +199,7 @@ func TestRegistry(t *testing.T) {
 	if def, ok := RelationDef(RelListensOn); !ok || def.From != TypeServiceListener || def.To != TypeNetworkInterface {
 		t.Error("relation def wrong")
 	}
-	if len(EntityTypes()) != 13 || len(RelationTypes()) != 13 {
+	if len(EntityTypes()) != 14 || len(RelationTypes()) != 15 {
 		t.Errorf("registry counts: %d entity, %d relation", len(EntityTypes()), len(RelationTypes()))
 	}
 	// compute.vm (hypervisor-discovered VM), container and pod are registered
@@ -208,6 +208,19 @@ func TestRegistry(t *testing.T) {
 	// would be a producer emitting against a Toise too old to know the type.
 	if !IsKnownEntityType(TypeComputeVM) || !IsKnownEntityType(TypeContainer) || !IsKnownEntityType(TypePod) {
 		t.Error("compute.vm, container and pod must be known entity types")
+	}
+	if !IsKnownEntityType(TypeNetworkSegment) {
+		t.Error("network.segment must be a known entity type")
+	}
+	// A segment is declared by its cluster and joined by a workload, and the two
+	// edges flow opposite ways: the cluster failing drops the segments it
+	// declares (From->To, like has_interface and has_route), while the segment
+	// failing takes what is attached to it (To->From).
+	if def, ok := RelationDef(RelHasSegment); !ok || def.From != TypeServiceInstance || def.To != TypeNetworkSegment || def.Impact != ImpactFromTo {
+		t.Error("has_segment relation def wrong")
+	}
+	if def, ok := RelationDef(RelAttachedTo); !ok || def.To != TypeNetworkSegment || def.Impact != ImpactToFrom {
+		t.Error("attached_to relation def wrong")
 	}
 	// depends_on (connection topology, #184) targets an observable network.endpoint.
 	if def, ok := RelationDef(RelDependsOn); !ok || def.From != TypeServiceInstance || def.To != TypeNetworkEndpoint {

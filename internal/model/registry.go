@@ -52,6 +52,16 @@ const (
 	// type. It carries the pod-scoped telemetry no single container can own: the
 	// network namespace is shared per pod.
 	TypePod = wire.TypePod
+	// TypeNetworkSegment is a broadcast and reachability domain bearing an
+	// assigned identifier — the entity that lets "why can't A reach B" be a graph
+	// question (ADR 0034). Identity is a subtype-prefixed value by precedence, of
+	// which only `swarm:` is frozen; `k8s:` and `vlan:` are deliberately open
+	// because neither has a scope that can be spelled correctly yet.
+	//
+	// Membership is NECESSARY AND NOT SUFFICIENT for reachability: policies
+	// restrict on top of it, so the graph says two workloads COULD address each
+	// other, never that they do.
+	TypeNetworkSegment = wire.TypeNetworkSegment
 )
 
 // Phase-1 relation types. See ADR 0004.
@@ -100,6 +110,18 @@ const (
 	// same_as edges is a deferred read-time overlay (ADR 0020, Lot B). The
 	// producer states evidence it can justify; it never pre-merges (ADR 0018/0020).
 	RelSameAs = wire.RelTypeSameAs
+
+	// RelAttachedTo joins a workload to a network segment, FROM the entity that
+	// holds the network namespace the attachment belongs to: a container on
+	// Docker and Swarm, a pod on Kubernetes. Not from the workload or the service
+	// — a Swarm service is not an entity, so an edge from one would have no
+	// source (ADR 0034).
+	RelAttachedTo = wire.RelTypeAttachedTo
+	// RelHasSegment attaches a network segment to the cluster that declares it,
+	// following the ownership family already here: has_interface for a host's
+	// ports, has_route for a device's routes — a logical network object declared
+	// by its owner. A segment is emitted with this edge or not at all.
+	RelHasSegment = wire.RelTypeHasSegment
 
 	// Legacy device-level edges — superseded under topology-as-entities (ADR 0022)
 	// and NOT to be emitted by producers: routes_via is replaced by network.route +
@@ -161,6 +183,7 @@ var entityTypes = map[string]struct{}{
 	TypeComputeVM:       {},
 	TypeContainer:       {},
 	TypePod:             {},
+	TypeNetworkSegment:  {},
 }
 
 var relationTypes = map[string]RelationTypeDef{
@@ -192,6 +215,16 @@ var relationTypes = map[string]RelationTypeDef{
 	// Non-structural (its appearance is not an alert) and ImpactNone (not a failure
 	// path); the canonical collapse is a deferred read-time overlay (ADR 0020, Lot B).
 	RelSameAs: {Type: RelSameAs, From: "", To: "", Structural: false, Impact: ImpactNone},
+	// "X attached_to Y": the segment failing takes what is attached to it. The
+	// direction states a dependency; it does not promise an event will arrive —
+	// an overlay is a control-plane construct and no producer can mark one down
+	// today, so impact_of answers a hypothetical while nothing propagates at
+	// runtime (ADR 0034). Structural because the alertable event is here, on the
+	// edge: a container losing its attachment is observable.
+	RelAttachedTo: {Type: RelAttachedTo, From: TypeContainer, To: TypeNetworkSegment, Structural: true, Impact: ImpactToFrom},
+	// "X has_segment Y": the cluster failing drops the segments it declares —
+	// same shape and direction as has_interface and has_route.
+	RelHasSegment: {Type: RelHasSegment, From: TypeServiceInstance, To: TypeNetworkSegment, Structural: true, Impact: ImpactFromTo},
 	// legacy device-level edges (superseded; not emitted — see the const block)
 	RelRoutesVia:  {Type: RelRoutesVia, From: TypeNetworkDevice, To: TypeNetworkDevice, Structural: true, Impact: ImpactToFrom},
 	RelForwardsTo: {Type: RelForwardsTo, From: TypeNetworkDevice, To: TypeNetworkDevice, Structural: true, Impact: ImpactBoth},

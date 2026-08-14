@@ -15,7 +15,7 @@ require (
 	github.com/oklog/ulid/v2 v2.1.1
 	github.com/prometheus/client_golang v1.15.0
 	github.com/prometheus/client_model v0.3.0
-	github.com/toise-dev/toise/pkg/emit v0.7.0
+	github.com/toise-dev/toise/pkg/emit v0.9.0
 	github.com/vektah/gqlparser/v2 v2.5.33
 	go.opentelemetry.io/collector/pdata v1.59.0
 	google.golang.org/grpc v1.82.1
