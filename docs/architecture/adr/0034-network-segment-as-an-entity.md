@@ -111,10 +111,56 @@ does.
 
 The consequence is operational and belongs here rather than being discovered by
 the first integrator: **running only the manager probe yields segments with no
-attachments**, which is a legitimate and stable state, not a defect. Toise has no
-entity-level orphan rule — an entity with no edges lives as long as a producer
-keeps asserting it. Only a relation whose *endpoint* is missing is parked and
-eventually dropped, which is a different mechanism.
+attachments**, which is a legitimate and stable state on the consumer side.
+Toise has no entity-level orphan rule — an entity with no edges lives as long as
+a producer keeps asserting it. Only a relation whose *endpoint* is missing is
+parked and eventually dropped, which is a different mechanism.
+
+### A segment is never emitted as an isolated node
+
+That consumer-side tolerance is not enough, because it says nothing about what a
+producer will actually put on the wire. The reference producer's emitter drops an
+entity before emission unless it is a `host`, carries an outgoing edge, or is
+targeted by another entity — a reasonable guard against emitting things nothing
+refers to. A manager-only deployment would therefore emit **no segments at all**,
+not segments without attachments: the guard would take them before the wire and
+the consumer would see a graph that is empty on this point rather than merely
+incomplete.
+
+Rather than ask a producer to exempt the type, the segment carries an edge that
+is **true**: an overlay belongs to the cluster that declares it, and is scoped to
+it.
+
+```
+service.instance --has_segment--> network.segment   (the cluster declares it)
+container        --attached_to--> network.segment   (the workload joins it)
+```
+
+`has_segment` follows the **ownership family the vocabulary already has**:
+`has_interface` (a host declares its ports) and, closest of all, `has_route` (a
+device declares its routes — a *logical* network object, not a physical one).
+Same shape, same direction, same impact: From to To, the owner failing takes the
+declared object with it.
+
+An earlier draft anchored the segment with `runs_on` instead, to avoid a second
+relation type. Two arguments killed it, both from the reference producer's
+maintainer. The **semantic** one: `runs_on` means *executes on / is scheduled
+onto*, and every type in its From set is a compute thing. Adding a network object
+would give one relation two senses, so that "what runs on this cluster" would
+start returning its networks — and once merged, the senses cannot be separated
+again without another ADR. The **cost** one: the saving was illusory. Neither
+relation exists yet, so both ship in the same SDK tag; the extra cost is a
+constant, not a cycle.
+
+The `pod` precedent does not carry here. Composing was right for a pod because a
+pod genuinely *is* scheduled onto a node — the existing sense stretched, it did
+not split. A segment is not scheduled anywhere.
+
+The guard is still satisfied, on its **third** term: the cluster targets the
+segment. And the rule this fixes for producers generally: **a segment is emitted
+with its cluster edge or not at all.** That is not a workaround for one
+producer's guard; it is what makes a segment's provenance explicit — a segment
+nobody can say whose it is has no business in the graph.
 
 ### What the impact direction promises, and what it does not
 
@@ -155,8 +201,9 @@ membership says almost nothing about reachability.
 
 ## Consequences
 
-- A fourteenth entity type and a fourteenth relation type. Both additive:
-  existing types, relations and stored events are untouched (ADR 0030).
+- A fourteenth entity type and two relation types, `attached_to` and
+  `has_segment`. Both ship in the same SDK tag. All additive: existing types,
+  relations and stored events are untouched (ADR 0030).
 - The usual ordering applies, met twice before: the SDK is tagged first, the
   engine registers the type second, the producer emits third. The root module
   resolves `pkg/emit` by published version, so a constant cannot be registered
