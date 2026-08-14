@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
+### Added
+
+- **`network.segment` entity type, with `attached_to` and `has_segment`** (ADR 0034).
+  A segment is a broadcast and reachability domain bearing an assigned identifier —
+  the thing that makes *why can't A reach B* a graph question. It was previously
+  nothing: none of the network types names it, so producers carried overlays as
+  metric labels, queryable but not traversable.
+
+  ```
+  service.instance --has_segment--> network.segment   (the cluster declares it)
+  container        --attached_to--> network.segment   (the workload joins it)
+  ```
+
+  **Only `swarm:<network-id>` is a frozen identity subtype.** `k8s:` and `vlan:` are
+  deliberately left open, and that is the decision rather than an omission:
+  Kubernetes has no object to identify in the default flat-network case, and a VLAN
+  id is not globally unique while a VLAN trunked across five switches is one segment
+  rather than five. An identity engraved wrongly costs a migration; an open one
+  costs a sentence.
+
+  **Membership is necessary and not sufficient for reachability.** Network policies
+  restrict on top of it, and on a flat cluster network shared membership says almost
+  nothing. Likewise the impact direction states a dependency without promising an
+  event: no producer can mark a segment down, so `impact_of` answers a hypothetical
+  while nothing propagates at runtime. Do not alert on segment-failure propagation.
+  The alertable event is on the edge — a container losing its attachment.
+
+  Ships for producers as `wire.TypeNetworkSegment`, `wire.RelTypeAttachedTo` and
+  `wire.RelTypeHasSegment` in **`pkg/emit/v0.9.0`**; the engine registry derives
+  from those constants. As always the two are not interchangeable: the SDK tag lets
+  a producer compile, this release lets it emit.
+
 ## [0.13.0] - 2026-08-13
 
 **One answer per question — the identity release.** Three places where the same
