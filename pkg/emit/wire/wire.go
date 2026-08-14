@@ -193,15 +193,24 @@ const (
 )
 
 // Legacy relation types, superseded under topology-as-entities (ADR 0022) and
-// NOT to be emitted by new producers. They stay registered so the boundary keeps
-// accepting existing emitters; the device-level views they expressed are derived
-// at read time instead.
+// NOT to be emitted. They stay registered so the boundary keeps accepting an
+// existing emitter; the device-level views they expressed are derived at read
+// time instead.
+//
+// All three are DEPRECATED and scheduled for removal in 1.0. They are still
+// accepted today, and RelationTypes() still lists them, because the list states
+// what the boundary accepts rather than what a producer should emit. A producer
+// still emitting one has until 1.0 to move to the replacement named on each.
 const (
-	// RelTypeRoutesVia is superseded by network.route + has_route + next_hop_via.
+	// Deprecated: superseded by network.route + has_route + next_hop_via. Still
+	// accepted at the boundary, scheduled for removal in 1.0. No known producer
+	// emits it.
 	RelTypeRoutesVia = "routes_via"
-	// RelTypeForwardsTo is superseded by connected_to to the learned port.
+	// Deprecated: superseded by connected_to to the learned port. Still accepted
+	// at the boundary, scheduled for removal in 1.0. No known producer emits it.
 	RelTypeForwardsTo = "forwards_to"
-	// RelTypeAdjacentTo is superseded by port-to-port connected_to.
+	// Deprecated: superseded by port-to-port connected_to. Still accepted at the
+	// boundary, scheduled for removal in 1.0. No known producer emits it.
 	RelTypeAdjacentTo = "adjacent_to"
 )
 

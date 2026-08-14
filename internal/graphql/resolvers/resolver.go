@@ -215,10 +215,18 @@ func (r *queryResolver) EntityHistory(ctx context.Context, id string, since, unt
 	return r.changeConnection(filtered, first, after)
 }
 
-func (r *queryResolver) RecentChanges(ctx context.Context, window string, first *int, after *string) (*generated.ChangeConnection, error) {
-	d, err := time.ParseDuration(window)
+// defaultRecentChangesWindow matches the MCP recent_changes default, so the same
+// question asked over either surface takes the same shape and the same default.
+const defaultRecentChangesWindow = "1h"
+
+func (r *queryResolver) RecentChanges(ctx context.Context, window *string, first *int, after *string) (*generated.ChangeConnection, error) {
+	w := defaultRecentChangesWindow
+	if window != nil && *window != "" {
+		w = *window
+	}
+	d, err := time.ParseDuration(w)
 	if err != nil || d <= 0 {
-		return nil, fmt.Errorf("invalid window %q: use a positive Go duration like 15m, 2h, or 24h", window)
+		return nil, fmt.Errorf("invalid window %q: use a positive Go duration like 15m, 2h, or 24h", w)
 	}
 	now := r.now()
 	evs, err := r.Store.ReadByTimeRange(ctx, now.Add(-d), now.Add(time.Nanosecond)) // inclusive of now

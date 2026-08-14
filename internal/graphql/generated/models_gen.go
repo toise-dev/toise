@@ -273,7 +273,10 @@ const (
 	ChangeTypeEntityCreated ChangeType = "ENTITY_CREATED"
 	// The entity existed and is now soft-deleted; the log retains its history.
 	ChangeTypeEntityDeleted ChangeType = "ENTITY_DELETED"
-	// An identifying attribute mutated (anomalous; the logical id is preserved).
+	// **Never emitted.** Under exact identity matching (ADR 0018) an identity change
+	// is a different entity, so the engine has no reason to produce this. The value
+	// is retained to replay logs written before that rule and cannot be removed
+	// without breaking them. Do not write a handler waiting for it.
 	ChangeTypeEntityIdentityChanged ChangeType = "ENTITY_IDENTITY_CHANGED"
 	// A descriptive (non-identifying) attribute changed.
 	ChangeTypeEntityAttributeUpdated ChangeType = "ENTITY_ATTRIBUTE_UPDATED"

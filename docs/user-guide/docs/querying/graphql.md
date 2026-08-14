@@ -37,7 +37,7 @@ curl -s http://127.0.0.1:8080/graphql \
 | `entities(filter, first = 50, after)` | `EntityConnection!` | current entities, newest-first, paginated |
 | `relations(filter, first = 50, after)` | `RelationConnection!` | current relations, paginated |
 | `entityHistory(id!, since, until, asKnownAt, first = 100, after)` | `ChangeConnection!` | one entity's change timeline (bi-temporal) |
-| `recentChanges(window!, first = 100, after)` | `ChangeConnection!` | changes across all entities within a window |
+| `recentChanges(window = "1h", first = 100, after)` | `ChangeConnection!` | changes across all entities within a window |
 | `canonical(id!, asOf)` | `CanonicalGroup` | what is believed to be the same real thing as this entity (null if nothing is) |
 
 ### Subscriptions
@@ -113,6 +113,12 @@ type Attribute { key: String!, value: String!, type: ValueType! }  # ValueType: 
 `ENTITY_IDENTITY_CHANGED`, `ENTITY_ATTRIBUTE_UPDATED`, `ENTITY_STATE_CHANGED`,
 `ENTITY_UNCHANGED`, `RELATION_ADDED`, `RELATION_REMOVED`,
 `RELATION_ATTRIBUTE_CHANGED`.
+
+!!! warning "`ENTITY_IDENTITY_CHANGED` is never emitted"
+    Under exact identity matching an identity change *is* a different entity, so
+    the engine has no reason to produce it. The value is retained only to replay
+    logs written before that rule and cannot be removed without breaking them.
+    Do not write a handler waiting for it.
 
 !!! note "Attribute values are stringly-typed on the wire"
     Every `Attribute.value` is a string; read `Attribute.type` to interpret it
@@ -207,7 +213,8 @@ query Recent {
 }
 ```
 
-`window` is a Go duration string (`"15m"`, `"2h"`, `"24h"`).
+`window` is a Go duration string (`"15m"`, `"2h"`, `"24h"`) and defaults to
+`"1h"` — the same default the MCP `recent_changes` tool uses.
 
 **Subscribe to live changes** (WebSocket, `graphql-ws` subprotocol, on
 `ws://127.0.0.1:8080/graphql`):
