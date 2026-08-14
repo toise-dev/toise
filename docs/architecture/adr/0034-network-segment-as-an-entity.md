@@ -1,7 +1,8 @@
 # 34. The network segment is an entity, and only the subtype with an assigned identifier is frozen
 
-- Status: Proposed
-- Date: 2026-08-13
+- Status: Accepted
+- Date: 2026-08-13 (accepted 2026-08-14, after two rounds of review with the
+  reference producer)
 - Relates to: ADR 0004 (data model aligned with OTel entities), ADR 0018 (exact
   identity matching), ADR 0022 (engine stores facts only), ADR 0030 (deployment
   tiers — additive and opt-in), ADR 0032 (connection-derived edges; the
@@ -231,3 +232,20 @@ answer, and it stays open rather than being guessed.
 
 **ADR 0022** keeps the boundary: membership is a producer-asserted fact,
 reachability is not stored.
+
+## Sequencing
+
+Agreed with the reference producer at acceptance, in this order:
+
+1. **`pkg/emit`** publishes `network.segment`, `attached_to` and `has_segment` in
+   one tag. A producer can compile.
+2. **The engine registers them**, deriving from those constants. A producer can
+   emit — the boundary refuses unknown types under the default strict vocabulary,
+   so the two steps are not interchangeable.
+3. **The producer emits.** Segments and their `has_segment` edges are a direct
+   addition to the Swarm probe, which already sees the networks. `attached_to`
+   needs the Docker probe to read container network membership, which it does not
+   read today; the field is in the API, so it is work rather than an obstacle.
+
+The consequence for a reader of an early graph: **segments may appear before any
+`attached_to` does.** That is the expected order of arrival, not a gap.
