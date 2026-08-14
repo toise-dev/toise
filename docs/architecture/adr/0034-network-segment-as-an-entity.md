@@ -132,24 +132,35 @@ is **true**: an overlay belongs to the cluster that declares it, and is scoped t
 it.
 
 ```
-network.segment --runs_on--> service.instance   (the cluster)
-container       --attached_to--> network.segment
+service.instance --has_segment--> network.segment   (the cluster declares it)
+container        --attached_to--> network.segment   (the workload joins it)
 ```
 
-**No new relation type.** `runs_on`'s From/To pairing is advisory and its impact
-already flows target to source, so the cluster failing takes its segments with
-it, which is what one wants. This is the same composition the `pod` decision
-used, and for the same reason: a vocabulary that composes is worth more than one
-that grows.
+`has_segment` follows the **ownership family the vocabulary already has**:
+`has_interface` (a host declares its ports) and, closest of all, `has_route` (a
+device declares its routes — a *logical* network object, not a physical one).
+Same shape, same direction, same impact: From to To, the owner failing takes the
+declared object with it.
 
-"Runs on" reads oddly for a network segment taken literally. It is read here as
-*is hosted by, is scoped to* — the sense it already carries for a pod, which is
-scheduled onto a host rather than executing on it.
+An earlier draft anchored the segment with `runs_on` instead, to avoid a second
+relation type. Two arguments killed it, both from the reference producer's
+maintainer. The **semantic** one: `runs_on` means *executes on / is scheduled
+onto*, and every type in its From set is a compute thing. Adding a network object
+would give one relation two senses, so that "what runs on this cluster" would
+start returning its networks — and once merged, the senses cannot be separated
+again without another ADR. The **cost** one: the saving was illusory. Neither
+relation exists yet, so both ship in the same SDK tag; the extra cost is a
+constant, not a cycle.
 
-The rule this fixes for producers generally: **a segment is emitted with its
-cluster edge or not at all.** That is not a workaround for one producer's guard;
-it is what makes a segment's provenance explicit — a segment nobody can say
-whose it is has no business in the graph.
+The `pod` precedent does not carry here. Composing was right for a pod because a
+pod genuinely *is* scheduled onto a node — the existing sense stretched, it did
+not split. A segment is not scheduled anywhere.
+
+The guard is still satisfied, on its **third** term: the cluster targets the
+segment. And the rule this fixes for producers generally: **a segment is emitted
+with its cluster edge or not at all.** That is not a workaround for one
+producer's guard; it is what makes a segment's provenance explicit — a segment
+nobody can say whose it is has no business in the graph.
 
 ### What the impact direction promises, and what it does not
 
@@ -190,9 +201,9 @@ membership says almost nothing about reachability.
 
 ## Consequences
 
-- A fourteenth entity type and a fourteenth relation type — `attached_to` only;
-  the cluster edge reuses `runs_on`. Both additive: existing types, relations and
-  stored events are untouched (ADR 0030).
+- A fourteenth entity type and two relation types, `attached_to` and
+  `has_segment`. Both ship in the same SDK tag. All additive: existing types,
+  relations and stored events are untouched (ADR 0030).
 - The usual ordering applies, met twice before: the SDK is tagged first, the
   engine registers the type second, the producer emits third. The root module
   resolves `pkg/emit` by published version, so a constant cannot be registered
