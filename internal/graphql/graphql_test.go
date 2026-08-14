@@ -289,6 +289,21 @@ func TestRecentChanges(t *testing.T) {
 	if resp.RecentChanges.TotalCount != 4 {
 		t.Errorf("recentChanges totalCount = %d, want 4", resp.RecentChanges.TotalCount)
 	}
+
+	// window is optional and defaults to 1h, matching the MCP recent_changes
+	// tool: the same question asked over either surface takes the same shape.
+	// It was required here and defaulted there, which is the kind of drift a
+	// frozen surface cannot fix later.
+	resp.RecentChanges.TotalCount = 0
+	c.MustPost(`{ recentChanges{ totalCount } }`, &resp)
+	if resp.RecentChanges.TotalCount != 4 {
+		t.Errorf("recentChanges with no window = %d, want 4 (the 1h default)", resp.RecentChanges.TotalCount)
+	}
+
+	// An explicit bad window is still an error, with an actionable message.
+	if err := c.Post(`{ recentChanges(window:"nope"){ totalCount } }`, &resp); err == nil {
+		t.Error("an unparseable window should be rejected")
+	}
 }
 
 func TestComplexityLimit(t *testing.T) {

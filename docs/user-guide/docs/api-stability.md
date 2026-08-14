@@ -76,6 +76,44 @@ This is the posture ratified in
 [ADR 0031](https://github.com/toise-dev/toise/blob/main/docs/architecture/adr/0031-one-zero-stability-decoupled-from-upstream-spec.md):
 we do not gate Toise's stability on an externally-controlled "Stable" date.
 
+## What parity between MCP and GraphQL means
+
+The two read surfaces are **not** meant to be feature-equal, and the difference
+is deliberate rather than a backlog:
+
+- **GraphQL is the typed query surface** over the read model — entities,
+  relations, history, subscriptions. A client picks its own fields.
+- **MCP adds analysis**: traversal and interpretation an assistant would
+  otherwise have to reimplement from many round trips — `impact_of`, `find_path`,
+  `graph_diff`, `describe_type`, `telemetry_keys`.
+
+What *is* promised is narrower and more useful: **where both surfaces answer the
+same question, they answer it identically** — same walk, same thresholds, same
+defaults. The `same_as` canonical overlay is computed once and called from both;
+`recentChanges` and `recent_changes` take the same window default. A divergence
+there is a bug, not a design choice.
+
+The corollary, stated so it is not assumed away at 1.0: **a new MCP tool does not
+oblige a matching GraphQL query**, and the reverse holds too.
+
+## Deprecations in flight
+
+| Deprecated | Replacement | Removal |
+|------------|-------------|---------|
+| `routes_via` relation type | `network.route` + `has_route` + `next_hop_via` | 1.0 |
+| `forwards_to` relation type | `connected_to` to the learned port | 1.0 |
+| `adjacent_to` relation type | port-to-port `connected_to` | 1.0 |
+
+All three were superseded under topology-as-entities (ADR 0022) and have been
+documented as "do not emit" since. They are **still accepted** and still listed by
+`wire.RelationTypes()`, because that list states what the boundary accepts rather
+than what a producer should emit. No known producer emits any of them.
+
+`ENTITY_IDENTITY_CHANGED` is a different case and is **not** deprecated: nothing
+emits it — under exact identity matching an identity change is a different entity
+— but the value is retained to replay logs written before that rule, so it cannot
+be removed. Do not write a handler waiting for it.
+
 ## Not covered (may change anytime)
 
 - The **debug UI** (`/`), the GraphQL **playground** and **introspection** — development aids, off under `--production`.

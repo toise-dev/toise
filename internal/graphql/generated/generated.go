@@ -125,7 +125,7 @@ type ComplexityRoot struct {
 		Entities      func(childComplexity int, filter *EntityFilter, first *int, after *string, asOf *string) int
 		Entity        func(childComplexity int, id string, asOf *string) int
 		EntityHistory func(childComplexity int, id string, since *string, until *string, asKnownAt *string, first *int, after *string) int
-		RecentChanges func(childComplexity int, window string, first *int, after *string) int
+		RecentChanges func(childComplexity int, window *string, first *int, after *string) int
 		Relations     func(childComplexity int, filter *RelationFilter, first *int, after *string, asOf *string) int
 	}
 
@@ -173,7 +173,7 @@ type QueryResolver interface {
 	Entities(ctx context.Context, filter *EntityFilter, first *int, after *string, asOf *string) (*EntityConnection, error)
 	Relations(ctx context.Context, filter *RelationFilter, first *int, after *string, asOf *string) (*RelationConnection, error)
 	EntityHistory(ctx context.Context, id string, since *string, until *string, asKnownAt *string, first *int, after *string) (*ChangeConnection, error)
-	RecentChanges(ctx context.Context, window string, first *int, after *string) (*ChangeConnection, error)
+	RecentChanges(ctx context.Context, window *string, first *int, after *string) (*ChangeConnection, error)
 	Canonical(ctx context.Context, id string, asOf *string) (*CanonicalGroup, error)
 }
 type SubscriptionResolver interface {
@@ -532,7 +532,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Query.RecentChanges(childComplexity, args["window"].(string), args["first"].(*int), args["after"].(*string)), true
+		return e.ComplexityRoot.Query.RecentChanges(childComplexity, args["window"].(*string), args["first"].(*int), args["after"].(*string)), true
 	case "Query.relations":
 		if e.ComplexityRoot.Query.Relations == nil {
 			break
@@ -813,7 +813,12 @@ enum ChangeType {
   ENTITY_CREATED
   "The entity existed and is now soft-deleted; the log retains its history."
   ENTITY_DELETED
-  "An identifying attribute mutated (anomalous; the logical id is preserved)."
+  """
+  **Never emitted.** Under exact identity matching (ADR 0018) an identity change
+  is a different entity, so the engine has no reason to produce this. The value
+  is retained to replay logs written before that rule and cannot be removed
+  without breaking them. Do not write a handler waiting for it.
+  """
   ENTITY_IDENTITY_CHANGED
   "A descriptive (non-identifying) attribute changed."
   ENTITY_ATTRIBUTE_UPDATED
@@ -1096,9 +1101,11 @@ type Query {
 
   """
   Recent change events across all entities within ` + "`" + `window` + "`" + ` (a Go duration like
-  ` + "`" + `15m` + "`" + `, ` + "`" + `2h` + "`" + `, ` + "`" + `24h` + "`" + `), newest-first, with Relay pagination.
+  ` + "`" + `15m` + "`" + `, ` + "`" + `2h` + "`" + `, ` + "`" + `24h` + "`" + `), newest-first, with Relay pagination. ` + "`" + `window` + "`" + ` defaults to
+  ` + "`" + `1h` + "`" + `, matching the MCP ` + "`" + `recent_changes` + "`" + ` tool — the same question asked over
+  either surface takes the same shape and the same default.
   """
-  recentChanges(window: String!, first: Int = 100, after: String): ChangeConnection!
+  recentChanges(window: String = "1h", first: Int = 100, after: String): ChangeConnection!
 
   """
   The canonical group of an entity: everything believed to be the same real
@@ -1665,8 +1672,8 @@ func (ec *executionContext) field_Query_recentChanges_args(ctx context.Context, 
 	var err error
 	args := map[string]any{}
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "window",
-		func(ctx context.Context, v any) (string, error) {
-			return ec.unmarshalNString2string(ctx, v)
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
 		})
 	if err != nil {
 		return nil, err
@@ -3166,7 +3173,7 @@ func (ec *executionContext) _Query_recentChanges(ctx context.Context, field grap
 		},
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().RecentChanges(ctx, fc.Args["window"].(string), fc.Args["first"].(*int), fc.Args["after"].(*string))
+			return ec.Resolvers.Query().RecentChanges(ctx, fc.Args["window"].(*string), fc.Args["first"].(*int), fc.Args["after"].(*string))
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *ChangeConnection) graphql.Marshaler {

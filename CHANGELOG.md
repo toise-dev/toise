@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
+### Deprecated
+
+- **The three legacy relation types — `routes_via`, `forwards_to`, `adjacent_to`
+  — are deprecated and will be removed in 1.0.** All were superseded under
+  topology-as-entities (ADR 0022) and have been documented as "do not emit" since:
+  use `network.route` + `has_route` + `next_hop_via`, `connected_to` to the learned
+  port, and port-to-port `connected_to` respectively.
+
+  They remain **accepted** at the boundary and still appear in
+  `wire.RelationTypes()`, because that list states what the boundary accepts rather
+  than what a producer should emit. The constants now carry a Go `Deprecated:`
+  marker, so an IDE or linter flags any remaining use.
+
+  This notice is what makes the removal possible: the stability policy requires a
+  deprecation in a release preceding the removal, and 1.0 is where the surfaces
+  freeze.
+
 ### Added
 
 - **`network.segment` entity type, with `attached_to` and `has_segment`** (ADR 0034).
@@ -85,6 +102,22 @@ identity the contract never specified. No wire-contract break, no data migration
   a current-state query for `same_as` reads **zero** after the cutover and looks
   like a failure to emit. Verify with a dated read at the cutover instant.
 
+- **GraphQL `recentChanges` takes an optional `window`, defaulting to `1h`** —
+  matching the MCP `recent_changes` tool, where it was already optional with that
+  default. The same question asked over either surface now takes the same shape.
+  Backward compatible: an explicit window still works, and an unparseable one is
+  still rejected.
+- **`ENTITY_IDENTITY_CHANGED` is documented as never emitted**, in the schema and
+  the GraphQL guide. Under exact identity matching an identity change is a
+  different entity, so nothing produces it — but the value is retained to replay
+  logs written before that rule and cannot be removed. It was listed in the change
+  taxonomy with no hint of this, so a consumer could reasonably have written a
+  handler for an event that will never arrive.
+- **The stability policy states what parity between MCP and GraphQL means**: the
+  surfaces are deliberately not feature-equal (GraphQL is the typed query surface,
+  MCP adds traversal and interpretation), but where both answer the same question
+  they answer it identically — same walk, same thresholds, same defaults. A new MCP
+  tool does not oblige a matching GraphQL query.
 - **GraphQL `canonical(id, asOf)` query** — the ADR 0020 identity overlay, until now
   reachable only over MCP. It returns the entities that high-confidence `same_as`
   edges assert are the same real thing as the one queried, transitively, plus the
