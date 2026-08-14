@@ -19,14 +19,15 @@ func TestVocabularyLists(t *testing.T) {
 			want: []string{TypeHost, TypeProcess, TypeNetworkInterface, TypeNetworkAddress,
 				TypeNetworkRoute, TypeServiceListener, TypeServiceInstance, TypeDatabase,
 				TypeNetworkDevice, TypeNetworkEndpoint, TypeComputeVM, TypeContainer,
-				TypePod},
+				TypePod, TypeNetworkSegment},
 		},
 		{
 			what: "relation type",
 			list: RelationTypes(),
 			want: []string{RelTypeRunsOn, RelTypeHasInterface, RelTypeBoundTo, RelTypeNextHopVia,
 				RelTypeListensOn, RelTypeMonitors, RelTypeHasRoute, RelTypeConnectedTo,
-				RelTypeDependsOn, RelTypeSameAs, RelTypeRoutesVia, RelTypeForwardsTo, RelTypeAdjacentTo},
+				RelTypeDependsOn, RelTypeSameAs, RelTypeAttachedTo, RelTypeHasSegment,
+				RelTypeRoutesVia, RelTypeForwardsTo, RelTypeAdjacentTo},
 		},
 	} {
 		seen := map[string]bool{}

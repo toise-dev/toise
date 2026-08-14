@@ -123,6 +123,23 @@ const (
 	// cannot: the network namespace is shared per pod, so pod-scoped network
 	// measurements belong to it and to nothing else.
 	TypePod = "pod"
+	// TypeNetworkSegment is a broadcast and reachability domain bearing an
+	// assigned identifier: two workloads on the same segment can address each
+	// other, two on different segments cannot, whatever the firewall says.
+	// Docker Swarm's overlay is an instance of that definition, not the
+	// definition (ADR 0034).
+	//
+	// Identity is a single subtype-prefixed value by precedence, like
+	// network.device.id. Only `swarm:<network-id>` is frozen, because the cluster
+	// assigns it. `k8s:` and `vlan:` are deliberately NOT frozen: Kubernetes has
+	// no object to identify in the default flat-network case, and a VLAN id is
+	// not globally unique while a VLAN trunked across five switches is one
+	// segment rather than five. Emitting either would engrave a wrong identity.
+	//
+	// Membership is a NECESSARY AND NOT SUFFICIENT condition for reachability:
+	// network policies restrict on top of it, and on a flat cluster network
+	// shared membership says almost nothing.
+	TypeNetworkSegment = "network.segment"
 )
 
 // Relation types. The From/To pairings are canonical but advisory: they are not
@@ -159,6 +176,20 @@ const (
 	// RelConfidence/RelBasis. It does NOT merge the entities: the canonical
 	// collapse is a read-time overlay (ADR 0020).
 	RelTypeSameAs = "same_as"
+	// RelTypeAttachedTo attaches a workload to the network segment it joined,
+	// FROM the entity holding the network namespace the attachment belongs to: a
+	// container on Docker and Swarm, a pod on Kubernetes (the namespace is shared
+	// per pod). Not from the workload or the service — a Swarm service is not an
+	// entity, so an edge from one would have no source (ADR 0034).
+	RelTypeAttachedTo = "attached_to"
+	// RelTypeHasSegment attaches a network segment to the cluster that declares
+	// it, following the ownership family already in this vocabulary:
+	// has_interface for a host's ports, has_route for a device's routes — a
+	// logical network object declared by its owner, which is the shape here.
+	//
+	// A segment is emitted with this edge or not at all: a segment nobody can say
+	// whose it is has no business in the graph.
+	RelTypeHasSegment = "has_segment"
 )
 
 // Legacy relation types, superseded under topology-as-entities (ADR 0022) and
@@ -183,7 +214,7 @@ func EntityTypes() []string {
 		TypeHost, TypeProcess, TypeNetworkInterface, TypeNetworkAddress,
 		TypeNetworkRoute, TypeServiceListener, TypeServiceInstance, TypeDatabase,
 		TypeNetworkDevice, TypeNetworkEndpoint, TypeComputeVM, TypeContainer,
-		TypePod,
+		TypePod, TypeNetworkSegment,
 	}
 }
 
@@ -194,7 +225,7 @@ func RelationTypes() []string {
 	return []string{
 		RelTypeRunsOn, RelTypeHasInterface, RelTypeBoundTo, RelTypeNextHopVia,
 		RelTypeListensOn, RelTypeMonitors, RelTypeHasRoute, RelTypeConnectedTo,
-		RelTypeDependsOn, RelTypeSameAs,
+		RelTypeDependsOn, RelTypeSameAs, RelTypeAttachedTo, RelTypeHasSegment,
 		RelTypeRoutesVia, RelTypeForwardsTo, RelTypeAdjacentTo,
 	}
 }
