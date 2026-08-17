@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
+### Changed
+
+- **The 1.0 freeze audit walked the whole MCP surface.** The twelve tools hold up:
+  `entity_id`, `as_of`, `max_depth`, `limit`, `verbosity`, `truncated` and `total`
+  are spelled identically across every tool that has them, and each tool that can
+  truncate says so. Two nested `count` fields on `describe_type` were the only
+  bare ones left and now carry descriptions like their siblings.
+
+- **Two conventions are stated once in the stability policy** rather than repeated
+  per field, and both are frozen at 1.0 because changing either breaks clients:
+  absence is an **empty string, not null** for scalars (optional *objects* stay
+  nullable), and **`count` is scoped to the object carrying it** while `total` is
+  the population before the limit.
+
+- **The MCP golden pins shape, not prose.** Field descriptions are deliberately
+  outside it, so the wording an assistant reads stays improvable after 1.0;
+  renaming or retyping a field does not.
+
 ## [0.14.0] - 2026-08-17
 
 **Reachability, and the first deprecation.** A fourteenth entity type makes *why

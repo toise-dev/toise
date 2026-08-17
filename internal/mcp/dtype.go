@@ -40,7 +40,7 @@ type AttributeUsage struct {
 type RelationParticipation struct {
 	RelationType string      `json:"relation_type"`
 	Direction    string      `json:"direction" jsonschema:"outgoing if entities of this type are the source, incoming if the target"`
-	Count        int         `json:"count"`
+	Count        int         `json:"count" jsonschema:"edges of this relation type observed on entities of this type"`
 	PeerTypes    []TypeCount `json:"peer_types" jsonschema:"the types observed at the other end, with counts"`
 }
 
@@ -48,7 +48,7 @@ type RelationParticipation struct {
 type EndpointShape struct {
 	FromType string `json:"from_type"`
 	ToType   string `json:"to_type"`
-	Count    int    `json:"count"`
+	Count    int    `json:"count" jsonschema:"edges observed with this exact (from, to) type pair"`
 }
 
 // DescribeTypeOutput zooms on one type: its registration, its observed shape,
