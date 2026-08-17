@@ -108,9 +108,19 @@ Liveness uses two mechanisms:
 1. **Explicit `entity.delete` is the primary signal.** When a producer knows an
    entity is gone, it emits `entity.delete` and Toise soft-deletes it (history
    retained). A heartbeat is just a re-emitted `entity.state`. A delete may carry
-   an optional **`entity.delete.reason`** — an open enum (`terminated`, `expired`,
-   `evicted`, …, never validated against a closed set) — captured, persisted, and
-   surfaced on MCP `recent_changes` / `graph_diff` and GraphQL `ChangeEvent.deleteReason`.
+   an optional **`entity.delete.reason`** — an open enum, never validated against a
+   closed set — captured, persisted, and surfaced on MCP `recent_changes` /
+   `graph_diff` and GraphQL `ChangeEvent.deleteReason`.
+
+    Recommended values: `terminated`, `evicted`, `scaled_down`, `user_requested`,
+    `expired`, `parent_removed` — and **`unmonitored`**, which is the one that
+    matters. The first six say the *resource* ended; `unmonitored` says the
+    *observation* did, and the resource may well still be running. Never use a
+    lifecycle value when a probe was simply removed or a target left the scope: an
+    entity that disappears because someone edited a configuration must not read as
+    "the thing is gone". See the
+    [contract](https://github.com/toise-dev/toise/blob/main/docs/data-model/senhub-agent-contract.md)
+    for the full table and how each value pairs with `delete_source`.
 2. **Interval backstop.** If a producer set `entity.report.interval` (> 0) and then
    goes silent past that interval, the liveness sweep expires the entity — so a
    producer that crashes without sending a delete doesn't leave stale entities
