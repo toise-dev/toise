@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
+### Added
+
+- **`entity.delete.reason` gets a recommended core, and is stated as a distinct axis
+  from `delete_source`.** The two answer different questions — `delete_source` is
+  *who authored the disappearance* (Toise writes it, ADR 0033), the reason is *why
+  the producer decided* (the producer writes it, stored verbatim) — so producer
+  values are **not** a subset of the source's. Aligning them would restate a fact
+  the consumer already owns, and drift the moment Toise gains a fourth source.
+
+  The enum stays open. What is new is a recommended set so producers converge
+  without being policed: `terminated`, `evicted`, `scaled_down`, `user_requested`,
+  `expired`, `parent_removed`, and **`unmonitored`**.
+
+  `unmonitored` is the one that earns the section. The other six say the *resource*
+  ended; `unmonitored` says the *observation* did and the resource may still be
+  running. A database entity that vanishes because someone edited a probe list must
+  not read as "the database is gone" — that is the reading that causes an incident.
+  It is the producer-side mirror of `liveness_expiry`: there Toise says *I stopped
+  hearing*, here the producer says *I stopped looking*.
+
+- **`pkg/emit/wire` being stdlib-only is now enforced by a test**, not just promised
+  in a doc comment. The reference producer adopted the contract precisely because it
+  could take the vocabulary without the transport — its agent already owns one OTLP
+  rail carrying the tenant header and relay enrichment, and a second OTLP client
+  would have reintroduced the drift a shared contract exists to remove. One
+  convenience import would have closed that door silently. Verified alongside: a
+  module importing only `wire` requires `pkg/emit` and nothing else after
+  `go mod tidy` — module-graph pruning keeps grpc and pdata out.
+
 ### Deprecated
 
 - **The three legacy relation types — `routes_via`, `forwards_to`, `adjacent_to`

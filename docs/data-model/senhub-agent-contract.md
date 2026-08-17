@@ -164,6 +164,61 @@ new entity, both **unconditionally**, with no persisted state to decide:
     verification reads zero and looks like a failure to emit. **Verify with a
     dated read at the cutover instant**, which shows both entities and the link.
 
+#### `entity.delete.reason` — a distinct axis from `delete_source`
+
+The two answer different questions and are **not** two spellings of one fact:
+
+- **`delete_source`** is *who authored the disappearance*. Toise writes it
+  (ADR 0033), the producer never does.
+- **`entity.delete.reason`** is *why the producer decided*. The producer writes
+  it, Toise stores it verbatim and never validates it (ADR 0022).
+
+Producer values are therefore **not** a subset of `delete_source`. Aligning them
+would have the producer restate a fact the consumer already owns, and the two
+would drift the moment Toise gains a fourth source — a retention reap or an
+operator purge, both anticipated by ADR 0033. The value spaces do not align
+either: `liveness_expiry` is meaningless from a producer that is by definition
+speaking, and a configuration change is meaningless as an author.
+
+**The enum stays open** — Toise accepts any string. But an open enum with no
+recommended core is how every producer invents its own spelling, so the values
+below are what Toise recommends. Converge on them; do not be policed by them.
+
+| Recommended value | Meaning | Family |
+| --- | --- | --- |
+| `terminated` | the resource ended normally | resource lifecycle |
+| `evicted` | it was displaced by its scheduler | resource lifecycle |
+| `scaled_down` | it was removed by a scaling decision | resource lifecycle |
+| `user_requested` | a human asked for its removal | resource lifecycle |
+| `expired` | the producer's own retention/TTL ended it | resource lifecycle |
+| `parent_removed` | the producer removed it because its parent went away | resource lifecycle |
+| `unmonitored` | **the observation ended; the resource may well still exist** | observation |
+
+**The rule that matters: never use a lifecycle value when you merely stopped
+looking.** A probe removed from the configuration, or a target that left the
+scope, deletes the entity for a reason that says nothing about the resource. A
+database entity that disappears because someone edited a probe list must not read
+as "the database is gone" — that is the reading that causes an incident, and
+`unmonitored` is what prevents it. It is the producer-side mirror of
+`liveness_expiry`: there Toise says *I stopped hearing*, here the producer says
+*I stopped looking*.
+
+`parent_removed` is deliberately **not** spelled `cascade`, even though the
+producer-side situation resembles Toise's: `cascade` is a `delete_source` value
+meaning *Toise removed an edge whose endpoint died*. Reusing one word across the
+two axes would recreate, one level down, the ambiguity ADR 0033 exists to remove.
+
+Read together, the pairs are unambiguous:
+
+| `delete_source` | `delete.reason` | Reading |
+| --- | --- | --- |
+| `producer` | `terminated` | the thing ended, and the producer saw it |
+| `producer` | `unmonitored` | the thing may still exist; we stopped watching |
+| `producer` | `parent_removed` | producer-side cascade: the parent went first |
+| `producer` | *(absent)* | the producer decided and gave no motive |
+| `liveness_expiry` | *(absent)* | the producer went silent past its interval |
+| `cascade` | *(absent)* | Toise removed an edge whose endpoint died |
+
 ### Descriptive attributes — vocabulary & state semantics (toise#216)
 
 Identity is settled above; this fixes the **descriptive** attribute vocabulary and
