@@ -88,8 +88,11 @@ either is a breaking change for clients that assume the current shape.
 schema can legitimately be empty — `Entity.schemaUrl`, `SameAsLink.basis`, a
 `CanonicalMember`'s `type` and `label` when the alias is deleted. They are
 non-nullable and empty rather than nullable, so a client never has to branch on
-null for a scalar it asked for. Optional *objects* are still nullable
-(`Entity.annotations`, the `canonical` query) — the convention covers scalars.
+null for a scalar it asked for — and because the empty string already carries
+meaning in this API: an annotation set to `""` *removes* its key. Introducing
+null would create a second way to say "nothing" next to one that is
+load-bearing. Optional *objects* are still nullable (`Entity.annotations`, the
+`canonical` query) — the convention covers scalars.
 
 **`count` is scoped to the object carrying it, `total` is the population before
 the limit.** On a paginated MCP result, `count` is what was returned and `total`
