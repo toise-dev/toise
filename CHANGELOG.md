@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
+## [0.14.0] - 2026-08-17
+
+**Reachability, and the first deprecation.** A fourteenth entity type makes *why
+can't A reach B* a graph question, and the 1.0 freeze audit opens by naming what
+will not survive it. No wire-contract break, no data migration; everything
+additive except the log-format note below.
+
 ### Added
 
 - **`entity.delete.reason` gets a recommended core, and is stated as a distinct axis

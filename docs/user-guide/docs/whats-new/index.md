@@ -12,6 +12,12 @@ below. See the [API stability policy](../api-stability.md).
 
 ## Releases
 
+- [**0.14.0**](0.14.0.md) — 2026-08-17 — **reachability, and the first
+  deprecation**: a fourteenth entity type, `network.segment`, makes *why can't A
+  reach B* a graph question (`has_segment` from the declaring cluster,
+  `attached_to` from the container or pod), with only the `swarm:` identity
+  subtype frozen; and the 1.0 freeze audit opens by deprecating the three legacy
+  relation types for removal at 1.0.
 - [**0.13.0**](0.13.0.md) — 2026-08-13 — **one answer per question**: the ADR 0020
   `same_as` identity overlay reaches GraphQL as `canonical(id, asOf)`, computed by
   the same walk and threshold as MCP so the two surfaces cannot disagree; the
