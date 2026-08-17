@@ -15,6 +15,8 @@ can build on.
 |---------|-----------------|-----------|
 | **Producer wire contract** (OTLP entity events) | `entity.state` / `entity.delete` records, the `entity.*` attributes, embedded `entity.relationships`, identity rules | byte-exact conformance fixture (`pkg/emit/conformance`, `fixture_v1.bin`) |
 | **MCP surface** | the set of tools (name + input/output fields), resources and resource templates (name, URI, MIME), and prompts (name, arguments) | a golden contract test (`internal/mcp`, `tool_contract.golden`) — any change fails the build until the golden is deliberately regenerated |
+
+The golden pins **shape, not prose**: field *descriptions* are deliberately outside it, so the wording an assistant reads can be improved after 1.0 without a contract break. Renaming or retyping a field cannot.
 | **GraphQL schema** | types, fields and arguments in `schema.graphql` | the schema is the hand-maintained source of truth; changes are reviewed in the PR diff |
 
 **Change rules for stable surfaces:**
@@ -75,6 +77,29 @@ change rules above — not a mirror of the upstream lifecycle label. In practice
 This is the posture ratified in
 [ADR 0031](https://github.com/toise-dev/toise/blob/main/docs/architecture/adr/0031-one-zero-stability-decoupled-from-upstream-spec.md):
 we do not gate Toise's stability on an externally-controlled "Stable" date.
+
+## Two conventions the surfaces will keep
+
+Both are consistently applied today and are stated here rather than per field, so
+a consumer learns them once. Both are also **frozen at 1.0**, since changing
+either is a breaking change for clients that assume the current shape.
+
+**Absence is an empty string, not null.** Twenty `String!` fields in the GraphQL
+schema can legitimately be empty — `Entity.schemaUrl`, `SameAsLink.basis`, a
+`CanonicalMember`'s `type` and `label` when the alias is deleted. They are
+non-nullable and empty rather than nullable, so a client never has to branch on
+null for a scalar it asked for — and because the empty string already carries
+meaning in this API: an annotation set to `""` *removes* its key. Introducing
+null would create a second way to say "nothing" next to one that is
+load-bearing. Optional *objects* are still nullable (`Entity.annotations`, the
+`canonical` query) — the convention covers scalars.
+
+**`count` is scoped to the object carrying it, `total` is the population before
+the limit.** On a paginated MCP result, `count` is what was returned and `total`
+is what matched; inside a nested object — a relation participation, an endpoint
+shape, a type breakdown — `count` is how many of *that* thing were observed. Every
+occurrence carries its own description in the tool schema; the rule above is why
+they differ.
 
 ## What parity between MCP and GraphQL means
 
