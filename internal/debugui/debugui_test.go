@@ -143,7 +143,7 @@ func newTestHandler(t *testing.T) *Handler {
 		byEntity: map[model.EntityID][]model.Event{web.ID: {entEv}},
 		byTime:   []model.Event{entEv, relEv},
 	}
-	h, err := New(g, st)
+	h, err := New(g, st, "acme-corp", func() []string { return []string{"acme-corp", "default"} })
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -244,5 +244,42 @@ func TestUnknownPath404(t *testing.T) {
 	h := newTestHandler(t)
 	if code, _ := get(t, h, "/nope"); code != http.StatusNotFound {
 		t.Fatalf("want 404 for unknown path, got %d", code)
+	}
+}
+
+// TestEveryPageNamesItsTenant pins #335: an empty view that does not say WHAT it
+// is empty for is indistinguishable from "nothing was emitted". Diagnosed as a
+// live incident once — a producer's segments were in another tenant, and the
+// obvious page read as "the producer stopped". Every page must name the tenant
+// it answers for.
+func TestEveryPageNamesItsTenant(t *testing.T) {
+	h := newTestHandler(t)
+	for _, target := range []string{"/", "/entities", "/changes"} {
+		code, body := get(t, h, target)
+		if code != http.StatusOK {
+			t.Fatalf("%s: status %d", target, code)
+		}
+		if !strings.Contains(body, "tenant acme-corp") {
+			t.Errorf("%s does not name its tenant", target)
+		}
+		if !strings.Contains(body, `<option selected>acme-corp</option>`) || !strings.Contains(body, "<option>default</option>") {
+			t.Errorf("%s: switcher missing or current tenant not selected", target)
+		}
+	}
+}
+
+// TestNoSwitcherWithoutList pins the ADR 0028 side of #335: under claim-derived
+// tenancy the handler gets no tenant list, and the page must not offer one — a
+// scoped reader learning which other tenants exist crosses the isolation
+// boundary. The tenant still has to be NAMED; only the enumeration is withheld.
+func TestNoSwitcherWithoutList(t *testing.T) {
+	h := newTestHandler(t)
+	h.listTenants = nil
+	_, body := get(t, h, "/")
+	if strings.Contains(body, `<select name="tenant"`) {
+		t.Error("switcher rendered with no tenant list")
+	}
+	if !strings.Contains(body, "tenant acme-corp") {
+		t.Error("the tenant must still be named without the switcher")
 	}
 }

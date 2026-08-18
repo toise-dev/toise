@@ -364,11 +364,29 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		mux.Handle("/playground", playground.Handler("Toise", "/graphql"))
 	}
 	if cfg.DebugUI {
+		// The tenant switcher exists only where tenant selection is already
+		// client-controlled. Under claim-derived tenancy the claim resolver stays
+		// in charge, the ?tenant= parameter is never consulted, and the tenant
+		// list is not offered — a scoped reader must not learn which other
+		// tenants exist (ADR 0028).
+		var listTenants func() []string
+		if !cfg.DeriveOnlyTenancy() && !cfg.OIDCEnabled() {
+			listTenants = func() []string {
+				stacks := reg.Stacks()
+				ids := make([]string, len(stacks))
+				for i, st := range stacks {
+					ids[i] = st.Tenant
+				}
+				return ids
+			}
+		}
 		debugRouter := newTenantRouter(reg, logger, func(st *registry.Stack) (http.Handler, error) {
-			return debugui.New(st.Graph, st.Store)
+			return debugui.New(st.Graph, st.Store, st.Tenant, listTenants)
 		})
 		if cfg.DeriveOnlyTenancy() || cfg.OIDCEnabled() {
 			debugRouter.resolve = authn.EffectiveTenantHTTP
+		} else {
+			debugRouter.resolve = tenant.FromHTTPWithQuery
 		}
 		mux.Handle("/", debugRouter)
 	}

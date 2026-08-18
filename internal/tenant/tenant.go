@@ -71,6 +71,19 @@ func FromHTTP(r *http.Request) (string, bool) {
 	return Sanitize(r.Header.Get(HeaderOrgID))
 }
 
+// FromHTTPWithQuery resolves the tenant from a ?tenant= query parameter, falling
+// back to the X-Scope-OrgID header. It exists for the debug UI, whose tenant
+// switcher is a plain HTML form — a form cannot set a header. It grants no new
+// trust: it is wired only where the header is already client-controlled, never
+// under claim-derived tenancy (ADR 0028), where the claim resolver stays in
+// charge and this function is not reachable.
+func FromHTTPWithQuery(r *http.Request) (string, bool) {
+	if q := r.URL.Query().Get("tenant"); q != "" {
+		return Sanitize(q)
+	}
+	return FromHTTP(r)
+}
+
 // FromGRPC resolves the tenant from gRPC metadata (x-scope-orgid). ok is false only
 // when a present value is invalid; an absent one yields Default.
 func FromGRPC(ctx context.Context) (string, bool) {

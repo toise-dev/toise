@@ -50,22 +50,28 @@ type EventReader interface {
 
 // Handler serves the debug UI over HTTP.
 type Handler struct {
-	graph Graph
-	store EventReader
-	tmpl  *template.Template
-	now   func() time.Time
-	mux   *http.ServeMux
+	graph       Graph
+	store       EventReader
+	tenant      string
+	listTenants func() []string // nil = no switcher (claim-derived tenancy)
+	tmpl        *template.Template
+	now         func() time.Time
+	mux         *http.ServeMux
 }
 
 // New builds a debug UI handler reading from the given projection and event log.
 // It parses the embedded templates; an error means a template is malformed,
 // which is a programming error the caller should surface at startup.
-func New(graph Graph, store EventReader) (*Handler, error) {
+// New builds the handler for one tenant's graph. listTenants, when non-nil,
+// supplies the ids offered by the tenant switcher; pass nil when the tenant is
+// derived from verified claims — there the reader must not learn which other
+// tenants exist, and could not switch anyway (ADR 0028).
+func New(graph Graph, store EventReader, tenantID string, listTenants func() []string) (*Handler, error) {
 	tmpl, err := template.New("debugui").ParseFS(templatesFS, "templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("parsing debug UI templates: %w", err)
 	}
-	h := &Handler{graph: graph, store: store, tmpl: tmpl, now: time.Now}
+	h := &Handler{graph: graph, store: store, tenant: tenantID, listTenants: listTenants, tmpl: tmpl, now: time.Now}
 	h.mux = http.NewServeMux()
 	h.mux.HandleFunc("/", h.dashboard)
 	h.mux.HandleFunc("/entities", h.entities)
@@ -81,10 +87,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) { h.mux.Serv
 type pageMeta struct {
 	Title   string
 	Version string
+	// Tenant is the id of the graph this page answers for. Every page says it,
+	// because an empty view that does not say WHAT it is empty for is
+	// indistinguishable from "nothing was emitted" — the misreading that costs a
+	// diagnosis in any multi-tenant deployment (#335).
+	Tenant string
+	// Tenants, when non-empty, feeds the switcher. Empty under claim-derived
+	// tenancy: the reader must not learn which other tenants exist.
+	Tenants []string
 }
 
 func (h *Handler) meta(title string) pageMeta {
-	return pageMeta{Title: title, Version: version.String()}
+	m := pageMeta{Title: title, Version: version.String(), Tenant: h.tenant}
+	if h.listTenants != nil {
+		m.Tenants = h.listTenants()
+	}
+	return m
 }
 
 type attrView struct {

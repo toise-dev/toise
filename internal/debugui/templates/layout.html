@@ -14,6 +14,7 @@ header { display:flex; align-items:center; gap:1rem; padding:.6rem 1rem; backgro
 header .brand { font-weight:700; color:var(--fg); }
 header .tag { color:var(--dim); font-size:12px; border:1px solid var(--line); border-radius:4px; padding:0 .35rem; }
 header nav { display:flex; gap:1rem; margin-left:auto; }
+form.tenantswitch { display:flex; gap:.3rem; align-items:center; margin:0; }
 main { padding:1rem; max-width:1100px; margin:0 auto; }
 h1 { font-size:18px; margin:.2rem 0 1rem; }
 h2 { font-size:14px; color:var(--dim); text-transform:uppercase; letter-spacing:.05em; margin:1.5rem 0 .5rem; }
@@ -40,7 +41,8 @@ footer { color:var(--dim); padding:1rem; text-align:center; border-top:1px solid
 </head>
 <body>
 <header>
-<a href="/" class="brand">Toise</a><span class="tag">debug UI</span>
+<a href="/" class="brand">Toise</a><span class="tag">debug UI</span><span class="tag">tenant {{.Tenant}}</span>
+{{if .Tenants}}<form class="tenantswitch" method="get" action=""><select name="tenant">{{range .Tenants}}<option{{if eq . $.Tenant}} selected{{end}}>{{.}}</option>{{end}}</select><button>switch</button></form>{{end}}
 <nav>
 <a href="/">Dashboard</a>
 <a href="/entities">Entities</a>
@@ -51,6 +53,6 @@ footer { color:var(--dim); padding:1rem; text-align:center; border-top:1px solid
 <main>{{end}}
 
 {{define "foot"}}</main>
-<footer>{{.Version}} · phase 1 · no authentication — trusted networks only</footer>
+<footer>{{.Version}} · tenant {{.Tenant}} · development aid — off under --production</footer>
 </body>
 </html>{{end}}

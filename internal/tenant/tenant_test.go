@@ -72,3 +72,28 @@ func TestFromGRPC(t *testing.T) {
 		t.Error("invalid metadata should be rejected")
 	}
 }
+
+// TestFromHTTPWithQuery pins the debug-UI resolver: a form cannot set a header,
+// so ?tenant= wins over X-Scope-OrgID, both are sanitized, and absence of both
+// still yields the default tenant.
+func TestFromHTTPWithQuery(t *testing.T) {
+	mk := func(target, header string) *http.Request {
+		r := httptest.NewRequest(http.MethodGet, target, nil)
+		if header != "" {
+			r.Header.Set(HeaderOrgID, header)
+		}
+		return r
+	}
+	if id, ok := FromHTTPWithQuery(mk("/?tenant=acme", "other")); !ok || id != "acme" {
+		t.Errorf("query must win over the header: got %q ok=%v", id, ok)
+	}
+	if id, ok := FromHTTPWithQuery(mk("/", "acme")); !ok || id != "acme" {
+		t.Errorf("header fallback: got %q ok=%v", id, ok)
+	}
+	if id, ok := FromHTTPWithQuery(mk("/", "")); !ok || id != Default {
+		t.Errorf("no header, no query: got %q ok=%v, want the default tenant", id, ok)
+	}
+	if _, ok := FromHTTPWithQuery(mk("/?tenant=..%2Fescape", "")); ok {
+		t.Error("an invalid query tenant must be refused, not defaulted")
+	}
+}
