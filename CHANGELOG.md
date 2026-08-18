@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **GraphQL history stops returning heartbeats by default** — the freeze audit's
+  walk of the GraphQL schema found the two surfaces answering the same window
+  differently: MCP `entity_history` / `recent_changes` exclude `entity.unchanged`
+  heartbeats unless asked, GraphQL returned them all. Both queries now take
+  `includeHeartbeats` (default `false`), matching MCP's name and default.
+
+  **Behavior change**: a client that relied on heartbeats appearing in
+  `entityHistory` or `recentChanges` must now pass `includeHeartbeats: true`.
+  Heartbeats dominate a live window, so counts drop sharply — that is the point.
+
+  Also from the same walk: the user guide claimed `entities` returns newest-first
+  when it is oldest-first (ascending ULID) and the schema said so — the guide now
+  agrees with the code; and `ChangeEvent.dropped` says it is only meaningful on a
+  subscription stream, where before a query-side reader could reasonably wait for
+  a gap signal that never comes.
+
 - **The HA docs state what replicas agree on — and what they legitimately do not**
   (#338). Replicas converge on stable topology; they do not necessarily agree, at
   an instant, on connection-derived `depends_on` edges, which are removed by

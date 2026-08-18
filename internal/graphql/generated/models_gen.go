@@ -126,8 +126,9 @@ type ChangeEvent struct {
 	// on non-removal events and on events recorded before schema 1.1 — an absent
 	// source means UNKNOWN, never `producer`.
 	DeleteSource *string `json:"deleteSource,omitempty"`
-	// Events dropped just before this one because this subscriber could not keep
-	// up. Positive means you have a gap: re-query the current state and resume.
+	// Only meaningful on a subscription stream: events dropped just before this one
+	// because the subscriber could not keep up. Positive means you have a gap —
+	// re-query the current state and resume. Always 0 on query results.
 	Dropped int `json:"dropped"`
 	// The entity this event is about, if it is an entity event.
 	Entity *Entity `json:"entity,omitempty"`

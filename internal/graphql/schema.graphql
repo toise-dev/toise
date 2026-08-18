@@ -218,8 +218,9 @@ type ChangeEvent {
   """
   deleteSource: String
   """
-  Events dropped just before this one because this subscriber could not keep
-  up. Positive means you have a gap: re-query the current state and resume.
+  Only meaningful on a subscription stream: events dropped just before this one
+  because the subscriber could not keep up. Positive means you have a gap —
+  re-query the current state and resume. Always 0 on query results.
   """
   dropped: Int!
   "The entity this event is about, if it is an entity event."
@@ -327,16 +328,21 @@ type Query {
   The timeline of change events for one entity. `since`/`until` (RFC 3339) bound
   the query in eventTime space (reality). Provide `asKnownAt` (RFC 3339) to
   switch to the audit view: only events Toise had recorded by that instant.
+  `entity.unchanged` heartbeats are excluded unless `includeHeartbeats` is set,
+  matching the MCP `entity_history` tool — they dominate a raw timeline.
   """
-  entityHistory(id: ID!, since: String, until: String, asKnownAt: String, first: Int = 100, after: String): ChangeConnection!
+  entityHistory(id: ID!, since: String, until: String, asKnownAt: String, includeHeartbeats: Boolean! = false, first: Int = 100, after: String): ChangeConnection!
 
   """
   Recent change events across all entities within `window` (a Go duration like
   `15m`, `2h`, `24h`), newest-first, with Relay pagination. `window` defaults to
-  `1h`, matching the MCP `recent_changes` tool — the same question asked over
-  either surface takes the same shape and the same default.
+  `1h` and `entity.unchanged` heartbeats are excluded unless `includeHeartbeats`
+  is set — both matching the MCP `recent_changes` tool, so the same question
+  asked over either surface takes the same shape, the same defaults, and the
+  same answer. Heartbeats dominate a live window; raw timelines want them,
+  change review does not.
   """
-  recentChanges(window: String = "1h", first: Int = 100, after: String): ChangeConnection!
+  recentChanges(window: String = "1h", includeHeartbeats: Boolean! = false, first: Int = 100, after: String): ChangeConnection!
 
   """
   The canonical group of an entity: everything believed to be the same real
