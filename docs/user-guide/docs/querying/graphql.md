@@ -34,10 +34,10 @@ curl -s http://127.0.0.1:8080/graphql \
 | Query | Returns | Purpose |
 | --- | --- | --- |
 | `entity(id: ID!)` | `Entity` | one entity by its logical id (null if unknown) |
-| `entities(filter, first = 50, after)` | `EntityConnection!` | current entities, newest-first, paginated |
+| `entities(filter, first = 50, after)` | `EntityConnection!` | current entities, **oldest-first** (ascending ULID), paginated |
 | `relations(filter, first = 50, after)` | `RelationConnection!` | current relations, paginated |
-| `entityHistory(id!, since, until, asKnownAt, first = 100, after)` | `ChangeConnection!` | one entity's change timeline (bi-temporal) |
-| `recentChanges(window = "1h", first = 100, after)` | `ChangeConnection!` | changes across all entities within a window |
+| `entityHistory(id!, since, until, asKnownAt, includeHeartbeats = false, first = 100, after)` | `ChangeConnection!` | one entity's change timeline (bi-temporal); heartbeats excluded by default |
+| `recentChanges(window = "1h", includeHeartbeats = false, first = 100, after)` | `ChangeConnection!` | changes across all entities within a window; heartbeats excluded by default |
 | `canonical(id!, asOf)` | `CanonicalGroup` | what is believed to be the same real thing as this entity (null if nothing is) |
 
 ### Subscriptions
@@ -214,7 +214,9 @@ query Recent {
 ```
 
 `window` is a Go duration string (`"15m"`, `"2h"`, `"24h"`) and defaults to
-`"1h"` — the same default the MCP `recent_changes` tool uses.
+`"1h"`, and `entity.unchanged` heartbeats are excluded unless
+`includeHeartbeats: true` — both matching the MCP `recent_changes` tool, so the
+same window gives the same answer on either surface.
 
 **Subscribe to live changes** (WebSocket, `graphql-ws` subprotocol, on
 `ws://127.0.0.1:8080/graphql`):

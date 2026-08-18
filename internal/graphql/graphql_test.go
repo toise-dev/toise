@@ -612,3 +612,47 @@ func TestCanonicalThresholdGate(t *testing.T) {
 		t.Fatalf("canonical = %+v, want the alias at threshold 0.4", resp.Canonical)
 	}
 }
+
+// TestHeartbeatsExcludedByDefault pins the parity fix: MCP excluded
+// entity.unchanged heartbeats from history by default and GraphQL returned
+// them, so the same window answered differently on the two surfaces. Both now
+// exclude by default and include on request.
+func TestHeartbeatsExcludedByDefault(t *testing.T) {
+	s := newStack(t)
+	// Re-assert the host unchanged: a heartbeat lands in the log.
+	if _, err := s.engine.ObserveEntity(change.EntityObservation{
+		Type: model.TypeHost, Identity: []model.KeyValue{kv("host.id", "h1")},
+		Attributes: []model.KeyValue{kv("status", "down")}, EventTime: t0.Add(90 * time.Second)}); err != nil {
+		t.Fatal(err)
+	}
+	c := s.client(t)
+	var resp struct {
+		EntityHistory struct {
+			TotalCount int
+			Edges      []struct{ Node struct{ ChangeType string } }
+		}
+	}
+	q := `query($id:ID!,$hb:Boolean!){ entityHistory(id:$id, includeHeartbeats:$hb){ totalCount edges { node { changeType } } } }`
+
+	c.MustPost(q, &resp, client.Var("id", string(s.hostID)), client.Var("hb", false))
+	for _, e := range resp.EntityHistory.Edges {
+		if e.Node.ChangeType == "ENTITY_UNCHANGED" {
+			t.Error("a heartbeat leaked into the default timeline")
+		}
+	}
+	without := resp.EntityHistory.TotalCount
+
+	c.MustPost(q, &resp, client.Var("id", string(s.hostID)), client.Var("hb", true))
+	if resp.EntityHistory.TotalCount != without+1 {
+		t.Errorf("includeHeartbeats: got %d events, want %d (the heartbeat back)", resp.EntityHistory.TotalCount, without+1)
+	}
+
+	// Same default on recentChanges.
+	var rc struct{ RecentChanges struct{ TotalCount int } }
+	c.MustPost(`{ recentChanges(window:"1h"){ totalCount } }`, &rc)
+	def := rc.RecentChanges.TotalCount
+	c.MustPost(`{ recentChanges(window:"1h", includeHeartbeats:true){ totalCount } }`, &rc)
+	if rc.RecentChanges.TotalCount != def+1 {
+		t.Errorf("recentChanges includeHeartbeats: got %d, want %d", rc.RecentChanges.TotalCount, def+1)
+	}
+}

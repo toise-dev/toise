@@ -176,7 +176,21 @@ func (r *queryResolver) Relations(ctx context.Context, filter *generated.Relatio
 	}, nil
 }
 
-func (r *queryResolver) EntityHistory(ctx context.Context, id string, since, until, asKnownAt *string, first *int, after *string) (*generated.ChangeConnection, error) {
+// dropHeartbeats filters entity.unchanged events out of a timeline, matching
+// the MCP default: heartbeats dominate a live window, and both surfaces must
+// give the same answer to the same question.
+func dropHeartbeats(evs []model.Event) []model.Event {
+	kept := evs[:0:0]
+	for _, ev := range evs {
+		if ev.Entity != nil && ev.Entity.ChangeType == model.EntityUnchanged {
+			continue
+		}
+		kept = append(kept, ev)
+	}
+	return kept
+}
+
+func (r *queryResolver) EntityHistory(ctx context.Context, id string, since, until, asKnownAt *string, includeHeartbeats bool, first *int, after *string) (*generated.ChangeConnection, error) {
 	evs, err := r.Store.ReadByEntity(ctx, model.EntityID(id))
 	if err != nil {
 		return nil, err
@@ -192,6 +206,9 @@ func (r *queryResolver) EntityHistory(ctx context.Context, id string, since, unt
 	knownT, err := parseOptTime(asKnownAt, "asKnownAt")
 	if err != nil {
 		return nil, err
+	}
+	if !includeHeartbeats {
+		evs = dropHeartbeats(evs)
 	}
 	filtered := evs[:0:0]
 	for _, ev := range evs {
@@ -219,7 +236,7 @@ func (r *queryResolver) EntityHistory(ctx context.Context, id string, since, unt
 // question asked over either surface takes the same shape and the same default.
 const defaultRecentChangesWindow = "1h"
 
-func (r *queryResolver) RecentChanges(ctx context.Context, window *string, first *int, after *string) (*generated.ChangeConnection, error) {
+func (r *queryResolver) RecentChanges(ctx context.Context, window *string, includeHeartbeats bool, first *int, after *string) (*generated.ChangeConnection, error) {
 	w := defaultRecentChangesWindow
 	if window != nil && *window != "" {
 		w = *window
@@ -232,6 +249,9 @@ func (r *queryResolver) RecentChanges(ctx context.Context, window *string, first
 	evs, err := r.Store.ReadByTimeRange(ctx, now.Add(-d), now.Add(time.Nanosecond)) // inclusive of now
 	if err != nil {
 		return nil, err
+	}
+	if !includeHeartbeats {
+		evs = dropHeartbeats(evs)
 	}
 	// newest-first
 	for i, j := 0, len(evs)-1; i < j; i, j = i+1, j-1 {
