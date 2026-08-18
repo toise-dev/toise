@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The HA docs state what replicas agree on — and what they legitimately do not**
+  (#338). Replicas converge on stable topology; they do not necessarily agree, at
+  an instant, on connection-derived `depends_on` edges, which are removed by
+  absence per source and can flicker between producer cycles. Diagnosed twice as a
+  suspected defect before being written down. The section also names the two
+  comparison traps: ids are minted per instance (diff identities, never ids), and
+  connection edges must be compared over a window, never at an instant.
+
 - **The debug UI names its tenant on every page, and offers a switcher** (#335).
   Diagnosed as a live incident once: a producer's entities were in another tenant,
   the obvious page read empty, and the conclusion was "the producer stopped". An

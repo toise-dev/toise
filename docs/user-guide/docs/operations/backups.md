@@ -87,6 +87,39 @@ It replays each tenant's contiguous segments and re-appends the events into a ne
 
 Toise is single-writer and the live graph is **derivable** (producers re-assert every heartbeat), so read HA needs no clustering: run **N identical instances** behind a load balancer, each ingesting the same OTLP fan-out and rebuilding its own projection (the "run two Prometheus" pattern). Point live queries at any replica; point **history/time-travel** queries at a node backed by the durable log. No Raft, no ring (ADR 0029).
 
+### What replicas agree on — and what they legitimately do not
+
+Two replicas of the same fan-out **converge on stable topology**: hosts,
+interfaces, routes, containers, listeners and their edges end up identical,
+because every producer re-asserts them each heartbeat and both replicas hear the
+same assertions.
+
+They do **not** necessarily agree, at any given instant, on
+**connection-derived edges** (`depends_on`). Those are removed by absence per
+source: each producer re-emits its full current connection set, and an edge a
+sample momentarily misses disappears and comes back a cycle later. Two replicas
+are independent consumers with no coordination on the data path — deliberately
+(ADR 0029) — so an edge whose presence flickers between producer cycles can be
+present on one replica and absent on the other, in both directions, with neither
+replica wrong. Observed in production: a handful of loopback `depends_on` edges
+differing while the 87 `network.endpoint` entities were byte-identical on both
+sides — the replicas agreed on *which endpoints exist*, and differed only on
+*who currently depends on four of them*.
+
+!!! warning "Comparing two replicas: two traps"
+    **Never diff relation (or entity) ids across replicas.** Logical ids are
+    ULIDs minted independently *by each instance*, so an id-based diff reports
+    every edge as different — hundreds of false divergences on a healthy pair.
+    Compare **identities** (the `identity` key/value sets, and for relations the
+    identity pair of their endpoints).
+
+    **Never compare `depends_on` at an instant.** Compare the stable types, or
+    compare connection edges over a window (`graph_diff`) rather than a
+    snapshot. A steady small `depends_on` gap with identical `network.endpoint`
+    sets is the flicker described above, not data loss; the signal that would
+    actually indicate loss is a gap in the *stable* types or in the endpoint
+    entities themselves.
+
 **RPO/RTO.** With scheduled backups, the recovery-point is at most one `backup_interval` (plus your off-node sync lag); **log shipping shrinks the recovery point to one `log_shipping_interval`** (seconds-scale) at a fraction of the bytes. Recovery-time is a process start plus the projection rebuild (bounded by one heartbeat window for the live graph). A read replica that is already running has effectively zero RTO for live queries.
 
 ## Scaling: many tenants
