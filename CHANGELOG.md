@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
+### Added
+
+- **The debug UI names its tenant on every page, and offers a switcher** (#335).
+  Diagnosed as a live incident once: a producer's entities were in another tenant,
+  the obvious page read empty, and the conclusion was "the producer stopped". An
+  empty view that does not say what it is empty *for* is indistinguishable from
+  nothing having been emitted. The header now carries the tenant id, and — when
+  tenant selection is client-controlled — a zero-JS dropdown listing the tenants
+  on disk, driven by a new `?tenant=` query parameter (a plain HTML form cannot
+  set a header).
+
+  Under claim-derived tenancy (derive-only / OIDC) the switcher and the query
+  parameter are both absent, deliberately: the tenant comes from the verified
+  claim, and a scoped reader must not learn which other tenants exist (ADR 0028).
+  The tenant is still named — only the enumeration is withheld.
+
+  The footer's stale "phase 1 · no authentication" line, written before auth
+  existed, is replaced by the accurate "development aid — off under --production".
+
 ### Changed
 
 - **The 1.0 freeze audit walked the whole MCP surface.** The twelve tools hold up:
