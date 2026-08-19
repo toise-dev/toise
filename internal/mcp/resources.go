@@ -136,6 +136,31 @@ The graph is producer truth and read-only. The one write is ` + "`annotate_entit
 operator notes (owner, runbook, ticket) kept as an overlay, surfaced back on
 ` + "`get_entity`" + `, never mixed into producer attributes.
 
+## Traps worth knowing before you trust an answer
+
+These are field-earned: each one has made a competent consumer draw a wrong
+conclusion from a correct query (#346).
+
+- **A disappearance never means "a human deleted this."** Deletions carry
+  ` + "`delete_source`" + `, written out in the ` + "`disappearance`" + ` field. ` + "`producer`" + ` = the
+  producer reported it gone; ` + "`liveness_expiry`" + ` = the producer went silent and the
+  thing may still be running; ` + "`cascade`" + ` = something it touched died. Reporting an
+  operator action, a rename or a manual removal from a disappearance alone is the
+  single most expensive mistake made against this API.
+- **A wide window returns its newest slice, not all of it.** To investigate a past
+  incident give ` + "`from`" + `/` + "`to`" + ` to ` + "`graph_diff`" + ` or ` + "`recent_changes`" + `; a five-hour ask
+  answered under the limit can omit an event two hours back. The payload names the
+  window it actually covered — read it before concluding nothing changed.
+- **Ids are not portable.** They are per-replica, and an entity that returns after
+  more than 15 minutes of silence is minted a new one. Keep identities
+  (` + "`host.id`" + `, ` + "`container.id`" + `), re-resolve with ` + "`find_entities`" + `.
+- **Topology is traversed, not listed.** An address is a ` + "`network.address`" + ` entity two
+  hops from its host, not an attribute on it. Walk with ` + "`get_neighbors`" + ` depth 2
+  before deciding a fact is absent.
+- **Absence is not evidence of absence.** The graph is exactly as complete as its
+  producers; check ` + "`describe_schema`" + ` counts before treating a gap as a fact about
+  the world.
+
 Results are structured and name-bearing — ids carry human labels and types — so
-a single call usually answers the question without a second lookup.
+one call answers most questions, and the ones that need a second hop say so.
 `
