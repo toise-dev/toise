@@ -12,6 +12,15 @@ below. See the [API stability policy](../api-stability.md).
 
 ## Releases
 
+- [**0.15.0**](0.15.0.md) — 2026-08-20 — **the release that answers**: the MCP
+  server now carries `instructions`, the one guidance channel every client
+  receives at initialize and which had been empty; every disappearance is glossed
+  in plain language, stating what it is *not* (none of `producer`,
+  `liveness_expiry`, `cascade` means an operator removed anything);
+  `recent_changes` accepts `from`/`to` so a past incident window is reachable, and
+  a truncated answer now names the slice it actually covered instead of reading as
+  a complete one; GraphQL history excludes heartbeats by default, matching MCP.
+
 - [**0.14.0**](0.14.0.md) — 2026-08-17 — **reachability, and the first
   deprecation**: a fourteenth entity type, `network.segment`, makes *why can't A
   reach B* a graph question (`has_segment` from the declaring cluster,
