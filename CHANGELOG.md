@@ -9,7 +9,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
+## [0.15.0] - 2026-08-20
+
+**The release that answers.** Two operator agents worked a full day of
+infrastructure incidents without opening Toise once, and a third read entity
+disappearances as human deletions. The graph held the answers throughout. What
+failed was everything around the data — so this release fixes the reading, not
+the recording. Additive only: no wire-contract break, no data migration.
+
 ### Added
+
+- **The MCP server tells every agent what it needs to read an answer correctly**
+  (#346). The `instructions` channel — delivered to every client at initialize —
+  was empty. Resources must be fetched deliberately and prompts are
+  user-invocable, so an autonomous agent received no guidance at all, however
+  much of it existed elsewhere. It now carries only what changes an answer: start
+  from `describe_schema`; bound an incident window with `graph_diff`; what a
+  disappearance does not mean; ids are per-replica and re-minted after the
+  resurrection window; an address is two hops away; absence is not evidence of
+  absence.
+
+- **Disappearances carry their meaning, not just their code.** Every
+  `delete_source` on the change feed is glossed as a sentence in a new
+  `disappearance` field, and each gloss states what it is **not**: none of
+  `producer`, `liveness_expiry` or `cascade` says an operator removed anything.
+  The denial is the load-bearing half — a bare enum sitting next to a field named
+  like a cause was read as one, producing a host rename, a database removal and a
+  manual `docker compose down` that never happened, asserted at high confidence.
+
+- **`recent_changes` accepts `from`/`to`, and a truncated answer confesses.**
+  Investigating a past incident meant a longer window, whose limit then kept the
+  **newest** changes — so an event two hours back was absent from a five-hour
+  answer that claimed to cover it, and the tool read as "nothing happened". A
+  bounded past window now works directly (the shape `graph_diff` already had),
+  every answer names the window it actually read via `window_from` / `window_to`,
+  and when the limit truncates, `covered` states which slice came back, how many
+  older changes it hid, and how to reach them. A truncated window that reads as a
+  complete one is how a graph holding the answer looks like a graph that has none.
+
+- **`DependsOnLocalEndpoint` in the emit SDK** (`pkg/emit` v0.10.0, #343) builds
+  the four-key identity of a host-local `network.endpoint` so producers stop
+  hand-rolling it — the place the contract was most likely to be violated.
+  Forgetting the fourth key on loopback merges every machine's local endpoint into
+  one entity; adding it on an RFC1918 peer forks an identity nothing will ever
+  join. The helper classifies the address itself: exactly the four host-local
+  ranges (`127.0.0.0/8`, `::1`, `169.254.0.0/16`, `fe80::/10`) gain the observing
+  host's id, everything else falls back to the three-key edge. It also applies the
+  frozen identity canonicalization — RFC 5952 form for IPv6, zone lowercased
+  verbatim, IPv4-mapped literals unmapped — so both spellings of one peer derive
+  one identity.
 
 - **GraphQL history stops returning heartbeats by default** — the freeze audit's
   walk of the GraphQL schema found the two surfaces answering the same window
@@ -69,6 +117,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The MCP golden pins shape, not prose.** Field descriptions are deliberately
   outside it, so the wording an assistant reads stays improvable after 1.0;
   renaming or retyping a field does not.
+
+- **The MCP guide drops its claim that one call usually suffices**, and gains the
+  traps that have each made a competent consumer draw a wrong conclusion from a
+  correct query. Stopping at the first call is exactly the mistake the old wording
+  encouraged: the address of a host is a `network.address` entity two hops away,
+  not an attribute on it.
+
+- **The ingestion guide states the 15-minute resurrection window** (#344). Return
+  inside it and an entity keeps its logical id and one continuous history; return
+  after it and the same identity is minted a fresh id whose history does not reach
+  back. The behavior has shipped since 0.7.0 and was documented nowhere a consumer
+  would look, so it was rediscovered in the field as a suspected defect — along
+  with its two consequences, now written down: never persist a logical id between
+  investigations (keep the identity and re-resolve), and ids are per-replica.
 
 ## [0.14.0] - 2026-08-17
 
@@ -1171,7 +1233,10 @@ contract converged with the senhub-agent reference producer.
   default and are intended for trusted networks only; the WebSocket subscription
   endpoint enforces an origin check.
 
-[Unreleased]: https://github.com/toise-dev/toise/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/toise-dev/toise/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/toise-dev/toise/compare/v0.14.0...v0.15.0
+[0.14.0]: https://github.com/toise-dev/toise/compare/v0.13.0...v0.14.0
+[0.13.0]: https://github.com/toise-dev/toise/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/toise-dev/toise/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/toise-dev/toise/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/toise-dev/toise/compare/v0.9.2...v0.10.0
