@@ -2,8 +2,15 @@
 // key/value notes a human or an assistant attaches to an entity (owner, runbook
 // link, ticket, a remark). It is NOT producer truth — it lives in a per-tenant
 // Pebble sidecar, separate from the event log, and never enters the projection
-// or replay (0.7.0). Annotations key on the entity's logical id, so they survive
-// identity changes and re-attach if the entity resurrects (#183).
+// or replay (0.7.0).
+//
+// Annotations key on the entity's IDENTITY fingerprint, not on its logical id.
+// A logical id is minted per replica, so an id-keyed overlay cannot be shared
+// between the nodes of a cluster and is lost when an entity returns after the
+// resurrection window with a fresh id. The fingerprint is derived from the
+// identifying attributes alone (ADR 0017), so every node computes the same one
+// for the same thing. Rows written under the old scheme migrate on first touch;
+// see GetAt.
 package annotations
 
 import (
@@ -39,7 +46,70 @@ func Open(dir string) (*Store, error) {
 // Close releases the underlying database.
 func (s *Store) Close() error { return s.db.Close() }
 
-// Get returns the entity's annotation, or ok=false if it has none.
+// GetAt returns the annotation stored under key, falling back to the legacy
+// key and migrating the row across when it is found there.
+//
+// The overlay used to be keyed by the entity's logical id. That made it
+// unshareable: replicas mint their own ids, so the same machine carries a
+// different id on each, and a row copied between nodes would attach to nothing
+// (#348). It also lost the annotation whenever an entity came back after the
+// resurrection window and was minted a fresh id (#344). Keying on the identity
+// fingerprint fixes both, because every replica computes the same fingerprint
+// for the same identity.
+//
+// Migration is lazy rather than a startup sweep: a bulk pass would need the
+// projection loaded and would have to decide what to do with rows whose id no
+// longer resolves. Moving each row the first time it is touched is crash-safe,
+// costs one extra read on a miss, and leaves untouched rows readable for as
+// long as their id resolves.
+func (s *Store) GetAt(key, legacyKey string) (Annotation, bool, error) {
+	a, ok, err := s.Get(key)
+	if err != nil || ok || legacyKey == "" || legacyKey == key {
+		return a, ok, err
+	}
+	old, ok, err := s.Get(legacyKey)
+	if err != nil || !ok {
+		return Annotation{}, false, err
+	}
+	if merr := s.migrate(key, legacyKey, old); merr != nil {
+		// The row is readable; failing the read because it could not be moved
+		// would hide an annotation an operator wrote. Report it as found.
+		return old, true, nil
+	}
+	return old, true, nil
+}
+
+// SetAt merges values under key, first migrating any row still held under the
+// legacy key so the merge sees what the operator wrote earlier.
+func (s *Store) SetAt(key, legacyKey string, values map[string]string, author string, now time.Time) (Annotation, error) {
+	if legacyKey != "" && legacyKey != key {
+		if _, _, err := s.GetAt(key, legacyKey); err != nil {
+			return Annotation{}, err
+		}
+	}
+	return s.Set(key, values, author, now)
+}
+
+// migrate moves a row from the legacy key to the identity key. It writes before
+// deleting: a crash between the two leaves a duplicate that the next read
+// resolves, whereas the reverse order would lose the annotation.
+func (s *Store) migrate(key, legacyKey string, a Annotation) error {
+	blob, err := json.Marshal(a)
+	if err != nil {
+		return fmt.Errorf("encoding annotation for migration to %s: %w", key, err)
+	}
+	if err := s.db.Set([]byte(key), blob, pebble.Sync); err != nil {
+		return fmt.Errorf("migrating annotation to %s: %w", key, err)
+	}
+	if err := s.db.Delete([]byte(legacyKey), pebble.Sync); err != nil {
+		return fmt.Errorf("clearing legacy annotation %s: %w", legacyKey, err)
+	}
+	return nil
+}
+
+// Get returns the annotation stored under the given key, or ok=false if there
+// is none. Callers holding an entity should prefer GetAt, which handles the
+// legacy key.
 func (s *Store) Get(id string) (Annotation, bool, error) {
 	v, closer, err := s.db.Get([]byte(id))
 	if errors.Is(err, pebble.ErrNotFound) {

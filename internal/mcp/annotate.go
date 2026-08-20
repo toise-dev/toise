@@ -52,10 +52,11 @@ func (s *Server) annotateEntity(ctx context.Context, _ *mcpsdk.CallToolRequest, 
 	if len(in.Annotations) == 0 {
 		return nil, AnnotateEntityOutput{}, fmt.Errorf("at least one annotation key is required (an empty value removes a key)")
 	}
-	if _, ok, _ := s.graph.GetEntity(model.EntityID(in.EntityID)); !ok {
+	e, ok, _ := s.graph.GetEntity(model.EntityID(in.EntityID))
+	if !ok {
 		return nil, AnnotateEntityOutput{}, fmt.Errorf("no entity with id %q; annotate a known entity (use find_entities)", in.EntityID)
 	}
-	a, err := s.ann.Set(in.EntityID, in.Annotations, "", s.now())
+	a, err := s.ann.SetAt(e.IdentityHash(), in.EntityID, in.Annotations, "", s.now())
 	if err != nil {
 		return nil, AnnotateEntityOutput{}, err
 	}
@@ -72,7 +73,11 @@ func (s *Server) annotationFor(id string) *AnnotationOut {
 	if s.ann == nil {
 		return nil
 	}
-	a, ok, err := s.ann.Get(id)
+	key := id
+	if e, ok, _ := s.graph.GetEntity(model.EntityID(id)); ok {
+		key = e.IdentityHash()
+	}
+	a, ok, err := s.ann.GetAt(key, id)
 	if err != nil || !ok {
 		return nil
 	}

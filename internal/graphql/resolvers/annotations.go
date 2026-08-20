@@ -37,14 +37,15 @@ func (r *mutationResolver) AnnotateEntity(ctx context.Context, id string, in []g
 	if len(in) == 0 {
 		return nil, fmt.Errorf("at least one annotation is required (an empty value removes a key)")
 	}
-	if _, ok, _ := r.Graph.GetEntity(model.EntityID(id)); !ok {
+	ent, ok, _ := r.Graph.GetEntity(model.EntityID(id))
+	if !ok {
 		return nil, fmt.Errorf("no entity with id %q; annotate a known entity", id)
 	}
 	values := make(map[string]string, len(in))
 	for _, e := range in {
 		values[e.Key] = e.Value
 	}
-	a, err := r.Annotations.Set(id, values, "", r.now())
+	a, err := r.Annotations.SetAt(ent.IdentityHash(), id, values, "", r.now())
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +62,11 @@ func (r *entityResolver) Annotations(_ context.Context, obj *generated.Entity) (
 	if r.Resolver.Annotations == nil {
 		return nil, nil
 	}
-	a, ok, err := r.Resolver.Annotations.Get(obj.ID)
+	key := obj.ID
+	if ent, found, _ := r.Graph.GetEntity(model.EntityID(obj.ID)); found {
+		key = ent.IdentityHash()
+	}
+	a, ok, err := r.Resolver.Annotations.GetAt(key, obj.ID)
 	if err != nil {
 		return nil, err
 	}
