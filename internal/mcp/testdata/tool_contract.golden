@@ -185,6 +185,7 @@ tool entity_history
     changed_keys []string
     delete_reason string
     delete_source string
+    disappearance string
     entity object
       attributes []object
         key string
@@ -215,9 +216,11 @@ tool entity_history
 tool recent_changes
   in:
   change_type string
+  from string
   include_heartbeats bool
   kind string
   limit int
+  to string
   window string
   out:
   by_change_type []object
@@ -231,6 +234,7 @@ tool recent_changes
     changed_keys []string
     delete_reason string
     delete_source string
+    disappearance string
     entity object
       attributes []object
         key string
@@ -258,6 +262,9 @@ tool recent_changes
       to_id string
       type string
   count int
+  covered string
+  window_from string
+  window_to string
 tool graph_diff
   in:
   from string

@@ -56,9 +56,35 @@ type Change struct {
 	// after a missed heartbeat), or cascade (an endpoint died and took the edge).
 	// Distinct from DeleteReason, which is producer-supplied verbatim. Empty =
 	// unknown (event predates provenance), never to be read as producer.
-	DeleteSource string    `json:"delete_source,omitempty" jsonschema:"who authored the disappearance: producer, liveness_expiry (missed heartbeat) or cascade (endpoint died); empty on older events"`
-	Entity       *Entity   `json:"entity,omitempty"`
-	Relation     *Relation `json:"relation,omitempty"`
+	DeleteSource string `json:"delete_source,omitempty" jsonschema:"who authored the disappearance: producer, liveness_expiry (missed heartbeat) or cascade (endpoint died); empty on older events"`
+	// Disappearance is DeleteSource written out as a sentence. A bare enum next
+	// to a field named like a cause invites the one reading no consumer should
+	// make — that a human deleted something — so the payload carries the
+	// meaning, not just the code (#346).
+	Disappearance string    `json:"disappearance,omitempty" jsonschema:"delete_source in plain language, including what it does NOT mean"`
+	Entity        *Entity   `json:"entity,omitempty"`
+	Relation      *Relation `json:"relation,omitempty"`
+}
+
+// disappearanceGloss renders a delete_source as a sentence a reader cannot
+// misread. Every gloss states the negative explicitly: none of these sources
+// means an operator deleted anything, and consumers have concluded exactly that
+// from the bare enum — three invented human operations, asserted at high
+// confidence, in one incident (#346).
+func disappearanceGloss(src model.DeleteSource) string {
+	switch src {
+	case model.DeleteSourceProducer:
+		return "the producer reported this gone — it either sent an explicit delete or stopped listing the entity it had been reporting. " +
+			"This is an observation about the world, NOT an operator action: nothing here says a human removed anything."
+	case model.DeleteSourceLivenessExpiry:
+		return "no news — the producer went silent past the interval it declared, so Toise expired the entity. " +
+			"The thing may well still be running: this describes the observation ending, NOT the resource ending."
+	case model.DeleteSourceCascade:
+		return "collateral — an entity this edge touched disappeared, so the edge went with it. " +
+			"Look at the entity that died for the real event; this row is a consequence, not a cause."
+	default:
+		return ""
+	}
 }
 
 func valueString(v model.Value) (str, typ string) {
@@ -168,6 +194,7 @@ func changeOut(ev model.Event) Change {
 		}
 		c.DeleteReason = ee.DeleteReason
 		c.DeleteSource = string(ee.DeleteSource)
+		c.Disappearance = disappearanceGloss(ee.DeleteSource)
 		ent := entityOut(ee.Entity, ee.ChangeType == model.EntityDeleted)
 		c.Entity = &ent
 	case ev.Relation != nil:
@@ -180,6 +207,7 @@ func changeOut(ev model.Event) Change {
 			c.ChangedKeys = re.ChangedKeys
 		}
 		c.DeleteSource = string(re.DeleteSource)
+		c.Disappearance = disappearanceGloss(re.DeleteSource)
 		rel := relationOut(re.Relation)
 		c.Relation = &rel
 	}

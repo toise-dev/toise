@@ -150,6 +150,38 @@ missed re-emission; size it `3 × 120 = 360s`.
     `entity.report.interval` it declares, or the sweeper will expire them between
     heartbeats. Pick a heartbeat comfortably below the declared interval.
 
+### Coming back: the 15-minute resurrection window
+
+A deleted entity is not immediately forgotten. For **15 minutes** after its
+deletion, its identity stays *resurrectable*: a producer that goes silent —
+crash, partition, a heartbeat slower than its interval — and re-asserts the same
+identity within that window gets its **original logical id back**, with one
+continuous history. Past the window, the same identity is minted a **fresh id**,
+and the entity's story is split in two: the new id's history begins at its
+rebirth and does not reach back.
+
+The window is a fixed 15 minutes, not configurable, and it bounds staleness the
+way the tombstone cache bounds memory — Toise will not claim an id it can no
+longer vouch for.
+
+Two consequences worth internalising before you debug an incident with the
+change feed:
+
+- **Never persist a logical id between two investigations.** An id you noted
+  yesterday may name an entity that has since died and come back under a new one.
+  Note the **identity** instead (`host.id`, `container.id`, `service.instance.id`)
+  and re-resolve it each time — that is what stays true.
+- **Ids are per-replica.** Each read replica projects the log independently and
+  mints its own ids, so the same machine legitimately carries a different logical
+  id on each replica. Ids are local to the replica that gave them to you;
+  identities are what travel. See
+  [what replicas agree on](operations/backups.md#what-replicas-agree-on--and-what-they-legitimately-do-not)
+  for the rest of the comparison traps.
+
+To join a timeline across a resurrection, query by identity and read both
+entities: the graph keeps the old one visible as deleted, with its history
+intact.
+
 ## Try it without writing a producer
 
 The bundled `toise-probe` is a real OTLP/gRPC producer — use it to exercise the

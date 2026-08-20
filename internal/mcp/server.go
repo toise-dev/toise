@@ -140,6 +140,33 @@ func (s *Server) SetIdentityThreshold(t float64) *Server {
 	return s
 }
 
+// serverInstructions is delivered to every client at initialize. It is the only
+// guidance channel an autonomous agent receives without asking: resources must
+// be fetched deliberately and prompts are user-invocable, so both are invisible
+// to one. Leaving it empty was measurable — two operator agents worked a full
+// day of infrastructure incidents without opening Toise once, and a third read
+// disappearances as human deletions (#346). What goes here is therefore only
+// what changes an answer: the traps that make a correct question return a wrong
+// impression.
+const serverInstructions = `Toise is a living map of infrastructure: what exists, how it connects, and how that changed — built from what producers observe, as an append-only event log you can read at any past instant.
+
+START by calling describe_schema: it names the entity and relation types this instance actually holds, with counts. Guessing type or attribute names is the most common way to conclude "Toise does not know that" about something it holds.
+
+INVESTIGATING AN INCIDENT — the highest-value thing here, and the least obvious:
+Call graph_diff with from/to bounding the window (e.g. the fifteen minutes before an alert). It answers ACROSS THE WHOLE FLEET in one call, which is what makes it worth reaching for: a per-host log tells you a machine changed, this tells you that eleven machines changed the same way in the same window — a pattern no per-host query can show. recent_changes also accepts from/to for the same purpose.
+Do NOT investigate a past incident by asking recent_changes for a wide window: the limit keeps the NEWEST changes, so an event two hours back is absent from a "5h" answer. When that happens the payload says so in "covered" — read it before concluding nothing happened.
+
+READING A DISAPPEARANCE — the trap that has produced confidently wrong conclusions:
+Deletions carry delete_source, glossed in plain language in the "disappearance" field. NONE of its values means a human deleted anything. producer = the producer reported it gone. liveness_expiry = the producer went silent, and the thing may still be running. cascade = something it touched died. Never report an operator action, a rename, or a manual removal from a disappearance alone.
+
+IDENTIFIERS: entity ids are per-replica and are re-minted if an entity comes back after more than 15 minutes of silence. Never carry an id between investigations — keep the identity (host.id, container.id, service.instance.id) and re-resolve it with find_entities.
+
+TOPOLOGY IS TRAVERSED, NOT LISTED: an address is not an attribute of a host — it is a network.address entity two hops away (host -has_interface-> network.interface <-bound_to- network.address). Use get_neighbors with depth 2 rather than concluding the address is missing. Same shape for anything that can be multiple and mutable.
+
+COVERAGE: this graph is exactly as complete as its producers. Absence is not evidence of absence — if a type looks under-populated, check describe_schema counts before treating a gap as fact.
+
+Every reading tool takes as_of (RFC 3339) to read the graph as it was at that instant. Writes are limited to annotate_entity: operator notes kept as an overlay, never mixed into producer truth.`
+
 // New builds an MCP server reading from the given projection and event log. The
 // underlying SDK server is constructed once and reused across transports and
 // HTTP sessions; the tools are stateless reads.
@@ -150,7 +177,7 @@ func New(graph Graph, store EventReader) *Server {
 		Title:   "Toise — the living map of your infrastructure",
 		Version: version.String(),
 	}
-	srv := mcpsdk.NewServer(impl, nil)
+	srv := mcpsdk.NewServer(impl, &mcpsdk.ServerOptions{Instructions: serverInstructions})
 	s.register(srv)
 	s.srv = srv
 	return s
@@ -230,12 +257,16 @@ func (s *Server) register(srv *mcpsdk.Server) {
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name: "recent_changes",
-		Description: "List recent changes across the whole graph within a time window (a Go " +
+		Description: "List changes across the whole graph — the entire fleet, not one host — within a time window (a Go " +
 			"duration such as 15m, 2h, or 24h), newest first. Optionally filter to entity " +
 			"changes, relation changes, or only structural changes (alert-worthy topology " +
 			"appearances/disappearances), or to one change_type. Heartbeats (entity.unchanged) " +
 			"are excluded and the result is bounded by limit unless asked otherwise; the " +
-			"digest reports totals per change type. Use this to answer 'what changed recently?'.",
+			"digest reports totals per change type. Use this to answer 'what changed recently?' — " +
+			"and give from/to instead of window to investigate a PAST window, such as the minutes " +
+			"before an alert. A wide window plus the limit keeps only the NEWEST changes, so an " +
+			"older event can be missing from a window that claims to cover it; when that happens " +
+			"'covered' says which slice came back. Every answer names the window actually read.",
 	}, observe(s, "recent_changes", s.recentChanges))
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{

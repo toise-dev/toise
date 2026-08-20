@@ -295,8 +295,14 @@ func (s *Server) entityHistory(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 
 // RecentChangesInput selects a window and kind of change.
 type RecentChangesInput struct {
-	Window string `json:"window,omitempty" jsonschema:"a positive Go duration looking back from now, e.g. 15m, 2h, 24h (default 1h)"`
-	Kind   string `json:"kind,omitempty" jsonschema:"filter: entity, relation, structural, or all (default all)"`
+	Window string `json:"window,omitempty" jsonschema:"a positive Go duration looking back from now, e.g. 15m, 2h, 24h (default 1h); for a window in the past give from/to instead"`
+	// From/To target a past window directly. Reaching an incident from an hours-long
+	// window used to be impossible here: the limit keeps the NEWEST changes, so an
+	// event two hours back was absent from a window that claimed to cover it, and
+	// the answer read as "nothing happened" (#346).
+	From string `json:"from,omitempty" jsonschema:"RFC 3339 start instant — use instead of window to investigate a past window (e.g. the ten minutes before an alert)"`
+	To   string `json:"to,omitempty" jsonschema:"RFC 3339 end instant (default now; only valid with from)"`
+	Kind string `json:"kind,omitempty" jsonschema:"filter: entity, relation, structural, or all (default all)"`
 	// Budget controls (#115): a live window is heartbeat-dominated, so
 	// heartbeats are excluded and the result is bounded by default.
 	ChangeType        string `json:"change_type,omitempty" jsonschema:"only changes of this type, e.g. entity.created or relation.removed (omit for all)"`
@@ -308,16 +314,23 @@ type RecentChangesInput struct {
 type RecentChangesOutput struct {
 	Changes []Change `json:"changes"`
 	Count   int      `json:"count" jsonschema:"number of changes returned"`
+	// WindowFrom/WindowTo name the window that was actually read, so an answer
+	// is never mistaken for one about a different span.
+	WindowFrom string `json:"window_from" jsonschema:"RFC 3339 start of the window actually read"`
+	WindowTo   string `json:"window_to" jsonschema:"RFC 3339 end of the window actually read"`
+	// Covered is set only when the limit truncated the answer: it states, in
+	// words, which slice of the window came back and how to reach the rest.
+	Covered string `json:"covered,omitempty" jsonschema:"set when truncated: which part of the requested window this answer actually covers, and how to get the rest"`
 	ChangeDigest
 }
 
 func (s *Server) recentChanges(ctx context.Context, _ *mcpsdk.CallToolRequest, in RecentChangesInput) (*mcpsdk.CallToolResult, RecentChangesOutput, error) {
-	if in.Window == "" {
+	if in.Window == "" && in.From == "" {
 		in.Window = "1h"
 	}
-	d, err := time.ParseDuration(in.Window)
-	if err != nil || d <= 0 {
-		return nil, RecentChangesOutput{}, fmt.Errorf("invalid window %q: use a positive Go duration like 15m, 2h, or 24h", in.Window)
+	from, to, err := s.diffBounds(GraphDiffInput{Window: in.Window, From: in.From, To: in.To})
+	if err != nil {
+		return nil, RecentChangesOutput{}, err
 	}
 	kind := strings.ToLower(strings.TrimSpace(in.Kind))
 	switch kind {
@@ -330,12 +343,12 @@ func (s *Server) recentChanges(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 		return nil, RecentChangesOutput{}, err
 	}
 	limit := clampLimit(in.Limit)
-	now := s.now()
-	evs, err := s.store.ReadByTimeRange(ctx, now.Add(-d), now.Add(time.Nanosecond))
+	evs, err := s.store.ReadByTimeRange(ctx, from, to.Add(time.Nanosecond))
 	if err != nil {
 		return nil, RecentChangesOutput{}, fmt.Errorf("reading changes: %w", err)
 	}
 	out := RecentChangesOutput{Changes: []Change{}}
+	out.WindowFrom, out.WindowTo = formatTime(from), formatTime(to)
 	for i := len(evs) - 1; i >= 0; i-- { // newest first
 		ev := evs[i]
 		if !keepKind(ev, kind) {
@@ -356,6 +369,18 @@ func (s *Server) recentChanges(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 	}
 	out.Truncated = out.Total > limit
 	out.Count = len(out.Changes)
+	if out.Truncated && len(out.Changes) > 0 {
+		// The limit keeps the NEWEST changes, so a truncated answer silently
+		// covers only the tail of the window it was asked for — which is how a
+		// graph holding the answer reads as a graph that has none (#346). Say
+		// which slice was actually returned, and how to get the rest.
+		oldest := out.Changes[len(out.Changes)-1].EventTime
+		out.Covered = fmt.Sprintf(
+			"PARTIAL: %d of %d matching changes returned, covering %s to %s — NOT the whole window you asked for (%s to %s). "+
+				"%d older changes in the window are not shown. To see them, ask again with from/to bounding the sub-window you care about "+
+				"(that is how you investigate the minutes before an incident), or narrow with kind/change_type.",
+			out.Count, out.Total, oldest, out.WindowTo, out.WindowFrom, out.WindowTo, out.Total-out.Count)
+	}
 	out.finishDigest()
 	return nil, out, nil
 }
