@@ -26,9 +26,10 @@ type FindEntitiesInput struct {
 
 // FindEntitiesOutput carries the matching entities.
 type FindEntitiesOutput struct {
-	Entities  []Entity `json:"entities"`
-	Total     int      `json:"total" jsonschema:"number of entities matching the filter before the limit was applied"`
-	Truncated bool     `json:"truncated" jsonschema:"true if more entities matched than were returned; narrow the filter or raise the limit"`
+	Graph     GraphMeta `json:"graph" jsonschema:"what the answering graph holds and how fresh it is; read this before treating absence as fact"`
+	Entities  []Entity  `json:"entities"`
+	Total     int       `json:"total" jsonschema:"number of entities matching the filter before the limit was applied"`
+	Truncated bool      `json:"truncated" jsonschema:"true if more entities matched than were returned; narrow the filter or raise the limit"`
 }
 
 func (s *Server) findEntities(ctx context.Context, _ *mcpsdk.CallToolRequest, in FindEntitiesInput) (*mcpsdk.CallToolResult, FindEntitiesOutput, error) {
@@ -56,6 +57,7 @@ func (s *Server) findEntities(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 	for i, e := range matched {
 		out.Entities[i] = entityOutV(e, false, compact)
 	}
+	out.Graph = s.graphMeta(g, in.AsOf)
 	return nil, out, nil
 }
 
@@ -71,6 +73,7 @@ type GetEntityInput struct {
 // GetEntityOutput carries the entity and any operator annotations (an overlay,
 // not producer truth — see annotate_entity).
 type GetEntityOutput struct {
+	Graph       GraphMeta       `json:"graph" jsonschema:"what the answering graph holds and how fresh it is; read this before treating absence as fact"`
 	Entity      Entity          `json:"entity"`
 	Annotations *AnnotationOut  `json:"annotations,omitempty" jsonschema:"operator-added notes on this entity (not producer truth); absent when none"`
 	Canonical   *CanonicalGroup `json:"canonical,omitempty" jsonschema:"read-time identity overlay (ADR 0020): other entities that high-confidence same_as edges assert are the same real thing; absent when none. The entities are NOT merged — this is a derived view over the belief edges."`
@@ -93,6 +96,7 @@ func (s *Server) getEntity(ctx context.Context, _ *mcpsdk.CallToolRequest, in Ge
 		return nil, GetEntityOutput{}, fmt.Errorf("no entity found with id %q; use find_entities to discover ids — if it was deleted a while ago its tombstone may have been evicted, but entity_history still has its past", in.EntityID)
 	}
 	return nil, GetEntityOutput{
+		Graph:       s.graphMeta(g, in.AsOf),
 		Entity:      entityOutV(e, deleted, compact),
 		Annotations: s.annotationFor(in.EntityID),
 		Canonical:   s.canonicalGroup(g, model.EntityID(in.EntityID)),
@@ -126,6 +130,7 @@ type Neighbor struct {
 
 // GetNeighborsOutput carries the reachable entities with their edges.
 type GetNeighborsOutput struct {
+	Graph     GraphMeta  `json:"graph" jsonschema:"what the answering graph holds and how fresh it is; read this before treating absence as fact"`
 	Neighbors []Neighbor `json:"neighbors"`
 	Count     int        `json:"count" jsonschema:"neighbors returned (after the limit)"`
 	Total     int        `json:"total" jsonschema:"neighbors reachable within max_depth before the limit was applied"`
@@ -199,6 +204,7 @@ func (s *Server) getNeighbors(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 		out.Truncated = true
 	}
 	out.Count = len(out.Neighbors)
+	out.Graph = s.graphMeta(g, in.AsOf)
 	return nil, out, nil
 }
 
@@ -219,8 +225,9 @@ type EntityHistoryInput struct {
 
 // EntityHistoryOutput carries the timeline, oldest first.
 type EntityHistoryOutput struct {
-	Changes []Change `json:"changes"`
-	Count   int      `json:"count" jsonschema:"number of changes returned"`
+	Graph   GraphMeta `json:"graph" jsonschema:"what the answering graph holds and how fresh it is; read this before treating absence as fact"`
+	Changes []Change  `json:"changes"`
+	Count   int       `json:"count" jsonschema:"number of changes returned"`
 	ChangeDigest
 }
 
@@ -289,6 +296,7 @@ func (s *Server) entityHistory(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 		out.Changes[i] = changeOut(ev)
 	}
 	out.finishDigest()
+	out.Graph = s.graphMeta(s.graph, "")
 	return nil, out, nil
 }
 
@@ -313,8 +321,9 @@ type RecentChangesInput struct {
 
 // RecentChangesOutput carries the changes, newest first.
 type RecentChangesOutput struct {
-	Changes []Change `json:"changes"`
-	Count   int      `json:"count" jsonschema:"number of changes returned"`
+	Graph   GraphMeta `json:"graph" jsonschema:"what the answering graph holds and how fresh it is; read this before treating absence as fact"`
+	Changes []Change  `json:"changes"`
+	Count   int       `json:"count" jsonschema:"number of changes returned"`
 	// WindowFrom/WindowTo name the window that was actually read, so an answer
 	// is never mistaken for one about a different span.
 	WindowFrom string `json:"window_from" jsonschema:"RFC 3339 start of the window actually read"`
@@ -408,6 +417,7 @@ func (s *Server) recentChanges(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 			out.Count, out.Total, oldest, out.WindowTo, out.WindowFrom, out.WindowTo, out.Total-out.Count)
 	}
 	out.finishDigest()
+	out.Graph = s.graphMeta(s.graph, "")
 	return nil, out, nil
 }
 
@@ -553,6 +563,7 @@ type GovernanceAttributeInfo struct {
 
 // DescribeSchemaOutput summarizes the graph's contents.
 type DescribeSchemaOutput struct {
+	Graph          GraphMeta   `json:"graph" jsonschema:"what the answering graph holds and how fresh it is; read this before treating absence as fact"`
 	Description    string      `json:"description" jsonschema:"a natural-language summary of what this Toise instance currently knows"`
 	EntityTypes    []TypeCount `json:"entity_types"`
 	RelationTypes  []TypeCount `json:"relation_types"`
@@ -580,6 +591,7 @@ func (s *Server) describeSchema(ctx context.Context, _ *mcpsdk.CallToolRequest, 
 		GovernanceAttributes: governanceVocabulary(),
 	}
 	out.Description = describe(out)
+	out.Graph = s.graphMeta(g, in.AsOf)
 	return nil, out, nil
 }
 

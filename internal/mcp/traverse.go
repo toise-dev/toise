@@ -65,6 +65,7 @@ type PathHop struct {
 
 // FindPathOutput carries the shortest path, or a first-class 'not reachable'.
 type FindPathOutput struct {
+	Graph     GraphMeta `json:"graph" jsonschema:"what the answering graph holds and how fresh it is; read this before treating absence as fact"`
 	Reachable bool      `json:"reachable" jsonschema:"false is a real answer: no path within max_depth (NOT an error)"`
 	Hops      int       `json:"hops" jsonschema:"number of edges on the path (0 when from and to are the same entity)"`
 	MaxDepth  int       `json:"max_depth" jsonschema:"the hop cap that was applied; raise it if reachable=false looks wrong"`
@@ -129,6 +130,7 @@ func (s *Server) findPath(ctx context.Context, _ *mcpsdk.CallToolRequest, in Fin
 		frontier = next
 	}
 	if !found {
+		out.Graph = s.graphMeta(g, in.AsOf)
 		return nil, out, nil // reachable: false is the answer, not an error
 	}
 
@@ -153,5 +155,6 @@ func (s *Server) findPath(ctx context.Context, _ *mcpsdk.CallToolRequest, in Fin
 	out.Reachable = true
 	out.Path = hops
 	out.Hops = len(hops) - 1
+	out.Graph = s.graphMeta(g, in.AsOf)
 	return nil, out, nil
 }
