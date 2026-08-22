@@ -160,9 +160,12 @@ continuous history. Past the window, the same identity is minted a **fresh id**,
 and the entity's story is split in two: the new id's history begins at its
 rebirth and does not reach back.
 
-The window is a fixed 15 minutes, not configurable, and it bounds staleness the
-way the tombstone cache bounds memory — Toise will not claim an id it can no
-longer vouch for.
+The window defaults to 15 minutes and bounds staleness the way the tombstone
+cache bounds memory — Toise will not claim an id it can no longer vouch for.
+Since 0.16.0 it is tunable with
+[`resurrection_grace`](configuration.md#settings): size it against your fleet's
+report intervals, so that riding out a couple of missed cycles does not split a
+timeline. Changing it requires a restart.
 
 Two consequences worth internalising before you debug an incident with the
 change feed:

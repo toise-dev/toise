@@ -25,6 +25,7 @@ for the rationale.
 | `data_dir` | `TOISE_DATA_DIR` | `--data-dir` | `toise-data` | Pebble event-log directory |
 | `relation_buffer_ttl` | `TOISE_RELATION_BUFFER_TTL` | `--relation-buffer-ttl` | `30s` | hold an out-of-order edge waiting for its endpoints (`0` = disabled) |
 | `liveness_sweep_interval` | `TOISE_LIVENESS_SWEEP_INTERVAL` | `--liveness-sweep-interval` | `30s` | how often to expire entities past their heartbeat interval (`0` = disabled) |
+| `resurrection_grace` | `TOISE_RESURRECTION_GRACE` | `--resurrection-grace` | `15m` | how long a deleted entity's identity keeps its logical id if the producer returns; past it the same identity is minted a fresh id and its timeline splits (`0`/absent = the 15m default, negative = no time bound). Requires a restart to change. See [the resurrection window](ingestion.md#coming-back-the-15-minute-resurrection-window). |
 | `retention_max_age` | `TOISE_RETENTION_MAX_AGE` | `--retention-max-age` | `0` | max age of retained events (`0` = unlimited) |
 | `retention_compaction_interval` | `TOISE_RETENTION_COMPACTION_INTERVAL` | `--retention-compaction-interval` | `1h` | heartbeat-coalescing compaction cadence |
 | `snapshot_interval` | `TOISE_SNAPSHOT_INTERVAL` | `--snapshot-interval` | `5m` | projection snapshot cadence for fast restart and liveness survival across restarts (`0` = disabled) |
