@@ -123,6 +123,11 @@ func (s *Store) Get(id string) (Annotation, bool, error) {
 	if err := json.Unmarshal(v, &a); err != nil {
 		return Annotation{}, false, fmt.Errorf("decoding annotation %s: %w", id, err)
 	}
+	if len(a.Values) == 0 {
+		// A tombstone: the annotation was removed. It reads as absence; only
+		// Scan (the sync path) sees it.
+		return Annotation{}, false, nil
+	}
 	return a, true, nil
 }
 
@@ -146,20 +151,52 @@ func (s *Store) Set(id string, values map[string]string, author string, now time
 	}
 	cur.Author = author
 	cur.UpdatedAt = now
+	// A removal writes a TOMBSTONE (empty values, fresh UpdatedAt) rather than
+	// deleting the row: reads treat it as absence, but sync can see it — a hard
+	// delete is indistinguishable from "never existed", so a removed annotation
+	// would resurrect from the shared store on the next pull (#348).
 	if len(cur.Values) == 0 {
-		if derr := s.db.Delete([]byte(id), pebble.Sync); derr != nil {
-			return Annotation{}, fmt.Errorf("clearing annotation %s: %w", id, derr)
-		}
-		return Annotation{Values: map[string]string{}, Author: author, UpdatedAt: now}, nil
+		cur.Values = map[string]string{}
 	}
-	blob, err := json.Marshal(cur)
-	if err != nil {
-		return Annotation{}, fmt.Errorf("encoding annotation %s: %w", id, err)
-	}
-	if err := s.db.Set([]byte(id), blob, pebble.Sync); err != nil {
-		return Annotation{}, fmt.Errorf("writing annotation %s: %w", id, err)
+	if err := s.Apply(id, cur); err != nil {
+		return Annotation{}, err
 	}
 	return cur, nil
+}
+
+// Apply writes a row verbatim — values, author and timestamp as given,
+// tombstones included. It is the sync path's write: a remote row that won
+// last-writer-wins must land exactly as its author wrote it, not be re-merged
+// or re-stamped, or two nodes converge to different bytes.
+func (s *Store) Apply(id string, a Annotation) error {
+	blob, err := json.Marshal(a)
+	if err != nil {
+		return fmt.Errorf("encoding annotation %s: %w", id, err)
+	}
+	if err := s.db.Set([]byte(id), blob, pebble.Sync); err != nil {
+		return fmt.Errorf("writing annotation %s: %w", id, err)
+	}
+	return nil
+}
+
+// Scan visits every row, tombstones included — the sync path's read. Reads for
+// serving go through Get, which hides tombstones.
+func (s *Store) Scan(fn func(id string, a Annotation) error) error {
+	iter, err := s.db.NewIter(nil)
+	if err != nil {
+		return fmt.Errorf("opening annotations iterator: %w", err)
+	}
+	defer func() { _ = iter.Close() }()
+	for iter.First(); iter.Valid(); iter.Next() {
+		var a Annotation
+		if err := json.Unmarshal(iter.Value(), &a); err != nil {
+			return fmt.Errorf("decoding annotation %s: %w", iter.Key(), err)
+		}
+		if err := fn(string(iter.Key()), a); err != nil {
+			return err
+		}
+	}
+	return iter.Error()
 }
 
 // Delete removes all annotations for an entity.
