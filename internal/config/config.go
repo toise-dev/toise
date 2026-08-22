@@ -77,12 +77,19 @@ type Config struct {
 	// (tombstones then live until the cap evicts them). Size it against the
 	// fleet's report intervals: a fleet re-asserting every 6 minutes rides out
 	// two missed cycles inside the default.
-	ResurrectionGrace  Duration `yaml:"resurrection_grace"`
-	RetentionMaxAge    Duration `yaml:"retention_max_age"`
-	CompactionInterval Duration `yaml:"retention_compaction_interval"`
-	SnapshotInterval   Duration `yaml:"snapshot_interval"` // 0 = disabled (replay full log on start)
-	LogFormat          string   `yaml:"log_format"`        // "text" or "json"
-	LogLevel           string   `yaml:"log_level"`         // debug | info | warn | error
+	ResurrectionGrace Duration `yaml:"resurrection_grace"`
+	RetentionMaxAge   Duration `yaml:"retention_max_age"`
+	// TenantRetentionMaxAge overrides the retention bound per tenant, as
+	// "tenant:duration" pairs (e.g. "imagroupe:2160h"). An unlisted tenant keeps
+	// RetentionMaxAge; a listed tenant is pruned to its own bound even when the
+	// global one is 0/unlimited. Retention is what a multi-tenant offer prices,
+	// so it must be expressible per tenant (#350). Storage becomes a per-tenant
+	// variable — see the storage-sizing guide. Changing it requires a restart.
+	TenantRetentionMaxAge []string `yaml:"tenant_retention_max_age"`
+	CompactionInterval    Duration `yaml:"retention_compaction_interval"`
+	SnapshotInterval      Duration `yaml:"snapshot_interval"` // 0 = disabled (replay full log on start)
+	LogFormat             string   `yaml:"log_format"`        // "text" or "json"
+	LogLevel              string   `yaml:"log_level"`         // debug | info | warn | error
 
 	// Production is a hardening profile: when true it forces GraphQLIntrospection,
 	// Playground, and DebugUI off regardless of their individual values.
@@ -331,6 +338,33 @@ func parseTenantTokens(pairs []string, label string) (map[string][]string, error
 	return out, nil
 }
 
+// TenantRetentionMap parses TenantRetentionMaxAge ("tenant:duration" pairs)
+// into tenant -> max age. A malformed pair is a hard error: a typo here would
+// silently prune a paying tenant's history to the wrong bound, which is the
+// same class of accident as a token pair widening access.
+func (c Config) TenantRetentionMap() (map[string]time.Duration, error) {
+	if len(c.TenantRetentionMaxAge) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]time.Duration, len(c.TenantRetentionMaxAge))
+	for _, pair := range c.TenantRetentionMaxAge {
+		id, raw, found := strings.Cut(pair, ":")
+		san, ok := tenant.Sanitize(id)
+		if !found || !ok || san != id {
+			return nil, fmt.Errorf("invalid tenant_retention_max_age entry %q: want \"<tenant>:<duration>\" with a canonical tenant id", pair)
+		}
+		d, err := time.ParseDuration(strings.TrimSpace(raw))
+		if err != nil || d <= 0 {
+			return nil, fmt.Errorf("invalid tenant_retention_max_age entry %q: duration must be a positive Go duration like 720h", pair)
+		}
+		if _, dup := out[id]; dup {
+			return nil, fmt.Errorf("invalid tenant_retention_max_age: tenant %q appears twice; one bound per tenant", id)
+		}
+		out[id] = d
+	}
+	return out, nil
+}
+
 // DeriveOnlyTenancy reports whether the derive-only tenant trust mode is in
 // effect (ADR 0028): a scoped token's tenant is derived from its binding and a
 // client-supplied X-Scope-OrgID / tenant.id is ignored. The empty value is
@@ -433,6 +467,9 @@ func (c *Config) applyEnv(getenv func(string) string) error {
 			return fmt.Errorf("invalid TOISE_TENANT_AUTO_CREATE %q: %w", v, err)
 		}
 		c.TenantAutoCreate = b
+	}
+	if v := getenv("TOISE_TENANT_RETENTION_MAX_AGE"); v != "" {
+		c.TenantRetentionMaxAge = splitOrigins(v)
 	}
 	if v := getenv("TOISE_TENANT_ALLOWLIST"); v != "" {
 		c.TenantAllowlist = splitOrigins(v)

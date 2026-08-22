@@ -135,6 +135,12 @@ func ingestTLSConfig(base *tls.Config, clientCAFile string) (*tls.Config, error)
 }
 
 func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
+	// Per-tenant retention bounds parse before anything opens: a malformed pair
+	// must refuse to boot rather than prune someone's history to the wrong bound.
+	tenantRetention, err := cfg.TenantRetentionMap()
+	if err != nil {
+		return err
+	}
 	// One {store, projection, engine} stack per tenant under <data-dir>/<tenant>/
 	// (ADR 0025). A legacy single-tenant data dir is migrated to the default tenant
 	// on open; existing tenants and the default are opened up front.
@@ -473,15 +479,22 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 						}); err != nil {
 							logger.Error("heartbeat coalescing failed", "tenant", st.Tenant, "err", err)
 						}
-						if storeCfg.RetentionMaxAge > 0 {
-							cutoff := time.Now().Add(-storeCfg.RetentionMaxAge)
+						// Retention resolves per tenant: a listed tenant is pruned
+						// to its own bound, an unlisted one to the global default —
+						// retention is what a multi-tenant offer prices (#350).
+						maxAge := storeCfg.RetentionMaxAge
+						if d, ok := tenantRetention[st.Tenant]; ok {
+							maxAge = d
+						}
+						if maxAge > 0 {
+							cutoff := time.Now().Add(-maxAge)
 							if err := maint.Observe("prune", st.Tenant, func() error {
 								ev, by, perr := st.Store.PruneOlderThan(cutoff)
 								if perr != nil {
 									return perr
 								}
 								if ev > 0 {
-									logger.Info("pruned events past retention", "tenant", st.Tenant, "events", ev, "bytes", by, "older_than", storeCfg.RetentionMaxAge.String())
+									logger.Info("pruned events past retention", "tenant", st.Tenant, "events", ev, "bytes", by, "older_than", maxAge.String())
 								}
 								return nil
 							}); err != nil {
