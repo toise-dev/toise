@@ -3,6 +3,15 @@
 Use this to plan disk for the Toise event log and to choose a
 [`retention_max_age`](../configuration.md#settings).
 
+!!! note "Per-tenant retention changes the budget"
+    With [`tenant_retention_max_age`](../configuration.md#settings), tenants no
+    longer cost the same: each tenant's log grows with **its own** change rate ×
+    **its own** bound. Budget disk per tenant (rate × bound, plus snapshot and
+    compaction headroom) instead of multiplying one figure by the tenant count,
+    and revisit `max_tenants` reasoning accordingly — one long-retention tenant
+    can outweigh many default ones. Reads older than a tenant's bound are
+    refused at its own prune horizon, exactly as with the global bound.
+
 !!! warning "These are estimates, not measurements"
     The figures below are conservative planning estimates, not benchmarks.
     Re-validate against your own hardware and realistic event payloads before
