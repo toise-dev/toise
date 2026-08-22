@@ -10,6 +10,7 @@ import (
 	"github.com/toise-dev/toise/internal/annotations"
 	"github.com/toise-dev/toise/internal/audit"
 	"github.com/toise-dev/toise/internal/model"
+	"github.com/toise-dev/toise/internal/store"
 	"github.com/toise-dev/toise/internal/version"
 )
 
@@ -44,6 +45,11 @@ type EventReader interface {
 	// ScanByTimeRange streams the range to fn (no intermediate slice), backing
 	// the as-of fold (projection.At).
 	ScanByTimeRange(ctx context.Context, start, end time.Time, fn func(model.Event) error) error
+	// ScanTimeIndex walks the window's index entries without resolving primary
+	// records, so a filter can skip an event without paying its read and decode;
+	// Resolve fetches the ones a caller keeps (#351).
+	ScanTimeIndex(ctx context.Context, start, end time.Time, newestFirst bool, fn func(store.TimeIndexEntry) error) error
+	Resolve(seq uint64) (model.Event, bool, error)
 	// PruneHorizon is the latest retention cutoff ever applied (zero = never
 	// pruned): the oldest instant an as-of read can answer completely.
 	PruneHorizon() time.Time
@@ -170,8 +176,8 @@ Every reading tool takes as_of (RFC 3339) to read the graph as it was at that in
 // New builds an MCP server reading from the given projection and event log. The
 // underlying SDK server is constructed once and reused across transports and
 // HTTP sessions; the tools are stateless reads.
-func New(graph Graph, store EventReader) *Server {
-	s := &Server{graph: graph, store: store, now: time.Now, timeout: toolTimeout, idThr: defaultIdentityThreshold}
+func New(graph Graph, events EventReader) *Server {
+	s := &Server{graph: graph, store: events, now: time.Now, timeout: toolTimeout, idThr: defaultIdentityThreshold}
 	impl := &mcpsdk.Implementation{
 		Name:    "toise",
 		Title:   "Toise — the living map of your infrastructure",

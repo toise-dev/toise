@@ -12,6 +12,7 @@ import (
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/toise-dev/toise/internal/model"
+	"github.com/toise-dev/toise/internal/store"
 )
 
 // --- fakes -------------------------------------------------------------------
@@ -132,6 +133,49 @@ func (s *fakeStore) ScanByTimeRange(_ context.Context, start, end time.Time, fn 
 		}
 	}
 	return nil
+}
+
+// ScanTimeIndex mirrors the store's classified scan over the in-memory slice:
+// each event is its own index entry, tagged from its content, with its slice
+// position as the sequence Resolve looks up.
+func (s *fakeStore) ScanTimeIndex(_ context.Context, start, end time.Time, newestFirst bool, fn func(store.TimeIndexEntry) error) error {
+	emit := func(i int) error {
+		ev := s.byTime[i]
+		et, _ := ev.Times()
+		if et.Before(start) || et.After(end) {
+			return nil
+		}
+		e := store.TimeIndexEntry{Seq: uint64(i), Tagged: true}
+		switch {
+		case ev.Entity != nil:
+			e.ChangeType = ev.Entity.ChangeType
+		case ev.Relation != nil:
+			e.ChangeType = ev.Relation.ChangeType
+			e.Structural = ev.Relation.Relation.Structural
+		}
+		return fn(e)
+	}
+	if newestFirst {
+		for i := len(s.byTime) - 1; i >= 0; i-- {
+			if err := emit(i); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for i := range s.byTime {
+		if err := emit(i); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *fakeStore) Resolve(seq uint64) (model.Event, bool, error) {
+	if int(seq) >= len(s.byTime) {
+		return model.Event{}, false, nil
+	}
+	return s.byTime[seq], true, nil
 }
 
 // --- fixture -----------------------------------------------------------------
@@ -934,6 +978,13 @@ func (blockingStore) ScanByTimeRange(ctx context.Context, _, _ time.Time, _ func
 	<-ctx.Done()
 	return ctx.Err()
 }
+
+func (blockingStore) ScanTimeIndex(ctx context.Context, _, _ time.Time, _ bool, _ func(store.TimeIndexEntry) error) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (blockingStore) Resolve(uint64) (model.Event, bool, error) { return model.Event{}, false, nil }
 
 func (blockingStore) PruneHorizon() time.Time { return time.Time{} }
 

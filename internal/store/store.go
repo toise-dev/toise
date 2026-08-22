@@ -283,7 +283,28 @@ func indexEvent(batch *pebble.Batch, ev model.Event, seq uint64) error {
 	if err := batch.Set(typeKey(ct, seq), nil, nil); err != nil {
 		return err
 	}
-	return batch.Set(timeKey(eventNs, seq), nil, nil)
+	return batch.Set(timeKey(eventNs, seq), []byte{classTag(ev, ct)}, nil)
+}
+
+// classTag encodes an event's classification into the single byte a time-index
+// entry carries as its value. A windowed read used to pay one random point
+// lookup plus a proto decode PER EVENT IN THE WINDOW just to discover that the
+// event was a heartbeat and drop it — at 10k hosts that is ~3M resolutions per
+// one-hour window to keep a few dozen changes, and the flagship "what changed"
+// reads took 7.5s (#351). With the class in the index, a scan skips what a
+// filter excludes without ever touching the primary record.
+//
+// Layout: low 7 bits = the proto ChangeType value (stable on the wire, so
+// stable here); high bit = the relation's structural flag. The tag is a storage
+// detail, never surfaced: readers that meet an untagged entry (written before
+// this) fall back to resolving, and retention ages the untagged format out on
+// its own.
+func classTag(ev model.Event, ct model.ChangeType) byte {
+	b := byte(ct) & 0x7f
+	if ev.Relation != nil && ev.Relation.Relation.Structural {
+		b |= 0x80
+	}
+	return b
 }
 
 // getBySeq fetches and decodes the primary record for seq.
