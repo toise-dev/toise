@@ -227,3 +227,37 @@ func formatTime(t time.Time) string {
 func matches(e model.Entity, want map[string]string) bool {
 	return e.MatchAll(want)
 }
+
+// GraphMeta is the provenance block every read answer carries: what the
+// answering graph holds, how fresh its log is, and how far back it can answer.
+// Three operator agents independently asked for the same thing before any of
+// them would trust an answer (#346): a consumer's job is arbitrating between
+// disagreeing sources, and a source that does not state its own scope and
+// freshness cannot enter the arbitration — it gets hand-verified once, then
+// bypassed. Absence is not evidence of absence, and this block is where an
+// answer says how much absence it can even speak for.
+type GraphMeta struct {
+	Entities  int `json:"entities" jsonschema:"entities the answering graph holds"`
+	Relations int `json:"relations" jsonschema:"relations the answering graph holds"`
+	// NewestEvent dates the log, not the projection: a live graph with a stale
+	// log means producers stopped talking, which is itself the finding.
+	NewestEvent string `json:"newest_event,omitempty" jsonschema:"RFC 3339 event time of the newest event in this tenant's log; how fresh this instance is"`
+	// OldestAnswerable is the prune horizon: an as_of read before it is refused
+	// rather than answered wrongly.
+	OldestAnswerable string `json:"oldest_answerable,omitempty" jsonschema:"RFC 3339 prune horizon; history and as_of reads reach no further back"`
+	// AsOf is set when this answer reads a past instant rather than now.
+	AsOf string `json:"as_of,omitempty" jsonschema:"set when this answer describes the graph as of a past instant, not the present"`
+}
+
+// graphMeta assembles the provenance block from the graph that actually
+// answered (live or an as-of fold) and the tenant's log.
+func (s *Server) graphMeta(g Graph, asOf string) GraphMeta {
+	m := GraphMeta{Entities: g.EntityCount(), Relations: g.RelationCount(), AsOf: asOf}
+	if t, ok, err := s.store.NewestEventTime(); err == nil && ok {
+		m.NewestEvent = formatTime(t)
+	}
+	if h := s.store.PruneHorizon(); !h.IsZero() {
+		m.OldestAnswerable = formatTime(h)
+	}
+	return m
+}

@@ -46,9 +46,10 @@ type DiffTotals struct {
 
 // GraphDiffOutput is the folded net difference between the two instants.
 type GraphDiffOutput struct {
-	From    string `json:"from"`
-	To      string `json:"to"`
-	Summary string `json:"summary" jsonschema:"a one-line natural-language summary of the net difference"`
+	Graph   GraphMeta `json:"graph" jsonschema:"what the answering graph holds and how fresh it is; read this before treating absence as fact"`
+	From    string    `json:"from"`
+	To      string    `json:"to"`
+	Summary string    `json:"summary" jsonschema:"a one-line natural-language summary of the net difference"`
 
 	EntitiesCreated   []Entity        `json:"entities_created,omitempty" jsonschema:"entities present at to but not at from"`
 	EntitiesDeleted   []DeletedEntity `json:"entities_deleted,omitempty" jsonschema:"entities present at from but not at to"`
@@ -266,6 +267,7 @@ func (s *Server) graphDiff(ctx context.Context, _ *mcpsdk.CallToolRequest, in Gr
 	}
 
 	out.Summary = diffSummary(out)
+	out.Graph = s.graphMeta(s.graph, "")
 	return nil, out, nil
 }
 

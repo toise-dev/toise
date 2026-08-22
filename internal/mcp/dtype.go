@@ -54,11 +54,12 @@ type EndpointShape struct {
 // DescribeTypeOutput zooms on one type: its registration, its observed shape,
 // and how it connects.
 type DescribeTypeOutput struct {
-	Kind        string `json:"kind" jsonschema:"entity, relation, or unknown"`
-	Type        string `json:"type"`
-	Registered  bool   `json:"registered" jsonschema:"true if the type is in the built-in registry"`
-	Count       int    `json:"count" jsonschema:"live instances in the graph"`
-	Description string `json:"description" jsonschema:"a natural-language summary"`
+	Graph       GraphMeta `json:"graph" jsonschema:"what the answering graph holds and how fresh it is; read this before treating absence as fact"`
+	Kind        string    `json:"kind" jsonschema:"entity, relation, or unknown"`
+	Type        string    `json:"type"`
+	Registered  bool      `json:"registered" jsonschema:"true if the type is in the built-in registry"`
+	Count       int       `json:"count" jsonschema:"live instances in the graph"`
+	Description string    `json:"description" jsonschema:"a natural-language summary"`
 
 	// Entity kinds.
 	IdentityKeys  []AttributeUsage        `json:"identity_keys,omitempty" jsonschema:"observed identifying attribute keys (sampled)"`
@@ -82,11 +83,15 @@ func (s *Server) describeType(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 	}
 
 	if rels := g.ListRelations(in.Type, "", ""); len(rels) > 0 || isRegisteredRelation(in.Type) {
-		return nil, describeRelationType(g, in.Type, rels), nil
+		out := describeRelationType(g, in.Type, rels)
+		out.Graph = s.graphMeta(g, in.AsOf)
+		return nil, out, nil
 	}
 	ents := g.ListEntities(in.Type)
 	if len(ents) > 0 || model.IsKnownEntityType(in.Type) {
-		return nil, describeEntityType(g, in.Type, ents), nil
+		out := describeEntityType(g, in.Type, ents)
+		out.Graph = s.graphMeta(g, in.AsOf)
+		return nil, out, nil
 	}
 	return nil, DescribeTypeOutput{}, fmt.Errorf("type %q is neither a known type nor present in the graph; describe_schema lists what exists", in.Type)
 }

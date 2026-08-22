@@ -171,6 +171,17 @@ func (s *fakeStore) ScanTimeIndex(_ context.Context, start, end time.Time, newes
 	return nil
 }
 
+// NewestEventTime mirrors the store: the max event time across the fixture.
+func (s *fakeStore) NewestEventTime() (time.Time, bool, error) {
+	var newest time.Time
+	for _, ev := range s.byTime {
+		if et, _ := ev.Times(); et.After(newest) {
+			newest = et
+		}
+	}
+	return newest, !newest.IsZero(), nil
+}
+
 func (s *fakeStore) Resolve(seq uint64) (model.Event, bool, error) {
 	if int(seq) >= len(s.byTime) {
 		return model.Event{}, false, nil
@@ -985,6 +996,8 @@ func (blockingStore) ScanTimeIndex(ctx context.Context, _, _ time.Time, _ bool, 
 }
 
 func (blockingStore) Resolve(uint64) (model.Event, bool, error) { return model.Event{}, false, nil }
+
+func (blockingStore) NewestEventTime() (time.Time, bool, error) { return time.Time{}, false, nil }
 
 func (blockingStore) PruneHorizon() time.Time { return time.Time{} }
 

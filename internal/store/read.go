@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"time"
@@ -138,6 +139,32 @@ func (s *Store) ScanTimeIndex(ctx context.Context, start, end time.Time, newestF
 // index key deterministically outliving its record never means a live event.
 func (s *Store) Resolve(seq uint64) (model.Event, bool, error) {
 	return s.resolveSeq(seq)
+}
+
+// NewestEventTime returns the event time of the newest event in the log, or
+// ok=false on an empty log. One bounded seek on the time index — no state to
+// go stale across restarts. It backs the freshness every read answer declares
+// (#346): a consumer arbitrating between disagreeing sources needs the source
+// to state how current it is, and a source that cannot say gets left out of
+// the arbitration.
+func (s *Store) NewestEventTime() (time.Time, bool, error) {
+	iter, err := s.db.NewIter(&pebble.IterOptions{
+		LowerBound: timeKeyBound(0),
+		UpperBound: prefixUpperBound([]byte(timePrefix)),
+	})
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("opening time iterator: %w", err)
+	}
+	defer func() { _ = iter.Close() }()
+	if !iter.Last() {
+		return time.Time{}, false, iter.Error()
+	}
+	key := iter.Key()
+	if len(key) < len(timePrefix)+16 {
+		return time.Time{}, false, nil
+	}
+	ns := binary.BigEndian.Uint64(key[len(timePrefix) : len(timePrefix)+8])
+	return time.Unix(0, int64(ns)).UTC(), true, nil
 }
 
 // ReadByTimeRange returns, in event-time order, every event whose event_time is

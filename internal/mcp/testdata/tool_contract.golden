@@ -19,6 +19,12 @@ tool find_entities
       value string
     label string
     type string
+  graph object
+    as_of string
+    entities int
+    newest_event string
+    oldest_answerable string
+    relations int
   total int
   truncated bool
 tool get_entity
@@ -54,6 +60,12 @@ tool get_entity
       value string
     label string
     type string
+  graph object
+    as_of string
+    entities int
+    newest_event string
+    oldest_answerable string
+    relations int
 tool get_neighbors
   in:
   as_of string
@@ -64,6 +76,12 @@ tool get_neighbors
   verbosity string
   out:
   count int
+  graph object
+    as_of string
+    entities int
+    newest_event string
+    oldest_answerable string
+    relations int
   neighbors []object
     attributes []object
       key string
@@ -103,6 +121,12 @@ tool find_path
   relation_type string
   to_id string
   out:
+  graph object
+    as_of string
+    entities int
+    newest_event string
+    oldest_answerable string
+    relations int
   hops int
   max_depth int
   path []object
@@ -133,6 +157,12 @@ tool impact_of
   by_type []object
     count int
     type string
+  graph object
+    as_of string
+    entities int
+    newest_event string
+    oldest_answerable string
+    relations int
   impacted []object
     attributes []object
       key string
@@ -213,6 +243,12 @@ tool entity_history
       to_id string
       type string
   count int
+  graph object
+    as_of string
+    entities int
+    newest_event string
+    oldest_answerable string
+    relations int
 tool recent_changes
   in:
   change_type string
@@ -263,6 +299,12 @@ tool recent_changes
       type string
   count int
   covered string
+  graph object
+    as_of string
+    entities int
+    newest_event string
+    oldest_answerable string
+    relations int
   window_from string
   window_to string
 tool graph_diff
@@ -331,6 +373,12 @@ tool graph_diff
     delete_reason string
     delete_source string
   from string
+  graph object
+    as_of string
+    entities int
+    newest_event string
+    oldest_answerable string
+    relations int
   relations_added []object
     attributes []object
       key string
@@ -398,6 +446,12 @@ tool describe_type
     count int
     from_type string
     to_type string
+  graph object
+    as_of string
+    entities int
+    newest_event string
+    oldest_answerable string
+    relations int
   identity_keys []object
     example string
     key string
@@ -433,6 +487,12 @@ tool telemetry_keys
       value string
     label string
     type string
+  graph object
+    as_of string
+    entities int
+    newest_event string
+    oldest_answerable string
+    relations int
   guidance string
   keys []object
     key string
@@ -454,6 +514,12 @@ tool describe_schema
     semconv bool
     summary string
     values []string
+  graph object
+    as_of string
+    entities int
+    newest_event string
+    oldest_answerable string
+    relations int
   relation_types []object
     count int
     type string

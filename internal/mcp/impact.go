@@ -30,6 +30,7 @@ type ImpactedEntity struct {
 
 // ImpactOfOutput is the blast radius, nearest first.
 type ImpactOfOutput struct {
+	Graph     GraphMeta        `json:"graph" jsonschema:"what the answering graph holds and how fresh it is; read this before treating absence as fact"`
 	Root      Entity           `json:"root" jsonschema:"the failed entity the propagation started from"`
 	Impacted  []ImpactedEntity `json:"impacted"`
 	Total     int              `json:"total" jsonschema:"impacted entities before the limit was applied"`
@@ -105,6 +106,7 @@ func (s *Server) impactOf(ctx context.Context, _ *mcpsdk.CallToolRequest, in Imp
 	}
 	out.Impacted = impacted
 	out.Summary = impactSummary(root, out)
+	out.Graph = s.graphMeta(g, in.AsOf)
 	return nil, out, nil
 }
 

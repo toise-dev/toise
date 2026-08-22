@@ -50,6 +50,9 @@ type EventReader interface {
 	// Resolve fetches the ones a caller keeps (#351).
 	ScanTimeIndex(ctx context.Context, start, end time.Time, newestFirst bool, fn func(store.TimeIndexEntry) error) error
 	Resolve(seq uint64) (model.Event, bool, error)
+	// NewestEventTime dates the newest event in the log — the freshness every
+	// read answer declares in its provenance block (#346).
+	NewestEventTime() (time.Time, bool, error)
 	// PruneHorizon is the latest retention cutoff ever applied (zero = never
 	// pruned): the oldest instant an as-of read can answer completely.
 	PruneHorizon() time.Time
@@ -169,7 +172,7 @@ IDENTIFIERS: entity ids are per-replica and are re-minted if an entity comes bac
 
 TOPOLOGY IS TRAVERSED, NOT LISTED: an address is not an attribute of a host — it is a network.address entity two hops away (host -has_interface-> network.interface <-bound_to- network.address). Use get_neighbors with depth 2 rather than concluding the address is missing. Same shape for anything that can be multiple and mutable.
 
-COVERAGE: this graph is exactly as complete as its producers. Absence is not evidence of absence — if a type looks under-populated, check describe_schema counts before treating a gap as fact.
+COVERAGE AND FRESHNESS: every answer carries a "graph" block — how many entities and relations the answering graph holds, the newest event in its log, and the oldest instant it can still answer. Read it before trusting an answer, and especially before trusting an EMPTY one: this graph is exactly as complete as its producers, absence is not evidence of absence, and a stale newest_event means producers stopped talking — which is itself a finding.
 
 Every reading tool takes as_of (RFC 3339) to read the graph as it was at that instant. Writes are limited to annotate_entity: operator notes kept as an overlay, never mixed into producer truth.`
 

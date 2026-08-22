@@ -81,6 +81,7 @@ type TelemetryKey struct {
 
 // TelemetryKeysOutput carries the join keys and how to use them.
 type TelemetryKeysOutput struct {
+	Graph    GraphMeta      `json:"graph" jsonschema:"what the answering graph holds and how fresh it is; read this before treating absence as fact"`
 	Entity   Entity         `json:"entity"`
 	Keys     []TelemetryKey `json:"keys"`
 	Guidance string         `json:"guidance" jsonschema:"how to apply the keys against metric and log backends"`
@@ -159,5 +160,6 @@ func (s *Server) telemetryKeys(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 			"metric_label); log pipelines keep the dotted form (use key). Values must match exactly " +
 			"— a join that almost matches silently returns nothing."
 	}
+	out.Graph = s.graphMeta(g, in.AsOf)
 	return nil, out, nil
 }
