@@ -16,6 +16,7 @@ import (
 	"github.com/toise-dev/toise/internal/graphql/generated"
 	"github.com/toise-dev/toise/internal/model"
 	"github.com/toise-dev/toise/internal/projection"
+	"github.com/toise-dev/toise/internal/store"
 )
 
 // EventReader is the subset of the store the resolvers read history from.
@@ -25,6 +26,11 @@ type EventReader interface {
 	// ScanByTimeRange streams the range to fn (no intermediate slice), backing
 	// the as-of fold (projection.At).
 	ScanByTimeRange(ctx context.Context, start, end time.Time, fn func(model.Event) error) error
+	// ScanTimeIndex walks the window's index entries without resolving primary
+	// records, so a filter can skip an event without paying its read and decode;
+	// Resolve fetches the ones a caller keeps (#351).
+	ScanTimeIndex(ctx context.Context, start, end time.Time, newestFirst bool, fn func(store.TimeIndexEntry) error) error
+	Resolve(seq uint64) (model.Event, bool, error)
 	// PruneHorizon is the latest retention cutoff ever applied (zero = never
 	// pruned): the oldest instant an as-of read can answer completely.
 	PruneHorizon() time.Time
@@ -246,16 +252,27 @@ func (r *queryResolver) RecentChanges(ctx context.Context, window *string, inclu
 		return nil, fmt.Errorf("invalid window %q: use a positive Go duration like 15m, 2h, or 24h", w)
 	}
 	now := r.now()
-	evs, err := r.Store.ReadByTimeRange(ctx, now.Add(-d), now.Add(time.Nanosecond)) // inclusive of now
+	// Walk the time index newest-first and drop heartbeats from the tag alone:
+	// a window is heartbeat-dominated, and excluding an event must not cost a
+	// point lookup and a decode of it (#351). Only kept events are resolved —
+	// pre-tagging entries fall back to resolving, and age out with retention.
+	var evs []model.Event
+	err = r.Store.ScanTimeIndex(ctx, now.Add(-d), now.Add(time.Nanosecond), true, func(e store.TimeIndexEntry) error {
+		if !includeHeartbeats && e.Tagged && e.ChangeType == model.EntityUnchanged {
+			return nil
+		}
+		ev, ok, rerr := r.Store.Resolve(e.Seq)
+		if rerr != nil || !ok {
+			return rerr
+		}
+		if !includeHeartbeats && !e.Tagged && ev.Entity != nil && ev.Entity.ChangeType == model.EntityUnchanged {
+			return nil
+		}
+		evs = append(evs, ev)
+		return nil
+	})
 	if err != nil {
 		return nil, err
-	}
-	if !includeHeartbeats {
-		evs = dropHeartbeats(evs)
-	}
-	// newest-first
-	for i, j := 0, len(evs)-1; i < j; i, j = i+1, j-1 {
-		evs[i], evs[j] = evs[j], evs[i]
 	}
 	return r.changeConnection(evs, first, after)
 }

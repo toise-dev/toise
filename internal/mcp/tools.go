@@ -10,6 +10,7 @@ import (
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/toise-dev/toise/internal/model"
+	"github.com/toise-dev/toise/internal/store"
 )
 
 // --- find_entities ---
@@ -343,29 +344,54 @@ func (s *Server) recentChanges(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 		return nil, RecentChangesOutput{}, err
 	}
 	limit := clampLimit(in.Limit)
-	evs, err := s.store.ReadByTimeRange(ctx, from, to.Add(time.Nanosecond))
-	if err != nil {
-		return nil, RecentChangesOutput{}, fmt.Errorf("reading changes: %w", err)
-	}
 	out := RecentChangesOutput{Changes: []Change{}}
 	out.WindowFrom, out.WindowTo = formatTime(from), formatTime(to)
-	for i := len(evs) - 1; i >= 0; i-- { // newest first
-		ev := evs[i]
-		if !keepKind(ev, kind) {
-			continue
+	// Walk the time index newest-first and classify from the tag, so an event a
+	// filter excludes is skipped without a point lookup or a decode. A window is
+	// heartbeat-dominated — millions of exclusions per hour at fleet scale — and
+	// this read used to pay full resolution for every one of them (#351). Only
+	// the entries that land in the returned page are resolved.
+	err = s.store.ScanTimeIndex(ctx, from, to.Add(time.Nanosecond), true, func(e store.TimeIndexEntry) error {
+		ct, structural := e.ChangeType, e.Structural
+		var ev model.Event
+		resolved := false
+		if !e.Tagged {
+			// Pre-tagging row: classification requires the record, as it always
+			// did. Retention ages these out; new writes never take this path.
+			rev, ok, rerr := s.store.Resolve(e.Seq)
+			if rerr != nil || !ok {
+				return rerr
+			}
+			ev, resolved = rev, true
+			ct = eventChangeType(ev)
+			structural = ev.Relation != nil && ev.Relation.Relation.Structural
 		}
-		kept, heartbeat := filter.keep(ev)
+		if !keepKindClass(ct, structural, kind) {
+			return nil
+		}
+		kept, heartbeat := filter.keepClass(ct)
 		if heartbeat {
 			out.HeartbeatsExcluded++
 		}
 		if !kept {
-			continue
+			return nil
 		}
 		out.Total++
-		out.tally(ev)
+		out.tallyClass(ct)
 		if len(out.Changes) < limit {
+			if !resolved {
+				rev, ok, rerr := s.store.Resolve(e.Seq)
+				if rerr != nil || !ok {
+					return rerr
+				}
+				ev = rev
+			}
 			out.Changes = append(out.Changes, changeOut(ev))
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, RecentChangesOutput{}, fmt.Errorf("reading changes: %w", err)
 	}
 	out.Truncated = out.Total > limit
 	out.Count = len(out.Changes)
@@ -385,14 +411,16 @@ func (s *Server) recentChanges(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 	return nil, out, nil
 }
 
-func keepKind(ev model.Event, kind string) bool {
+// keepKindClass applies the kind filter over the classification alone, so an
+// index scan can apply it without resolving the event.
+func keepKindClass(ct model.ChangeType, structural bool, kind string) bool {
 	switch kind {
 	case "entity":
-		return ev.Entity != nil
+		return ct.IsEntity()
 	case "relation":
-		return ev.Relation != nil
+		return ct.IsRelation()
 	case "structural":
-		return ev.Relation != nil && ev.Relation.Relation.Structural
+		return structural
 	default:
 		return true
 	}
@@ -410,7 +438,12 @@ type ChangeDigest struct {
 }
 
 func (d *ChangeDigest) tally(ev model.Event) {
-	ct := eventChangeType(ev).String()
+	d.tallyClass(eventChangeType(ev))
+}
+
+// tallyClass is tally over the change type alone — the index-scan form.
+func (d *ChangeDigest) tallyClass(c model.ChangeType) {
+	ct := c.String()
 	for i := range d.ByChangeType {
 		if d.ByChangeType[i].Type == ct {
 			d.ByChangeType[i].Count++
@@ -446,7 +479,11 @@ func newChangeFilter(changeType string, includeHeartbeats bool) (changeFilter, e
 }
 
 func (f changeFilter) keep(ev model.Event) (kept, heartbeat bool) {
-	ct := eventChangeType(ev)
+	return f.keepClass(eventChangeType(ev))
+}
+
+// keepClass is keep over the change type alone — the index-scan form.
+func (f changeFilter) keepClass(ct model.ChangeType) (kept, heartbeat bool) {
 	if f.changeType != model.ChangeUnspecified {
 		return ct == f.changeType, false
 	}

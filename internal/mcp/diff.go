@@ -10,6 +10,7 @@ import (
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/toise-dev/toise/internal/model"
+	"github.com/toise-dev/toise/internal/store"
 )
 
 // --- graph_diff ---
@@ -102,7 +103,25 @@ func (s *Server) graphDiff(ctx context.Context, _ *mcpsdk.CallToolRequest, in Gr
 		return nil, GraphDiffOutput{}, err
 	}
 	limit := clampLimit(in.Limit)
-	evs, err := s.store.ReadByTimeRange(ctx, from, to)
+	// Stream the window oldest-first (the fold is order-sensitive) and skip
+	// heartbeats from the index tag alone. The fold has always dropped
+	// heartbeat-only entries as "no net difference"; resolving millions of them
+	// first was the whole cost of a windowed diff at fleet scale (#351).
+	var evs []model.Event
+	err = s.store.ScanTimeIndex(ctx, from, to, false, func(e store.TimeIndexEntry) error {
+		if e.Tagged && e.ChangeType == model.EntityUnchanged {
+			return nil
+		}
+		ev, ok, rerr := s.store.Resolve(e.Seq)
+		if rerr != nil || !ok {
+			return rerr
+		}
+		if !e.Tagged && ev.Entity != nil && ev.Entity.ChangeType == model.EntityUnchanged {
+			return nil
+		}
+		evs = append(evs, ev)
+		return nil
+	})
 	if err != nil {
 		return nil, GraphDiffOutput{}, fmt.Errorf("reading changes: %w", err)
 	}

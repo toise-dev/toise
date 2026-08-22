@@ -81,10 +81,69 @@ func (s *Store) ScanByTimeRange(ctx context.Context, start, end time.Time, fn fu
 	return iter.Error()
 }
 
+// TimeIndexEntry is one time-index row as the classified scan yields it: the
+// event's sequence, and — when the row was written with a class tag — enough of
+// its classification to filter without resolving the primary record. Tagged is
+// false for rows written before tagging existed; a caller that needs the class
+// of such a row must Resolve it, exactly as every caller once did for every row.
+type TimeIndexEntry struct {
+	Seq        uint64
+	ChangeType model.ChangeType
+	Structural bool
+	Tagged     bool
+}
+
+// ScanTimeIndex walks the time index over [start, end) in event-time order —
+// newest first when newestFirst is set — WITHOUT resolving primary records.
+// This is the read the change tools sit on: a window is dominated by heartbeats
+// that the default filters exclude, and excluding an event must not cost a
+// random read and a decode of it (#351). The caller resolves the entries it
+// actually keeps via Resolve.
+func (s *Store) ScanTimeIndex(ctx context.Context, start, end time.Time, newestFirst bool, fn func(TimeIndexEntry) error) error {
+	lower := timeKeyBound(start.UnixNano())
+	upper := timeKeyBound(end.UnixNano())
+	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
+	if err != nil {
+		return fmt.Errorf("opening time iterator: %w", err)
+	}
+	defer func() { _ = iter.Close() }()
+
+	step := func() bool { return iter.Next() }
+	valid := iter.First()
+	if newestFirst {
+		step = func() bool { return iter.Prev() }
+		valid = iter.Last()
+	}
+	n := 0
+	for ; valid; valid = step() {
+		if err := checkEvery(ctx, n); err != nil {
+			return err
+		}
+		n++
+		e := TimeIndexEntry{Seq: seqFromKeySuffix(iter.Key())}
+		if v := iter.Value(); len(v) == 1 {
+			e.ChangeType = model.ChangeType(v[0] & 0x7f)
+			e.Structural = v[0]&0x80 != 0
+			e.Tagged = true
+		}
+		if err := fn(e); err != nil {
+			return err
+		}
+	}
+	return iter.Error()
+}
+
+// Resolve fetches the event behind a sequence yielded by ScanTimeIndex. ok is
+// false when the primary record was coalesced or pruned by maintenance — the
+// index key deterministically outliving its record never means a live event.
+func (s *Store) Resolve(seq uint64) (model.Event, bool, error) {
+	return s.resolveSeq(seq)
+}
+
 // ReadByTimeRange returns, in event-time order, every event whose event_time is
 // in [start, end). It materializes the whole range; prefer ScanByTimeRange when
-// folding (it applies events as they stream, with no intermediate slice). Kept
-// for callers that genuinely need the full slice (recent_changes).
+// folding (it applies events as they stream, with no intermediate slice), and
+// ScanTimeIndex when a filter would discard most of the window.
 func (s *Store) ReadByTimeRange(ctx context.Context, start, end time.Time) ([]model.Event, error) {
 	var out []model.Event
 	if err := s.ScanByTimeRange(ctx, start, end, func(ev model.Event) error {
