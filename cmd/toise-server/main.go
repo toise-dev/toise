@@ -145,6 +145,9 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("opening tenant registry: %w", err)
 	}
+	if cfg.ResurrectionGrace != 0 {
+		reg.SetResurrectionGrace(cfg.ResurrectionGrace.D())
+	}
 	defer func() { _ = reg.Close() }()
 
 	// Final snapshot at graceful shutdown, declared right after the close so it

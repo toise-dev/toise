@@ -79,6 +79,11 @@ type Registry struct {
 	dataDir  string
 	storeCfg store.Config
 	relBuf   time.Duration
+	// resGrace overrides the projection's resurrection grace window when non-zero
+	// (negative disables the time bound); zero keeps the built-in default (#344).
+	// Set once via SetResurrectionGrace before serving; it applies to stacks
+	// already open and to every stack opened after.
+	resGrace time.Duration
 	limits   Limits
 	logger   *slog.Logger
 	// now is the clock each tenant engine uses (liveness floor at boot, Sweep).
@@ -110,6 +115,26 @@ type inflight struct {
 // persisted tenants from boot rather than only after a tenant's first request.
 func Open(dataDir string, storeCfg store.Config, relBuf time.Duration, logger *slog.Logger) (*Registry, error) {
 	return OpenWithLimits(dataDir, storeCfg, relBuf, Limits{AutoCreate: true}, logger)
+}
+
+// SetResurrectionGrace overrides the resurrection grace window (#344): how long
+// a deleted entity's identity keeps its logical id if the producer returns.
+// Zero keeps the projection's built-in default; negative disables the time
+// bound. It applies to every stack already open — boot opens persisted tenants
+// eagerly, so calling this right after Open still covers them — and to every
+// stack opened later. Call it before serving; a mid-flight change only affects
+// deadlines armed from then on, which is fine for a startup knob and not a
+// correctness issue for anything else.
+func (r *Registry) SetResurrectionGrace(d time.Duration) {
+	if d == 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.resGrace = d
+	for _, st := range r.stacks {
+		st.Graph.SetTombstoneTTL(d)
+	}
 }
 
 // OpenWithLimits is Open with runtime tenant-creation bounds (#115).
@@ -374,6 +399,9 @@ func (r *Registry) openStack(id string) (*Stack, error) {
 		return nil, fmt.Errorf("opening event log for tenant %q: %w", id, err)
 	}
 	graph := projection.New()
+	if r.resGrace != 0 {
+		graph.SetTombstoneTTL(r.resGrace)
+	}
 	restoredFrom := uint64(0)
 	var liveness []byte
 	if seq, snapEvents, blob, ok, rerr := st.ReadSnapshot(); rerr != nil {

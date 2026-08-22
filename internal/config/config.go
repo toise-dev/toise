@@ -62,11 +62,20 @@ type Config struct {
 	MCPStdio              bool     `yaml:"mcp_stdio"`
 	RelationBufferTTL     Duration `yaml:"relation_buffer_ttl"`
 	LivenessSweepInterval Duration `yaml:"liveness_sweep_interval"`
-	RetentionMaxAge       Duration `yaml:"retention_max_age"`
-	CompactionInterval    Duration `yaml:"retention_compaction_interval"`
-	SnapshotInterval      Duration `yaml:"snapshot_interval"` // 0 = disabled (replay full log on start)
-	LogFormat             string   `yaml:"log_format"`        // "text" or "json"
-	LogLevel              string   `yaml:"log_level"`         // debug | info | warn | error
+	// ResurrectionGrace is how long a deleted entity's identity stays
+	// resurrectable: a producer that returns within it gets the original
+	// logical id back with a continuous history; past it, the same identity is
+	// minted a fresh id and the timeline splits (#344). Zero or absent keeps
+	// the built-in 15m default; a negative value disables the time bound
+	// (tombstones then live until the cap evicts them). Size it against the
+	// fleet's report intervals: a fleet re-asserting every 6 minutes rides out
+	// two missed cycles inside the default.
+	ResurrectionGrace  Duration `yaml:"resurrection_grace"`
+	RetentionMaxAge    Duration `yaml:"retention_max_age"`
+	CompactionInterval Duration `yaml:"retention_compaction_interval"`
+	SnapshotInterval   Duration `yaml:"snapshot_interval"` // 0 = disabled (replay full log on start)
+	LogFormat          string   `yaml:"log_format"`        // "text" or "json"
+	LogLevel           string   `yaml:"log_level"`         // debug | info | warn | error
 
 	// Production is a hardening profile: when true it forces GraphQLIntrospection,
 	// Playground, and DebugUI off regardless of their individual values.
@@ -444,6 +453,7 @@ func (c *Config) applyEnv(getenv func(string) string) error {
 	}{
 		{"TOISE_RELATION_BUFFER_TTL", &c.RelationBufferTTL},
 		{"TOISE_LIVENESS_SWEEP_INTERVAL", &c.LivenessSweepInterval},
+		{"TOISE_RESURRECTION_GRACE", &c.ResurrectionGrace},
 		{"TOISE_RETENTION_MAX_AGE", &c.RetentionMaxAge},
 		{"TOISE_RETENTION_COMPACTION_INTERVAL", &c.CompactionInterval},
 		{"TOISE_SNAPSHOT_INTERVAL", &c.SnapshotInterval},
@@ -624,6 +634,8 @@ func resolve(args []string, getenv func(string) string) (Config, error) {
 		"how long to hold an out-of-order edge waiting for its endpoints before dropping it (0 = disabled)")
 	livenessSweepInterval := fs.Duration("liveness-sweep-interval", cfg.LivenessSweepInterval.D(),
 		"how often to expire entities past their heartbeat interval (0 = disabled)")
+	resurrectionGrace := fs.Duration("resurrection-grace", cfg.ResurrectionGrace.D(),
+		"how long a deleted entity's identity keeps its logical id on return (0 = built-in 15m, negative = no time bound)")
 	retentionMaxAge := fs.Duration("retention-max-age", cfg.RetentionMaxAge.D(),
 		"maximum age of retained events (0 = unlimited)")
 	compactionInterval := fs.Duration("retention-compaction-interval", cfg.CompactionInterval.D(),
@@ -668,6 +680,7 @@ func resolve(args []string, getenv func(string) string) (Config, error) {
 	cfg.MCPStdio = *mcpStdio
 	cfg.RelationBufferTTL = Duration(*relationBufferTTL)
 	cfg.LivenessSweepInterval = Duration(*livenessSweepInterval)
+	cfg.ResurrectionGrace = Duration(*resurrectionGrace)
 	cfg.RetentionMaxAge = Duration(*retentionMaxAge)
 	cfg.CompactionInterval = Duration(*compactionInterval)
 	cfg.SnapshotInterval = Duration(*snapshotInterval)

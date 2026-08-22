@@ -108,6 +108,15 @@ func (g *Graph) SetTombstoneTTL(ttl time.Duration) {
 	g.tombstoneTTL = ttl
 }
 
+// TombstoneTTL returns the resurrection grace window in force — the observable
+// half of SetTombstoneTTL, so wiring (config → registry → every stack) can be
+// verified rather than trusted.
+func (g *Graph) TombstoneTTL() time.Duration {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.tombstoneTTL
+}
+
 // Replay rebuilds the graph by applying every event from the scanner in order.
 func (g *Graph) Replay(s EventScanner) error {
 	return s.Scan(func(_ uint64, ev model.Event) error {
