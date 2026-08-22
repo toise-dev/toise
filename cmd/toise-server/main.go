@@ -36,6 +36,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
+	"github.com/toise-dev/toise/internal/annotations"
 	"github.com/toise-dev/toise/internal/audit"
 	"github.com/toise-dev/toise/internal/auth"
 	"github.com/toise-dev/toise/internal/change"
@@ -591,6 +592,23 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 							return err
 						}); err != nil {
 							logger.Error("log shipping failed", "tenant", st.Tenant, "err", err)
+						}
+						// Operator annotations ride the same store (#348): each
+						// node pushes what it wrote and pulls what the other
+						// wrote, last-writer-wins, tombstones included — the
+						// cluster's nodes converge without ever talking to each
+						// other, and a single-node deployment simply gains an
+						// annotation backup.
+						if st.Annotations != nil {
+							if err := maint.Observe("annsync", st.Tenant, func() error {
+								pushed, pulled, serr := annotations.SyncOnce(ctx, st.Annotations, sink, "annotations/"+st.Tenant)
+								if serr == nil && pushed+pulled > 0 {
+									logger.Info("annotations synced", "tenant", st.Tenant, "pushed", pushed, "pulled", pulled)
+								}
+								return serr
+							}); err != nil {
+								logger.Error("annotation sync failed", "tenant", st.Tenant, "err", err)
+							}
 						}
 					}
 				}
