@@ -27,9 +27,30 @@ This page summarises what to expect and how to measure it for yourself.
 | --- | --- |
 | OTLP LogRecord convert + dispatch | ~90 ns/op (excludes gRPC transport) |
 | Event-log append (batch of 100, Sync) | ~4.1 ms per batch |
-| `find_entities` filtering 200 of 10k hosts | ~1.86 ms/op |
+| `find_entities` filtering 200 hosts out of 10k **entities** (~270 real hosts at the measured 37-entities-per-host ratio) | ~1.86 ms/op |
 | `get_neighbors` depth 2 | ~330 ns/op |
 | Projection rebuild (replay) | ~440 ns/event (~0.44 s extrapolated for 1M events) |
+
+### Measured at fleet scale (#351)
+
+A production-shaped estate — 37 entities per host, the ratio the real fleet
+exhibits — loaded to 10,000 hosts (311,750 entities, 300,000 relations) on
+arm64 developer hardware:
+
+| What | Measurement |
+| --- | --- |
+| Resident memory (settled, after GC) | ~150 MB (~0.4 KB per entity over a ~21 MB baseline) |
+| Sustained ingest during load | ~39,000 entities/s over chunked exports |
+| `find_entities` 200 of 10,000 real hosts | ~25 ms |
+| `get_neighbors` depth 2 | ~1 ms — indifferent to graph size |
+| `recent_changes`, 1h window of 380k heartbeats | **~20 ms** (the classified time index skips what a filter excludes) |
+| `graph_diff`, same window | **~17 ms** |
+| A window of 611k *real* changes | seconds — the answer itself is large |
+
+The last row is the intended shape: **a question costs its answer, never the
+noise it had to discard**. Do not size memory from a reading taken during or
+right after a bulk load — the GC high-water mark can read several times the
+settled figure.
 
 ### Batched append in practice
 

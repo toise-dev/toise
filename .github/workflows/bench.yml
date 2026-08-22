@@ -1,0 +1,80 @@
+# Benchmark regression gate (#351): every PR touching Go code runs the key
+# benchmarks on its merge-base and on its head, on the SAME runner back to
+# back, and fails when a guarded benchmark regresses significantly. "Fast
+# today" only becomes "fast by contract" when a regression cannot merge
+# silently.
+#
+# Design choices, stated so they are not re-litigated by accident:
+# - Only statistically significant regressions fail (benchstat p < 0.05 over
+#   count=8 runs): shared CI runners are noisy, and a gate that cries wolf gets
+#   deleted. The failure threshold is deliberately generous (+35%) for the same
+#   reason — this catches "someone reintroduced per-event resolution", not
+#   micro-drift. Tighten it only with dedicated runners.
+# - The guarded set is small and named: the durable-append path and the reads
+#   the product's promises rest on. Guarding everything guards nothing.
+name: Bench gate
+
+on:
+  pull_request:
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/bench.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GUARDED: "BenchmarkAppendBatch100|BenchmarkScanTimeIndexSkipHeartbeats|BenchmarkFindEntities|BenchmarkGetNeighbors"
+      PKGS: "./internal/store/ ./internal/mcp/"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.4"
+
+      - name: Bench merge-base
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          git checkout --detach "$(git merge-base "origin/${BASE_REF}" HEAD)"
+          go test $PKGS -run 'XXX' -bench "$GUARDED" -count=8 -benchtime=50x | tee /tmp/base.txt
+          git checkout --detach "$HEAD_SHA"
+
+      - name: Bench head
+        run: |
+          go test $PKGS -run 'XXX' -bench "$GUARDED" -count=8 -benchtime=50x | tee /tmp/head.txt
+
+      - name: Compare
+        run: |
+          go install golang.org/x/perf/cmd/benchstat@latest
+          benchstat /tmp/base.txt /tmp/head.txt | tee /tmp/delta.txt
+          python3 - <<'PY'
+          import re, sys
+          fail = []
+          for line in open('/tmp/delta.txt'):
+              # benchstat rows look like: "Name-10  1.0ms ± 2%  1.4ms ± 3%  +35.71% (p=0.000 n=8)"
+              m = re.search(r'^(\S+)\s.*\+(\d+(?:\.\d+)?)%\s+\(p=(\d?\.\d+)', line)
+              if not m:
+                  continue
+              name, delta, p = m.group(1), float(m.group(2)), float(m.group(3))
+              if p < 0.05 and delta > 35.0:
+                  fail.append(f"{name}: +{delta}% (p={p})")
+              elif p < 0.05 and delta > 15.0:
+                  print(f"::warning::{name} regressed +{delta}% (p={p}) — under the gate, worth a look")
+          if fail:
+              print("::error::significant benchmark regression:")
+              for f in fail:
+                  print(f"::error::  {f}")
+              sys.exit(1)
+          print("bench gate: no significant regression above 35%")
+          PY

@@ -19,6 +19,7 @@ OTLP entity events are carried as OTLP **`LogRecord`s** over the logs service.
 | Protocol | OTLP/**gRPC** (logs service) |
 | Default address | `127.0.0.1:4317` (set via `otlp_listen`) |
 | Compression | uncompressed **and gzip** accepted — gzip is the OTel SDK default, so it works out of the box |
+| Max export size | **4 MiB** by default (gRPC's limit) — an oversized export is refused whole with `ResourceExhausted`; raise it with [`otlp_max_recv_bytes`](configuration.md#settings) |
 
 The ingest boundary is the single place where the OTel wire shape is translated
 into Toise's internal event model; everything downstream is Toise's own model.
