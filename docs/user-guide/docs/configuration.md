@@ -22,6 +22,7 @@ for the rationale.
 | --- | --- | --- | --- | --- |
 | `listen` | `TOISE_LISTEN` | `--listen` | `127.0.0.1:8080` | GraphQL/HTTP + MCP + debug UI address |
 | `otlp_listen` | `TOISE_OTLP_LISTEN` | `--otlp-listen` | `127.0.0.1:4317` | OTLP/gRPC ingestion address |
+| `otlp_max_recv_bytes` | `TOISE_OTLP_MAX_RECV_BYTES` | `--otlp-max-recv-bytes` | `0` *(= gRPC's 4 MiB)* | maximum size in bytes of one OTLP export accepted on ingest; an oversized export is refused whole (`ResourceExhausted`). Producers batching a large inventory must chunk below this. |
 | `data_dir` | `TOISE_DATA_DIR` | `--data-dir` | `toise-data` | Pebble event-log directory |
 | `relation_buffer_ttl` | `TOISE_RELATION_BUFFER_TTL` | `--relation-buffer-ttl` | `30s` | hold an out-of-order edge waiting for its endpoints (`0` = disabled) |
 | `liveness_sweep_interval` | `TOISE_LIVENESS_SWEEP_INTERVAL` | `--liveness-sweep-interval` | `30s` | how often to expire entities past their heartbeat interval (`0` = disabled) |

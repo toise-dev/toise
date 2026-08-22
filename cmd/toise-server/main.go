@@ -224,6 +224,11 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		logger.Info("OIDC verification enabled on read surfaces", "issuer", cfg.OIDCIssuer)
 	}
 	var grpcOpts []grpc.ServerOption
+	if cfg.OTLPMaxRecvBytes > 0 {
+		// The 4 MiB gRPC default refused a 5,000-host inventory sent as one
+		// export, whole, while nothing documented where batching stops (#351).
+		grpcOpts = append(grpcOpts, grpc.MaxRecvMsgSize(cfg.OTLPMaxRecvBytes))
+	}
 	if authn.Enabled() {
 		grpcOpts = append(grpcOpts,
 			grpc.UnaryInterceptor(authn.UnaryInterceptor()),

@@ -56,8 +56,15 @@ func (d Duration) MarshalYAML() (any, error) { return time.Duration(d).String(),
 // kebab-case form (e.g. RelationBufferTTL -> relation_buffer_ttl ->
 // TOISE_RELATION_BUFFER_TTL -> --relation-buffer-ttl).
 type Config struct {
-	Listen                string   `yaml:"listen"`
-	OTLPListen            string   `yaml:"otlp_listen"`
+	Listen     string `yaml:"listen"`
+	OTLPListen string `yaml:"otlp_listen"`
+	// OTLPMaxRecvBytes caps the size of one OTLP/gRPC export the ingest listener
+	// accepts. 0 keeps gRPC's 4 MiB default. The cap was undocumented and
+	// unconfigurable while the producer contract urged aggressive batching — a
+	// 5,000-host inventory in one export is ~10 MB and was refused whole (#351).
+	// The producer sees the ResourceExhausted error; nothing is silent. Raise it
+	// deliberately: one export is buffered in memory per in-flight request.
+	OTLPMaxRecvBytes      int      `yaml:"otlp_max_recv_bytes"`
 	DataDir               string   `yaml:"data_dir"`
 	MCPStdio              bool     `yaml:"mcp_stdio"`
 	RelationBufferTTL     Duration `yaml:"relation_buffer_ttl"`
@@ -440,6 +447,13 @@ func (c *Config) applyEnv(getenv func(string) string) error {
 		}
 		c.MaxTenants = n
 	}
+	if v := getenv("TOISE_OTLP_MAX_RECV_BYTES"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("invalid TOISE_OTLP_MAX_RECV_BYTES %q: %w", v, err)
+		}
+		c.OTLPMaxRecvBytes = n
+	}
 	if v := getenv("TOISE_MCP_STDIO"); v != "" {
 		b, err := strconv.ParseBool(v)
 		if err != nil {
@@ -628,6 +642,8 @@ func resolve(args []string, getenv func(string) string) (Config, error) {
 	configPath := fs.String("config", path, "path to a YAML config file (env: TOISE_CONFIG)")
 	listen := fs.String("listen", cfg.Listen, "address for the GraphQL/HTTP server (loopback by default; phase 1 has no auth)")
 	otlpListen := fs.String("otlp-listen", cfg.OTLPListen, "address for the OTLP/gRPC ingestion server")
+	otlpMaxRecvBytes := fs.Int("otlp-max-recv-bytes", cfg.OTLPMaxRecvBytes,
+		"maximum size in bytes of one OTLP export accepted on ingest (0 = gRPC's 4 MiB default)")
 	dataDir := fs.String("data-dir", cfg.DataDir, "directory for the Pebble event log")
 	mcpStdio := fs.Bool("mcp-stdio", cfg.MCPStdio, "serve only the MCP server over stdio (for Claude Desktop); no HTTP or OTLP servers")
 	relationBufferTTL := fs.Duration("relation-buffer-ttl", cfg.RelationBufferTTL.D(),
@@ -676,6 +692,7 @@ func resolve(args []string, getenv func(string) string) (Config, error) {
 	_ = *configPath // already consumed via configPathFromArgs; defined for --help and validation
 	cfg.Listen = *listen
 	cfg.OTLPListen = *otlpListen
+	cfg.OTLPMaxRecvBytes = *otlpMaxRecvBytes
 	cfg.DataDir = *dataDir
 	cfg.MCPStdio = *mcpStdio
 	cfg.RelationBufferTTL = Duration(*relationBufferTTL)
