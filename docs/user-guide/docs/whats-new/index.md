@@ -12,6 +12,16 @@ below. See the [API stability policy](../api-stability.md).
 
 ## Releases
 
+- [**0.16.0**](0.16.0.md) — 2026-09-01 — **the release that keeps its promises
+  at scale**: the incident-window reads answer in milliseconds on a
+  10,000-host estate (7.5 s → 21 ms, by classifying the time index so a read
+  skips what it excludes); every MCP answer carries a `graph` block declaring
+  its own scope and freshness — coverage, newest event, prune horizon, `as_of`;
+  operator annotations key on identity and travel through the shared object
+  store, so a cluster's nodes finally agree on them; and the resurrection
+  grace window, per-tenant retention, and the OTLP export size cap become
+  configuration instead of constants.
+
 - [**0.15.0**](0.15.0.md) — 2026-08-20 — **the release that answers**: the MCP
   server now carries `instructions`, the one guidance channel every client
   receives at initialize and which had been empty; every disappearance is glossed
