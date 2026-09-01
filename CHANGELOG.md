@@ -9,6 +9,123 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
+## [0.16.0] - 2026-09-01
+
+**The release that keeps its promises at scale.** The scale campaign measured a
+10,000-host estate and found the flagship read paying seconds for its noise; the
+consumer surveys settled response-level provenance as the blocker to trust; and a
+rolling-upgrade check found the annotation that prevents a total outage readable
+on one of the two nodes it protects. This release makes the existing promises
+hold: the incident window answers in milliseconds at fleet scale, every answer
+declares its own scope and freshness, the operator overlay survives replicas and
+re-minted ids, and three ceilings that were hard-coded constants become
+configuration. Contract delta is additive (one `graph` object on the read tools);
+no data migration — old annotation rows migrate on first touch, untagged
+time-index entries age out through retention.
+
+### Performance
+
+- **Change reads skip what they exclude** (#352). "What changed in the last
+  hour" at 10,000 hosts took 7.5 seconds on both `recent_changes` and
+  `graph_diff` — the cost was classifying millions of heartbeats one random
+  lookup and proto decode at a time, only to drop them. Each time-index entry
+  now carries a one-byte tag (change type plus the relation's structural flag),
+  so readers that exclude heartbeats — or filter by kind or change type — skip
+  an entry from the tag alone and touch the primary record only for events they
+  keep. Measured on the same 311,750-entity estate: a window holding 380,000
+  heartbeats and nothing else answers in **21 ms** on `recent_changes` (7,612 ms
+  before, `heartbeats_excluded` still exact) and **17 ms** on `graph_diff`
+  (7,562 ms before). A window of 611,750 real changes still costs seconds —
+  that is the answer being large, which is the principle: cost follows the
+  answer, not the noise. Pre-existing entries carry no tag; readers fall back
+  to resolving them, exactly the cost every entry paid before, and retention
+  ages the untagged format out on its own.
+
+### Added
+
+- **Every MCP read answer declares its own scope and freshness** (#356). Three
+  operator agents converged independently on the same blocker: a source that
+  does not state its own coverage and freshness cannot enter an arbitration
+  between disagreeing sources — it gets hand-verified once, then bypassed.
+  Every read tool's answer now carries a `graph` block: entity and relation
+  counts of the graph that answered, the newest event time in the tenant's log,
+  the oldest instant still answerable (the prune horizon), and the `as_of` when
+  the answer reads a past instant. Freshness dates the **log**, not the
+  projection, deliberately: a live graph over a stale log means the producers
+  stopped talking, and that is a finding the reader must see. An `as_of` fold
+  reports the folded counts, not the present's. The instructions' coverage
+  paragraph now points at the block, above all for empty answers — absence is
+  not evidence of absence, and the block is where an answer says how much
+  absence it can even speak for. Additive: one object, five fields, eleven read
+  tools, pinned by the golden.
+
+- **Per-tenant retention bounds** (#354). `retention_max_age` was one global
+  value, so a multi-tenant deployment could not sell differentiated history:
+  raising the bound for one tenant charged every tenant's disk for it.
+  `tenant_retention_max_age` takes `tenant:duration` pairs (the tenant-token
+  precedent); an unlisted tenant keeps the global bound, a listed one is pruned
+  to its own bound even when the global is unlimited. A malformed pair refuses
+  to boot rather than pruning someone's history to the wrong bound, and a zero
+  duration is refused because it would silently mean unlimited. The
+  storage-sizing guide now prices tenants individually.
+
+- **The resurrection grace window is tunable** (#353). The 15-minute window
+  during which a deleted identity keeps its logical id was a hard-coded
+  constant, rediscovered in the field as a suspected defect.
+  `resurrection_grace` (yaml / `TOISE_RESURRECTION_GRACE` /
+  `--resurrection-grace`) now sizes it: zero or absent keeps the built-in
+  default (zero-config posture byte-identical), negative disables the time
+  bound and leaves eviction to the cap. Applied uniformly to stacks opened at
+  boot and stacks minted later, pinned by tests — two tenants getting different
+  resurrection behavior from one config file is exactly the silent divergence
+  the knob must not introduce. The ingestion guide no longer claims the window
+  is fixed.
+
+- **The OTLP export size cap is configurable, and documented** (#355). The
+  4 MiB gRPC receive limit appeared in no documentation while the producer
+  contract urged aggressive batching — a 5,000-host inventory sent as one
+  export was refused whole. `otlp_max_recv_bytes` raises it deliberately
+  (0 keeps the gRPC default), and both the transport table and the
+  configuration reference state the cap and its failure mode, so a producer
+  learns where batching stops from the docs rather than from
+  `ResourceExhausted`.
+
+- **A benchmark gate makes the fast paths contractual** (#355). Every PR
+  touching Go runs four guarded benchmarks on merge-base and head on the same
+  runner; a statistically significant regression above threshold fails the
+  gate. The guarded set is small and named — the durable append and the reads
+  the product's promises rest on, including one that degrades by orders of
+  magnitude if per-event resolution ever returns to the windowed change read.
+  Thresholds are generous on purpose: a gate that cries wolf gets deleted.
+  `performance.md` now says what its benchmarks actually measure (the "10k
+  hosts" fixture is ~270 real hosts at the fleet's measured 37-entities-per-host
+  ratio) and records the fleet-scale numbers.
+
+- **Annotations travel through the shared object store** (#357). The operator
+  overlay was node-local: the HA reboot constraint was readable on one of the
+  two nodes it protects. When log shipping is enabled, each maintenance cycle
+  now also reconciles every tenant's annotation sidecar with the sink under
+  `annotations/<tenant>`, both directions, last-writer-wins by `UpdatedAt` —
+  zero new configuration, zero node-to-node coupling: the nodes never talk,
+  they meet at the object store, and a single-node deployment simply gains an
+  annotation backup. Deletions travel because a removal is now a **write** — a
+  tombstone with a fresh timestamp — otherwise a deleted annotation is
+  indistinguishable from one that never existed and resurrects from the shared
+  store on the next pull. Rows are named by the hex of their key; foreign
+  objects under the prefix are skipped, never allowed to wedge the sync.
+
+### Fixed
+
+- **Annotations key on identity, not on a logical id** (#349). Each replica
+  mints its own ids, so the same machine carries a different id on each node —
+  an overlay keyed that way cannot be shared, and it silently lost its rows
+  whenever an entity returned after the resurrection window under a fresh id.
+  Annotations now key on the identity fingerprint (ADR 0017), which every node
+  computes identically from the identifying attributes alone. Rows written
+  under the old scheme migrate on first touch — the lazy move writes before
+  deleting, so a crash between the two leaves a duplicate the next read
+  resolves, never a lost operator note.
+
 ## [0.15.0] - 2026-08-20
 
 **The release that answers.** Two operator agents worked a full day of

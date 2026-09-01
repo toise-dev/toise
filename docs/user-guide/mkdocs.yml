@@ -104,6 +104,7 @@ nav:
   - Troubleshooting: troubleshooting.md
   - What's new:
       - Overview: whats-new/index.md
+      - 0.16.0: whats-new/0.16.0.md
       - 0.15.0: whats-new/0.15.0.md
       - 0.14.0: whats-new/0.14.0.md
       - 0.13.0: whats-new/0.13.0.md
