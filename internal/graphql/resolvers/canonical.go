@@ -23,7 +23,10 @@ func (r *queryResolver) Canonical(ctx context.Context, id string, asOf *string) 
 	if err != nil {
 		return nil, err
 	}
-	root := model.EntityID(id)
+	root, ok := g.ResolveHandle(id)
+	if !ok {
+		return nil, nil
+	}
 	if _, ok, _ := g.GetEntity(root); !ok {
 		return nil, nil
 	}

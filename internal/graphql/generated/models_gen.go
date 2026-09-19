@@ -153,8 +153,16 @@ type ChangeFilter struct {
 // or service listener) aligned with the OpenTelemetry entity data model. The `id`
 // is a stable logical identifier that survives identity changes.
 type Entity struct {
-	// Stable logical identifier (a ULID). Survives identity changes.
+	// This replica's local identifier for the entity (a ULID). It differs between
+	// replicas and is re-minted when an entity returns after a long silence, so it
+	// is a detail of the answering node, not a durable reference — prefer
+	// `identityFingerprint` to carry between calls or to store (ADR 0035).
 	ID string `json:"id"`
+	// The handle that names the entity itself, derived from its type and
+	// identifying attributes. Every replica computes the same value without
+	// coordinating, so it survives a failover and a re-mint. Anywhere this schema
+	// takes an entity id it takes a fingerprint too (ADR 0035).
+	IdentityFingerprint string `json:"identityFingerprint"`
 	// Entity type, e.g. `host`, `process`, `network.interface`.
 	Type string `json:"type"`
 	// Identifying attributes — their values together identify the entity.
