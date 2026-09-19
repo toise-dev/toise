@@ -17,6 +17,7 @@ tool find_entities
       key string
       type string
       value string
+    identity_fingerprint string
     label string
     type string
   graph object
@@ -58,6 +59,7 @@ tool get_entity
       key string
       type string
       value string
+    identity_fingerprint string
     label string
     type string
   graph object
@@ -93,6 +95,7 @@ tool get_neighbors
       key string
       type string
       value string
+    identity_fingerprint string
     label string
     type string
     depth int
@@ -108,6 +111,7 @@ tool get_neighbors
         key string
         type string
         value string
+      identity_fingerprint string
       label string
       type string
     via_relation string
@@ -142,6 +146,7 @@ tool find_path
         key string
         type string
         value string
+      identity_fingerprint string
       label string
       type string
     via_relation string
@@ -174,6 +179,7 @@ tool impact_of
       key string
       type string
       value string
+    identity_fingerprint string
     label string
     type string
     depth int
@@ -189,6 +195,7 @@ tool impact_of
       key string
       type string
       value string
+    identity_fingerprint string
     label string
     type string
   summary string
@@ -227,6 +234,7 @@ tool entity_history
         key string
         type string
         value string
+      identity_fingerprint string
       label string
       type string
     event_id string
@@ -282,6 +290,7 @@ tool recent_changes
         key string
         type string
         value string
+      identity_fingerprint string
       label string
       type string
     event_id string
@@ -325,6 +334,7 @@ tool graph_diff
       key string
       type string
       value string
+    identity_fingerprint string
     label string
     type string
     changed_keys []string
@@ -340,6 +350,7 @@ tool graph_diff
       key string
       type string
       value string
+    identity_fingerprint string
     label string
     type string
   entities_deleted []object
@@ -353,6 +364,7 @@ tool graph_diff
       key string
       type string
       value string
+    identity_fingerprint string
     label string
     type string
     delete_reason string
@@ -368,6 +380,7 @@ tool graph_diff
       key string
       type string
       value string
+    identity_fingerprint string
     label string
     type string
     delete_reason string
@@ -485,6 +498,7 @@ tool telemetry_keys
       key string
       type string
       value string
+    identity_fingerprint string
     label string
     type string
   graph object

@@ -66,7 +66,7 @@ var ownerDirection = map[string]string{
 
 // TelemetryKeysInput names the entity.
 type TelemetryKeysInput struct {
-	EntityID string `json:"entity_id" jsonschema:"the entity whose telemetry join keys to derive"`
+	EntityID string `json:"entity_id" jsonschema:"the entity whose telemetry join keys to derive, by identity_fingerprint (preferred, stable across replicas) or id"`
 	AsOf     string `json:"as_of,omitempty" jsonschema:"RFC 3339 instant: derive the keys from the graph as it was then (event-time), instead of now"`
 }
 
@@ -95,9 +95,13 @@ func (s *Server) telemetryKeys(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 	if err != nil {
 		return nil, TelemetryKeysOutput{}, err
 	}
-	ent, ok, deleted := g.GetEntity(model.EntityID(in.EntityID))
+	entID, ok := g.ResolveHandle(in.EntityID)
 	if !ok {
-		return nil, TelemetryKeysOutput{}, fmt.Errorf("no entity found with id %q; use find_entities to discover ids", in.EntityID)
+		return nil, TelemetryKeysOutput{}, fmt.Errorf("no entity found for handle %q; use find_entities to discover entities", in.EntityID)
+	}
+	ent, ok, deleted := g.GetEntity(entID)
+	if !ok {
+		return nil, TelemetryKeysOutput{}, fmt.Errorf("no entity found for handle %q; use find_entities to discover entities", in.EntityID)
 	}
 
 	out := TelemetryKeysOutput{Entity: entityOut(ent, deleted)}
@@ -128,7 +132,7 @@ func (s *Server) telemetryKeys(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 	// host or device — walk one hop to the entity that OWNS this one and
 	// inherit its join keys (a listener gains its host's host.id via runs_on).
 	// Only ownership hops qualify; see ownerDirection.
-	edges := edgesOf(g, model.EntityID(in.EntityID), "")
+	edges := edgesOf(g, entID, "")
 	for i := range edges {
 		if ownerDirection[edges[i].rel.Type] != edges[i].direction {
 			continue

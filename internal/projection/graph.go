@@ -2,6 +2,7 @@ package projection
 
 import (
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -538,6 +539,43 @@ func (g *Graph) MatchTombstone(typ string, identity []model.KeyValue) (model.Ent
 		}
 	}
 	return id, true
+}
+
+// ResolveFingerprint finds the logical entity id an identity fingerprint names
+// (ADR 0035). The fingerprint is Entity.IdentityHash(): deterministic, so every
+// node computes the same value for the same entity without coordinating, where
+// a logical id is node-local and incarnation-scoped.
+//
+// Soft-deleted entities resolve too, so a fingerprint reaches exactly what its
+// logical id reaches — a tombstone stays readable by id until it is pruned, and
+// a handle that resolved one way but not the other would be a trap of its own.
+func (g *Graph) ResolveFingerprint(fingerprint string) (model.EntityID, bool) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	if id, ok := g.byHash[fingerprint]; ok {
+		return id, true
+	}
+	if id, ok := g.tombByHash[fingerprint]; ok {
+		return id, true
+	}
+	return "", false
+}
+
+// ResolveHandle resolves a consumer-supplied entity handle — an identity
+// fingerprint or a logical id — to a logical id (ADR 0035).
+//
+// The two namespaces cannot collide: a fingerprint is its entity type, a colon,
+// then hex, and a ULID is Crockford base32, which has no colon. So one argument
+// accepts both and no read surface needs a second one.
+//
+// A handle that is not a fingerprint passes through unresolved: whether that id
+// exists is the caller's own lookup, exactly as before this existed.
+func (g *Graph) ResolveHandle(handle string) (model.EntityID, bool) {
+	if !strings.Contains(handle, ":") {
+		return model.EntityID(handle), true
+	}
+	return g.ResolveFingerprint(handle)
 }
 
 // SnapshotEvents returns synthetic create/add events that, applied in order to a

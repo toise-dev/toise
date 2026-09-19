@@ -15,7 +15,7 @@ import (
 
 // AnnotateEntityInput sets operator annotations on an entity.
 type AnnotateEntityInput struct {
-	EntityID    string            `json:"entity_id" jsonschema:"the logical entity id to annotate"`
+	EntityID    string            `json:"entity_id" jsonschema:"the entity to annotate, by identity_fingerprint (preferred, stable across replicas) or id"`
 	Annotations map[string]string `json:"annotations" jsonschema:"key/value notes to merge onto the entity; an empty value removes that key"`
 }
 
@@ -52,11 +52,15 @@ func (s *Server) annotateEntity(ctx context.Context, _ *mcpsdk.CallToolRequest, 
 	if len(in.Annotations) == 0 {
 		return nil, AnnotateEntityOutput{}, fmt.Errorf("at least one annotation key is required (an empty value removes a key)")
 	}
-	e, ok, _ := s.graph.GetEntity(model.EntityID(in.EntityID))
+	entID, ok := s.graph.ResolveHandle(in.EntityID)
 	if !ok {
-		return nil, AnnotateEntityOutput{}, fmt.Errorf("no entity with id %q; annotate a known entity (use find_entities)", in.EntityID)
+		return nil, AnnotateEntityOutput{}, fmt.Errorf("no entity for handle %q; annotate a known entity (use find_entities)", in.EntityID)
 	}
-	a, err := s.ann.SetAt(e.IdentityHash(), in.EntityID, in.Annotations, "", s.now())
+	e, ok, _ := s.graph.GetEntity(entID)
+	if !ok {
+		return nil, AnnotateEntityOutput{}, fmt.Errorf("no entity for handle %q; annotate a known entity (use find_entities)", in.EntityID)
+	}
+	a, err := s.ann.SetAt(e.IdentityHash(), string(entID), in.Annotations, "", s.now())
 	if err != nil {
 		return nil, AnnotateEntityOutput{}, err
 	}

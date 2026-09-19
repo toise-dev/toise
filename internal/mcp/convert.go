@@ -20,12 +20,13 @@ type Attribute struct {
 // summary derived from the identifying attributes so the model can refer to the
 // entity without re-deriving it.
 type Entity struct {
-	ID         string      `json:"id" jsonschema:"the stable logical entity id (a ULID), stable across identity changes"`
-	Type       string      `json:"type" jsonschema:"the entity type, e.g. host, process, network_interface"`
-	Label      string      `json:"label" jsonschema:"a short human-readable label derived from the identifying attributes"`
-	Identity   []Attribute `json:"identity,omitempty" jsonschema:"the identifying attributes that together identify this entity; omitted in compact verbosity"`
-	Attributes []Attribute `json:"attributes,omitempty" jsonschema:"descriptive, non-identifying attributes; omitted in compact verbosity"`
-	Deleted    bool        `json:"deleted" jsonschema:"true if the entity has been observed deleted"`
+	ID                  string      `json:"id" jsonschema:"this replica's local id for the entity (a ULID); it differs between replicas and is re-minted after a long silence, so prefer identity_fingerprint to carry between calls"`
+	IdentityFingerprint string      `json:"identity_fingerprint" jsonschema:"the handle that names the entity itself, derived from its identifying attributes; every replica computes the same one, and any tool taking an entity id takes this instead"`
+	Type                string      `json:"type" jsonschema:"the entity type, e.g. host, process, network_interface"`
+	Label               string      `json:"label" jsonschema:"a short human-readable label derived from the identifying attributes"`
+	Identity            []Attribute `json:"identity,omitempty" jsonschema:"the identifying attributes that together identify this entity; omitted in compact verbosity"`
+	Attributes          []Attribute `json:"attributes,omitempty" jsonschema:"descriptive, non-identifying attributes; omitted in compact verbosity"`
+	Deleted             bool        `json:"deleted" jsonschema:"true if the entity has been observed deleted"`
 }
 
 // Relation is a typed directed edge rendered for an LLM.
@@ -138,10 +139,11 @@ func entityOut(e model.Entity, deleted bool) Entity {
 // then re-fetches one in full. Full is the default and unchanged.
 func entityOutV(e model.Entity, deleted, compact bool) Entity {
 	out := Entity{
-		ID:      string(e.ID),
-		Type:    e.Type,
-		Label:   label(e),
-		Deleted: deleted,
+		ID:                  string(e.ID),
+		IdentityFingerprint: e.IdentityHash(),
+		Type:                e.Type,
+		Label:               label(e),
+		Deleted:             deleted,
 	}
 	if !compact {
 		out.Identity = attrsOut(e.Identity)

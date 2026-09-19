@@ -29,6 +29,20 @@ func (g *fakeGraph) GetEntity(id model.EntityID) (model.Entity, bool, bool) {
 	return e, ok, g.deleted[id]
 }
 
+// ResolveHandle mirrors projection.Graph: a fingerprint is matched against the
+// entities held, anything else passes through as a logical id (ADR 0035).
+func (g *fakeGraph) ResolveHandle(handle string) (model.EntityID, bool) {
+	if !strings.Contains(handle, ":") {
+		return model.EntityID(handle), true
+	}
+	for id, e := range g.entities {
+		if e.IdentityHash() == handle {
+			return id, true
+		}
+	}
+	return "", false
+}
+
 func (g *fakeGraph) ListEntities(typ string) []model.Entity {
 	var out []model.Entity
 	for id, e := range g.entities {
