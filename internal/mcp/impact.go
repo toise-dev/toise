@@ -15,7 +15,7 @@ import (
 
 // ImpactOfInput names the failed (or hypothetically failing) entity.
 type ImpactOfInput struct {
-	EntityID string `json:"entity_id" jsonschema:"the entity whose failure to propagate, by identity_fingerprint (preferred, stable across replicas) or id"`
+	EntityID string `json:"entity_id" jsonschema:"the entity whose failure to propagate, by identity_fingerprint (preferred, stable across replicas), by identity written inline as type:key=value, or by id"`
 	MaxDepth int    `json:"max_depth,omitempty" jsonschema:"how many propagation hops to follow, 1 to 10 (default 10)"`
 	Limit    int    `json:"limit,omitempty" jsonschema:"maximum impacted entities to return (default 50, max 200); totals always cover everything"`
 	AsOf     string `json:"as_of,omitempty" jsonschema:"RFC 3339 instant: propagate through the graph as it was then (event-time), instead of now"`

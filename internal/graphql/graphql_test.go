@@ -692,3 +692,35 @@ func TestEntityFingerprintIsServedAndAccepted(t *testing.T) {
 		t.Errorf("type = %q, want host", second.Entity.Type)
 	}
 }
+
+// The identity a client already holds reaches the entity in one call, with no
+// lookup first (ADR 0035, #370).
+func TestEntityByInlineIdentity(t *testing.T) {
+	s := newStack(t)
+	c := s.client(t)
+
+	var first struct {
+		Entity struct {
+			ID       string
+			Type     string
+			Identity []struct{ Key, Value string }
+		}
+	}
+	c.MustPost(`query($id:ID!){ entity(id:$id){ id type identity{ key value } } }`, &first, client.Var("id", string(s.hostID)))
+	if len(first.Entity.Identity) == 0 {
+		t.Fatal("the test host has no identifying attributes")
+	}
+	pairs := make([]string, 0, len(first.Entity.Identity))
+	for _, kv := range first.Entity.Identity {
+		pairs = append(pairs, kv.Key+"="+kv.Value)
+	}
+	handle := first.Entity.Type + ":" + strings.Join(pairs, ",")
+
+	var byIdentity struct {
+		Entity struct{ ID string }
+	}
+	c.MustPost(`query($id:ID!){ entity(id:$id){ id } }`, &byIdentity, client.Var("id", handle))
+	if byIdentity.Entity.ID != string(s.hostID) {
+		t.Errorf("identity handle %q resolved to %q, want %q", handle, byIdentity.Entity.ID, s.hostID)
+	}
+}

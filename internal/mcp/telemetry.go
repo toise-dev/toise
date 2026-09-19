@@ -66,7 +66,7 @@ var ownerDirection = map[string]string{
 
 // TelemetryKeysInput names the entity.
 type TelemetryKeysInput struct {
-	EntityID string `json:"entity_id" jsonschema:"the entity whose telemetry join keys to derive, by identity_fingerprint (preferred, stable across replicas) or id"`
+	EntityID string `json:"entity_id" jsonschema:"the entity whose telemetry join keys to derive, by identity_fingerprint (preferred, stable across replicas), by identity written inline as type:key=value, or by id"`
 	AsOf     string `json:"as_of,omitempty" jsonschema:"RFC 3339 instant: derive the keys from the graph as it was then (event-time), instead of now"`
 }
 

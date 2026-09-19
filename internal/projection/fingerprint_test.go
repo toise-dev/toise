@@ -118,3 +118,70 @@ func containsColon(s string) bool {
 	}
 	return false
 }
+
+// The third handle form: the identity a consumer already holds, so it reaches
+// the entity in one call instead of search-then-fetch (ADR 0035, #370).
+func TestResolveHandleAcceptsAnIdentity(t *testing.T) {
+	g := New()
+	id := model.NewEntityID()
+	g.Apply(entityCreated(id, model.TypeHost, kv("host.id", "h1")))
+
+	if got, ok := g.ResolveHandle("host:host.id=h1"); !ok || got != id {
+		t.Errorf("ResolveHandle(identity) = %q, %v; want %q, true", got, ok, id)
+	}
+	if _, ok := g.ResolveHandle("host:host.id=nope"); ok {
+		t.Error("an identity naming nothing resolved")
+	}
+	if _, ok := g.ResolveHandle("container:host.id=h1"); ok {
+		t.Error("an identity resolved against the wrong entity type")
+	}
+}
+
+// Identity is matched exactly (ADR 0018): a subset of the identifying
+// attributes is a different identity, never a tolerant match.
+func TestResolveIdentityIsExact(t *testing.T) {
+	g := New()
+	id := model.NewEntityID()
+	g.Apply(entityCreated(id, model.TypeServiceListener,
+		kv("service.endpoint", "h1:80/tcp"), kv("network.transport", "tcp")))
+
+	full := map[string]string{"service.endpoint": "h1:80/tcp", "network.transport": "tcp"}
+	if got, ok := g.ResolveIdentity(model.TypeServiceListener, full); !ok || got != id {
+		t.Errorf("full identity = %q, %v; want %q, true", got, ok, id)
+	}
+	partial := map[string]string{"service.endpoint": "h1:80/tcp"}
+	if _, ok := g.ResolveIdentity(model.TypeServiceListener, partial); ok {
+		t.Error("a partial identity matched; exact matching (ADR 0018) forbids it")
+	}
+}
+
+// A multi-key identity written inline keeps working, and a value carrying a
+// colon (service.endpoint does) is not mistaken for a handle separator.
+func TestResolveHandleIdentityWithColonInValue(t *testing.T) {
+	g := New()
+	id := model.NewEntityID()
+	g.Apply(entityCreated(id, model.TypeServiceListener,
+		kv("service.endpoint", "h1:80/tcp"), kv("network.transport", "tcp")))
+
+	got, ok := g.ResolveHandle("service.listener:service.endpoint=h1:80/tcp,network.transport=tcp")
+	if !ok || got != id {
+		t.Errorf("ResolveHandle(multi-key identity) = %q, %v; want %q, true", got, ok, id)
+	}
+}
+
+// An identity whose value is not a string still resolves: the fast hash path
+// misses and the bounded fallback finds it.
+func TestResolveIdentityNonStringValue(t *testing.T) {
+	g := New()
+	id := model.NewEntityID()
+	g.Apply(model.Event{Entity: &model.EntityEvent{
+		ChangeType: model.EntityCreated,
+		Entity: model.Entity{ID: id, Type: model.TypeHost, Identity: []model.KeyValue{
+			{Key: "host.id", Value: model.IntValue(42)},
+		}},
+	}})
+
+	if got, ok := g.ResolveIdentity(model.TypeHost, map[string]string{"host.id": "42"}); !ok || got != id {
+		t.Errorf("non-string identity = %q, %v; want %q, true", got, ok, id)
+	}
+}

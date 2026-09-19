@@ -15,7 +15,7 @@ import (
 
 // AnnotateEntityInput sets operator annotations on an entity.
 type AnnotateEntityInput struct {
-	EntityID    string            `json:"entity_id" jsonschema:"the entity to annotate, by identity_fingerprint (preferred, stable across replicas) or id"`
+	EntityID    string            `json:"entity_id" jsonschema:"the entity to annotate, by identity_fingerprint (preferred, stable across replicas), by identity written inline as type:key=value, or by id"`
 	Annotations map[string]string `json:"annotations" jsonschema:"key/value notes to merge onto the entity; an empty value removes that key"`
 }
 

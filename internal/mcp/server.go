@@ -28,8 +28,9 @@ const (
 // state from (ADR 0008). The concrete *projection.Graph satisfies it.
 type Graph interface {
 	GetEntity(id model.EntityID) (model.Entity, bool, bool)
-	// ResolveHandle turns a consumer-supplied handle — an identity fingerprint
-	// or a logical id — into a logical id (ADR 0035).
+	// ResolveHandle turns a consumer-supplied handle — an identity fingerprint,
+	// an identity written inline as type:key=value, or a logical id — into a
+	// logical id (ADR 0035).
 	ResolveHandle(handle string) (model.EntityID, bool)
 	ListEntities(typ string) []model.Entity
 	ListRelations(typ string, from, to model.EntityID) []model.Relation
@@ -171,7 +172,7 @@ Do NOT investigate a past incident by asking recent_changes for a wide window: t
 READING A DISAPPEARANCE — the trap that has produced confidently wrong conclusions:
 Deletions carry delete_source, glossed in plain language in the "disappearance" field. NONE of its values means a human deleted anything. producer = the producer reported it gone. liveness_expiry = the producer went silent, and the thing may still be running. cascade = something it touched died. Never report an operator action, a rename, or a manual removal from a disappearance alone.
 
-HANDLES: every entity carries two. identity_fingerprint names the entity itself — every replica computes the same one, and it is the handle to carry between calls and to store. id is a local detail: it differs between replicas and is re-minted if an entity comes back after more than 15 minutes of silence, so an id held across a failover or an outage resolves to nothing. Anywhere a tool takes an entity id it takes a fingerprint too; prefer the fingerprint. When neither resolves, re-resolve from the real identity (host.id, container.id, service.instance.id) with find_entities.
+HANDLES: every entity carries two. identity_fingerprint names the entity itself — every replica computes the same one, and it is the handle to carry between calls and to store. id is a local detail: it differs between replicas and is re-minted if an entity comes back after more than 15 minutes of silence, so an id held across a failover or an outage resolves to nothing. Anywhere a tool takes an entity id it takes two other forms: the fingerprint (prefer it), and the identity you already hold, written inline as type:key=value (e.g. host:host.id=abc, or service.listener:service.endpoint=h1:80/tcp,network.transport=tcp for a multi-key identity) — that one saves you the find_entities call entirely. When neither resolves, re-resolve from the real identity (host.id, container.id, service.instance.id) with find_entities.
 
 TOPOLOGY IS TRAVERSED, NOT LISTED: an address is not an attribute of a host — it is a network.address entity two hops away (host -has_interface-> network.interface <-bound_to- network.address). Use get_neighbors with depth 2 rather than concluding the address is missing. Same shape for anything that can be multiple and mutable.
 

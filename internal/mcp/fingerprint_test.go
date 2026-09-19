@@ -96,3 +96,32 @@ func TestFingerprintIsTheSameAcrossNodes(t *testing.T) {
 		t.Error("the same entity got different fingerprints on two nodes")
 	}
 }
+
+// A consumer that holds a real-world identity reaches the entity in one call,
+// with no find_entities first (ADR 0035, #370).
+func TestToolsAcceptAnInlineIdentity(t *testing.T) {
+	s := newTestServer()
+	ctx := context.Background()
+
+	_, byID, err := s.getEntity(ctx, nil, GetEntityInput{EntityID: "01HOST_WEB"})
+	if err != nil {
+		t.Fatalf("getEntity by id: %v", err)
+	}
+	pairs := make([]string, 0, len(byID.Entity.Identity))
+	for _, a := range byID.Entity.Identity {
+		pairs = append(pairs, a.Key+"="+a.Value)
+	}
+	handle := byID.Entity.Type + ":" + strings.Join(pairs, ",")
+
+	_, byIdentity, err := s.getEntity(ctx, nil, GetEntityInput{EntityID: handle})
+	if err != nil {
+		t.Fatalf("getEntity by identity %q: %v", handle, err)
+	}
+	if byIdentity.Entity.ID != byID.Entity.ID {
+		t.Errorf("identity handle resolved to %q, want %q", byIdentity.Entity.ID, byID.Entity.ID)
+	}
+
+	if _, _, err := s.getEntity(ctx, nil, GetEntityInput{EntityID: "host:host.id=nothing-here"}); err == nil {
+		t.Error("an identity naming nothing did not error")
+	}
+}

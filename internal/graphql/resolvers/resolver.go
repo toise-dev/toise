@@ -39,8 +39,9 @@ type EventReader interface {
 // Graph is the subset of the projection the resolvers read current state from.
 type Graph interface {
 	GetEntity(id model.EntityID) (model.Entity, bool, bool)
-	// ResolveHandle turns a client-supplied handle — an identity fingerprint or
-	// a logical id — into a logical id (ADR 0035).
+	// ResolveHandle turns a client-supplied handle — an identity fingerprint, an
+	// identity written inline as type:key=value, or a logical id — into a
+	// logical id (ADR 0035).
 	ResolveHandle(handle string) (model.EntityID, bool)
 	ListEntities(typ string) []model.Entity
 	ListRelations(typ string, from, to model.EntityID) []model.Relation

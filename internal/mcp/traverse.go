@@ -49,8 +49,8 @@ func edgesOf(g Graph, id model.EntityID, relType string) []edge {
 
 // FindPathInput names the two endpoints.
 type FindPathInput struct {
-	FromID       string `json:"from_id" jsonschema:"the start entity, by identity_fingerprint (preferred) or id"`
-	ToID         string `json:"to_id" jsonschema:"the destination entity, by identity_fingerprint (preferred) or id"`
+	FromID       string `json:"from_id" jsonschema:"the start entity, by identity_fingerprint (preferred), by identity written inline as type:key=value, or by id"`
+	ToID         string `json:"to_id" jsonschema:"the destination entity, by identity_fingerprint (preferred), by identity written inline as type:key=value, or by id"`
 	RelationType string `json:"relation_type,omitempty" jsonschema:"only traverse relations of this type (omit to traverse any)"`
 	MaxDepth     int    `json:"max_depth,omitempty" jsonschema:"maximum hops to explore, 1 to 10 (default 10)"`
 	AsOf         string `json:"as_of,omitempty" jsonschema:"RFC 3339 instant: search the graph as it was then (event-time), instead of now"`

@@ -843,8 +843,9 @@ enum ChangeType {
 
 """
 An infrastructure entity (a host, process, network interface, address, route,
-or service listener) aligned with the OpenTelemetry entity data model. The ` + "`" + `id` + "`" + `
-is a stable logical identifier that survives identity changes.
+or service listener) aligned with the OpenTelemetry entity data model. It
+carries two handles: ` + "`" + `identityFingerprint` + "`" + `, which names the entity itself and
+is the one to keep, and ` + "`" + `id` + "`" + `, which is local to the answering replica.
 """
 type Entity {
   """
@@ -858,7 +859,9 @@ type Entity {
   The handle that names the entity itself, derived from its type and
   identifying attributes. Every replica computes the same value without
   coordinating, so it survives a failover and a re-mint. Anywhere this schema
-  takes an entity id it takes a fingerprint too (ADR 0035).
+  takes an entity id it also takes a fingerprint, and the identity itself
+  written inline as ` + "`" + `type:key=value` + "`" + ` (comma-separated for a multi-key
+  identity) — which reaches the entity without a lookup first (ADR 0035).
   """
   identityFingerprint: String!
   "Entity type, e.g. ` + "`" + `host` + "`" + `, ` + "`" + `process` + "`" + `, ` + "`" + `network.interface` + "`" + `."

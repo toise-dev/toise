@@ -562,20 +562,82 @@ func (g *Graph) ResolveFingerprint(fingerprint string) (model.EntityID, bool) {
 	return "", false
 }
 
-// ResolveHandle resolves a consumer-supplied entity handle — an identity
-// fingerprint or a logical id — to a logical id (ADR 0035).
+// ResolveIdentity finds the entity a real-world identity names: an entity type
+// and the identifying attributes a consumer already holds, such as
+// host + {host.id: "..."} (ADR 0035). It is what spares a consumer the
+// search-then-fetch round trip that teaches it to cache ids in the first place.
 //
-// The two namespaces cannot collide: a fingerprint is its entity type, a colon,
-// then hex, and a ULID is Crockford base32, which has no colon. So one argument
-// accepts both and no read surface needs a second one.
+// The fast path is the same exact identity hash the ingest path uses, with the
+// values read as strings — which is what every identifying attribute in the
+// vocabulary actually is. An identity keyed on a non-string value (a producer
+// may emit one) misses that hash, so the fallback compares canonical display
+// strings within the entity type. The cost is stated rather than discovered:
+// the fallback scans one type's entities, the same scan find_entities performs,
+// and only when the O(1) path has already missed.
+func (g *Graph) ResolveIdentity(typ string, identity map[string]string) (model.EntityID, bool) {
+	if typ == "" || len(identity) == 0 {
+		return "", false
+	}
+	kvs := make([]model.KeyValue, 0, len(identity))
+	for k, v := range identity {
+		kvs = append(kvs, model.KeyValue{Key: k, Value: model.StringValue(v)})
+	}
+	if id, ok := g.ResolveFingerprint(model.Entity{Type: typ, Identity: kvs}.IdentityHash()); ok {
+		return id, true
+	}
+
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	for id := range g.byType[typ] {
+		e, ok := g.entities[id]
+		if !ok || len(e.Identity) != len(identity) {
+			continue
+		}
+		match := true
+		for _, kv := range e.Identity {
+			want, given := identity[kv.Key]
+			if !given || kv.Value.Display() != want {
+				match = false
+				break
+			}
+		}
+		if match {
+			return id, true
+		}
+	}
+	return "", false
+}
+
+// ResolveHandle resolves a consumer-supplied entity handle to a logical id
+// (ADR 0035). Three forms, and they cannot be confused for one another:
 //
-// A handle that is not a fingerprint passes through unresolved: whether that id
+//   - a logical id — no colon, since a ULID is Crockford base32;
+//   - an identity fingerprint, "type:hex" — a colon and no "=";
+//   - an identity, "type:key=value" or "type:k1=v1,k2=v2" — a colon and a "=".
+//
+// One argument therefore takes all three and no read surface needs a second
+// one. A value containing a comma cannot be written in the third form; that is
+// what find_entities is for.
+//
+// A handle that is none of these passes through unresolved: whether that id
 // exists is the caller's own lookup, exactly as before this existed.
 func (g *Graph) ResolveHandle(handle string) (model.EntityID, bool) {
-	if !strings.Contains(handle, ":") {
+	typ, rest, hasColon := strings.Cut(handle, ":")
+	switch {
+	case !hasColon:
 		return model.EntityID(handle), true
+	case !strings.Contains(rest, "="):
+		return g.ResolveFingerprint(handle)
 	}
-	return g.ResolveFingerprint(handle)
+	identity := make(map[string]string)
+	for _, pair := range strings.Split(rest, ",") {
+		k, v, ok := strings.Cut(pair, "=")
+		if !ok || k == "" {
+			return "", false
+		}
+		identity[k] = v
+	}
+	return g.ResolveIdentity(typ, identity)
 }
 
 // SnapshotEvents returns synthetic create/add events that, applied in order to a
