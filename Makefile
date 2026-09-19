@@ -55,9 +55,10 @@ lint: ## Run golangci-lint (root module + the pkg/emit SDK module)
 	golangci-lint run ./...
 	cd pkg/emit && golangci-lint run ./...
 
-fmt: ## Format the code (gofmt -s + goimports)
-	gofmt -s -w .
-	goimports -w -local github.com/toise-dev/toise .
+fmt: ## Format the code (gofmt -s + goimports), leaving generated files alone
+	@files=$$(find . -name '*.go' -not -path './.git/*' | xargs grep -L '^// Code generated .* DO NOT EDIT\.$$'); \
+	gofmt -s -w $$files; \
+	goimports -w -local github.com/toise-dev/toise $$files
 
 tidy: ## Tidy go.mod / go.sum (both modules)
 	go mod tidy
