@@ -4,7 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 
 	toisev1 "github.com/toise-dev/toise/proto/toise/v1"
@@ -61,21 +61,41 @@ const (
 // (keys sorted, values type-tagged) so the result is stable regardless of input
 // order and unambiguous across value types. See ADR 0017.
 func (e Entity) IdentityHash() string {
-	kvs := make([]KeyValue, len(e.Identity))
-	copy(kvs, e.Identity)
-	sort.Slice(kvs, func(i, j int) bool { return kvs[i].Key < kvs[j].Key })
-
-	var b strings.Builder
-	b.WriteString(e.Type)
-	b.WriteString(sepRecord)
-	for _, kv := range kvs {
-		b.WriteString(kv.Key)
-		b.WriteString(sepField)
-		b.WriteString(kv.Value.canonical())
-		b.WriteString(sepRecord)
+	// Hot in both directions: every ingested observation hashes to find its
+	// entity, and every rendered entity carries its fingerprint. The encoding is
+	// byte-for-byte what it has always been — stored hashes depend on it — but
+	// it is built on the stack for the shapes that actually occur (few keys,
+	// short values) instead of through a chain of temporary strings.
+	var idents [4]KeyValue
+	kvs := idents[:0]
+	if len(e.Identity) > cap(kvs) {
+		kvs = make([]KeyValue, 0, len(e.Identity))
 	}
-	sum := sha256.Sum256([]byte(b.String()))
-	return e.Type + ":" + hex.EncodeToString(sum[:idHashBytes])
+	kvs = append(kvs, e.Identity...)
+	if len(kvs) > 1 {
+		slices.SortFunc(kvs, func(a, b KeyValue) int { return strings.Compare(a.Key, b.Key) })
+	}
+
+	var scratch [256]byte
+	buf := scratch[:0]
+	buf = append(buf, e.Type...)
+	buf = append(buf, sepRecord...)
+	for _, kv := range kvs {
+		buf = append(buf, kv.Key...)
+		buf = append(buf, sepField...)
+		buf = kv.Value.appendCanonical(buf)
+		buf = append(buf, sepRecord...)
+	}
+	sum := sha256.Sum256(buf)
+
+	var hexed [idHashBytes * 2]byte
+	hex.Encode(hexed[:], sum[:idHashBytes])
+	var sb strings.Builder
+	sb.Grow(len(e.Type) + 1 + len(hexed))
+	sb.WriteString(e.Type)
+	sb.WriteByte(':')
+	sb.Write(hexed[:])
+	return sb.String()
 }
 
 // Validate checks the entity's structural invariants, including vocabulary
