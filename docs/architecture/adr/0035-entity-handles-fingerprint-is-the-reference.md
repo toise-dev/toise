@@ -1,6 +1,6 @@
 # 35. Entity handles: the identity fingerprint is the consumer's reference
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-09-19
 - Amends: [ADR 0017](0017-entity-identity-and-stability.md) (which reference
   consumers hold), within [ADR 0029](0029-resilience-and-high-availability.md)
