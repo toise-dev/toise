@@ -65,7 +65,7 @@ func (s *Server) findEntities(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 
 // GetEntityInput names the entity to fetch.
 type GetEntityInput struct {
-	EntityID  string `json:"entity_id" jsonschema:"the logical entity id to fetch"`
+	EntityID  string `json:"entity_id" jsonschema:"the entity to fetch, by identity_fingerprint (preferred, stable across replicas), by identity written inline as type:key=value, or by id"`
 	AsOf      string `json:"as_of,omitempty" jsonschema:"RFC 3339 instant: read the entity as it was then (event-time), instead of now"`
 	Verbosity string `json:"verbosity,omitempty" jsonschema:"compact returns only id/type/label; full (default) adds identity and attributes"`
 }
@@ -91,15 +91,19 @@ func (s *Server) getEntity(ctx context.Context, _ *mcpsdk.CallToolRequest, in Ge
 	if err != nil {
 		return nil, GetEntityOutput{}, err
 	}
-	e, ok, deleted := g.GetEntity(model.EntityID(in.EntityID))
+	id, ok := g.ResolveHandle(in.EntityID)
 	if !ok {
-		return nil, GetEntityOutput{}, fmt.Errorf("no entity found with id %q; use find_entities to discover ids — if it was deleted a while ago its tombstone may have been evicted, but entity_history still has its past", in.EntityID)
+		return nil, GetEntityOutput{}, fmt.Errorf("no entity found for handle %q; use find_entities to discover entities — if it was deleted a while ago its tombstone may have been evicted, but entity_history still has its past", in.EntityID)
+	}
+	e, ok, deleted := g.GetEntity(id)
+	if !ok {
+		return nil, GetEntityOutput{}, fmt.Errorf("no entity found for handle %q; use find_entities to discover entities — if it was deleted a while ago its tombstone may have been evicted, but entity_history still has its past", in.EntityID)
 	}
 	return nil, GetEntityOutput{
 		Graph:       s.graphMeta(g, in.AsOf),
 		Entity:      entityOutV(e, deleted, compact),
-		Annotations: s.annotationFor(in.EntityID),
-		Canonical:   s.canonicalGroup(g, model.EntityID(in.EntityID)),
+		Annotations: s.annotationFor(string(id)),
+		Canonical:   s.canonicalGroup(g, id),
 	}, nil
 }
 
@@ -107,7 +111,7 @@ func (s *Server) getEntity(ctx context.Context, _ *mcpsdk.CallToolRequest, in Ge
 
 // GetNeighborsInput parameterises the traversal.
 type GetNeighborsInput struct {
-	EntityID     string `json:"entity_id" jsonschema:"the entity to traverse outward from"`
+	EntityID     string `json:"entity_id" jsonschema:"the entity to traverse outward from, by identity_fingerprint (preferred, stable across replicas), by identity written inline as type:key=value, or by id"`
 	RelationType string `json:"relation_type,omitempty" jsonschema:"only follow relations of this type (omit to follow any)"`
 	MaxDepth     int    `json:"max_depth,omitempty" jsonschema:"how many relation hops to traverse, 1 to 5 (default 1); same name as find_path and impact_of"`
 	Limit        int    `json:"limit,omitempty" jsonschema:"maximum neighbors to return (default 50, max 200); the closest are kept and totals always cover everything"`
@@ -157,9 +161,12 @@ func (s *Server) getNeighbors(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 	if err != nil {
 		return nil, GetNeighborsOutput{}, err
 	}
-	start := model.EntityID(in.EntityID)
+	start, ok := g.ResolveHandle(in.EntityID)
+	if !ok {
+		return nil, GetNeighborsOutput{}, fmt.Errorf("no entity found for handle %q; use find_entities to discover entities", in.EntityID)
+	}
 	if _, ok, _ := g.GetEntity(start); !ok {
-		return nil, GetNeighborsOutput{}, fmt.Errorf("no entity found with id %q; use find_entities to discover ids", in.EntityID)
+		return nil, GetNeighborsOutput{}, fmt.Errorf("no entity found for handle %q; use find_entities to discover entities", in.EntityID)
 	}
 	// BFS through the edge view so each neighbor carries how it was reached;
 	// the first (shallowest) edge to reach an entity wins, like a shortest path.
@@ -212,7 +219,7 @@ func (s *Server) getNeighbors(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 
 // EntityHistoryInput bounds the timeline.
 type EntityHistoryInput struct {
-	EntityID  string `json:"entity_id" jsonschema:"the entity whose timeline to return"`
+	EntityID  string `json:"entity_id" jsonschema:"the entity whose timeline to return, by identity_fingerprint (preferred, stable across replicas), by identity written inline as type:key=value, or by id"`
 	Since     string `json:"since,omitempty" jsonschema:"RFC 3339 lower bound on event-time (inclusive)"`
 	Until     string `json:"until,omitempty" jsonschema:"RFC 3339 upper bound on event-time (inclusive)"`
 	AsKnownAt string `json:"as_known_at,omitempty" jsonschema:"RFC 3339 audit cut-off: include only changes Toise had recorded by this instant"`
@@ -252,7 +259,15 @@ func (s *Server) entityHistory(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 		return nil, EntityHistoryOutput{}, err
 	}
 	limit := clampLimit(in.Limit)
-	evs, err := s.store.ReadByEntity(ctx, model.EntityID(in.EntityID))
+	// History is read from the log by id, so a fingerprint is resolved against
+	// the live graph first (ADR 0035). A fingerprint whose entity has left the
+	// projection entirely still passes through as-is and simply finds nothing,
+	// which is the same answer an evicted id gets.
+	histID, ok := s.graph.ResolveHandle(in.EntityID)
+	if !ok {
+		return nil, EntityHistoryOutput{}, fmt.Errorf("no entity found for handle %q; use find_entities to discover entities", in.EntityID)
+	}
+	evs, err := s.store.ReadByEntity(ctx, histID)
 	if err != nil {
 		return nil, EntityHistoryOutput{}, fmt.Errorf("reading history: %w", err)
 	}

@@ -656,3 +656,71 @@ func TestHeartbeatsExcludedByDefault(t *testing.T) {
 		t.Errorf("recentChanges includeHeartbeats: got %d, want %d", rc.RecentChanges.TotalCount, def+1)
 	}
 }
+
+// The fingerprint is served on every entity and accepted wherever the id is, so
+// a client can read one from an answer and use it in the next query (ADR 0035).
+// It is the handle that survives a failover; the id is this replica's own.
+func TestEntityFingerprintIsServedAndAccepted(t *testing.T) {
+	s := newStack(t)
+	c := s.client(t)
+
+	var first struct {
+		Entity struct {
+			ID                  string
+			IdentityFingerprint string
+		}
+	}
+	c.MustPost(`query($id:ID!){ entity(id:$id){ id identityFingerprint } }`, &first, client.Var("id", string(s.hostID)))
+	if first.Entity.IdentityFingerprint == "" {
+		t.Fatal("entity carries no identityFingerprint")
+	}
+	if first.Entity.IdentityFingerprint == first.Entity.ID {
+		t.Fatal("the fingerprint is the id; it must derive from the identity")
+	}
+
+	var second struct {
+		Entity struct {
+			ID   string
+			Type string
+		}
+	}
+	c.MustPost(`query($id:ID!){ entity(id:$id){ id type } }`, &second, client.Var("id", first.Entity.IdentityFingerprint))
+	if second.Entity.ID != string(s.hostID) {
+		t.Errorf("fingerprint resolved to %q, want %q", second.Entity.ID, s.hostID)
+	}
+	if second.Entity.Type != model.TypeHost {
+		t.Errorf("type = %q, want host", second.Entity.Type)
+	}
+}
+
+// The identity a client already holds reaches the entity in one call, with no
+// lookup first (ADR 0035, #370).
+func TestEntityByInlineIdentity(t *testing.T) {
+	s := newStack(t)
+	c := s.client(t)
+
+	var first struct {
+		Entity struct {
+			ID       string
+			Type     string
+			Identity []struct{ Key, Value string }
+		}
+	}
+	c.MustPost(`query($id:ID!){ entity(id:$id){ id type identity{ key value } } }`, &first, client.Var("id", string(s.hostID)))
+	if len(first.Entity.Identity) == 0 {
+		t.Fatal("the test host has no identifying attributes")
+	}
+	pairs := make([]string, 0, len(first.Entity.Identity))
+	for _, kv := range first.Entity.Identity {
+		pairs = append(pairs, kv.Key+"="+kv.Value)
+	}
+	handle := first.Entity.Type + ":" + strings.Join(pairs, ",")
+
+	var byIdentity struct {
+		Entity struct{ ID string }
+	}
+	c.MustPost(`query($id:ID!){ entity(id:$id){ id } }`, &byIdentity, client.Var("id", handle))
+	if byIdentity.Entity.ID != string(s.hostID) {
+		t.Errorf("identity handle %q resolved to %q, want %q", handle, byIdentity.Entity.ID, s.hostID)
+	}
+}

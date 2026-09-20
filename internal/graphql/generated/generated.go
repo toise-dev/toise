@@ -91,13 +91,14 @@ type ComplexityRoot struct {
 	}
 
 	Entity struct {
-		Annotations func(childComplexity int) int
-		Attributes  func(childComplexity int) int
-		Deleted     func(childComplexity int) int
-		ID          func(childComplexity int) int
-		Identity    func(childComplexity int) int
-		SchemaURL   func(childComplexity int) int
-		Type        func(childComplexity int) int
+		Annotations         func(childComplexity int) int
+		Attributes          func(childComplexity int) int
+		Deleted             func(childComplexity int) int
+		ID                  func(childComplexity int) int
+		Identity            func(childComplexity int) int
+		IdentityFingerprint func(childComplexity int) int
+		SchemaURL           func(childComplexity int) int
+		Type                func(childComplexity int) int
 	}
 
 	EntityConnection struct {
@@ -407,6 +408,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Entity.Identity(childComplexity), true
+	case "Entity.identityFingerprint":
+		if e.ComplexityRoot.Entity.IdentityFingerprint == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Entity.IdentityFingerprint(childComplexity), true
 	case "Entity.schemaUrl":
 		if e.ComplexityRoot.Entity.SchemaURL == nil {
 			break
@@ -836,12 +843,27 @@ enum ChangeType {
 
 """
 An infrastructure entity (a host, process, network interface, address, route,
-or service listener) aligned with the OpenTelemetry entity data model. The ` + "`" + `id` + "`" + `
-is a stable logical identifier that survives identity changes.
+or service listener) aligned with the OpenTelemetry entity data model. It
+carries two handles: ` + "`" + `identityFingerprint` + "`" + `, which names the entity itself and
+is the one to keep, and ` + "`" + `id` + "`" + `, which is local to the answering replica.
 """
 type Entity {
-  "Stable logical identifier (a ULID). Survives identity changes."
+  """
+  This replica's local identifier for the entity (a ULID). It differs between
+  replicas and is re-minted when an entity returns after a long silence, so it
+  is a detail of the answering node, not a durable reference — prefer
+  ` + "`" + `identityFingerprint` + "`" + ` to carry between calls or to store (ADR 0035).
+  """
   id: ID!
+  """
+  The handle that names the entity itself, derived from its type and
+  identifying attributes. Every replica computes the same value without
+  coordinating, so it survives a failover and a re-mint. Anywhere this schema
+  takes an entity id it also takes a fingerprint, and the identity itself
+  written inline as ` + "`" + `type:key=value` + "`" + ` (comma-separated for a multi-key
+  identity) — which reaches the entity without a lookup first (ADR 0035).
+  """
+  identityFingerprint: String!
   "Entity type, e.g. ` + "`" + `host` + "`" + `, ` + "`" + `process` + "`" + `, ` + "`" + `network.interface` + "`" + `."
   type: String!
   "Identifying attributes — their values together identify the entity."
@@ -1284,6 +1306,8 @@ func (ec *executionContext) childFields_Entity(ctx context.Context, field graphq
 	switch field.Name {
 	case "id":
 		return ec.fieldContext_Entity_id(ctx, field)
+	case "identityFingerprint":
+		return ec.fieldContext_Entity_identityFingerprint(ctx, field)
 	case "type":
 		return ec.fieldContext_Entity_type(ctx, field)
 	case "identity":
@@ -2610,6 +2634,29 @@ func (ec *executionContext) _Entity_id(ctx context.Context, field graphql.Collec
 }
 func (ec *executionContext) fieldContext_Entity_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("Entity", field, false, false, errors.New("field of type ID does not have child fields"))
+}
+
+func (ec *executionContext) _Entity_identityFingerprint(ctx context.Context, field graphql.CollectedField, obj *Entity) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Entity_identityFingerprint(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.IdentityFingerprint, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Entity_identityFingerprint(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("Entity", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
 func (ec *executionContext) _Entity_type(ctx context.Context, field graphql.CollectedField, obj *Entity) (ret graphql.Marshaler) {
@@ -5503,6 +5550,11 @@ func (ec *executionContext) _Entity(ctx context.Context, sel ast.SelectionSet, o
 			out.Values[i] = graphql.MarshalString("Entity")
 		case "id":
 			out.Values[i] = ec._Entity_id(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "identityFingerprint":
+			out.Values[i] = ec._Entity_identityFingerprint(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				atomic.AddUint32(&out.Invalids, 1)
 			}

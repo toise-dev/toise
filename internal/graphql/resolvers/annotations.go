@@ -37,7 +37,11 @@ func (r *mutationResolver) AnnotateEntity(ctx context.Context, id string, in []g
 	if len(in) == 0 {
 		return nil, fmt.Errorf("at least one annotation is required (an empty value removes a key)")
 	}
-	ent, ok, _ := r.Graph.GetEntity(model.EntityID(id))
+	eid, ok := r.Graph.ResolveHandle(id)
+	if !ok {
+		return nil, fmt.Errorf("no entity for handle %q", id)
+	}
+	ent, ok, _ := r.Graph.GetEntity(eid)
 	if !ok {
 		return nil, fmt.Errorf("no entity with id %q; annotate a known entity", id)
 	}

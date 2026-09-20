@@ -2,6 +2,7 @@ package projection
 
 import (
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -538,6 +539,105 @@ func (g *Graph) MatchTombstone(typ string, identity []model.KeyValue) (model.Ent
 		}
 	}
 	return id, true
+}
+
+// ResolveFingerprint finds the logical entity id an identity fingerprint names
+// (ADR 0035). The fingerprint is Entity.IdentityHash(): deterministic, so every
+// node computes the same value for the same entity without coordinating, where
+// a logical id is node-local and incarnation-scoped.
+//
+// Soft-deleted entities resolve too, so a fingerprint reaches exactly what its
+// logical id reaches — a tombstone stays readable by id until it is pruned, and
+// a handle that resolved one way but not the other would be a trap of its own.
+func (g *Graph) ResolveFingerprint(fingerprint string) (model.EntityID, bool) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	if id, ok := g.byHash[fingerprint]; ok {
+		return id, true
+	}
+	if id, ok := g.tombByHash[fingerprint]; ok {
+		return id, true
+	}
+	return "", false
+}
+
+// ResolveIdentity finds the entity a real-world identity names: an entity type
+// and the identifying attributes a consumer already holds, such as
+// host + {host.id: "..."} (ADR 0035). It is what spares a consumer the
+// search-then-fetch round trip that teaches it to cache ids in the first place.
+//
+// The fast path is the same exact identity hash the ingest path uses, with the
+// values read as strings — which is what every identifying attribute in the
+// vocabulary actually is. An identity keyed on a non-string value (a producer
+// may emit one) misses that hash, so the fallback compares canonical display
+// strings within the entity type. The cost is stated rather than discovered:
+// the fallback scans one type's entities, the same scan find_entities performs,
+// and only when the O(1) path has already missed.
+func (g *Graph) ResolveIdentity(typ string, identity map[string]string) (model.EntityID, bool) {
+	if typ == "" || len(identity) == 0 {
+		return "", false
+	}
+	kvs := make([]model.KeyValue, 0, len(identity))
+	for k, v := range identity {
+		kvs = append(kvs, model.KeyValue{Key: k, Value: model.StringValue(v)})
+	}
+	if id, ok := g.ResolveFingerprint(model.Entity{Type: typ, Identity: kvs}.IdentityHash()); ok {
+		return id, true
+	}
+
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	for id := range g.byType[typ] {
+		e, ok := g.entities[id]
+		if !ok || len(e.Identity) != len(identity) {
+			continue
+		}
+		match := true
+		for _, kv := range e.Identity {
+			want, given := identity[kv.Key]
+			if !given || kv.Value.Display() != want {
+				match = false
+				break
+			}
+		}
+		if match {
+			return id, true
+		}
+	}
+	return "", false
+}
+
+// ResolveHandle resolves a consumer-supplied entity handle to a logical id
+// (ADR 0035). Three forms, and they cannot be confused for one another:
+//
+//   - a logical id — no colon, since a ULID is Crockford base32;
+//   - an identity fingerprint, "type:hex" — a colon and no "=";
+//   - an identity, "type:key=value" or "type:k1=v1,k2=v2" — a colon and a "=".
+//
+// One argument therefore takes all three and no read surface needs a second
+// one. A value containing a comma cannot be written in the third form; that is
+// what find_entities is for.
+//
+// A handle that is none of these passes through unresolved: whether that id
+// exists is the caller's own lookup, exactly as before this existed.
+func (g *Graph) ResolveHandle(handle string) (model.EntityID, bool) {
+	typ, rest, hasColon := strings.Cut(handle, ":")
+	switch {
+	case !hasColon:
+		return model.EntityID(handle), true
+	case !strings.Contains(rest, "="):
+		return g.ResolveFingerprint(handle)
+	}
+	identity := make(map[string]string)
+	for _, pair := range strings.Split(rest, ",") {
+		k, v, ok := strings.Cut(pair, "=")
+		if !ok || k == "" {
+			return "", false
+		}
+		identity[k] = v
+	}
+	return g.ResolveIdentity(typ, identity)
 }
 
 // SnapshotEvents returns synthetic create/add events that, applied in order to a

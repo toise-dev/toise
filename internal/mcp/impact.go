@@ -15,7 +15,7 @@ import (
 
 // ImpactOfInput names the failed (or hypothetically failing) entity.
 type ImpactOfInput struct {
-	EntityID string `json:"entity_id" jsonschema:"the entity whose failure to propagate"`
+	EntityID string `json:"entity_id" jsonschema:"the entity whose failure to propagate, by identity_fingerprint (preferred, stable across replicas), by identity written inline as type:key=value, or by id"`
 	MaxDepth int    `json:"max_depth,omitempty" jsonschema:"how many propagation hops to follow, 1 to 10 (default 10)"`
 	Limit    int    `json:"limit,omitempty" jsonschema:"maximum impacted entities to return (default 50, max 200); totals always cover everything"`
 	AsOf     string `json:"as_of,omitempty" jsonschema:"RFC 3339 instant: propagate through the graph as it was then (event-time), instead of now"`
@@ -53,10 +53,13 @@ func (s *Server) impactOf(ctx context.Context, _ *mcpsdk.CallToolRequest, in Imp
 	if err != nil {
 		return nil, ImpactOfOutput{}, err
 	}
-	rootID := model.EntityID(in.EntityID)
+	rootID, ok := g.ResolveHandle(in.EntityID)
+	if !ok {
+		return nil, ImpactOfOutput{}, fmt.Errorf("no live entity for handle %q; use find_entities to discover entities", in.EntityID)
+	}
 	root, ok, deleted := g.GetEntity(rootID)
 	if !ok || deleted {
-		return nil, ImpactOfOutput{}, fmt.Errorf("no live entity with id %q; use find_entities to discover ids", in.EntityID)
+		return nil, ImpactOfOutput{}, fmt.Errorf("no live entity for handle %q; use find_entities to discover entities", in.EntityID)
 	}
 
 	out := ImpactOfOutput{Root: entityOut(root, false)}

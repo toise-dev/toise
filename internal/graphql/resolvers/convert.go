@@ -50,12 +50,13 @@ func attrsToGQL(kvs []model.KeyValue) []generated.Attribute {
 
 func entityToGQL(e model.Entity, deleted bool) *generated.Entity {
 	return &generated.Entity{
-		ID:         string(e.ID),
-		Type:       e.Type,
-		Identity:   attrsToGQL(e.Identity),
-		Attributes: attrsToGQL(e.Attributes),
-		SchemaURL:  e.SchemaURL,
-		Deleted:    deleted,
+		ID:                  string(e.ID),
+		IdentityFingerprint: e.IdentityHash(),
+		Type:                e.Type,
+		Identity:            attrsToGQL(e.Identity),
+		Attributes:          attrsToGQL(e.Attributes),
+		SchemaURL:           e.SchemaURL,
+		Deleted:             deleted,
 	}
 }
 

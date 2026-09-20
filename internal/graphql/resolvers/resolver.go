@@ -39,6 +39,10 @@ type EventReader interface {
 // Graph is the subset of the projection the resolvers read current state from.
 type Graph interface {
 	GetEntity(id model.EntityID) (model.Entity, bool, bool)
+	// ResolveHandle turns a client-supplied handle — an identity fingerprint, an
+	// identity written inline as type:key=value, or a logical id — into a
+	// logical id (ADR 0035).
+	ResolveHandle(handle string) (model.EntityID, bool)
 	ListEntities(typ string) []model.Entity
 	ListRelations(typ string, from, to model.EntityID) []model.Relation
 	RelationsTouching(id model.EntityID, relType string) []model.Relation
@@ -103,7 +107,11 @@ func (r *queryResolver) Entity(ctx context.Context, id string, asOf *string) (*g
 	if err != nil {
 		return nil, err
 	}
-	e, ok, deleted := g.GetEntity(model.EntityID(id))
+	eid, ok := g.ResolveHandle(id)
+	if !ok {
+		return nil, nil
+	}
+	e, ok, deleted := g.GetEntity(eid)
 	if !ok {
 		return nil, nil
 	}
@@ -197,7 +205,11 @@ func dropHeartbeats(evs []model.Event) []model.Event {
 }
 
 func (r *queryResolver) EntityHistory(ctx context.Context, id string, since, until, asKnownAt *string, includeHeartbeats bool, first *int, after *string) (*generated.ChangeConnection, error) {
-	evs, err := r.Store.ReadByEntity(ctx, model.EntityID(id))
+	eid, ok := r.Graph.ResolveHandle(id)
+	if !ok {
+		return &generated.ChangeConnection{}, nil
+	}
+	evs, err := r.Store.ReadByEntity(ctx, eid)
 	if err != nil {
 		return nil, err
 	}

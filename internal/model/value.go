@@ -143,6 +143,28 @@ func (v Value) toAny() any {
 // string "1" and the integer 1 do not collide. Composite kinds are
 // length-prefixed so nesting can never alias a different shape, and kvlist keys
 // are sorted so map ordering does not affect the encoding.
+// appendCanonical writes the canonical encoding of v to dst and returns the
+// extended slice. It is byte-for-byte what canonical() returns — identity
+// hashes are stored, so the two must never drift — but it writes the scalar
+// cases without allocating, which is what the identity hash pays for on every
+// ingested observation and every rendered entity.
+func (v Value) appendCanonical(dst []byte) []byte {
+	switch v.kind {
+	case KindString:
+		return append(append(dst, 's', ':'), v.s...)
+	case KindInt:
+		return strconv.AppendInt(append(dst, 'i', ':'), v.i, 10)
+	case KindDouble:
+		return strconv.AppendFloat(append(dst, 'd', ':'), v.f, 'g', -1, 64)
+	case KindBool:
+		return strconv.AppendBool(append(dst, 'b', ':'), v.b)
+	default:
+		// Arrays and kvlists are rare in an identity and their encoding is
+		// recursive; reuse the string form rather than duplicate it here.
+		return append(dst, v.canonical()...)
+	}
+}
+
 func (v Value) canonical() string {
 	switch v.kind {
 	case KindString:

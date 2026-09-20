@@ -29,6 +29,47 @@ func (g *fakeGraph) GetEntity(id model.EntityID) (model.Entity, bool, bool) {
 	return e, ok, g.deleted[id]
 }
 
+// ResolveHandle mirrors projection.Graph's three handle forms (ADR 0035): a
+// logical id, an identity fingerprint, or an identity written inline.
+func (g *fakeGraph) ResolveHandle(handle string) (model.EntityID, bool) {
+	typ, rest, hasColon := strings.Cut(handle, ":")
+	switch {
+	case !hasColon:
+		return model.EntityID(handle), true
+	case !strings.Contains(rest, "="):
+		for id, e := range g.entities {
+			if e.IdentityHash() == handle {
+				return id, true
+			}
+		}
+		return "", false
+	}
+	want := map[string]string{}
+	for _, pair := range strings.Split(rest, ",") {
+		k, v, ok := strings.Cut(pair, "=")
+		if !ok {
+			return "", false
+		}
+		want[k] = v
+	}
+	for id, e := range g.entities {
+		if e.Type != typ || len(e.Identity) != len(want) {
+			continue
+		}
+		match := true
+		for _, kv := range e.Identity {
+			if v, ok := want[kv.Key]; !ok || kv.Value.Display() != v {
+				match = false
+				break
+			}
+		}
+		if match {
+			return id, true
+		}
+	}
+	return "", false
+}
+
 func (g *fakeGraph) ListEntities(typ string) []model.Entity {
 	var out []model.Entity
 	for id, e := range g.entities {
