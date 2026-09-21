@@ -68,6 +68,9 @@ tool get_entity
     newest_event string
     oldest_answerable string
     relations int
+  resolution object
+    meaning string
+    observation_interval string
 tool get_neighbors
   in:
   as_of string
@@ -257,6 +260,9 @@ tool entity_history
     newest_event string
     oldest_answerable string
     relations int
+  resolution object
+    meaning string
+    observation_interval string
 tool recent_changes
   in:
   change_type string

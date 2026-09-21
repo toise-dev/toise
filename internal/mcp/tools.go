@@ -74,6 +74,7 @@ type GetEntityInput struct {
 // not producer truth — see annotate_entity).
 type GetEntityOutput struct {
 	Graph       GraphMeta       `json:"graph" jsonschema:"what the answering graph holds and how fresh it is; read this before treating absence as fact"`
+	Resolution  *Resolution     `json:"resolution,omitempty" jsonschema:"how often this entity is observed, and what that means for reading any timestamp about it; absent when no live producer declares a cadence"`
 	Entity      Entity          `json:"entity"`
 	Annotations *AnnotationOut  `json:"annotations,omitempty" jsonschema:"operator-added notes on this entity (not producer truth); absent when none"`
 	Canonical   *CanonicalGroup `json:"canonical,omitempty" jsonschema:"read-time identity overlay (ADR 0020): other entities that high-confidence same_as edges assert are the same real thing; absent when none. The entities are NOT merged — this is a derived view over the belief edges."`
@@ -101,6 +102,7 @@ func (s *Server) getEntity(ctx context.Context, _ *mcpsdk.CallToolRequest, in Ge
 	}
 	return nil, GetEntityOutput{
 		Graph:       s.graphMeta(g, in.AsOf),
+		Resolution:  s.resolutionFor(id),
 		Entity:      entityOutV(e, deleted, compact),
 		Annotations: s.annotationFor(string(id)),
 		Canonical:   s.canonicalGroup(g, id),
@@ -232,9 +234,10 @@ type EntityHistoryInput struct {
 
 // EntityHistoryOutput carries the timeline, oldest first.
 type EntityHistoryOutput struct {
-	Graph   GraphMeta `json:"graph" jsonschema:"what the answering graph holds and how fresh it is; read this before treating absence as fact"`
-	Changes []Change  `json:"changes"`
-	Count   int       `json:"count" jsonschema:"number of changes returned"`
+	Graph      GraphMeta   `json:"graph" jsonschema:"what the answering graph holds and how fresh it is; read this before treating absence as fact"`
+	Resolution *Resolution `json:"resolution,omitempty" jsonschema:"how finely these timestamps may be read; absent when no live producer declares a cadence"`
+	Changes    []Change    `json:"changes"`
+	Count      int         `json:"count" jsonschema:"number of changes returned"`
 	ChangeDigest
 }
 
@@ -271,7 +274,7 @@ func (s *Server) entityHistory(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 	if err != nil {
 		return nil, EntityHistoryOutput{}, fmt.Errorf("reading history: %w", err)
 	}
-	out := EntityHistoryOutput{}
+	out := EntityHistoryOutput{Resolution: s.resolutionFor(histID)}
 	filtered := evs[:0:0]
 	for _, ev := range evs {
 		et, rt := ev.Times()

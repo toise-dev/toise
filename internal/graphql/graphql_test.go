@@ -724,3 +724,48 @@ func TestEntityByInlineIdentity(t *testing.T) {
 		t.Errorf("identity handle %q resolved to %q, want %q", handle, byIdentity.Entity.ID, s.hostID)
 	}
 }
+
+// An entity states the resolution of its own timestamps, so a client knows how
+// finely it may compare them. Null when no producer declares a cadence: saying
+// nothing beats inventing a bound.
+func TestEntityResolution(t *testing.T) {
+	s := newStack(t)
+	c := s.client(t)
+
+	var before struct {
+		Entity struct {
+			Resolution *struct{ ObservationInterval, Meaning string }
+		}
+	}
+	c.MustPost(`query($id:ID!){ entity(id:$id){ resolution{ observationInterval meaning } } }`, &before, client.Var("id", string(s.hostID)))
+	if before.Entity.Resolution != nil {
+		t.Fatalf("resolution invented with no declared cadence: %+v", before.Entity.Resolution)
+	}
+
+	// The producer now declares a cadence; the same query starts answering.
+	if _, err := s.engine.ObserveEntity(change.EntityObservation{
+		Type:      model.TypeHost,
+		Identity:  []model.KeyValue{kv("host.id", "h1")},
+		EventTime: t0.Add(2 * time.Minute),
+		Producer:  "agent-a",
+		Interval:  30 * time.Second,
+	}); err != nil {
+		t.Fatalf("observe with interval: %v", err)
+	}
+
+	var after struct {
+		Entity struct {
+			Resolution *struct{ ObservationInterval, Meaning string }
+		}
+	}
+	c.MustPost(`query($id:ID!){ entity(id:$id){ resolution{ observationInterval meaning } } }`, &after, client.Var("id", string(s.hostID)))
+	if after.Entity.Resolution == nil {
+		t.Fatal("no resolution after a cadence was declared")
+	}
+	if after.Entity.Resolution.ObservationInterval != "30s" {
+		t.Errorf("observationInterval = %q, want 30s", after.Entity.Resolution.ObservationInterval)
+	}
+	if !strings.Contains(after.Entity.Resolution.Meaning, "cannot be ordered") {
+		t.Errorf("meaning does not state the limit: %s", after.Entity.Resolution.Meaning)
+	}
+}
