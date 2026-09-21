@@ -263,3 +263,39 @@ func (s *Server) graphMeta(g Graph, asOf string) GraphMeta {
 	}
 	return m
 }
+
+// Resolution states how finely an answer's timestamps may be read. Toise's
+// event_time is when a PRODUCER OBSERVED a fact, not when the fact became true,
+// so the truth lies somewhere in the interval before it. Two changes closer
+// together than the interval carry no ordering information at all.
+//
+// It is carried as a sentence and not only as a number for the same reason
+// delete_source is (#346): a bare duration next to nanosecond timestamps invites
+// the reading it exists to prevent. A real incident review concluded "the
+// service returned 47 s BEFORE the address moved, so the two are unrelated" from
+// two event_times 47 s apart, under a 30 s cadence — the gap was shorter than
+// the resolution and meant nothing.
+type Resolution struct {
+	ObservationInterval string `json:"observation_interval" jsonschema:"how often this entity's producers currently report, e.g. 30s"`
+	Meaning             string `json:"meaning" jsonschema:"what that implies for reading the timestamps in this answer, including what they cannot tell you"`
+}
+
+// resolutionFor renders the resolution block for an entity, or nil when no live
+// producer declares an interval — in which case the honest answer is to say
+// nothing rather than to invent a bound.
+func (s *Server) resolutionFor(id model.EntityID) *Resolution {
+	if s.cadence == nil {
+		return nil
+	}
+	interval, ok := s.cadence.ObservationInterval(id)
+	if !ok {
+		return nil
+	}
+	return &Resolution{
+		ObservationInterval: interval.String(),
+		Meaning: "every event_time here is when a producer OBSERVED the fact, not when it became true: the change happened somewhere in the " +
+			interval.String() + " before it. Two changes less than " + interval.String() +
+			" apart cannot be ordered from these timestamps, and no causal conclusion may be drawn from a gap that small — not even against an external clock. " +
+			"This is the coarsest cadence among the producers referencing this entity right now; it is not recoverable for past observations.",
+	}
+}

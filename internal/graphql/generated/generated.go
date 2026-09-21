@@ -97,6 +97,7 @@ type ComplexityRoot struct {
 		ID                  func(childComplexity int) int
 		Identity            func(childComplexity int) int
 		IdentityFingerprint func(childComplexity int) int
+		Resolution          func(childComplexity int) int
 		SchemaURL           func(childComplexity int) int
 		Type                func(childComplexity int) int
 	}
@@ -150,6 +151,11 @@ type ComplexityRoot struct {
 		Node   func(childComplexity int) int
 	}
 
+	Resolution struct {
+		Meaning             func(childComplexity int) int
+		ObservationInterval func(childComplexity int) int
+	}
+
 	SameAsLink struct {
 		Basis      func(childComplexity int) int
 		Confidence func(childComplexity int) int
@@ -165,6 +171,7 @@ type ComplexityRoot struct {
 
 type EntityResolver interface {
 	Annotations(ctx context.Context, obj *Entity) (*Annotation, error)
+	Resolution(ctx context.Context, obj *Entity) (*Resolution, error)
 }
 type MutationResolver interface {
 	AnnotateEntity(ctx context.Context, id string, annotations []AnnotationInput) (*Annotation, error)
@@ -414,6 +421,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Entity.IdentityFingerprint(childComplexity), true
+	case "Entity.resolution":
+		if e.ComplexityRoot.Entity.Resolution == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Entity.Resolution(childComplexity), true
 	case "Entity.schemaUrl":
 		if e.ComplexityRoot.Entity.SchemaURL == nil {
 			break
@@ -620,6 +633,19 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.RelationEdge.Node(childComplexity), true
+
+	case "Resolution.meaning":
+		if e.ComplexityRoot.Resolution.Meaning == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Resolution.Meaning(childComplexity), true
+	case "Resolution.observationInterval":
+		if e.ComplexityRoot.Resolution.ObservationInterval == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Resolution.ObservationInterval(childComplexity), true
 
 	case "SameAsLink.basis":
 		if e.ComplexityRoot.SameAsLink.Basis == nil {
@@ -880,6 +906,30 @@ type Entity {
   never part of the event log.
   """
   annotations: Annotation @goField(forceResolver: true)
+  """
+  How finely any timestamp about this entity may be read, or null when no live
+  producer declares a cadence. Ask for it before comparing event times.
+  """
+  resolution: Resolution @goField(forceResolver: true)
+}
+
+"""
+The resolution of Toise's timestamps for one entity.
+
+` + "`" + `eventTime` + "`" + ` is when a producer OBSERVED a fact, never when the fact became true:
+the change happened somewhere in ` + "`" + `observationInterval` + "`" + ` BEFORE it. Two changes
+closer together than that interval carry no ordering information, and no causal
+conclusion may be drawn from such a gap — not even against an external clock.
+
+The meaning is carried as a sentence, not only as a number, for the reason
+` + "`" + `delete_source` + "`" + ` is (#346): a bare duration beside nanosecond timestamps invites
+exactly the misreading it exists to prevent.
+"""
+type Resolution {
+  "How often this entity's producers currently report, e.g. ` + "`" + `30s` + "`" + `."
+  observationInterval: String!
+  "What that implies for reading timestamps, including what they cannot tell you."
+  meaning: String!
 }
 
 """
@@ -1320,6 +1370,8 @@ func (ec *executionContext) childFields_Entity(ctx context.Context, field graphq
 		return ec.fieldContext_Entity_deleted(ctx, field)
 	case "annotations":
 		return ec.fieldContext_Entity_annotations(ctx, field)
+	case "resolution":
+		return ec.fieldContext_Entity_resolution(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type Entity", field.Name)
 }
@@ -1394,6 +1446,16 @@ func (ec *executionContext) childFields_RelationEdge(ctx context.Context, field 
 		return ec.fieldContext_RelationEdge_node(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type RelationEdge", field.Name)
+}
+
+func (ec *executionContext) childFields_Resolution(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "observationInterval":
+		return ec.fieldContext_Resolution_observationInterval(ctx, field)
+	case "meaning":
+		return ec.fieldContext_Resolution_meaning(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type Resolution", field.Name)
 }
 
 func (ec *executionContext) childFields_SameAsLink(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -2824,6 +2886,38 @@ func (ec *executionContext) fieldContext_Entity_annotations(_ context.Context, f
 	return fc, nil
 }
 
+func (ec *executionContext) _Entity_resolution(ctx context.Context, field graphql.CollectedField, obj *Entity) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Entity_resolution(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Entity().Resolution(ctx, obj)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *Resolution) graphql.Marshaler {
+			return ec.marshalOResolution2ᚖgithubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐResolution(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_Entity_resolution(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Entity",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Resolution(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _EntityConnection_edges(ctx context.Context, field graphql.CollectedField, obj *EntityConnection) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -3683,6 +3777,52 @@ func (ec *executionContext) fieldContext_RelationEdge_node(_ context.Context, fi
 		},
 	}
 	return fc, nil
+}
+
+func (ec *executionContext) _Resolution_observationInterval(ctx context.Context, field graphql.CollectedField, obj *Resolution) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Resolution_observationInterval(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ObservationInterval, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Resolution_observationInterval(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("Resolution", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _Resolution_meaning(ctx context.Context, field graphql.CollectedField, obj *Resolution) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Resolution_meaning(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Meaning, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Resolution_meaning(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("Resolution", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
 func (ec *executionContext) _SameAsLink_from(ctx context.Context, field graphql.CollectedField, obj *SameAsLink) (ret graphql.Marshaler) {
@@ -5616,6 +5756,39 @@ func (ec *executionContext) _Entity(ctx context.Context, sel ast.SelectionSet, o
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "resolution":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Entity_resolution(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -6129,6 +6302,50 @@ func (ec *executionContext) _RelationEdge(ctx context.Context, sel ast.Selection
 			}
 		case "node":
 			out.Values[i] = ec._RelationEdge_node(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var resolutionImplementors = []string{"Resolution"}
+
+func (ec *executionContext) _Resolution(ctx context.Context, sel ast.SelectionSet, obj *Resolution) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, resolutionImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("Resolution")
+		case "observationInterval":
+			out.Values[i] = ec._Resolution_observationInterval(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "meaning":
+			out.Values[i] = ec._Resolution_meaning(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -7252,6 +7469,13 @@ func (ec *executionContext) unmarshalORelationFilter2ᚖgithubᚗcomᚋtoiseᚑd
 	}
 	res, err := ec.unmarshalInputRelationFilter(ctx, v)
 	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOResolution2ᚖgithubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐResolution(ctx context.Context, sel ast.SelectionSet, v *Resolution) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._Resolution(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalOString2ᚖstring(ctx context.Context, v any) (*string, error) {

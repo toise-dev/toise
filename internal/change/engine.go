@@ -466,6 +466,36 @@ func (e *Engine) observeEntityLocked(obs EntityObservation) (model.Event, error)
 	return ev, nil
 }
 
+// ObservationInterval returns how often this entity is currently observed: the
+// COARSEST interval among the producers that reference it, and whether any of
+// them declared one at all.
+//
+// It is the resolution of every timestamp Toise reports about that entity.
+// event_time is when a producer OBSERVED a fact, not when the fact became true,
+// so the truth lies somewhere in the interval before it — and two changes closer
+// together than the interval cannot be ordered from their timestamps at all.
+// Consumers have drawn causal conclusions from sub-interval gaps and been wrong;
+// the number is knowable here, so it is published rather than left to be
+// guessed (the #346 posture: carry the meaning, not just the value).
+//
+// The coarsest, not the finest, because it is the bound a consumer may rely on:
+// a second producer reporting faster does not make the slower one's observations
+// more precise. Live producers only — an entity no one references any more has
+// no current cadence, and a past one is not recoverable from the log, since the
+// interval is liveness state and was never an event field.
+func (e *Engine) ObservationInterval(id model.EntityID) (time.Duration, bool) {
+	e.obsMu.Lock()
+	defer e.obsMu.Unlock()
+
+	var coarsest time.Duration
+	for _, ref := range e.refs[id] {
+		if ref.interval > coarsest {
+			coarsest = ref.interval
+		}
+	}
+	return coarsest, coarsest > 0
+}
+
 // DeleteEntity releases this producer's reference to an entity matched by
 // identity. The entity is actually deleted (entity.deleted + cascade) only when
 // the last producer has released it; while another producer still references it,

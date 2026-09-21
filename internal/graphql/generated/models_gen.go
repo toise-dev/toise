@@ -180,6 +180,9 @@ type Entity struct {
 	// These are an overlay kept in a per-tenant sidecar — never producer truth and
 	// never part of the event log.
 	Annotations *Annotation `json:"annotations,omitempty"`
+	// How finely any timestamp about this entity may be read, or null when no live
+	// producer declares a cadence. Ask for it before comparing event times.
+	Resolution *Resolution `json:"resolution,omitempty"`
 }
 
 // A paginated list of entities.
@@ -258,6 +261,23 @@ type RelationFilter struct {
 	FromID *string `json:"fromId,omitempty"`
 	// Restrict to relations targeting this entity id.
 	ToID *string `json:"toId,omitempty"`
+}
+
+// The resolution of Toise's timestamps for one entity.
+//
+// `eventTime` is when a producer OBSERVED a fact, never when the fact became true:
+// the change happened somewhere in `observationInterval` BEFORE it. Two changes
+// closer together than that interval carry no ordering information, and no causal
+// conclusion may be drawn from such a gap — not even against an external clock.
+//
+// The meaning is carried as a sentence, not only as a number, for the reason
+// `delete_source` is (#346): a bare duration beside nanosecond timestamps invites
+// exactly the misreading it exists to prevent.
+type Resolution struct {
+	// How often this entity's producers currently report, e.g. `30s`.
+	ObservationInterval string `json:"observationInterval"`
+	// What that implies for reading timestamps, including what they cannot tell you.
+	Meaning string `json:"meaning"`
 }
 
 // One supporting `same_as` belief edge, with the producer's provenance.

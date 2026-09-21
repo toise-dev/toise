@@ -40,6 +40,12 @@ type Graph interface {
 	RelationCount() int
 }
 
+// Cadence answers how often an entity is currently observed. The change engine
+// satisfies it; nil leaves the resolution block off every answer.
+type Cadence interface {
+	ObservationInterval(id model.EntityID) (time.Duration, bool)
+}
+
 // EventReader is the subset of the event log the MCP tools read history from
 // (ADR 0007). The concrete *store.Store satisfies it. Reads honor context
 // cancellation, so the per-tool timeout actually stops a runaway scan.
@@ -114,6 +120,7 @@ type Server struct {
 	ann     *annotations.Store // per-tenant annotation sidecar; nil disables annotate_entity
 	audit   *audit.Auditor     // nil/disabled = no audit records (ADR 0028)
 	idThr   float64            // same_as confidence threshold for the canonical view (ADR 0020 Lot B)
+	cadence Cadence            // producer observation cadence; nil omits the resolution block
 }
 
 // defaultIdentityThreshold is the same_as confidence at or above which an alias
@@ -126,6 +133,14 @@ const defaultIdentityThreshold = 0.9
 // chaining. nil leaves annotations disabled.
 func (s *Server) SetAnnotations(a *annotations.Store) *Server {
 	s.ann = a
+	return s
+}
+
+// SetCadence attaches the source of producer observation cadence, which is what
+// lets an answer state the resolution of its own timestamps; returns s for
+// chaining. nil (the default) omits the resolution block rather than guessing.
+func (s *Server) SetCadence(c Cadence) *Server {
+	s.cadence = c
 	return s
 }
 
@@ -173,6 +188,8 @@ READING A DISAPPEARANCE — the trap that has produced confidently wrong conclus
 Deletions carry delete_source, glossed in plain language in the "disappearance" field. NONE of its values means a human deleted anything. producer = the producer reported it gone. liveness_expiry = the producer went silent, and the thing may still be running. cascade = something it touched died. Never report an operator action, a rename, or a manual removal from a disappearance alone.
 
 HANDLES: every entity carries two. identity_fingerprint names the entity itself — every replica computes the same one, and it is the handle to carry between calls and to store. id is a local detail: it differs between replicas and is re-minted if an entity comes back after more than 15 minutes of silence, so an id held across a failover or an outage resolves to nothing. Anywhere a tool takes an entity id it takes two other forms: the fingerprint (prefer it), and the identity you already hold, written inline as type:key=value (e.g. host:host.id=abc, or service.listener:service.endpoint=h1:80/tcp,network.transport=tcp for a multi-key identity) — that one saves you the find_entities call entirely. When neither resolves, re-resolve from the real identity (host.id, container.id, service.instance.id) with find_entities.
+
+TIMESTAMPS HAVE A RESOLUTION: event_time is when a producer OBSERVED a fact, never when the fact became true. get_entity and entity_history carry a "resolution" block giving that producer's cadence; the fact happened somewhere in the interval BEFORE each event_time. Two changes closer together than the interval carry no ordering information, and no causal conclusion may be drawn from a gap that small — including against an external clock, which is how a real review concluded "the service returned before the address moved" from two observations 47 s apart under a 30 s cadence. When you need finer than the cadence, the answer is not here: say so.
 
 TOPOLOGY IS TRAVERSED, NOT LISTED: an address is not an attribute of a host — it is a network.address entity two hops away (host -has_interface-> network.interface <-bound_to- network.address). Use get_neighbors with depth 2 rather than concluding the address is missing. Same shape for anything that can be multiple and mutable.
 
