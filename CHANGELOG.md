@@ -9,6 +9,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
+## [0.17.0] - 2026-09-21
+
+**The release that says what its answers are worth.** Two failures in the field,
+both of the same shape: an answer handed back a value that looked more solid
+than it was, and a consumer acted on it. An entity id, opaque and durable-looking,
+resolved to nothing after a failover. A nanosecond timestamp, exact-looking, was
+read as ordering two events that its producer's cadence could not distinguish —
+and a real incident review reached the wrong conclusion from it. Neither value
+was wrong; both were presented without the one thing needed to use them safely.
+This release publishes what Toise already knew in both cases. Contract delta is
+additive — new fields, an existing argument accepting more forms; no data
+migration, and every existing call keeps working unchanged.
+
+### Added
+
+- **The identity fingerprint is the consumer's handle** (#368, #369,
+  [ADR 0035](docs/architecture/adr/0035-entity-handles-fingerprint-is-the-reference.md)).
+  An entity id is minted locally by each replica and re-minted when an entity
+  returns after the resurrection window, so a consumer that carries one across
+  a failover or an outage resolves nothing — and, being opaque, the id cannot
+  warn its holder. Until now the cost was paid in prose: the MCP instructions
+  told every consumer never to carry an id between investigations. The
+  deterministic name already existed and was already load-bearing — 0.16.0
+  keyed operator annotations on it (#349) precisely because ids do not survive
+  — it was simply never exposed. Every entity now carries
+  `identity_fingerprint` (`identityFingerprint` on GraphQL), identical on every
+  node because it derives from the identifying attributes alone, and every
+  read surface that accepts an entity id accepts a fingerprint instead. The id
+  stays, in every answer and in the event log, documented as what it is: local
+  to the answering node, scoped to one incarnation.
+
+- **Reach an entity by the identity you already hold** (#370). Answering a
+  question about a known host took two calls: `find_entities` to trade
+  `host.id` for an entity id, then the real question. That round trip is what
+  teaches a consumer to cache the id — the one value it must not keep. The
+  handle argument now also accepts the identity written inline,
+  `type:key=value`, comma-separated for a multi-key identity
+  (`service.listener:service.endpoint=h1:80/tcp,network.transport=tcp`). No
+  tool and no query grows a second parameter: the three forms cannot be
+  confused, since a logical id carries no colon, a fingerprint a colon and no
+  `=`, an identity both. Matching stays exact (ADR 0018) — a subset of the
+  identifying attributes is a different identity, never a tolerant match.
+
+- **Answers state the resolution of their own timestamps** (#373). `event_time`
+  is when a producer *observed* a fact, never when the fact became true, and a
+  consumer cannot know that producer's cadence — so it reads a nanosecond
+  timestamp as exact and draws conclusions from gaps that mean nothing. In a
+  real incident review here, a 47-second gap between two observations under a
+  30-second cadence was read as "the service returned before the address moved,
+  so the two are unrelated"; direct operator measurements later showed the
+  opposite order. The cadence was already known — the engine keeps each
+  producer's declared interval to arm the liveness backstop (ADR 0019) — and is
+  now published: `get_entity` and `entity_history` carry a `resolution` block,
+  GraphQL exposes `Entity.resolution`. It states the coarsest interval among
+  the producers referencing the entity, because a faster second producer does
+  not make the slower one's observations finer, and it is **absent rather than
+  approximate** when no live producer declares one. It ships as a sentence and
+  not only a number, for the reason `delete_source` got its gloss in 0.14.0: a
+  bare duration beside nanosecond timestamps invites the very misreading it
+  exists to prevent.
+
+### Performance
+
+- **The identity hash costs one allocation instead of seven.** Exposing the
+  fingerprint on every rendered entity made the benchmark gate fire —
+  `find_entities` allocated +173% on a 200-entity page. The canonical bytes are
+  now built on the stack, sorted without reflection, and scalar values appended
+  without a temporary string. The gain is not only the new call site: this hash
+  runs on the ingest path too, once per observation, where it had never been
+  measured.
+
+### Fixed
+
+- **The identity hash encoding is frozen by a test.** It is *stored* — it keys
+  the live and tombstone indexes and is what operator annotations live under —
+  yet every test checked only determinism and distinctness, so a changed
+  encoding would have passed CI and orphaned every annotation on upgrade. The
+  golden values come from the encoding as it shipped; a change to them is a
+  migration, not a new golden.
+
+- **Documentation that had quietly become false.** The GraphQL `Entity`
+  docstring and its `id` field both said the id survives identity changes. That
+  stopped being true when ADR 0018 removed tolerant matching: a changed
+  identifying attribute is now a different entity with a different id.
+
+- **`make fmt` no longer rewrites generated files.** goimports regrouped the
+  protobuf output's imports on every run, dirtying a file `make proto` rewrites
+  identically — noise in every diff. The target now skips files carrying the
+  standard `Code generated ... DO NOT EDIT.` header, so a future generator is
+  covered without editing the rule again.
+
 ## [0.16.0] - 2026-09-01
 
 **The release that keeps its promises at scale.** The scale campaign measured a

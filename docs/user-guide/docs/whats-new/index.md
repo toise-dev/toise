@@ -12,6 +12,14 @@ below. See the [API stability policy](../api-stability.md).
 
 ## Releases
 
+- [**0.17.0**](0.17.0.md) — 2026-09-21 — **the release that says what its
+  answers are worth**: every entity carries an `identity_fingerprint` that is
+  the same on every replica and survives a re-mint, and every read surface
+  accepts it — or the identity itself, written inline — wherever it accepted an
+  entity id; and `get_entity` and `entity_history` state the resolution of
+  their own timestamps, so a reader knows how finely they may be compared
+  instead of guessing.
+
 - [**0.16.0**](0.16.0.md) — 2026-09-01 — **the release that keeps its promises
   at scale**: the incident-window reads answer in milliseconds on a
   10,000-host estate (7.5 s → 21 ms, by classifying the time index so a read
