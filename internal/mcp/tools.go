@@ -236,8 +236,15 @@ type EntityHistoryInput struct {
 type EntityHistoryOutput struct {
 	Graph      GraphMeta   `json:"graph" jsonschema:"what the answering graph holds and how fresh it is; read this before treating absence as fact"`
 	Resolution *Resolution `json:"resolution,omitempty" jsonschema:"how finely these timestamps may be read; absent when no live producer declares a cadence"`
-	Changes    []Change    `json:"changes"`
-	Count      int         `json:"count" jsonschema:"number of changes returned"`
+	// TimelineScope warns that this timeline covers ONE incarnation. History is
+	// indexed by the node-local id, and an entity that returns after the
+	// resurrection window is minted a fresh one — so an entity that flaps shows
+	// a short, calm timeline while the flapping itself is invisible here. It is
+	// set when the timeline opens on a creation, which is when earlier
+	// incarnations could exist and be missing.
+	TimelineScope string   `json:"timeline_scope,omitempty" jsonschema:"what this timeline does NOT cover; read it before concluding the entity has a short history"`
+	Changes       []Change `json:"changes"`
+	Count         int      `json:"count" jsonschema:"number of changes returned"`
 	ChangeDigest
 }
 
@@ -303,6 +310,19 @@ func (s *Server) entityHistory(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 		return ei.Before(ej)
 	})
 	out.Total = len(filtered)
+	// A timeline that opens on a creation may be one incarnation of an older
+	// identity: history is keyed by the node-local id, and a re-mint starts a
+	// fresh one. Say so rather than let a three-event answer read as "nothing
+	// ever happened to this" — an entity that flapped nine times in three days
+	// looked exactly that calm here.
+	if len(filtered) > 0 && filtered[0].Entity != nil && filtered[0].Entity.ChangeType == model.EntityCreated {
+		created, _ := filtered[0].Times()
+		out.TimelineScope = "this timeline covers ONE incarnation of the entity, opening at its creation on " +
+			created.UTC().Format(time.RFC3339) + ". History is keyed by the id local to this node, and an entity that returns after " +
+			"the resurrection window is minted a new one — so if this identity existed before that instant, those events are under a " +
+			"different id and are NOT here. A short, calm timeline is therefore not evidence of a calm entity. To see across " +
+			"incarnations, ask recent_changes with from/to over the period and match on the identity."
+	}
 	if len(filtered) > limit {
 		// keep the newest changes; the slice stays sorted oldest first.
 		filtered = filtered[len(filtered)-limit:]

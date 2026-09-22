@@ -765,7 +765,54 @@ func TestEntityResolution(t *testing.T) {
 	if after.Entity.Resolution.ObservationInterval != "30s" {
 		t.Errorf("observationInterval = %q, want 30s", after.Entity.Resolution.ObservationInterval)
 	}
-	if !strings.Contains(after.Entity.Resolution.Meaning, "cannot be ordered") {
+	if !strings.Contains(after.Entity.Resolution.Meaning, "no guaranteed ordering") {
 		t.Errorf("meaning does not state the limit: %s", after.Entity.Resolution.Meaning)
+	}
+}
+
+// A past window is bounded by instants, not by a duration back from now: a wide
+// duration plus a page size keeps only the newest changes, so an old event is
+// absent from an answer that claims to cover it (#373 parity with MCP).
+func TestRecentChangesFromTo(t *testing.T) {
+	s := newStack(t)
+	c := s.client(t)
+
+	var all struct {
+		RecentChanges struct {
+			Edges []struct{ Node struct{ EventTime string } }
+		}
+	}
+	c.MustPost(`{ recentChanges(window:"24h"){ edges{ node{ eventTime } } } }`, &all)
+	if len(all.RecentChanges.Edges) == 0 {
+		t.Fatal("no changes in the test stack")
+	}
+
+	// The stack's events sit at t0 and t0+1m; a window that ends before the
+	// second one must exclude it, which a duration from "now" cannot express.
+	var bounded struct {
+		RecentChanges struct {
+			Edges []struct{ Node struct{ EventTime string } }
+		}
+	}
+	c.MustPost(`query($f:String!,$t:String!){ recentChanges(from:$f, to:$t){ edges{ node{ eventTime } } } }`,
+		&bounded,
+		client.Var("f", t0.Add(-time.Minute).Format(time.RFC3339)),
+		client.Var("t", t0.Add(30*time.Second).Format(time.RFC3339)))
+	if len(bounded.RecentChanges.Edges) == 0 {
+		t.Fatal("the bounded window returned nothing")
+	}
+	if len(bounded.RecentChanges.Edges) >= len(all.RecentChanges.Edges) {
+		t.Errorf("bounded window kept %d of %d changes; it should exclude the later ones",
+			len(bounded.RecentChanges.Edges), len(all.RecentChanges.Edges))
+	}
+
+	// The two ways of naming a window are exclusive, and `to` alone is a mistake
+	// worth naming rather than silently reading as "since the beginning".
+	var ignored struct{}
+	if err := c.Post(`{ recentChanges(window:"1h", from:"2026-01-01T00:00:00Z"){ edges{ node{ eventTime } } } }`, &ignored); err == nil {
+		t.Error("window together with from was accepted")
+	}
+	if err := c.Post(`{ recentChanges(to:"2026-01-01T00:00:00Z"){ edges{ node{ eventTime } } } }`, &ignored); err == nil {
+		t.Error("to without from was accepted")
 	}
 }
