@@ -263,6 +263,7 @@ tool entity_history
   resolution object
     meaning string
     observation_interval string
+  timeline_scope string
 tool recent_changes
   in:
   change_type string

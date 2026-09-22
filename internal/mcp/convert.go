@@ -276,7 +276,7 @@ func (s *Server) graphMeta(g Graph, asOf string) GraphMeta {
 // two event_times 47 s apart, under a 30 s cadence — the gap was shorter than
 // the resolution and meant nothing.
 type Resolution struct {
-	ObservationInterval string `json:"observation_interval" jsonschema:"how often this entity's producers currently report, e.g. 30s"`
+	ObservationInterval string `json:"observation_interval" jsonschema:"the liveness interval this entity's producers declared, e.g. 30s — an UPPER BOUND on the uncertainty, deliberately padded above the real reporting cadence, never below it"`
 	Meaning             string `json:"meaning" jsonschema:"what that implies for reading the timestamps in this answer, including what they cannot tell you"`
 }
 
@@ -293,9 +293,9 @@ func (s *Server) resolutionFor(id model.EntityID) *Resolution {
 	}
 	return &Resolution{
 		ObservationInterval: interval.String(),
-		Meaning: "every event_time here is when a producer OBSERVED the fact, not when it became true: the change happened somewhere in the " +
-			interval.String() + " before it. Two changes less than " + interval.String() +
-			" apart cannot be ordered from these timestamps, and no causal conclusion may be drawn from a gap that small — not even against an external clock. " +
-			"This is the coarsest cadence among the producers referencing this entity right now; it is not recoverable for past observations.",
+		Meaning: "every event_time here is when a producer OBSERVED the fact, not when it became true. This is the liveness interval its producers DECLARED, which is padded above their real reporting cadence — so it is an upper bound on the uncertainty, never an under-statement: the change happened somewhere within " +
+			interval.String() + " before its event_time, often much closer. Two changes less than " + interval.String() +
+			" apart therefore carry no guaranteed ordering, and a causal conclusion drawn from a gap that small — including against an external clock — needs evidence from outside Toise. " +
+			"This is the coarsest declared interval among the producers referencing this entity right now; it is not recoverable for past observations.",
 	}
 }

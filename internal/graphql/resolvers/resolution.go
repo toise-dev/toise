@@ -25,9 +25,9 @@ func (r *entityResolver) Resolution(_ context.Context, obj *generated.Entity) (*
 	d := interval.String()
 	return &generated.Resolution{
 		ObservationInterval: d,
-		Meaning: "every eventTime about this entity is when a producer OBSERVED the fact, not when it became true: the change happened somewhere in the " +
-			d + " before it. Two changes less than " + d +
-			" apart cannot be ordered from these timestamps, and no causal conclusion may be drawn from a gap that small — not even against an external clock. " +
-			"This is the coarsest cadence among the producers referencing this entity right now; it is not recoverable for past observations.",
+		Meaning: "every eventTime about this entity is when a producer OBSERVED the fact, not when it became true. This is the liveness interval its producers DECLARED, padded above their real reporting cadence — an upper bound on the uncertainty, never an under-statement: the change happened somewhere within " +
+			d + " before its eventTime, often much closer. Two changes less than " + d +
+			" apart therefore carry no guaranteed ordering, and a causal conclusion drawn from a gap that small — including against an external clock — needs evidence from outside Toise. " +
+			"This is the coarsest declared interval among the producers referencing this entity right now; it is not recoverable for past observations.",
 	}, nil
 }

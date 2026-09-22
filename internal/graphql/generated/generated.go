@@ -127,7 +127,7 @@ type ComplexityRoot struct {
 		Entities      func(childComplexity int, filter *EntityFilter, first *int, after *string, asOf *string) int
 		Entity        func(childComplexity int, id string, asOf *string) int
 		EntityHistory func(childComplexity int, id string, since *string, until *string, asKnownAt *string, includeHeartbeats bool, first *int, after *string) int
-		RecentChanges func(childComplexity int, window *string, includeHeartbeats bool, first *int, after *string) int
+		RecentChanges func(childComplexity int, window *string, from *string, to *string, includeHeartbeats bool, first *int, after *string) int
 		Relations     func(childComplexity int, filter *RelationFilter, first *int, after *string, asOf *string) int
 	}
 
@@ -181,7 +181,7 @@ type QueryResolver interface {
 	Entities(ctx context.Context, filter *EntityFilter, first *int, after *string, asOf *string) (*EntityConnection, error)
 	Relations(ctx context.Context, filter *RelationFilter, first *int, after *string, asOf *string) (*RelationConnection, error)
 	EntityHistory(ctx context.Context, id string, since *string, until *string, asKnownAt *string, includeHeartbeats bool, first *int, after *string) (*ChangeConnection, error)
-	RecentChanges(ctx context.Context, window *string, includeHeartbeats bool, first *int, after *string) (*ChangeConnection, error)
+	RecentChanges(ctx context.Context, window *string, from *string, to *string, includeHeartbeats bool, first *int, after *string) (*ChangeConnection, error)
 	Canonical(ctx context.Context, id string, asOf *string) (*CanonicalGroup, error)
 }
 type SubscriptionResolver interface {
@@ -552,7 +552,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Query.RecentChanges(childComplexity, args["window"].(*string), args["includeHeartbeats"].(bool), args["first"].(*int), args["after"].(*string)), true
+		return e.ComplexityRoot.Query.RecentChanges(childComplexity, args["window"].(*string), args["from"].(*string), args["to"].(*string), args["includeHeartbeats"].(bool), args["first"].(*int), args["after"].(*string)), true
 	case "Query.relations":
 		if e.ComplexityRoot.Query.Relations == nil {
 			break
@@ -916,17 +916,19 @@ type Entity {
 """
 The resolution of Toise's timestamps for one entity.
 
-` + "`" + `eventTime` + "`" + ` is when a producer OBSERVED a fact, never when the fact became true:
-the change happened somewhere in ` + "`" + `observationInterval` + "`" + ` BEFORE it. Two changes
-closer together than that interval carry no ordering information, and no causal
-conclusion may be drawn from such a gap — not even against an external clock.
+` + "`" + `eventTime` + "`" + ` is when a producer OBSERVED a fact, never when the fact became true.
+` + "`" + `observationInterval` + "`" + ` is the liveness interval the producers DECLARED, padded
+above their real reporting cadence — an upper bound on the uncertainty, never an
+under-statement. Two changes closer together than that interval carry no
+guaranteed ordering, and a causal conclusion drawn from such a gap — including
+against an external clock — needs evidence from outside Toise.
 
 The meaning is carried as a sentence, not only as a number, for the reason
 ` + "`" + `delete_source` + "`" + ` is (#346): a bare duration beside nanosecond timestamps invites
 exactly the misreading it exists to prevent.
 """
 type Resolution {
-  "How often this entity's producers currently report, e.g. ` + "`" + `30s` + "`" + `."
+  "The liveness interval this entity's producers declared, e.g. ` + "`" + `30s` + "`" + `. An upper bound on the uncertainty, not their real reporting cadence."
   observationInterval: String!
   "What that implies for reading timestamps, including what they cannot tell you."
   meaning: String!
@@ -1177,13 +1179,22 @@ type Query {
   """
   Recent change events across all entities within ` + "`" + `window` + "`" + ` (a Go duration like
   ` + "`" + `15m` + "`" + `, ` + "`" + `2h` + "`" + `, ` + "`" + `24h` + "`" + `), newest-first, with Relay pagination. ` + "`" + `window` + "`" + ` defaults to
-  ` + "`" + `1h` + "`" + ` and ` + "`" + `entity.unchanged` + "`" + ` heartbeats are excluded unless ` + "`" + `includeHeartbeats` + "`" + `
+  ` + "`" + `1h` + "`" + ` when neither it nor ` + "`" + `from` + "`" + ` is given — the default lives in the resolver
+  rather than in this signature, so that supplying ` + "`" + `window` + "`" + ` can be told apart
+  from omitting it, and giving both ways of naming a window is an error instead
+  of a silent preference. ` + "`" + `entity.unchanged` + "`" + ` heartbeats are excluded unless ` + "`" + `includeHeartbeats` + "`" + `
   is set — both matching the MCP ` + "`" + `recent_changes` + "`" + ` tool, so the same question
   asked over either surface takes the same shape, the same defaults, and the
   same answer. Heartbeats dominate a live window; raw timelines want them,
   change review does not.
+
+  Give ` + "`" + `from` + "`" + `/` + "`" + `to` + "`" + ` (RFC 3339 instants) instead of ` + "`" + `window` + "`" + ` to investigate a PAST
+  window — the minutes before an alert, a maintenance campaign. A wide ` + "`" + `window` + "`" + `
+  plus ` + "`" + `first` + "`" + ` keeps only the NEWEST changes, so an event hours back is simply
+  absent from an answer that claims to cover it; bounding the window is how you
+  avoid concluding that nothing happened.
   """
-  recentChanges(window: String = "1h", includeHeartbeats: Boolean! = false, first: Int = 100, after: String): ChangeConnection!
+  recentChanges(window: String, from: String, to: String, includeHeartbeats: Boolean! = false, first: Int = 100, after: String): ChangeConnection!
 
   """
   The canonical group of an entity: everything believed to be the same real
@@ -1779,30 +1790,46 @@ func (ec *executionContext) field_Query_recentChanges_args(ctx context.Context, 
 		return nil, err
 	}
 	args["window"] = arg0
-	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "includeHeartbeats",
-		func(ctx context.Context, v any) (bool, error) {
-			return ec.unmarshalNBoolean2bool(ctx, v)
-		})
-	if err != nil {
-		return nil, err
-	}
-	args["includeHeartbeats"] = arg1
-	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "first",
-		func(ctx context.Context, v any) (*int, error) {
-			return ec.unmarshalOInt2ᚖint(ctx, v)
-		})
-	if err != nil {
-		return nil, err
-	}
-	args["first"] = arg2
-	arg3, err := graphql.ProcessArgField(ctx, rawArgs, "after",
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "from",
 		func(ctx context.Context, v any) (*string, error) {
 			return ec.unmarshalOString2ᚖstring(ctx, v)
 		})
 	if err != nil {
 		return nil, err
 	}
-	args["after"] = arg3
+	args["from"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "to",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["to"] = arg2
+	arg3, err := graphql.ProcessArgField(ctx, rawArgs, "includeHeartbeats",
+		func(ctx context.Context, v any) (bool, error) {
+			return ec.unmarshalNBoolean2bool(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["includeHeartbeats"] = arg3
+	arg4, err := graphql.ProcessArgField(ctx, rawArgs, "first",
+		func(ctx context.Context, v any) (*int, error) {
+			return ec.unmarshalOInt2ᚖint(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["first"] = arg4
+	arg5, err := graphql.ProcessArgField(ctx, rawArgs, "after",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["after"] = arg5
 	return args, nil
 }
 
@@ -3336,7 +3363,7 @@ func (ec *executionContext) _Query_recentChanges(ctx context.Context, field grap
 		},
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().RecentChanges(ctx, fc.Args["window"].(*string), fc.Args["includeHeartbeats"].(bool), fc.Args["first"].(*int), fc.Args["after"].(*string))
+			return ec.Resolvers.Query().RecentChanges(ctx, fc.Args["window"].(*string), fc.Args["from"].(*string), fc.Args["to"].(*string), fc.Args["includeHeartbeats"].(bool), fc.Args["first"].(*int), fc.Args["after"].(*string))
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *ChangeConnection) graphql.Marshaler {

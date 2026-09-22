@@ -216,7 +216,18 @@ func New(graph Graph, events EventReader) *Server {
 // HTTPHandler returns an http.Handler serving the MCP server over the Streamable
 // HTTP transport, suitable for mounting at a path such as /mcp.
 func (s *Server) HTTPHandler() http.Handler {
-	return mcpsdk.NewStreamableHTTPHandler(func(*http.Request) *mcpsdk.Server { return s.srv }, nil)
+	inner := mcpsdk.NewStreamableHTTPHandler(func(*http.Request) *mcpsdk.Server { return s.srv }, nil)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The transport's listening stream is a GET that never ends. A reverse
+		// proxy buffering by default (nginx does) holds it until its buffer
+		// fills, so a spec-conforming client never even receives the response
+		// headers and hangs on connect — while POSTs sail through, because they
+		// finish. Declaring the stream unbuffered here makes an instance sound
+		// behind a proxy nobody configured for it: at a customer, behind their
+		// own reverse proxy, no one will come and set proxy_buffering off.
+		w.Header().Set("X-Accel-Buffering", "no")
+		inner.ServeHTTP(w, r)
+	})
 }
 
 // ServeStdio runs the MCP server over stdio until the context is canceled or

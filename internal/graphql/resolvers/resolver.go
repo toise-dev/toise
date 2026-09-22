@@ -168,10 +168,23 @@ func (r *queryResolver) Relations(ctx context.Context, filter *generated.Relatio
 			typ = *filter.Type
 		}
 		if filter.FromID != nil {
-			from = model.EntityID(*filter.FromID)
+			// Accept the same three handle forms the rest of the schema does
+			// (ADR 0035). Before this, a fingerprint here matched nothing and
+			// answered totalCount: 0 — a silent empty result where every other
+			// surface resolves it, which is the exact failure this project
+			// spent a release removing.
+			id, ok := g.ResolveHandle(*filter.FromID)
+			if !ok {
+				return &generated.RelationConnection{Edges: []generated.RelationEdge{}, PageInfo: &generated.PageInfo{}}, nil
+			}
+			from = id
 		}
 		if filter.ToID != nil {
-			to = model.EntityID(*filter.ToID)
+			id, ok := g.ResolveHandle(*filter.ToID)
+			if !ok {
+				return &generated.RelationConnection{Edges: []generated.RelationEdge{}, PageInfo: &generated.PageInfo{}}, nil
+			}
+			to = id
 		}
 	}
 	all := g.ListRelations(typ, from, to)
@@ -254,22 +267,59 @@ func (r *queryResolver) EntityHistory(ctx context.Context, id string, since, unt
 // question asked over either surface takes the same shape and the same default.
 const defaultRecentChangesWindow = "1h"
 
-func (r *queryResolver) RecentChanges(ctx context.Context, window *string, includeHeartbeats bool, first *int, after *string) (*generated.ChangeConnection, error) {
+// changeWindow resolves the two ways of naming a window into instants: a
+// duration looking back from now, or an explicit from/to pair. The pair is what
+// lets a past window be investigated at all — a wide duration plus a page size
+// keeps only the NEWEST changes, so an event hours back is absent from an answer
+// that claims to cover it, and its absence reads as "nothing happened".
+func (r *queryResolver) changeWindow(window, from, to *string) (start, end time.Time, err error) {
+	has := func(p *string) bool { return p != nil && *p != "" }
+	if has(from) {
+		if has(window) {
+			return time.Time{}, time.Time{}, fmt.Errorf("give either window or from/to, not both")
+		}
+		start, perr := time.Parse(time.RFC3339, *from)
+		if perr != nil {
+			return time.Time{}, time.Time{}, fmt.Errorf("invalid from %q: use an RFC 3339 instant like 2026-09-20T08:00:00Z", *from)
+		}
+		endAt := r.now()
+		if has(to) {
+			endAt, perr = time.Parse(time.RFC3339, *to)
+			if perr != nil {
+				return time.Time{}, time.Time{}, fmt.Errorf("invalid to %q: use an RFC 3339 instant like 2026-09-20T09:30:00Z", *to)
+			}
+		}
+		if !endAt.After(start) {
+			return time.Time{}, time.Time{}, fmt.Errorf("to (%s) must be after from (%s)", endAt.Format(time.RFC3339), start.Format(time.RFC3339))
+		}
+		return start, endAt.Add(time.Nanosecond), nil
+	}
+	if has(to) {
+		return time.Time{}, time.Time{}, fmt.Errorf("to requires from: give both instants, or a window duration instead")
+	}
 	w := defaultRecentChangesWindow
-	if window != nil && *window != "" {
+	if has(window) {
 		w = *window
 	}
-	d, err := time.ParseDuration(w)
-	if err != nil || d <= 0 {
-		return nil, fmt.Errorf("invalid window %q: use a positive Go duration like 15m, 2h, or 24h", w)
+	d, derr := time.ParseDuration(w)
+	if derr != nil || d <= 0 {
+		return time.Time{}, time.Time{}, fmt.Errorf("invalid window %q: use a positive Go duration like 15m, 2h, or 24h", w)
 	}
 	now := r.now()
+	return now.Add(-d), now.Add(time.Nanosecond), nil
+}
+
+func (r *queryResolver) RecentChanges(ctx context.Context, window, from, to *string, includeHeartbeats bool, first *int, after *string) (*generated.ChangeConnection, error) {
+	start, end, err := r.changeWindow(window, from, to)
+	if err != nil {
+		return nil, err
+	}
 	// Walk the time index newest-first and drop heartbeats from the tag alone:
 	// a window is heartbeat-dominated, and excluding an event must not cost a
 	// point lookup and a decode of it (#351). Only kept events are resolved —
 	// pre-tagging entries fall back to resolving, and age out with retention.
 	var evs []model.Event
-	err = r.Store.ScanTimeIndex(ctx, now.Add(-d), now.Add(time.Nanosecond), true, func(e store.TimeIndexEntry) error {
+	err = r.Store.ScanTimeIndex(ctx, start, end, true, func(e store.TimeIndexEntry) error {
 		if !includeHeartbeats && e.Tagged && e.ChangeType == model.EntityUnchanged {
 			return nil
 		}

@@ -265,16 +265,18 @@ type RelationFilter struct {
 
 // The resolution of Toise's timestamps for one entity.
 //
-// `eventTime` is when a producer OBSERVED a fact, never when the fact became true:
-// the change happened somewhere in `observationInterval` BEFORE it. Two changes
-// closer together than that interval carry no ordering information, and no causal
-// conclusion may be drawn from such a gap — not even against an external clock.
+// `eventTime` is when a producer OBSERVED a fact, never when the fact became true.
+// `observationInterval` is the liveness interval the producers DECLARED, padded
+// above their real reporting cadence — an upper bound on the uncertainty, never an
+// under-statement. Two changes closer together than that interval carry no
+// guaranteed ordering, and a causal conclusion drawn from such a gap — including
+// against an external clock — needs evidence from outside Toise.
 //
 // The meaning is carried as a sentence, not only as a number, for the reason
 // `delete_source` is (#346): a bare duration beside nanosecond timestamps invites
 // exactly the misreading it exists to prevent.
 type Resolution struct {
-	// How often this entity's producers currently report, e.g. `30s`.
+	// The liveness interval this entity's producers declared, e.g. `30s`. An upper bound on the uncertainty, not their real reporting cadence.
 	ObservationInterval string `json:"observationInterval"`
 	// What that implies for reading timestamps, including what they cannot tell you.
 	Meaning string `json:"meaning"`

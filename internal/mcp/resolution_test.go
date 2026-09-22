@@ -33,7 +33,7 @@ func TestGetEntityCarriesResolution(t *testing.T) {
 		t.Errorf("observation_interval = %q, want 30s", out.Resolution.ObservationInterval)
 	}
 	// The number alone invites the misreading; the sentence is the point.
-	for _, want := range []string{"OBSERVED", "cannot be ordered", "30s"} {
+	for _, want := range []string{"OBSERVED", "no guaranteed ordering", "upper bound", "30s"} {
 		if !strings.Contains(out.Resolution.Meaning, want) {
 			t.Errorf("meaning does not mention %q: %s", want, out.Resolution.Meaning)
 		}
@@ -69,5 +69,34 @@ func TestResolutionAbsentWhenUnknown(t *testing.T) {
 		t.Fatal(err)
 	} else if out.Resolution != nil {
 		t.Errorf("resolution present with no cadence source: %+v", out.Resolution)
+	}
+}
+
+// A timeline that opens on a creation says what it does NOT cover. History is
+// keyed by the node-local id, so an entity that flapped shows a short, calm
+// timeline — which read as "nothing ever happened" for three days.
+func TestEntityHistoryDeclaresItsScope(t *testing.T) {
+	s := newTestServer()
+
+	_, out, err := s.entityHistory(context.Background(), nil, EntityHistoryInput{EntityID: "01HOST_WEB"})
+	if err != nil {
+		t.Fatalf("entityHistory: %v", err)
+	}
+	if len(out.Changes) == 0 {
+		t.Skip("the fixture has no history for this entity")
+	}
+	opensOnCreation := out.Changes[0].ChangeType == model.EntityCreated.String()
+	switch {
+	case opensOnCreation && out.TimelineScope == "":
+		t.Error("timeline opens on a creation but says nothing about earlier incarnations")
+	case !opensOnCreation && out.TimelineScope != "":
+		t.Errorf("timeline does not open on a creation yet carries a scope note: %s", out.TimelineScope)
+	}
+	if opensOnCreation {
+		for _, want := range []string{"ONE incarnation", "NOT here", "recent_changes"} {
+			if !strings.Contains(out.TimelineScope, want) {
+				t.Errorf("scope note does not mention %q: %s", want, out.TimelineScope)
+			}
+		}
 	}
 }
