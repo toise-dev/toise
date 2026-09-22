@@ -9,6 +9,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
+## [0.17.1] - 2026-09-22
+
+**The release that a week of field use wrote.** Every item here was found by
+something breaking in production, not by a review: a client hanging on connect,
+a filter answering zero where it should have resolved, a timeline that looked
+calm while its entity flapped nine times in three days. The pattern they share
+is the one 0.17.0 set out to remove — an answer that is confidently wrong costs
+more than an answer that is missing — so they are fixed in a patch rather than
+queued behind a feature.
+
+### Fixed
+
+- **The MCP stream declares itself unbuffered.** The transport's listening
+  stream is a `GET` that never ends. A reverse proxy buffering by default —
+  nginx does — holds it until its buffer fills, so a spec-conforming client
+  never receives the response headers and hangs on connect, while `POST`s sail
+  through because they finish. The failure is intermittent, which is worse than
+  an outright one: it reads as a network problem at the client's site. The
+  server now sets `X-Accel-Buffering: no`, so an instance is sound behind a
+  proxy nobody configured for it — at a customer, behind their own reverse
+  proxy, no one will come and set `proxy_buffering off`.
+
+- **The `relations` filter accepts the three handle forms.** An identity
+  fingerprint in `relations(filter: {fromId, toId})` matched nothing and
+  answered `totalCount: 0` — a silent empty result on the one surface 0.17.0's
+  release note claimed had been covered. It resolves handles now, and an
+  unresolvable one answers empty rather than pretending to have searched.
+
+- **`entity_history` states what it does not cover.** History is keyed by the
+  node-local id, so an entity re-minted after the resurrection window starts a
+  fresh timeline. One that flapped nine times in sixty-three hours showed three
+  events and read as "nothing ever happened to this" — which is how the
+  flapping stayed invisible for days. A timeline opening on a creation now says
+  that earlier incarnations live under another id, and points at
+  `recent_changes` with `from`/`to`. **The index that would genuinely span
+  incarnations is a storage change and is not in this release**; this makes the
+  answer honest, not complete.
+
+- **`recentChanges` takes `from`/`to` on GraphQL too.** The MCP tool has had it;
+  the schema offered only a duration, while our own guidance says a wide window
+  plus a page size keeps the newest changes and silently drops older ones — so
+  the surface could not ask the question it warns you to ask. The `window`
+  default moves from the signature into the resolver, which is what lets
+  supplying it be told apart from omitting it; naming a window both ways is now
+  an error instead of a silent preference.
+
+- **The `resolution` block names the right quantity.** It reports the producers'
+  *declared liveness interval*, which is deliberately padded above their real
+  reporting cadence — in production it announces `30m` where observations
+  arrive under a minute. The value was never wrong as a bound; the label called
+  it a cadence, which invited reading a conservative ceiling as a measurement.
+  It now says upper bound, and says it never under-states.
+
 ## [0.17.0] - 2026-09-21
 
 **The release that says what its answers are worth.** Two failures in the field,
