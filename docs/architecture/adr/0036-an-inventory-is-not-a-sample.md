@@ -46,6 +46,15 @@ Toise today has one way to say a thing exists and one way to say it is gone. It
 has no way to say *"this exists continuously and I see it now and then"* — so
 producers say the only thing they can, and say it wrongly.
 
+The producer's own maintainer put the distinction more sharply than this ADR
+first did, once the case was in front of both of us, and it is worth quoting
+because it is the shortest form of the rule: *the listener inventory is
+exhaustive by construction — you read the complete table of listening sockets,
+so an absence there is a real absence. Sampling outbound connections is not.
+Treating them the same is the error.* Two sources, one of which can be read
+negatively and one of which cannot, and nothing in the contract said which was
+which.
+
 ## Decision
 
 1. **Removal-by-absence is valid only for an exhaustive enumeration.** A
