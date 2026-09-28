@@ -46,12 +46,31 @@ func TestEntityOutCarriesDisplayName(t *testing.T) {
 			full.IdentityFingerprint, after.IdentityFingerprint)
 	}
 
-	// An entity identified by its name has nothing extra to show.
+	// An entity identified by its own name still has a name to show: the field
+	// always answers when one exists, so a caller never needs a fallback branch.
+	// The LABEL is what skips it, to avoid "host web-server-1 host.name=web-server-1".
 	byName := model.Entity{
 		Type:     model.TypeHost,
 		Identity: []model.KeyValue{{Key: "host.name", Value: model.StringValue("web-server-1")}},
 	}
-	if got := entityOut(byName, false).DisplayName; got != "" {
-		t.Fatalf("display_name = %q, want empty when the name is the identity", got)
+	out := entityOut(byName, false)
+	if out.DisplayName != "web-server-1" {
+		t.Fatalf("display_name = %q, want web-server-1", out.DisplayName)
+	}
+	if out.Label != "host host.name=web-server-1" {
+		t.Fatalf("label = %q, want no duplicated name", out.Label)
+	}
+
+	// A type whose readable name has to be composed gets it composed here, once,
+	// rather than in every consumer.
+	ep := model.Entity{
+		Type: model.TypeNetworkEndpoint,
+		Identity: []model.KeyValue{
+			{Key: "server.address", Value: model.StringValue("10.0.0.5")},
+			{Key: "server.port", Value: model.StringValue("5432")},
+		},
+	}
+	if got := entityOut(ep, false).DisplayName; got != "10.0.0.5:5432" {
+		t.Fatalf("endpoint display_name = %q, want 10.0.0.5:5432", got)
 	}
 }

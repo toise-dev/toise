@@ -1,14 +1,17 @@
 package model
 
-// displayNameKeys names, per entity type, the descriptive attributes that hold
-// what a human calls the thing, in order of preference. A type absent from this
-// map has no display name: its identity already reads as a name (a db instance
-// id is "redis:6379@<host>"), or nothing observed on it is more legible than the
-// identity itself.
+import "strings"
+
+// displayNameKeys names, per entity type, the attributes that hold what a human
+// calls the thing, in order of preference. A key may be an identifying one: an
+// entity identified by its own name still has a name to show.
+//
+// A type absent from this map and from displayNameComposed has no display name.
+// service.listener is the deliberate case: its identity is one composed string
+// containing a host uuid, and nothing observed on it reads better.
 //
 // These keys are for RENDERING ONLY. A display name drifts — a host is renamed
-// while its host.id does not — so nothing may key, join, or match on one. That
-// is the whole reason identity lives in Identity and this lives apart from it.
+// while its host.id does not — so nothing may key, join, or match on one.
 var displayNameKeys = map[string][]string{
 	TypeHost:             {"host.name"},
 	TypeContainer:        {"container.name", "compose.service"},
@@ -18,46 +21,87 @@ var displayNameKeys = map[string][]string{
 	TypeProcess:          {"process.name", "process.executable.name"},
 	TypePod:              {"k8s.pod.name"},
 	TypeComputeVM:        {"vm.name", "host.name"},
+	TypeNetworkRoute:     {"route.destination"},
 }
 
-// DisplayName returns the human-readable name of an entity, or "" when it has
-// none worth showing.
+// DisplayName returns what a human calls an entity — "dash172", "senhub-ping",
+// "10.0.0.5:5432" — or "" when nothing observed on it reads better than its
+// identity.
 //
-// It returns "" when the preferred key is itself an identifying attribute: the
-// name is already in the identity, and repeating it would pad every label of
-// that type with a duplicate.
+// It is the value to render as-is. It is never a key: a rename moves it and
+// leaves IdentityHash alone, which is the whole reason the two are separate.
 //
-// The point is scanning. An entity's identity is frequently a UUID or a 64-char
-// digest, so a caller listing many entities — the compact verbosity that exists
-// precisely to scan cheaply — used to see nothing it could recognize, even
-// though host.name and container.name were present on every one of them. An
-// answer that hides what it holds reads exactly like an answer that holds
-// nothing (#378).
+// Some types have no single attribute holding their name and must have one
+// composed. Doing that here rather than in each consumer is the point: every
+// consumer needs a readable name, so every consumer would otherwise write its
+// own cascade, with its own order and its own edge cases, and two products
+// would show the same thing under two names.
 func DisplayName(e Entity) string {
-	keys, ok := displayNameKeys[e.Type]
-	if !ok {
-		return ""
-	}
-	for _, key := range keys {
-		if hasIdentityKey(e, key) {
-			return ""
+	if compose, ok := displayNameComposed[e.Type]; ok {
+		if s := compose(e); s != "" {
+			return s
 		}
-		for _, kv := range e.Attributes {
-			if kv.Key == key {
-				if s := kv.Value.Display(); s != "" {
-					return s
-				}
-			}
+	}
+	for _, key := range displayNameKeys[e.Type] {
+		if s := attrValue(e, key); s != "" {
+			return s
 		}
 	}
 	return ""
 }
 
-func hasIdentityKey(e Entity, key string) bool {
+// LabelName is DisplayName minus what a label would duplicate: a label prints
+// the identifying attributes right after the name, so an entity identified by
+// its own name would otherwise read "host web-server-1 host.name=web-server-1".
+func LabelName(e Entity) string {
+	name := DisplayName(e)
+	if name == "" {
+		return ""
+	}
 	for _, kv := range e.Identity {
-		if kv.Key == key {
-			return true
+		if kv.Value.Display() == name {
+			return ""
 		}
 	}
-	return false
+	return name
+}
+
+// displayNameComposed holds the types whose readable name is built from several
+// attributes rather than read from one.
+var displayNameComposed = map[string]func(Entity) string{
+	TypeNetworkEndpoint: endpointName,
+}
+
+// endpointName renders an endpoint as address:port, bracketing an IPv6 literal
+// so the port stays legible — "[2a01:db8::1]:443" rather than an address with a
+// trailing colon-number that reads as one more group.
+func endpointName(e Entity) string {
+	addr := attrValue(e, "server.address")
+	if addr == "" {
+		return ""
+	}
+	if strings.Contains(addr, ":") && !strings.HasPrefix(addr, "[") {
+		addr = "[" + addr + "]"
+	}
+	if port := attrValue(e, "server.port"); port != "" {
+		return addr + ":" + port
+	}
+	return addr
+}
+
+// attrValue reads a key from either attribute list. Identity is searched first:
+// a key that identifies an entity is the more authoritative of the two when a
+// producer sends both.
+func attrValue(e Entity, key string) string {
+	for _, kv := range e.Identity {
+		if kv.Key == key {
+			return kv.Value.Display()
+		}
+	}
+	for _, kv := range e.Attributes {
+		if kv.Key == key {
+			return kv.Value.Display()
+		}
+	}
+	return ""
 }
