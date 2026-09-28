@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
+### Added
+
+- **A readable name has its own field.** Entities now carry `display_name`
+  (MCP, omitted when empty) and `displayName` (GraphQL) beside
+  `identityFingerprint`. Render it as-is: it is the value meant to be shown on
+  its own.
+
+  The label change below fixed scanning but left one string doing two jobs, and
+  `host dash172 host.id=6ccc0dcc-…` is wrong for a screen that wants `dash172`.
+  A caller therefore still had two bad paths — split a string documented as not
+  parseable, or dig into attributes for `host.name` and end up keying on a value
+  that drifts. That second path is how a consumer came to group flapping
+  entities by name, which silently splits one flapping entity into two calm ones
+  the moment a machine is renamed: a real flap that stops being visible rather
+  than erroring.
+
+  There are now three values with three jobs — `identityFingerprint` to match
+  on, `display_name` to show, the label to scan — and none invites another's
+  use. A display name is never a key: a rename moves it and leaves the
+  fingerprint byte-identical, which both surfaces pin with a test.
+
 ### Changed
 
 - **An entity label now carries the name the graph already held.** Labels were
