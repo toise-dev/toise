@@ -166,6 +166,16 @@ type Entity struct {
 	// written inline as `type:key=value` (comma-separated for a multi-key
 	// identity) — which reaches the entity without a lookup first (ADR 0035).
 	IdentityFingerprint string `json:"identityFingerprint"`
+	// What a human calls this entity — `dash172` for a host, `senhub-ping` for a
+	// container — or empty when nothing observed on it reads better than its
+	// identity. Render it as-is: it is the display value, and it is the only field
+	// meant to be shown on its own.
+	//
+	// It is NOT a key. A display name drifts — a host is renamed while its
+	// `host.id` does not — so nothing may group, join or match on it. Use
+	// `identityFingerprint` for that. The two exist separately so that neither
+	// invites the other's use (ADR 0035).
+	DisplayName string `json:"displayName"`
 	// Entity type, e.g. `host`, `process`, `network.interface`.
 	Type string `json:"type"`
 	// Identifying attributes — their values together identify the entity.

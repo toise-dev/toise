@@ -52,6 +52,7 @@ func entityToGQL(e model.Entity, deleted bool) *generated.Entity {
 	return &generated.Entity{
 		ID:                  string(e.ID),
 		IdentityFingerprint: e.IdentityHash(),
+		DisplayName:         model.DisplayName(e),
 		Type:                e.Type,
 		Identity:            attrsToGQL(e.Identity),
 		Attributes:          attrsToGQL(e.Attributes),

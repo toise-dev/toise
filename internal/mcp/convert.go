@@ -23,7 +23,8 @@ type Entity struct {
 	ID                  string      `json:"id" jsonschema:"this replica's local id for the entity (a ULID); it differs between replicas and is re-minted after a long silence, so prefer identity_fingerprint to carry between calls"`
 	IdentityFingerprint string      `json:"identity_fingerprint" jsonschema:"the handle that names the entity itself, derived from its identifying attributes; every replica computes the same one, and any tool taking an entity id takes this instead"`
 	Type                string      `json:"type" jsonschema:"the entity type, e.g. host, process, network_interface"`
-	Label               string      `json:"label" jsonschema:"a short human-readable label derived from the identifying attributes"`
+	DisplayName         string      `json:"display_name,omitempty" jsonschema:"what a human calls this entity - dash172 for a host, senhub-ping for a container - or absent when nothing observed on it reads better than its identity; render it as-is, and never group, join or match on it: a display name drifts when a thing is renamed, identity_fingerprint does not"`
+	Label               string      `json:"label" jsonschema:"a one-line summary for scanning: the type, the display name, then the identifying attributes; not a key and not meant to be shown on its own - use display_name to render and identity_fingerprint to match"`
 	Identity            []Attribute `json:"identity,omitempty" jsonschema:"the identifying attributes that together identify this entity; omitted in compact verbosity"`
 	Attributes          []Attribute `json:"attributes,omitempty" jsonschema:"descriptive, non-identifying attributes; omitted in compact verbosity"`
 	Deleted             bool        `json:"deleted" jsonschema:"true if the entity has been observed deleted"`
@@ -149,6 +150,7 @@ func entityOutV(e model.Entity, deleted, compact bool) Entity {
 		ID:                  string(e.ID),
 		IdentityFingerprint: e.IdentityHash(),
 		Type:                e.Type,
+		DisplayName:         model.DisplayName(e),
 		Label:               label(e),
 		Deleted:             deleted,
 	}

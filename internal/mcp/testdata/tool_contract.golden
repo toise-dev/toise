@@ -12,6 +12,7 @@ tool find_entities
       type string
       value string
     deleted bool
+    display_name string
     id string
     identity []object
       key string
@@ -54,6 +55,7 @@ tool get_entity
       type string
       value string
     deleted bool
+    display_name string
     id string
     identity []object
       key string
@@ -93,6 +95,7 @@ tool get_neighbors
       type string
       value string
     deleted bool
+    display_name string
     id string
     identity []object
       key string
@@ -109,6 +112,7 @@ tool get_neighbors
         type string
         value string
       deleted bool
+      display_name string
       id string
       identity []object
         key string
@@ -144,6 +148,7 @@ tool find_path
         type string
         value string
       deleted bool
+      display_name string
       id string
       identity []object
         key string
@@ -177,6 +182,7 @@ tool impact_of
       type string
       value string
     deleted bool
+    display_name string
     id string
     identity []object
       key string
@@ -193,6 +199,7 @@ tool impact_of
       type string
       value string
     deleted bool
+    display_name string
     id string
     identity []object
       key string
@@ -232,6 +239,7 @@ tool entity_history
         type string
         value string
       deleted bool
+      display_name string
       id string
       identity []object
         key string
@@ -292,6 +300,7 @@ tool recent_changes
         type string
         value string
       deleted bool
+      display_name string
       id string
       identity []object
         key string
@@ -336,6 +345,7 @@ tool graph_diff
       type string
       value string
     deleted bool
+    display_name string
     id string
     identity []object
       key string
@@ -352,6 +362,7 @@ tool graph_diff
       type string
       value string
     deleted bool
+    display_name string
     id string
     identity []object
       key string
@@ -366,6 +377,7 @@ tool graph_diff
       type string
       value string
     deleted bool
+    display_name string
     id string
     identity []object
       key string
@@ -382,6 +394,7 @@ tool graph_diff
       type string
       value string
     deleted bool
+    display_name string
     id string
     identity []object
       key string
@@ -500,6 +513,7 @@ tool telemetry_keys
       type string
       value string
     deleted bool
+    display_name string
     id string
     identity []object
       key string
