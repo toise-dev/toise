@@ -236,14 +236,22 @@ const attrsOf=n=>Object.fromEntries((n.attributes||[]).map(a=>[a.key,a.value]));
 const identOf=n=>Object.fromEntries((n.identity||[]).map(a=>[a.key,a.value]));
 function hostNameById(hid){ for(const e of Object.values(ENT)){ if(e.type==='host' && identOf(e)['host.id']===hid) return attrsOf(e)['host.name']; } return null; }
 
-// --- inferred links (an optional, derived overlay; OFF by default) ----------
+// --- inferred links (a derived overlay; ON by default) ----------------------
 // The engine stores facts only and never merges by heuristic, so an IP carried as
 // a plain attribute (a listener's bind address, an endpoint's server.address, a
 // route's next hop) is NOT linked to the network.address entity for that IP — the
 // same address ends up smeared across disconnected nodes. This overlay draws a
 // dashed edge from each IP-bearing entity to the matching network.address node, so
 // the graph reads as connected. These edges are DERIVED, not stored relations.
-let inferred=localStorage.getItem('toise_viz_inferred')==='1';
+// ON unless the reader turned it off. A graph database is used precisely so that
+// relations can be traversed, and the derived links are often the only thing
+// joining two halves of a real chain — a gateway's outbound dependency and the
+// dashboard listening behind it are stored as an endpoint and a listener that no
+// stored edge connects. Defaulting this overlay off produced a graph that looked
+// like it had no links at all, and a reader has no way to tell that apart from a
+// graph that genuinely has none. Off by default hid the answer; the toggle stays
+// for whoever wants only stored facts.
+let inferred=localStorage.getItem('toise_viz_inferred')!=='0';
 const IPV4=/(?:^|[^0-9.])(\d{1,3}(?:\.\d{1,3}){3})(?![0-9.])/g;
 // Host-local / non-routable addresses are NOT global join points: the same IP
 // exists independently on every host, so linking through it smears unrelated nodes
@@ -349,7 +357,13 @@ function rebuild(){
   edges.update(eUp);
   edges.getIds().forEach(id=>{ if(!edgeIds.has(id)) edges.remove(id); });
   document.getElementById('nNodes').textContent=nodeIds.size;
-  document.getElementById('nEdges').textContent=realCount+(inferred?' +'+(edgeIds.size-realCount)+' inferred':'');
+  // Never let a hidden thing read as an absent thing: when edges are painted
+  // invisible the canvas is indistinguishable from a graph with no relations, so
+  // the counter says which of the two it is.
+  const nE=document.getElementById('nEdges');
+  const inf=inferred?' +'+(edgeIds.size-realCount)+' inferred':'';
+  nE.textContent=realCount+inf+(showEdges?'':' — HIDDEN, click "edges"');
+  nE.style.color=showEdges?'':'var(--warn)';
   const leg=document.getElementById('legend'); leg.innerHTML='';
   if(inferred){ const s=document.createElement('span'); s.style.cursor='default'; s.style.opacity='.85';
     s.innerHTML='<i style="background:none;border-top:2px dashed #d29922;border-radius:0;height:0;width:14px"></i>inferred (derived, not stored)';
