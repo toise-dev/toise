@@ -431,9 +431,16 @@ func attrsView(kvs []model.KeyValue) []attrView {
 	return out
 }
 
+// label renders "type name key=value …": the display name when the entity has
+// one, then its identifying attributes. Shared shape with the MCP and GraphQL
+// labels, via model.DisplayName (#378).
 func label(e model.Entity) string {
 	var b strings.Builder
 	b.WriteString(e.Type)
+	if name := model.DisplayName(e); name != "" {
+		b.WriteByte(' ')
+		b.WriteString(name)
+	}
 	for _, kv := range e.Identity {
 		val, _ := valueString(kv.Value)
 		b.WriteByte(' ')

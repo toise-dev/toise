@@ -59,12 +59,17 @@ func (r *queryResolver) Canonical(ctx context.Context, id string, asOf *string) 
 	return &generated.CanonicalGroup{Aliases: aliases, Links: out}, nil
 }
 
-// entityLabel renders an entity as "type key=value …" over its identifying
-// attributes — enough for a human or a model to tell two aliases apart without
-// a second round trip.
+// entityLabel renders an entity as "type name key=value …" — its display name
+// when it has one, then its identifying attributes. Enough for a human or a
+// model to tell two aliases apart without a second round trip, and legible when
+// the identity is a UUID (#378).
 func entityLabel(e model.Entity) string {
 	var b strings.Builder
 	b.WriteString(e.Type)
+	if name := model.DisplayName(e); name != "" {
+		b.WriteByte(' ')
+		b.WriteString(name)
+	}
 	for _, kv := range e.Identity {
 		b.WriteByte(' ')
 		b.WriteString(kv.Key)

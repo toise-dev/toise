@@ -114,11 +114,18 @@ func attrsOut(kvs []model.KeyValue) []Attribute {
 	return out
 }
 
-// label builds a compact, human-readable identifier from the entity's
-// identifying attributes, e.g. "host hostname=web-server-1".
+// label builds a compact, human-readable identifier: the type, the entity's
+// display name when it has one, then its identifying attributes — e.g.
+// "host dash172 host.id=6ccc0dcc-...". The name comes first because this is what
+// a caller scanning many entities reads, and an identity is often a UUID or a
+// digest; the identity stays in full because the name is not a key (#378).
 func label(e model.Entity) string {
 	var b strings.Builder
 	b.WriteString(e.Type)
+	if name := model.DisplayName(e); name != "" {
+		b.WriteByte(' ')
+		b.WriteString(name)
+	}
 	for _, kv := range e.Identity {
 		val, _ := valueString(kv.Value)
 		b.WriteByte(' ')
