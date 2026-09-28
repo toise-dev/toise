@@ -94,6 +94,7 @@ type ComplexityRoot struct {
 		Annotations         func(childComplexity int) int
 		Attributes          func(childComplexity int) int
 		Deleted             func(childComplexity int) int
+		DisplayName         func(childComplexity int) int
 		ID                  func(childComplexity int) int
 		Identity            func(childComplexity int) int
 		IdentityFingerprint func(childComplexity int) int
@@ -403,6 +404,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Entity.Deleted(childComplexity), true
+	case "Entity.displayName":
+		if e.ComplexityRoot.Entity.DisplayName == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Entity.DisplayName(childComplexity), true
 	case "Entity.id":
 		if e.ComplexityRoot.Entity.ID == nil {
 			break
@@ -890,6 +897,18 @@ type Entity {
   identity) — which reaches the entity without a lookup first (ADR 0035).
   """
   identityFingerprint: String!
+  """
+  What a human calls this entity — ` + "`" + `dash172` + "`" + ` for a host, ` + "`" + `senhub-ping` + "`" + ` for a
+  container — or empty when nothing observed on it reads better than its
+  identity. Render it as-is: it is the display value, and it is the only field
+  meant to be shown on its own.
+
+  It is NOT a key. A display name drifts — a host is renamed while its
+  ` + "`" + `host.id` + "`" + ` does not — so nothing may group, join or match on it. Use
+  ` + "`" + `identityFingerprint` + "`" + ` for that. The two exist separately so that neither
+  invites the other's use (ADR 0035).
+  """
+  displayName: String!
   "Entity type, e.g. ` + "`" + `host` + "`" + `, ` + "`" + `process` + "`" + `, ` + "`" + `network.interface` + "`" + `."
   type: String!
   "Identifying attributes — their values together identify the entity."
@@ -1369,6 +1388,8 @@ func (ec *executionContext) childFields_Entity(ctx context.Context, field graphq
 		return ec.fieldContext_Entity_id(ctx, field)
 	case "identityFingerprint":
 		return ec.fieldContext_Entity_identityFingerprint(ctx, field)
+	case "displayName":
+		return ec.fieldContext_Entity_displayName(ctx, field)
 	case "type":
 		return ec.fieldContext_Entity_type(ctx, field)
 	case "identity":
@@ -2745,6 +2766,29 @@ func (ec *executionContext) _Entity_identityFingerprint(ctx context.Context, fie
 	)
 }
 func (ec *executionContext) fieldContext_Entity_identityFingerprint(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("Entity", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _Entity_displayName(ctx context.Context, field graphql.CollectedField, obj *Entity) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Entity_displayName(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.DisplayName, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Entity_displayName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("Entity", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
@@ -5722,6 +5766,11 @@ func (ec *executionContext) _Entity(ctx context.Context, sel ast.SelectionSet, o
 			}
 		case "identityFingerprint":
 			out.Values[i] = ec._Entity_identityFingerprint(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "displayName":
+			out.Values[i] = ec._Entity_displayName(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				atomic.AddUint32(&out.Invalids, 1)
 			}
