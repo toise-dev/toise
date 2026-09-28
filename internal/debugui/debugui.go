@@ -437,7 +437,7 @@ func attrsView(kvs []model.KeyValue) []attrView {
 func label(e model.Entity) string {
 	var b strings.Builder
 	b.WriteString(e.Type)
-	if name := model.DisplayName(e); name != "" {
+	if name := model.LabelName(e); name != "" {
 		b.WriteByte(' ')
 		b.WriteString(name)
 	}

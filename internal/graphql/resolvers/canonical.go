@@ -66,7 +66,7 @@ func (r *queryResolver) Canonical(ctx context.Context, id string, asOf *string) 
 func entityLabel(e model.Entity) string {
 	var b strings.Builder
 	b.WriteString(e.Type)
-	if name := model.DisplayName(e); name != "" {
+	if name := model.LabelName(e); name != "" {
 		b.WriteByte(' ')
 		b.WriteString(name)
 	}

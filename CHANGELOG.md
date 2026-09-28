@@ -30,6 +30,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   use. A display name is never a key: a rename moves it and leaves the
   fingerprint byte-identical, which both surfaces pin with a test.
 
+  Two properties a consumer should know before building on it. **The field
+  always answers when a name exists**, including for an entity identified by its
+  own name — a caller never needs a fallback branch, and it is the *label* that
+  drops the duplicate rather than the field. And **a name that has to be
+  composed is composed here**: a `network.endpoint` reads `10.0.0.5:5432`, with
+  an IPv6 literal bracketed so the port stays legible. That is the point of the
+  field — every consumer needs a readable name, so every consumer would
+  otherwise write its own composition, and two products would show the same
+  thing under two names. A `service.listener` is the deliberate exception: its
+  identity is one string carrying a host uuid and nothing observed on it reads
+  better, so the field is empty rather than dressed up.
+
 ### Changed
 
 - **An entity label now carries the name the graph already held.** Labels were

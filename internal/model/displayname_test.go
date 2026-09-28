@@ -20,10 +20,34 @@ func TestDisplayName(t *testing.T) {
 		e:    ent(TypeHost, []KeyValue{kv("host.id", "6ccc0dcc")}, []KeyValue{kv("host.name", "dash172")}),
 		want: "dash172",
 	}, {
-		// Repeating it would pad every label of that type with a duplicate, and
-		// would change labels that are already legible.
-		name: "no name when the key is itself identifying",
+		// The field always answers: an entity identified by its own name still
+		// has a name to show, and a caller that had to branch on "empty" would
+		// be writing the fallback this field exists to remove. LabelName is what
+		// drops the duplicate, and only for the label.
+		name: "identifying key still yields a name",
 		e:    ent(TypeHost, []KeyValue{kv("host.name", "web-server-1")}, nil),
+		want: "web-server-1",
+	}, {
+		name: "endpoint name is composed from address and port",
+		e: ent(TypeNetworkEndpoint, []KeyValue{
+			kv("server.address", "10.0.0.5"), kv("server.port", "5432")}, nil),
+		want: "10.0.0.5:5432",
+	}, {
+		// A bare IPv6 literal followed by :port reads as one more group, so the
+		// address is bracketed.
+		name: "ipv6 endpoint is bracketed",
+		e: ent(TypeNetworkEndpoint, []KeyValue{
+			kv("server.address", "2a01:db8::1"), kv("server.port", "443")}, nil),
+		want: "[2a01:db8::1]:443",
+	}, {
+		name: "endpoint without a port is the address alone",
+		e:    ent(TypeNetworkEndpoint, []KeyValue{kv("server.address", "10.0.0.5")}, nil),
+		want: "10.0.0.5",
+	}, {
+		// Its identity is one composed string carrying a host uuid, and nothing
+		// observed on it reads better. Empty is the honest answer.
+		name: "listener has no readable name",
+		e:    ent(TypeServiceListener, []KeyValue{kv("service.endpoint", "6ccc0dcc:135/tcp")}, nil),
 		want: "",
 	}, {
 		name: "container prefers container.name",
@@ -39,7 +63,7 @@ func TestDisplayName(t *testing.T) {
 		e:    ent(TypeServiceInstance, []KeyValue{kv("service.instance.id", "ef5c0135")}, []KeyValue{kv("service.name", "senhub-agent")}),
 		want: "senhub-agent",
 	}, {
-		name: "a type with no display key has none",
+		name: "an unmapped key on a type is not borrowed",
 		e:    ent(TypeServiceListener, []KeyValue{kv("service.endpoint", "h1:443/tcp")}, []KeyValue{kv("service.name", "nginx")}),
 		want: "",
 	}, {
@@ -77,5 +101,21 @@ func TestDisplayNameDoesNotAffectIdentity(t *testing.T) {
 	}
 	if before.IdentityHash() != after.IdentityHash() {
 		t.Fatalf("renaming changed the identity fingerprint: %s vs %s", before.IdentityHash(), after.IdentityHash())
+	}
+}
+
+// LabelName drops only what the label would print twice; the field keeps it.
+func TestLabelNameDropsTheDuplicate(t *testing.T) {
+	byName := ent(TypeHost, []KeyValue{kv("host.name", "web-server-1")}, nil)
+	if got := DisplayName(byName); got != "web-server-1" {
+		t.Fatalf("DisplayName = %q, want web-server-1", got)
+	}
+	if got := LabelName(byName); got != "" {
+		t.Fatalf("LabelName = %q, want empty to avoid a duplicated label", got)
+	}
+
+	byID := ent(TypeHost, []KeyValue{kv("host.id", "6ccc0dcc")}, []KeyValue{kv("host.name", "dash172")})
+	if got := LabelName(byID); got != "dash172" {
+		t.Fatalf("LabelName = %q, want dash172", got)
 	}
 }
