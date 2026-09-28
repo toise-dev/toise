@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
+### Changed
+
+- **An entity label now carries the name the graph already held.** Labels were
+  built from identifying attributes alone, so in `verbosity: compact` — the mode
+  that exists to scan many entities cheaply — hosts rendered as
+  `host host.id=<uuid>` and never `dash172`, and containers as sixty-four hex
+  characters and never `senhub-ping`. `host.name` was present on every host and
+  `container.name` on every container: the names were in the data and absent
+  from the rendering, and the cheap-scan mode was precisely the one that hid
+  them. An ops consumer auditing the fleet scanned the graph, recognized
+  nothing, concluded Toise did not know what was running, and cross-checked
+  every host over SSH to learn what the graph already held.
+
+  A label now reads `host dash172 host.id=<uuid>`. The identity stays in full;
+  the name leads because that is what a reader reaches first. `model.DisplayName`
+  is one shared source for the MCP, GraphQL and debug-UI labels, which were three
+  parallel implementations free to drift. An entity whose identity is already
+  legible — one identified by `host.name` — keeps a byte-identical label.
+
+  **If you consume labels, read this.** A label is a compact human-readable
+  identifier, not a parseable structure and never a key: it now contains a value
+  that drifts, so a rename changes it, where before it did not. Anything that
+  groups, joins or matches on a label must move to `identity_fingerprint`, which
+  is returned beside it, is identical across replicas, survives re-minting, and
+  does not move when a thing is renamed. Code that grouped by label across
+  incarnations was correct by accident until this release and is not any more.
+
 ## [0.17.1] - 2026-09-22
 
 **The release that a week of field use wrote.** Every item here was found by
