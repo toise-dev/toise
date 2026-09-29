@@ -6,6 +6,11 @@
 <title>Toise — Graph</title>
 <!--
   Example consumer of the Toise GraphQL API — NOT part of toise-server.
+
+  THIS SURFACE IS ENGLISH-ONLY. It is shown in international demos, so every
+  string that reaches the screen — button text, tooltips, counters, legends —
+  stays in English. Comments may be in any language; anything a viewer can read
+  may not.
   A standalone, dependency-free page (vis-network from a CDN) that loads the
   entity/relation graph with a query and then streams live changes over the
   entityChanged / relationChanged subscriptions. See README.md.
@@ -444,8 +449,8 @@ function rebuild(){
   // A folded node hides its children; a count that does not say so reads as a
   // graph that simply has fewer things in it (#378).
   const nN=document.getElementById('nNodes');
-  nN.textContent=nodeIds.size+(hiddenByFold?'  (+'+hiddenByFold+' repli\u00e9s)':'');
-  nN.title=hiddenByFold?(hiddenByFold+' entit\u00e9s sont repli\u00e9es dans leur propri\u00e9taire \u2014 double-clic sur un n\u0153ud pour l\u2019ouvrir'):'';
+  nN.textContent=nodeIds.size+(hiddenByFold?'  (+'+hiddenByFold+' folded)':'');
+  nN.title=hiddenByFold?(hiddenByFold+' entities are folded into their owner \u2014 double-click a node to open it'):'';
   // Never let a hidden thing read as an absent thing: when edges are painted
   // invisible the canvas is indistinguishable from a graph with no relations, so
   // the counter says which of the two it is.
@@ -755,10 +760,10 @@ net.on('doubleClick',p=>{ if(!folded || !p.nodes || !p.nodes.length) return;
 // exists. They drive the same per-type hiding the legend already uses, so the two
 // stay consistent — clicking a legend entry still works and is not overridden.
 const LAYERS=[
-  ['réseau',   ['network.device','network.interface','network.segment']],
-  ['machines', ['host','compute.vm']],
-  ['applicatif',['service.instance','service.listener','container','pod','db','process']],
-  ['adressage',['network.address','network.route','network.endpoint']],
+  ['network',   ['network.device','network.interface','network.segment']],
+  ['machines',  ['host','compute.vm']],
+  ['workloads', ['service.instance','service.listener','container','pod','db','process']],
+  ['addressing',['network.address','network.route','network.endpoint']],
 ];
 function layerTypes(name){ const l=LAYERS.find(x=>x[0]===name); return l?l[1]:[]; }
 function layerOn(name){ const t=layerTypes(name).filter(x=>presentTypes.has(x)); return t.length>0 && t.every(x=>!hidden.has(x)); }
