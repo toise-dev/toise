@@ -517,6 +517,41 @@ attributes**. So anything a producer would have hung on an edge becomes an
   `route.protocol`, and **`next_hop.ip`** ride as descriptive attributes. The next
   hop stays a scalar attribute because **`network.address` is deferred**; when it
   lands, `next_hop_via` (route→address) and `bound_to` (interface→address) follow.
+- **A bare IP is not a globally unique identity — do not link the ones that
+  repeat.** `network.address` is identified by the address alone, so two producers
+  emitting the same text land on the same entity. That is correct when the value
+  really does name one thing across the fleet — a routable gateway shared by the
+  machines behind it — and **wrong when the value repeats by convention on
+  unrelated machines**. The same `172.17.0.1` exists, independently, on every host
+  running Docker. Linking each of them to one shared entity makes the graph assert
+  a neighbourhood that does not exist, and the engine cannot tell that edge from a
+  real one afterwards.
+
+  So a producer **MUST NOT** emit `next_hop_via` or `bound_to` toward a bare-IP
+  `network.address` when the address is any of:
+
+  | range | why it repeats |
+  |---|---|
+  | `0.0.0.0`, `::` | wildcard, names no host |
+  | `127.0.0.0/8`, `::1` | loopback, present on every machine |
+  | `169.254.0.0/16`, `fe80::/10` | link-local (RFC 3927 / RFC 4291), scoped to one link |
+  | `172.17.0.0/16` | Docker's default bridge — the same gateway on every Docker host |
+
+  The discriminator is **not** "is it private". A private gateway that several
+  machines genuinely share — `10.10.0.1` for the VMs behind one hypervisor bridge —
+  is exactly the case this relation exists to express, and must be linked. The
+  question is whether the value would be the same on a machine that has nothing to
+  do with this one.
+
+  **When in doubt, do not emit the relation.** A missing edge is a gap a reader can
+  see and ask about; a wrong edge is a false statement that reads exactly like a
+  true one. Per ADR 0018 the engine matches identity byte-exactly and never merges
+  on a guess — which also means it cannot un-merge what a producer asserted.
+
+  Scoping a host-local address, rather than dropping it, is a live design question
+  (the `vlan:` scope left open by ADR 0034 is the same shape) and is **not** decided
+  here. Until it is, silence is the honest answer.
+
 - **Address canonicalization is frozen** (identity is byte-exact, so text form IS
   identity): `route.destination` is CIDR with the prefix **always** explicit
   (`/32` and `/128` included), host bits zeroed (`10.20.3.0/24`, never

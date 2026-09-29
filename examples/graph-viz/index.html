@@ -259,8 +259,11 @@ const IPV4=/(?:^|[^0-9.])(\d{1,3}(?:\.\d{1,3}){3})(?![0-9.])/g;
 // 172.17.0.1). Skip wildcard, loopback, link-local (RFC 3927), and the Docker
 // default bridge. (Other RFC 1918 ranges can be legitimately routable, so the real
 // fix for a host-local address is producer-side — don't emit it as a shared entity.)
+// Same list as the producer contract's "A bare IP is not a globally unique
+// identity" rule, which is normative; this overlay only has to agree with it.
 const notJoinable=ip=> !ip || ip==='0.0.0.0' || ip.startsWith('127.') || ip==='::' || ip==='::1'
-  || ip.startsWith('169.254.')   // link-local
+  || ip.startsWith('169.254.')   // link-local, IPv4 (RFC 3927)
+  || /^fe[89ab]/i.test(ip)       // link-local, IPv6 (fe80::/10) — scoped to one link
   || ip.startsWith('172.17.');   // Docker default bridge — same gateway on every host
 function inferredEdges(visible){
   const addrByIp={};
