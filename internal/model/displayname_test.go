@@ -44,11 +44,31 @@ func TestDisplayName(t *testing.T) {
 		e:    ent(TypeNetworkEndpoint, []KeyValue{kv("server.address", "10.0.0.5")}, nil),
 		want: "10.0.0.5",
 	}, {
-		// Its identity is one composed string carrying a host uuid, and nothing
-		// observed on it reads better. Empty is the honest answer.
-		name: "listener has no readable name",
+		// Nothing observed on it: empty is the honest answer, not a dressed-up id.
+		name: "listener with nothing observed has no name",
 		e:    ent(TypeServiceListener, []KeyValue{kv("service.endpoint", "6ccc0dcc:135/tcp")}, nil),
 		want: "",
+	}, {
+		// But when the producer did observe the process behind the socket, that
+		// is the readable part of an endpoint made of a uuid and a port.
+		name: "listener named by the process behind it",
+		e: ent(TypeServiceListener, []KeyValue{kv("service.endpoint", "6ccc0dcc:443/tcp")},
+			[]KeyValue{kv("process.executable.name", "nginx")}),
+		want: "nginx",
+	}, {
+		// The key an SNMP poll actually fills. Looking only for the keys we
+		// imagined, and concluding the name was absent, is how this was missed:
+		// the data was there under a key nobody queried (#364).
+		name: "network device named by the polled sysName",
+		e: ent(TypeNetworkDevice, []KeyValue{kv("network.device.id", "engine:80001f880461636331")},
+			[]KeyValue{kv("sys.name", "acc1")}),
+		want: "acc1",
+	}, {
+		// An operator-set name outranks the polled one.
+		name: "an explicit device name wins over sys.name",
+		e: ent(TypeNetworkDevice, []KeyValue{kv("network.device.id", "engine:x")},
+			[]KeyValue{kv("sys.name", "acc1"), kv("network.device.name", "acces-1")}),
+		want: "acces-1",
 	}, {
 		name: "container prefers container.name",
 		e: ent(TypeContainer, []KeyValue{kv("container.id", "b5183e6e")},
