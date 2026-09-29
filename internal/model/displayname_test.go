@@ -139,3 +139,26 @@ func TestLabelNameDropsTheDuplicate(t *testing.T) {
 		t.Fatalf("LabelName = %q, want dash172", got)
 	}
 }
+
+// A producer migrating to the semconv spelling must not go dark, and one that
+// has not migrated must not either: both are live at once during a rollout, and
+// the retention window holds pre-migration observations long after it.
+func TestInterfaceNameBothSpellings(t *testing.T) {
+	semconv := ent(TypeNetworkInterface,
+		[]KeyValue{kv("network.device.id", "engine:x"), kv("network.interface.name", "Gi1/0/1")}, nil)
+	if got := DisplayName(semconv); got != "Gi1/0/1" {
+		t.Fatalf("semconv spelling: DisplayName = %q, want Gi1/0/1", got)
+	}
+	legacy := ent(TypeNetworkInterface,
+		[]KeyValue{kv("network.device.id", "engine:x"), kv("interface.name", "Gi1/0/1")}, nil)
+	if got := DisplayName(legacy); got != "Gi1/0/1" {
+		t.Fatalf("legacy spelling: DisplayName = %q, want Gi1/0/1", got)
+	}
+
+	// They are NOT the same entity: the key is part of the identity, so the
+	// migration re-mints once. Pinning it here so nobody later "fixes" it into
+	// a silent merge, which is the one thing exact identity forbids.
+	if semconv.IdentityHash() == legacy.IdentityHash() {
+		t.Fatal("the two spellings must remain distinct identities")
+	}
+}

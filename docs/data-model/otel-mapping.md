@@ -321,7 +321,7 @@ standardizes no network entities, only `network.*` span/metric attributes) is:
 | Entity | Identity | Descriptive attributes | Attached by |
 | --- | --- | --- | --- |
 | `network.device` | `{network.device.id}` (precedence ladder below) | `sys.name`, `mgmt.ip`, `device.role`, … | — (the discovered asset) |
-| `network.interface` (a port) | `{network.device.id, interface.name}` | `oper_state` (state key), `speed`, … | `has_interface` (device→interface) |
+| `network.interface` (a port) | `{network.device.id, network.interface.name}` | `oper_state` (state key), `speed`, … | `has_interface` (device→interface) |
 | `network.route` | `{network.device.id, route.destination}` (CIDR) | `metric`, `route.protocol`, `next_hop.ip` | `has_route` (device→route) |
 
 Physical adjacency is a **bare `connected_to`** (interface↔interface). Device-level
@@ -364,8 +364,8 @@ ordinary descriptive attribute and the state change is lost.
 
 **Remote endpoints known only by MAC.** `connected_to` requires **two
 `network.interface` entities with exact identity** `{network.device.id,
-interface.name}`. When a neighbor is known only by a MAC (FDB/ARP, some LLDP
-remotes) and cannot be resolved to a `(device, interface.name)`, **do not fabricate
+network.interface.name}`. When a neighbor is known only by a MAC (FDB/ARP, some LLDP
+remotes) and cannot be resolved to a `(device, network.interface.name)`, **do not fabricate
 a phantom port** — that would violate exact identity. Resolve the MAC→device via the
 producer's inventory before emitting the edge (as the identity ladder already
 requires); otherwise omit it. A future `network.address` of MAC subtype may carry

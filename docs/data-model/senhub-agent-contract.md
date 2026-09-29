@@ -498,10 +498,19 @@ attributes**. So anything a producer would have hung on an edge becomes an
 **entity** instead:
 
 - **Ports are entities.** A port is a `network.interface` entity
-  (`{network.device.id, interface.name}`, with `oper_state`/`speed` as attributes),
+  (`{network.device.id, network.interface.name}`, with `oper_state`/`speed` as attributes),
   linked by `has_interface` (device→port); physical adjacency is a **bare
   `connected_to`** (port↔port) — never `adjacent_to` carrying `{local_port,
   remote_port}`.
+> **Interface identity is migrating.** The identifying key is
+> `network.interface.name` — the semantic-convention spelling, release candidate
+> since semconv v1.44.0. Producers before senhub-agent 0.6.0 emit `interface.name`,
+> and the two are **different identities**, so an interface is re-minted once when
+> its producer migrates: the old entity expires by liveness, the new one appears.
+> That is expected and it happens once. Toise accepts both spellings as telemetry
+> join keys and as display names for as long as the retention window holds
+> pre-migration observations.
+
 - **Routes are entities.** A routing-table entry is a `network.route`, identity
   **`{network.device.id, route.destination}`** (the destination as a canonical CIDR,
   e.g. `10.20.0.0/16`), linked by **`has_route`** (device→route). Its `metric`,
