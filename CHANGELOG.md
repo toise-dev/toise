@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Both spellings of the interface name are accepted.** senhub-agent 0.6.0 moves
+  its identifying key from `interface.name` to `network.interface.name`, the
+  semantic-convention spelling (release candidate since semconv v1.44.0). The two
+  are **different identities**, so an interface is re-minted once when its
+  producer migrates — the old entity expires by liveness, the new one appears.
+  Expected, and it happens once.
+
+  Toise accepts both as telemetry join keys (`telemetry_keys`) and as display
+  names, for as long as the retention window still holds pre-migration
+  observations. Dropping the old spelling on the day the new one lands would
+  blind the pivot to metrics for every interface observed before the migration,
+  which is the whole point of keeping a history. A test pins that the two remain
+  **distinct** identities: merging them would be the silent merge exact identity
+  exists to forbid.
+
+  The producer contract and the OTel mapping are updated to the new key.
+
 - **A readable name has its own field.** Entities now carry `display_name`
   (MCP, omitted when empty) and `displayName` (GraphQL) beside
   `identityFingerprint`. Render it as-is: it is the value meant to be shown on

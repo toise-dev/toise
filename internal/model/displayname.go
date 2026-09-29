@@ -20,8 +20,11 @@ var displayNameKeys = map[string][]string{
 	// MIB), measured present on 12 of 14 devices on the bench. The other two keys
 	// are guesses that no producer has ever emitted — kept only because an
 	// operator-set name would be more authoritative than the polled one.
-	TypeNetworkDevice:    {"network.device.name", "device.name", "sys.name"},
-	TypeNetworkInterface: {"interface.name"},
+	TypeNetworkDevice: {"network.device.name", "device.name", "sys.name"},
+	// network.interface.name is the semconv spelling producers are migrating to;
+	// interface.name is what the graph still holds for everything observed
+	// before they did.
+	TypeNetworkInterface: {"network.interface.name", "interface.name"},
 	// A listener's identity is an endpoint carrying a host uuid. The name of the
 	// process behind it is the readable part, when the producer observed one.
 	TypeServiceListener: {"process.executable.name", "process.name"},

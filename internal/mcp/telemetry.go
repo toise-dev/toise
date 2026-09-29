@@ -17,13 +17,19 @@ import (
 // commonly carry, making them usable as exact join keys between a Toise entity
 // and the entity's metrics and logs.
 var joinKeys = map[string]struct{}{
-	"host.id":                 {},
-	"host.name":               {},
-	"service.instance.id":     {},
-	"service.name":            {},
-	"service.namespace":       {},
-	"network.device.id":       {},
-	"db.instance.id":          {},
+	"host.id":             {},
+	"host.name":           {},
+	"service.instance.id": {},
+	"service.name":        {},
+	"service.namespace":   {},
+	"network.device.id":   {},
+	"db.instance.id":      {},
+	// Both spellings are live: network.interface.name is the semconv key
+	// (release candidate since v1.44.0) that producers are moving to, and
+	// interface.name is what everything before that emitted — and what the
+	// retention window still holds. Dropping the old one would blind the pivot
+	// on every interface observed before the migration.
+	"network.interface.name":  {},
 	"interface.name":          {},
 	"process.pid":             {},
 	"process.executable.name": {},
