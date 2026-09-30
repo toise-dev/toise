@@ -54,7 +54,7 @@ func hostExport(hostID string) plog.Logs {
 // until the host's heartbeat attaches it.
 func TestHostDepParkingWindow(t *testing.T) {
 	const H = "db17d891-46f2-4563-85d1-46402b1db900"
-	t0 := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	start := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 
 	process := func(eng *change.Engine, recon *embeddedReconciler, logs plog.Logs) {
 		rls := logs.ResourceLogs()
@@ -76,7 +76,7 @@ func TestHostDepParkingWindow(t *testing.T) {
 	_ = process
 
 	run := func(t *testing.T, hostFirst bool, gap time.Duration) (runsOn, dependsOn int) {
-		now := t0
+		now := start
 		g := projection.New()
 		eng := change.New(g, &failingAppender{},
 			change.WithRelationBuffer(30*time.Second),
