@@ -86,6 +86,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does not move when a thing is renamed. Code that grouped by label across
   incarnations was correct by accident until this release and is not any more.
 
+- **The `graph-viz` example folds children into their owner by default.** Matthieu,
+  on the deployed viz: "it is hard to read as a graph, it is very thin and there is
+  a lot on it." Measured on a live bench before changing anything: 546 entities and
+  548 relations, of which 264 `service.instance`, 168 `network.interface` and 41
+  `service.listener` — and **478 of 546, 88%, are the child of a single owner**.
+
+  Thinness was a symptom of density, not a style problem: edges are drawn thin and
+  faint precisely to survive a hairball, so thickening them on 546 nodes makes it
+  worse. Density had to fall first. An interface belongs to a device, a service runs
+  on a host, a route belongs to a machine; folding walks that ownership chain
+  **transitively** and draws only the head owner. On the same live graph: 546
+  entities to 48 drawn nodes, 11.4x, with 500 of 548 relations absorbed, no child
+  claimed by two owners and no cyclic chain.
+
+  **Nothing is lost.** Double-click opens an owner — single click already selects
+  and fills the panel, so it could not be reused. A folded owner carries a badge
+  saying how many of what it holds, and the counter names the folded total, so the
+  reduction is legible rather than silent. On a client graph of 367 nodes the same
+  change draws 3.
+
+  The surface is **English-only**, stated in its header: it is used for
+  demonstrations outside France.
+
+### Fixed
+
+- **The viz showed no link where a link existed.** Reported by an operator who saw
+  no relation between a gateway and a dashboard it demonstrably talks to. The link
+  was there: two toggles were off by default, and **both produce a canvas
+  indistinguishable from a graph with no relations at all** — so "I see no links"
+  and "there are no links" looked identical, with nothing to tell the reader which
+  one they were looking at.
+
+  The derived overlay is now **on by default**, opt-out instead of opt-in. The
+  engine stores facts only and never merges by heuristic (ADR 0022), so an IP
+  carried as a plain attribute — a listener's bind address, an endpoint's
+  `server.address` — is not linked to the `network.address` entity for that IP.
+  Toise resolves that join at read time and deliberately never writes it back as an
+  edge (ADR 0032), so the overlay is often the only thing joining the two halves of
+  a real chain. Defaulting a traversal off in a graph defeats the reason for having
+  one.
+
+  And a hidden thing no longer reads as an absent thing: with edges off, the
+  relations are still laid out and painted transparent, and the counter now says so
+  in the warning colour instead of showing a number beside an empty canvas.
+
 ## [0.17.1] - 2026-09-22
 
 **The release that a week of field use wrote.** Every item here was found by
