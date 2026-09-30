@@ -366,7 +366,38 @@ interface carries:
 | `mtu` | int | octets | config, not utilization |
 | `interface.type` | enum | `physical`/`virtual`/`wireless`/`loopback` | start with physical/virtual |
 | `duplex` | enum | `full`/`half`/`unknown` | renegotiable |
+| `network.interface.addresses` | string[] | `["10.10.0.60/24"]` | the interface's own addresses, each with its prefix |
+| `network.interface.subnets` | string[] | `["10.10.0.0/24"]` | the subnets those addresses sit in, deduplicated — **provisional**, see below |
 
+- **Addresses and subnets are arrays, and their value form is upstream's.** Both are
+  `string[]`, one element per address — **never** a joined string. A comma appears in
+  no IP text form, which is exactly what makes a joined value dangerous: it parses
+  cleanly as a single address, so a consumer that forgets to split shows one and is
+  never told it is wrong. The array is also the established upstream form — `host.ip`
+  and `host.mac` are both `string[]`. The notation is the one semconv specifies for
+  CIDR values: IPv4 in dotted-decimal with a prefix length of 0 to 32, IPv6 in RFC
+  5952 canonical text with a prefix length of 0 to 128.
+
+  **Host bits are the one place the two keys disagree, deliberately.** `subnets`
+  follows the frozen canonicalization and has its host bits zeroed
+  (`10.10.0.0/24`); `addresses` keeps them (`10.10.0.60/24`), because the address is
+  the point. The two values are indistinguishable by shape, so anything that
+  pattern-matches "looks like CIDR" will read one of them wrong. Read the key, never
+  the shape.
+
+  **`addresses` is the observed fact; `subnets` is derived from it.** Masking an
+  address by its prefix yields the subnet with no additional knowledge, so the two
+  can never legitimately disagree — a disagreement is a producer bug, not an
+  ambiguity for a consumer to resolve. Both keys are **absent** when no prefix is
+  known, including on a device that does not answer `ipAdEntNetMask`. Absent, never
+  present and empty: an empty string reads as an answer.
+
+  **`subnets` is provisional.** The OpenTelemetry Network Observability project lists
+  "IP subnet" among the L3 entities it intends to define, in its October 2026 to
+  January 2027 window. A subnet has an identity — its prefix — and a lifecycle, and
+  this document's own rule is that a fact which must persist belongs on an entity
+  rather than on an attribute. Expect this key to be superseded by an entity and a
+  traversal, and do not build anything that cannot absorb that.
 - **`speed` is in bit/s** (convert at the source: SNMP `ifSpeed` is bit/s, Linux `/sys` is
   Mbit/s). One `speed` key = the **negotiated/effective** rate; a separate `speed.max`
   (capability) is deferred until a use-case needs it.
