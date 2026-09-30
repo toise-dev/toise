@@ -586,6 +586,32 @@ attributes**. So anything a producer would have hung on an edge becomes an
   (the `vlan:` scope left open by ADR 0034 is the same shape) and is **not** decided
   here. Until it is, silence is the honest answer.
 
+  **The range table is necessary and not sufficient — filter by the owning interface
+  too.** The table catches Docker's default `172.17.0.0/16` and misses every
+  user-defined Docker network, which lands on `172.18.0.0/16`, `172.19.0.0/16` or a
+  custom range and is indistinguishable by address alone. The owning interface is
+  not: `docker*`, `br-<12 hex>`, `virbr*`, `cni*`, `cbr*`, `flannel*`, `lxcbr*`,
+  `kube*`, `cali*`, `antrea*`, `weave*` and `ovs-system` all name a host-local
+  virtualization bridge. A producer knows which interface a route leaves by and which
+  interface an address is bound to; a consumer reading only the address does not.
+  That asymmetry is the whole reason this rule lives in the producer.
+
+  A route leaving by such an interface keeps `network.interface.name` and its next
+  hop — the fact is true and worth recording — and emits **no** shared
+  `network.address` and **no** `next_hop_via`.
+
+  **Match on `br-` with the hyphen, never on `br`.** Plain `br0`, `br1`, `bridge0`
+  and `vmbr0` are ordinary routed bridges on hypervisors and routers. Their gateway
+  is a genuinely shared address and must stay linked — it is often the only thing
+  joining two machines in the graph.
+
+  **Known limitation.** OpenWrt names real routed bridges `br-lan`, `br-wan` and
+  `br-guest`, which match the `br-` prefix. On such a device this rule suppresses an
+  edge that should exist. We accept it, for the reason above: a missing edge is a gap
+  a reader can see and ask about, a false one is not. A deployment for which it
+  matters needs a discriminator based on the address's reachability rather than on
+  the interface's name, and that is not decided here either.
+
 - **Address canonicalization is frozen** (identity is byte-exact, so text form IS
   identity): `route.destination` is CIDR with the prefix **always** explicit
   (`/32` and `/128` included), host bits zeroed (`10.20.3.0/24`, never
