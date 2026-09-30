@@ -377,13 +377,30 @@ function repOf(id,guard){
     cur=up;
   }
 }
-// How many entities a folded node stands for, so the badge can say it.
-function foldedCount(){
+// What a folded node stands for, BY TYPE, so the badge says what is inside and
+// not only how much. Measured at a customer: an estate that is one host and 357
+// services, 97% of its relations a single runs_on. Folded, that is three nodes,
+// and a bare "(357)" reads as an empty graph. "(357 service.instance)" reads as
+// an accurate summary of an estate that really is shaped that way.
+function foldedInside(){
   const n={};
   if(!folded) return n;
-  for(const id of Object.keys(ENT)){ const r=repOf(id); if(r!==id) n[r]=(n[r]||0)+1; }
+  for(const id of Object.keys(ENT)){
+    const r=repOf(id); if(r===id) continue;
+    const by=(n[r]=n[r]||{}); const t=ENT[id].type; by[t]=(by[t]||0)+1;
+  }
   return n;
 }
+// "(357 service.instance)" for one kind, "(37 service.instance, 1 network.interface)"
+// for two, "+N" past that so a label stays a label. Full type names, never
+// abbreviated: a shortened type is a type the reader has to guess.
+function badge(by){
+  if(!by) return '';
+  const e=Object.entries(by).sort((a,b)=>b[1]-a[1]);
+  return '  ('+e.slice(0,2).map(([t,c])=>c+' '+t).join(', ')+(e.length>2?', +'+(e.length-2):'')+')';
+}
+function badgeTotal(by){ return by?Object.values(by).reduce((a,b)=>a+b,0):0; }
+function badgeFull(by){ return Object.entries(by).sort((a,b)=>b[1]-a[1]).map(([t,c])=>c+' '+t).join(', '); }
 
 let rebuildTimer=null;
 function scheduleRebuild(){ if(rebuildTimer) return; rebuildTimer=setTimeout(()=>{rebuildTimer=null;rebuild();},250); }
@@ -393,7 +410,7 @@ function rebuild(){
   const allTypes=new Set(), nodeIds=new Set(), nUp=[];
   const q=attrQuery.trim(); let matched=0;
   const firstLoad=!fitted;   // scatter new nodes on the very first layout so stabilisation spreads them
-  const inside=foldedCount();
+  const inside=foldedInside();
   let hiddenByFold=0;
   // Degree drives node size: dist1 with eight links must read as bigger than acc3
   // with one, so the shape of the network is legible before a single label is.
@@ -404,8 +421,9 @@ function rebuild(){
     if(repOf(n.id)!==n.id){ hiddenByFold++; return; }            // folded into an owner
     const ok=attrMatch(n); if(q && !ok && filterOnly) return;   // "only" mode: hide non-matching outright
     nodeIds.add(n.id); if(q&&ok) matched++;
-    const k=inside[n.id]||0, d=degree[n.id]||0;
-    const node={id:n.id,label:labelOf(n)+(k?'  ('+k+')':''),title:titleOf(n),
+    const by=inside[n.id], k=badgeTotal(by), d=degree[n.id]||0;
+    const node={id:n.id,label:labelOf(n)+badge(by),
+              title:titleOf(n)+(k?('\nfolded inside: '+badgeFull(by)+'  \u2014 double-click to open'):''),
               opacity:n.deleted?0.45:(q&&!ok?0.12:1),
               size:Math.min(34,12+Math.sqrt(d)*3.2)+(k?3:0),
               borderWidth:k?3:2,
