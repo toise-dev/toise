@@ -23,6 +23,7 @@ import (
 	"github.com/toise-dev/toise/internal/model"
 	"github.com/toise-dev/toise/internal/projection"
 	"github.com/toise-dev/toise/internal/store"
+	"github.com/toise-dev/toise/internal/tenant"
 )
 
 var t0 = time.Unix(1_700_000_000, 0).UTC()
@@ -548,13 +549,13 @@ func TestIngestCounters(t *testing.T) {
 	if v := get("toise_ingest_exports_total", "error"); v != 1 {
 		t.Errorf("exports{error} = %v, want 1", v)
 	}
-	if v := get("toise_ingest_records_total", "handled"); v != 1 {
+	if v := get("toise_ingest_records_total", "handled|"+tenant.Default); v != 1 {
 		t.Errorf("records{handled} = %v, want 1", v)
 	}
-	if v := get("toise_ingest_records_total", "ignored"); v != 1 {
+	if v := get("toise_ingest_records_total", "ignored|"+tenant.Default); v != 1 {
 		t.Errorf("records{ignored} = %v, want 1", v)
 	}
-	if v := get("toise_ingest_records_total", "rejected"); v != 1 {
+	if v := get("toise_ingest_records_total", "rejected|"+tenant.Default); v != 1 {
 		t.Errorf("records{rejected} = %v, want 1", v)
 	}
 	if v := get("toise_ingest_tenant_rejections_total", ""); v != 1 {
@@ -616,7 +617,7 @@ func TestAcceptUnknownTypes(t *testing.T) {
 	if got := g.CountByType()["acme.satellite.dish"]; got != 1 {
 		t.Errorf("CountByType = %d, want 1", got)
 	}
-	if v := counterValue(t, m.unknownTypes); v != 1 {
+	if v := counterValue(t, m.unknownTypes.WithLabelValues(tenant.Default)); v != 1 {
 		t.Errorf("unknown-type counter = %v, want 1", v)
 	}
 

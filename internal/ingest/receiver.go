@@ -128,8 +128,12 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (re
 	defer func() { s.metrics.export(err == nil) }()
 	ld := req.Logs()
 	var handled, skipped, rejected int
-	var rejectMsg string
+	var rejectMsg, rejectTenant string
 	var dropped []string
+	// Per-tenant tallies: one OTLP stream can carry several tenants, so an
+	// export-wide total would attribute one tenant's rejections to another.
+	type tenantCounts struct{ handled, skipped, rejected, dropped int }
+	perTenant := map[string]*tenantCounts{}
 
 	// An invalid X-Scope-OrgID is rejected rather than silently folded into the
 	// default tenant — a tenant id that cannot be honored is a caller error.
@@ -177,6 +181,8 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (re
 			return plogotlp.NewExportResponse(), status.Errorf(codes.Unavailable, "resolving tenant %q: %v", tenantID, err)
 		}
 		reconciler := s.reconcilerFor(tenantID)
+		s.metrics.ensure(tenantID)
+		atHandled, atSkipped, atRejected, atDropped := handled, skipped, rejected, len(dropped)
 		sls := rls.At(i).ScopeLogs()
 		var routeErr error
 		batchErr := engine.Batch(func(b *change.Batch) {
@@ -187,7 +193,7 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (re
 					ok, drop, err := routeRecordVocab(b, lr, producer, !s.acceptUnknown)
 					if ok && s.acceptUnknown && err == nil {
 						if typ, tok := strAttr(lr.Attributes(), attrEntityType); tok && !model.IsKnownEntityType(typ) {
-							s.metrics.unknownTypeAccepted()
+							s.metrics.unknownTypeAccepted(tenantID)
 						}
 					}
 					dropped = append(dropped, drop...)
@@ -201,7 +207,7 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (re
 						if errors.Is(err, errInvalidRecord) {
 							rejected++
 							if rejectMsg == "" {
-								rejectMsg = err.Error()
+								rejectMsg, rejectTenant = err.Error(), tenantID
 							}
 							continue
 						}
@@ -220,7 +226,7 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (re
 						if errors.Is(eerr, errInvalidRecord) {
 							rejected++
 							if rejectMsg == "" {
-								rejectMsg = eerr.Error()
+								rejectMsg, rejectTenant = eerr.Error(), tenantID
 							}
 							continue
 						}
@@ -247,6 +253,15 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (re
 		if batchErr != nil {
 			return plogotlp.NewExportResponse(), status.Errorf(codes.Unavailable, "ingest batch: %v", batchErr)
 		}
+		c := perTenant[tenantID]
+		if c == nil {
+			c = &tenantCounts{}
+			perTenant[tenantID] = c
+		}
+		c.handled += handled - atHandled
+		c.skipped += skipped - atSkipped
+		c.rejected += rejected - atRejected
+		c.dropped += len(dropped) - atDropped
 	}
 	if len(dropped) > 0 {
 		// Non-scalar attribute values are dropped (producers must send flat scalar
@@ -256,10 +271,12 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (re
 	if skipped > 0 {
 		s.logger.Debug("otlp export processed", "entity_events", handled, "ignored", skipped)
 	}
-	s.metrics.addRecords("handled", handled)
-	s.metrics.addRecords("ignored", skipped)
-	s.metrics.addRecords("rejected", rejected)
-	s.metrics.addDroppedValues(len(dropped))
+	for t, c := range perTenant {
+		s.metrics.addRecords(t, "handled", c.handled)
+		s.metrics.addRecords(t, "ignored", c.skipped)
+		s.metrics.addRecords(t, "rejected", c.rejected)
+		s.metrics.addDroppedValues(t, c.dropped)
+	}
 	resp = plogotlp.NewExportResponse()
 	if rejected > 0 {
 		// OTLP partial success: the export as a whole is accepted (no retry),
@@ -267,8 +284,10 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (re
 		ps := resp.PartialSuccess()
 		ps.SetRejectedLogRecords(int64(rejected))
 		ps.SetErrorMessage(rejectMsg)
+		// The tenant is on the line because the counter alone cannot say whose
+		// records were refused when several tenants share a server (#405).
 		s.logger.Warn("rejected entity records violating the wire contract",
-			"rejected", rejected, "first_error", rejectMsg)
+			"rejected", rejected, "tenant", rejectTenant, "first_error", rejectMsg)
 	}
 	return resp, nil
 }
