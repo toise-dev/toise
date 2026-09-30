@@ -35,7 +35,7 @@ func FuzzRouteRecord(f *testing.F) {
 			_ = err
 		}
 		r := newEmbeddedReconciler()
-		if _, err := r.handle(eng, lr); err != nil {
+		if _, err := r.handle(eng, lr, ""); err != nil {
 			_ = err
 		}
 	})

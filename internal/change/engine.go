@@ -62,10 +62,16 @@ type Engine struct {
 	// service.instance.id; "" for an anonymous/single producer), each with an
 	// expiry deadline (zero = no interval, explicit-only). An entity is live while
 	// any producer references it; it is deleted only when the last reference is
-	// released (explicit delete or interval expiry). See ADR 0019. Per-relation
-	// edge deadlines for the optional per-edge TTL. Guarded by obsMu.
-	refs         map[model.EntityID]map[string]liveRef
-	relDeadlines map[model.RelationID]liveRef
+	// released (explicit delete or interval expiry). See ADR 0019.
+	//
+	// relRefs is the same model for edges, and for the same reason: a shared
+	// entity is asserted by several producers, and an edge one of them declares
+	// must not be retracted by another that never declared it. A zero deadline
+	// means the producer asserts the edge with no refresh promise (an embedded
+	// edge), so only an explicit removal or the endpoint's death releases it.
+	// Guarded by obsMu.
+	refs    map[model.EntityID]map[string]liveRef
+	relRefs map[model.RelationID]map[string]liveRef
 
 	// batch staging: while a Batch runs, commit stages each event and its
 	// projection effects here instead of applying them; the durable append, the
@@ -202,7 +208,7 @@ func New(graph *projection.Graph, appender Appender, opts ...Option) *Engine {
 		logger:        slog.Default(),
 		subs:          make(map[int]Subscriber),
 		refs:          make(map[model.EntityID]map[string]liveRef),
-		relDeadlines:  make(map[model.RelationID]liveRef),
+		relRefs:       make(map[model.RelationID]map[string]liveRef),
 		pendingHashes: make(map[string]struct{}),
 	}
 	for _, o := range opts {
@@ -371,6 +377,11 @@ type RelationObservation struct {
 	To         EndpointRef
 	Attributes []model.KeyValue
 	EventTime  time.Time
+	// Producer is the asserting agent's service.instance.id, as for an entity
+	// observation. The edge is reference-counted per producer: it survives while
+	// any producer asserts it, so one producer's silence never retracts another's
+	// edge. Empty means a single anonymous producer.
+	Producer string
 	// Interval, when > 0, arms the same liveness backstop as for entities: an edge
 	// not re-asserted within Interval is expired (relation.removed) by Sweep.
 	Interval time.Duration
@@ -559,7 +570,7 @@ func (e *Engine) removeIncidentRelations(id model.EntityID, when time.Time) (int
 			errs = append(errs, fmt.Errorf("removing edge %s of deleted %s: %w", rel.ID, id, err))
 			continue
 		}
-		delete(e.relDeadlines, rel.ID)
+		delete(e.relRefs, rel.ID)
 		n++
 	}
 	return n, errors.Join(errs...)
@@ -593,7 +604,7 @@ func (e *Engine) Sweep() (SweepResult, error) {
 	// and its whole subtree lapses at once) otherwise costs one fsync per entity
 	// and edge, stalling ingestion for the duration. commit() sees the staged
 	// slot and buffers instead of appending per event (C1/C5). Liveness
-	// bookkeeping (refs, relDeadlines) is mutated directly below and, per the
+	// bookkeeping (refs, relRefs) is mutated directly below and, per the
 	// Batch contract, is not rolled back on a flush failure — the next Sweep
 	// self-heals from the still-live projection.
 	st := newStaged()
@@ -664,16 +675,25 @@ func (e *Engine) Sweep() (SweepResult, error) {
 		e.rebuildPendingHashes()
 	}
 
+	// Drop each producer reference whose interval has lapsed; an edge with no
+	// surviving reference is expired. A zero deadline never lapses, so an edge
+	// asserted without a refresh promise stays until it is removed explicitly or
+	// its endpoint dies — the pre-existing behavior of an embedded edge.
 	var expiredRelations []model.RelationID
-	for id, ref := range e.relDeadlines {
-		if now.After(ref.deadline) {
+	for id, producers := range e.relRefs {
+		for p, ref := range producers {
+			if !ref.deadline.IsZero() && now.After(ref.deadline) {
+				delete(producers, p)
+			}
+		}
+		if len(producers) == 0 {
 			expiredRelations = append(expiredRelations, id)
 		}
 	}
 	for _, id := range expiredRelations {
 		rel, ok := e.graph.GetRelation(id)
 		if !ok {
-			delete(e.relDeadlines, id)
+			delete(e.relRefs, id)
 			continue
 		}
 		ev := e.relationEvent(model.RelationRemoved, rel, now, model.DeleteSourceLivenessExpiry)
@@ -682,7 +702,7 @@ func (e *Engine) Sweep() (SweepResult, error) {
 			errs = append(errs, fmt.Errorf("expiring stale relation %s: %w", id, err))
 			continue
 		}
-		delete(e.relDeadlines, id)
+		delete(e.relRefs, id)
 		e.logger.Warn("expired stale relation: not re-asserted within its interval",
 			"relation_type", rel.Type, "relation_id", id)
 		res.Relations++
@@ -753,12 +773,19 @@ func (e *Engine) observeRelationLocked(obs RelationObservation) (model.Event, bo
 	}
 	rel := model.NewRelation(obs.Type, from, to, obs.Attributes...)
 
-	// Arm (or clear) the edge liveness backstop, even when the observation is
-	// otherwise unchanged — re-asserting an edge resets its deadline.
+	// Record this producer's reference, with its expiry deadline (zero = no
+	// interval, explicit-only), even when the observation is otherwise unchanged
+	// — re-asserting an edge resets that producer's deadline. Another producer's
+	// reference is left alone.
+	refs := e.relRefs[rel.ID]
+	if refs == nil {
+		refs = make(map[string]liveRef)
+		e.relRefs[rel.ID] = refs
+	}
 	if obs.Interval > 0 {
-		e.relDeadlines[rel.ID] = liveRef{deadline: e.now().Add(obs.Interval), interval: obs.Interval}
+		refs[obs.Producer] = liveRef{deadline: e.now().Add(obs.Interval), interval: obs.Interval}
 	} else {
-		delete(e.relDeadlines, rel.ID)
+		refs[obs.Producer] = liveRef{}
 	}
 
 	var ct model.ChangeType
@@ -854,7 +881,16 @@ func (e *Engine) removeRelationLocked(obs RelationObservation) (ev model.Event, 
 		return model.Event{}, false, err
 	}
 	id := model.ComputeRelationID(obs.Type, from, to)
-	delete(e.relDeadlines, id) // explicit remove clears any liveness backstop
+	// Release this producer's reference. While another producer still asserts the
+	// edge it stays live and no event is emitted: a producer that never declared
+	// an edge must not be able to retract it by falling silent about it.
+	if refs, ok := e.relRefs[id]; ok {
+		delete(refs, obs.Producer)
+		if len(refs) > 0 {
+			return model.Event{}, false, nil
+		}
+		delete(e.relRefs, id)
+	}
 	existing, ok := e.getRelation(id)
 	if !ok {
 		return model.Event{}, false, nil
@@ -1044,9 +1080,16 @@ func canonMap(kvs []model.KeyValue) map[string]string {
 // deadlines as-is.
 type livenessSnapshot struct {
 	Refs         map[string]map[string]time.Time     `json:"refs"`
-	RelDeadlines map[string]time.Time                `json:"rel_deadlines"`
 	RefIntervals map[string]map[string]time.Duration `json:"ref_intervals,omitempty"`
-	RelIntervals map[string]time.Duration            `json:"rel_intervals,omitempty"`
+	// RelRefs/RelRefIntervals are per-producer edge references, written since
+	// edges became reference-counted like entities. RelDeadlines/RelIntervals are
+	// the single-reference form that preceded them: still read, so a snapshot
+	// written by an earlier build restores as one anonymous producer, and no
+	// longer written.
+	RelRefs         map[string]map[string]time.Time     `json:"rel_refs,omitempty"`
+	RelRefIntervals map[string]map[string]time.Duration `json:"rel_ref_intervals,omitempty"`
+	RelDeadlines    map[string]time.Time                `json:"rel_deadlines,omitempty"`
+	RelIntervals    map[string]time.Duration            `json:"rel_intervals,omitempty"`
 }
 
 // LivenessBlob serializes the current liveness bookkeeping for inclusion in
@@ -1054,10 +1097,10 @@ type livenessSnapshot struct {
 func (e *Engine) LivenessBlob() ([]byte, error) {
 	e.obsMu.Lock()
 	snap := livenessSnapshot{
-		Refs:         make(map[string]map[string]time.Time, len(e.refs)),
-		RelDeadlines: make(map[string]time.Time, len(e.relDeadlines)),
-		RefIntervals: make(map[string]map[string]time.Duration, len(e.refs)),
-		RelIntervals: make(map[string]time.Duration, len(e.relDeadlines)),
+		Refs:            make(map[string]map[string]time.Time, len(e.refs)),
+		RefIntervals:    make(map[string]map[string]time.Duration, len(e.refs)),
+		RelRefs:         make(map[string]map[string]time.Time, len(e.relRefs)),
+		RelRefIntervals: make(map[string]map[string]time.Duration, len(e.relRefs)),
 	}
 	for id, producers := range e.refs {
 		ds := make(map[string]time.Time, len(producers))
@@ -1069,9 +1112,15 @@ func (e *Engine) LivenessBlob() ([]byte, error) {
 		snap.Refs[string(id)] = ds
 		snap.RefIntervals[string(id)] = is
 	}
-	for id, ref := range e.relDeadlines {
-		snap.RelDeadlines[string(id)] = ref.deadline
-		snap.RelIntervals[string(id)] = ref.interval
+	for id, producers := range e.relRefs {
+		ds := make(map[string]time.Time, len(producers))
+		is := make(map[string]time.Duration, len(producers))
+		for p, ref := range producers {
+			ds[p] = ref.deadline
+			is[p] = ref.interval
+		}
+		snap.RelRefs[string(id)] = ds
+		snap.RelRefIntervals[string(id)] = is
 	}
 	e.obsMu.Unlock()
 	b, err := json.Marshal(snap)
@@ -1104,9 +1153,26 @@ func (e *Engine) RestoreLiveness(blob []byte) error {
 		}
 		e.refs[model.EntityID(id)] = ps
 	}
+	for id, producers := range snap.RelRefs {
+		ps := make(map[string]liveRef, len(producers))
+		for p, deadline := range producers {
+			interval := snap.RelRefIntervals[id][p]
+			ps[p] = liveRef{deadline: floorDeadline(deadline, interval, now), interval: interval}
+		}
+		e.relRefs[model.RelationID(id)] = ps
+	}
+	// Pre-reference-counting snapshots carry one deadline per edge with no
+	// producer. Restore it as the anonymous producer rather than discard it: the
+	// edge keeps its backstop across the upgrade, and the first re-assertion by a
+	// named producer adds its own reference alongside.
 	for id, deadline := range snap.RelDeadlines {
+		if _, ok := e.relRefs[model.RelationID(id)]; ok {
+			continue
+		}
 		interval := snap.RelIntervals[id]
-		e.relDeadlines[model.RelationID(id)] = liveRef{deadline: floorDeadline(deadline, interval, now), interval: interval}
+		e.relRefs[model.RelationID(id)] = map[string]liveRef{
+			"": {deadline: floorDeadline(deadline, interval, now), interval: interval},
+		}
 	}
 	return nil
 }

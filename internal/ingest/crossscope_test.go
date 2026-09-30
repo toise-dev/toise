@@ -62,7 +62,7 @@ func runMultiScope(t *testing.T, logs plog.Logs) *projection.Graph {
 					if _, _, err := routeRecordVocab(b, lr, "agent-1", true); err != nil {
 						t.Fatalf("route: %v", err)
 					}
-					if _, err := recon.handleVocab(b, lr, true); err != nil {
+					if _, err := recon.handleVocab(b, lr, "", true); err != nil {
 						t.Fatalf("reconcile: %v", err)
 					}
 				}
