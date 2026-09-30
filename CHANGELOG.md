@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
+## [0.18.0] - 2026-09-30
+
+**The release that makes the graph legible.** 0.17.0 set out to say what an answer
+is worth; this one makes the answer readable. An entity now carries a name meant
+to be shown, the compact label carries it too, the example viz folds a hairball
+into a shape a person can take in, and the links it computes are drawn instead of
+hidden. Four of the six items below exist because a real consumer looked at a
+correct answer and could not use it.
+
+The fifth is the same principle applied to correctness rather than to reading: an
+edge was being reported gone by a producer that had never asserted it, about a
+hundred and fifty times a day on the one relation joining two machines. An answer
+that confidently contradicts itself costs more than a missing one, which is the
+thread running from 0.17.0 through here.
+
+**If you consume entity labels, read the `Changed` section.** A label now contains
+a value that drifts, so anything grouping or joining on one must move to
+`identity_fingerprint`.
+
 ### Added
 
 - **Both spellings of the interface name are accepted.** senhub-agent 0.6.0 moves
