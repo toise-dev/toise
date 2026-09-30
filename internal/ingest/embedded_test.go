@@ -63,7 +63,7 @@ func TestEmbeddedReconcilerAddsAndRemoves(t *testing.T) {
 	runsOn := []relDesc{{relType: "runs_on", toType: "host", toID: map[string]string{"host.id": "h1"}}}
 
 	// 1. state with runs_on -> host h1: the relation is observed.
-	if _, err := r.handle(f, embeddedRecord("service.instance", svc, runsOn)); err != nil {
+	if _, err := r.handle(f, embeddedRecord("service.instance", svc, runsOn), ""); err != nil {
 		t.Fatal(err)
 	}
 	if f.relAdds != 1 || f.relRemoves != 0 {
@@ -71,7 +71,7 @@ func TestEmbeddedReconcilerAddsAndRemoves(t *testing.T) {
 	}
 
 	// 2. re-emit the same set: idempotent re-observe (heartbeat), no removal.
-	if _, err := r.handle(f, embeddedRecord("service.instance", svc, runsOn)); err != nil {
+	if _, err := r.handle(f, embeddedRecord("service.instance", svc, runsOn), ""); err != nil {
 		t.Fatal(err)
 	}
 	if f.relAdds != 2 || f.relRemoves != 0 {
@@ -79,7 +79,7 @@ func TestEmbeddedReconcilerAddsAndRemoves(t *testing.T) {
 	}
 
 	// 3. re-emit WITHOUT the relationship: removal inferred by absence.
-	if _, err := r.handle(f, embeddedRecord("service.instance", svc, nil)); err != nil {
+	if _, err := r.handle(f, embeddedRecord("service.instance", svc, nil), ""); err != nil {
 		t.Fatal(err)
 	}
 	if f.relRemoves != 1 {
@@ -102,7 +102,7 @@ func TestEmbeddedReconcilerCarriesSameAsBelief(t *testing.T) {
 		toID:       map[string]string{"mac": "00:11:22:33:44:55"},
 		confidence: 0.95, basis: "ifPhysAddress",
 	}}
-	if _, err := r.handle(f, embeddedRecord("network.device", dev, sameAs)); err != nil {
+	if _, err := r.handle(f, embeddedRecord("network.device", dev, sameAs), ""); err != nil {
 		t.Fatal(err)
 	}
 	attrs := map[string]model.Value{}
@@ -128,7 +128,7 @@ func TestEmbeddedReconcilerBeliefOnlyOnSameAs(t *testing.T) {
 		relType: "runs_on", toType: "host", toID: map[string]string{"host.id": "h1"},
 		confidence: 0.9, basis: "nonsense",
 	}}
-	if _, err := r.handle(f, embeddedRecord("service.instance", svc, runsOn)); err != nil {
+	if _, err := r.handle(f, embeddedRecord("service.instance", svc, runsOn), ""); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.lastRelation.Attributes) != 0 {
@@ -141,20 +141,20 @@ func TestEmbeddedReconcilerEntityDeleteForgets(t *testing.T) {
 	f := &fakeEngine{}
 	svc := map[string]string{"service.instance.id": "s1"}
 	if _, err := r.handle(f, embeddedRecord("service.instance", svc,
-		[]relDesc{{relType: "runs_on", toType: "host", toID: map[string]string{"host.id": "h1"}}})); err != nil {
+		[]relDesc{{relType: "runs_on", toType: "host", toID: map[string]string{"host.id": "h1"}}}), ""); err != nil {
 		t.Fatal(err)
 	}
 	// Delete the source: the engine cascades its incident relations, so the
 	// reconciler just forgets its bookkeeping.
 	del := embeddedRecord("service.instance", svc, nil)
 	del.SetEventName(evEntityDelete)
-	if _, err := r.handle(f, del); err != nil {
+	if _, err := r.handle(f, del, ""); err != nil {
 		t.Fatal(err)
 	}
 	// A later re-create with no relationships must NOT try to remove the already
 	// cascaded relation.
 	before := f.relRemoves
-	if _, err := r.handle(f, embeddedRecord("service.instance", svc, nil)); err != nil {
+	if _, err := r.handle(f, embeddedRecord("service.instance", svc, nil), ""); err != nil {
 		t.Fatal(err)
 	}
 	if f.relRemoves != before {
@@ -166,7 +166,7 @@ func TestEmbeddedReconcilerIgnoresNonEntity(t *testing.T) {
 	r := newEmbeddedReconciler()
 	f := &fakeEngine{}
 	// A record with no EventName is not an entity event: nothing to reconcile.
-	if drop, err := r.handle(f, newRecord("")); err != nil || drop != nil {
+	if drop, err := r.handle(f, newRecord(""), ""); err != nil || drop != nil {
 		t.Fatalf("non-entity record: drop=%v err=%v, want nil/nil", drop, err)
 	}
 	if f.relAdds != 0 {
@@ -182,7 +182,7 @@ func TestEmbeddedReconcilerDropsMalformedDescriptor(t *testing.T) {
 	m := lr.Attributes().PutEmptySlice(attrEntityRelationships).AppendEmpty().SetEmptyMap()
 	m.PutStr(relDescType, "runs_on")
 	m.PutStr(relDescEntityType, "host")
-	drop, err := r.handle(f, lr)
+	drop, err := r.handle(f, lr, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestEmbeddedReconcilerUnknownRelationTypeVocabulary(t *testing.T) {
 	}
 
 	f := &fakeEngine{}
-	_, err := newEmbeddedReconciler().handle(f, embeddedRecord(model.TypeServiceInstance, svc, rels))
+	_, err := newEmbeddedReconciler().handle(f, embeddedRecord(model.TypeServiceInstance, svc, rels), "")
 	if !errors.Is(err, errInvalidRecord) {
 		t.Fatalf("strict mode: err = %v, want errInvalidRecord", err)
 	}
@@ -219,7 +219,7 @@ func TestEmbeddedReconcilerUnknownRelationTypeVocabulary(t *testing.T) {
 	}
 
 	open := &fakeEngine{}
-	if _, err := newEmbeddedReconciler().handleVocab(open, embeddedRecord(model.TypeServiceInstance, svc, rels), false); err != nil {
+	if _, err := newEmbeddedReconciler().handleVocab(open, embeddedRecord(model.TypeServiceInstance, svc, rels), "", false); err != nil {
 		t.Fatalf("open vocabulary: %v", err)
 	}
 	if open.relAdds != 2 {
@@ -257,7 +257,7 @@ func TestReconcilerStateRollsBackOnFlushFailure(t *testing.T) {
 				if _, _, err := routeRecord(b, lr, "p1"); err != nil {
 					t.Fatalf("route: %v", err)
 				}
-				if _, err := r.handle(b, lr); err != nil {
+				if _, err := r.handle(b, lr, ""); err != nil {
 					t.Fatalf("reconcile: %v", err)
 				}
 			}
@@ -290,5 +290,53 @@ func TestReconcilerStateRollsBackOnFlushFailure(t *testing.T) {
 	}
 	if g.RelationCount() != 0 {
 		t.Errorf("RelationCount = %d after retry, want 0 (removal re-derived)", g.RelationCount())
+	}
+}
+
+// A shared entity is emitted by every producer that references it, and only the
+// one that owns the far end carries a descriptor for the edge. Keyed by entity
+// alone, the reconciler treated the referencing producer's descriptor-less
+// emission as a retraction and removed the owner's edge — once per emission.
+// Measured on the bench as a gateway edge asserted and retracted about 156 times
+// a day (toise-dev/toise#396).
+func TestEmbeddedReconcilerIsScopedPerProducer(t *testing.T) {
+	r := newEmbeddedReconciler()
+	f := &fakeEngine{}
+	addr := map[string]string{"network.address": "10.10.0.1"}
+	boundTo := []relDesc{{relType: model.RelBoundTo, toType: model.TypeNetworkInterface,
+		toID: map[string]string{"host.id": "h1", "network.interface.name": "vmbr1"}}}
+
+	// The owner asserts the edge on the shared address.
+	if _, err := r.handle(f, embeddedRecord(model.TypeNetworkAddress, addr, boundTo), "owner"); err != nil {
+		t.Fatal(err)
+	}
+	if f.relAdds != 1 || f.relRemoves != 0 {
+		t.Fatalf("owner's assertion: %d adds, %d removes; want 1 and 0", f.relAdds, f.relRemoves)
+	}
+
+	// Another producer emits the same shared entity because it references it, and
+	// carries no descriptor: it owns no edge here and must retract nothing.
+	if _, err := r.handle(f, embeddedRecord(model.TypeNetworkAddress, addr, nil), "referencer"); err != nil {
+		t.Fatal(err)
+	}
+	if f.relRemoves != 0 {
+		t.Fatalf("a producer that never asserted the edge retracted it: %d removes, want 0", f.relRemoves)
+	}
+
+	// Re-emitting it a second time must stay just as harmless.
+	if _, err := r.handle(f, embeddedRecord(model.TypeNetworkAddress, addr, nil), "referencer"); err != nil {
+		t.Fatal(err)
+	}
+	if f.relRemoves != 0 {
+		t.Fatalf("repeated referencing emissions retracted the edge: %d removes, want 0", f.relRemoves)
+	}
+
+	// The owner dropping its own descriptor still retracts: absence from the
+	// producer that asserted it is a real removal, and must keep working.
+	if _, err := r.handle(f, embeddedRecord(model.TypeNetworkAddress, addr, nil), "owner"); err != nil {
+		t.Fatal(err)
+	}
+	if f.relRemoves != 1 {
+		t.Fatalf("the asserting producer's own absence did not retract: %d removes, want 1", f.relRemoves)
 	}
 }

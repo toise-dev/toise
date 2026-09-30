@@ -44,14 +44,14 @@ func newEmbeddedReconciler() *embeddedReconciler {
 // It is a no-op for non-entity records (those are routed by routeRecord). It
 // returns the dotted keys of any non-scalar or malformed descriptor values it
 // dropped, so the caller can surface the loss rather than discard it silently.
-func (r *embeddedReconciler) handle(e engine, lr plog.LogRecord) (dropped []string, err error) {
-	return r.handleVocab(e, lr, true)
+func (r *embeddedReconciler) handle(e engine, lr plog.LogRecord, producer string) (dropped []string, err error) {
+	return r.handleVocab(e, lr, producer, true)
 }
 
 // handleVocab is handle with the vocabulary check selectable, mirroring
 // routeRecordVocab: with strictVocab false (accept_unknown_types, #141) an
 // unknown relationship.type passes as long as the descriptor's shape is sound.
-func (r *embeddedReconciler) handleVocab(e engine, lr plog.LogRecord, strictVocab bool) (dropped []string, err error) {
+func (r *embeddedReconciler) handleVocab(e engine, lr plog.LogRecord, producer string, strictVocab bool) (dropped []string, err error) {
 	attrs := lr.Attributes()
 	et := lr.EventName()
 	if et != evEntityState && et != evEntityDelete {
@@ -65,7 +65,12 @@ func (r *embeddedReconciler) handleVocab(e engine, lr plog.LogRecord, strictVoca
 		return idDropped, nil
 	}
 	source := change.EndpointRef{Type: sourceType, Identity: sourceID}
-	sk := endpointKey(source)
+	// Keyed by producer AND entity: a shared entity is emitted by several
+	// producers, and each must diff only against what it itself last asserted.
+	// Keyed by entity alone, a producer that merely references the entity — and
+	// so carries no descriptor for it — removed every edge another producer had
+	// declared on it, once per emission (toise-dev/toise#396).
+	sk := producerKey(producer, source)
 
 	switch et {
 	case evEntityDelete:
@@ -85,7 +90,7 @@ func (r *embeddedReconciler) handleVocab(e engine, lr plog.LogRecord, strictVoca
 		return idDropped, nil
 	case evEntityState:
 		when := eventTimeOf(lr)
-		rels, relDropped, relErr := embeddedRelations(attrs, source, when, strictVocab)
+		rels, relDropped, relErr := embeddedRelations(attrs, source, producer, when, strictVocab)
 		dropped = append(dropped, idDropped...)
 		dropped = append(dropped, relDropped...)
 		// The valid descriptors are still reconciled when one is rejected: the
@@ -158,7 +163,7 @@ func (r *embeddedReconciler) reconcile(e engine, sourceKey string, desired []cha
 // (errInvalidRecord): validating here, before staging, bounds the blast radius —
 // the store would otherwise reject the producer's whole batch for one bad
 // descriptor, and the retryable failure would poison every subsequent export.
-func embeddedRelations(attrs pcommon.Map, source change.EndpointRef, when time.Time, strictVocab bool) (rels []change.RelationObservation, dropped []string, err error) {
+func embeddedRelations(attrs pcommon.Map, source change.EndpointRef, producer string, when time.Time, strictVocab bool) (rels []change.RelationObservation, dropped []string, err error) {
 	v, ok := attrs.Get(attrEntityRelationships)
 	if !ok || v.Type() != pcommon.ValueTypeSlice {
 		return nil, nil, nil
@@ -200,6 +205,7 @@ func embeddedRelations(attrs pcommon.Map, source change.EndpointRef, when time.T
 			To:             change.EndpointRef{Type: toType, Identity: toID},
 			EventTime:      when,
 			SourceInterval: srcInterval,
+			Producer:       producer,
 		}
 		// Belief attributes (confidence, basis) are carried only on same_as edges
 		// (ADR 0020): they are the input the read-time canonical overlay collapses
@@ -244,6 +250,12 @@ func strFromMap(m pcommon.Map, key string) (string, bool) {
 // endpointKey is a stable wire-identity string for a relation endpoint.
 func endpointKey(ep change.EndpointRef) string {
 	return ep.Type + "|" + canonicalIdentity(ep.Identity)
+}
+
+// producerKey scopes a source's assertion set to the producer that made it. The
+// separator is a NUL so it cannot occur in a producer id or an identity value.
+func producerKey(producer string, ep change.EndpointRef) string {
+	return producer + "\x00" + endpointKey(ep)
 }
 
 // relationKey identifies an embedded relation within its source (From is always

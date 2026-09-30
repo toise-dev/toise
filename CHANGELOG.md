@@ -111,6 +111,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **One producer could retract another producer's edge.** Entity liveness has
+  been reference-counted per producer since ADR 0019 — an entity stays live
+  while any producer asserts it. Edges were not: a single reference per edge,
+  and any removal deleted it outright. The two halves of multi-producer handling
+  disagreed.
+
+  The consequence showed up wherever an entity is shared. Several producers
+  emit the same `network.address` because they reference it as a gateway;
+  only the one that owns the interface carries the `bound_to` descriptor.
+  Every other emission arrived with no descriptor for that entity, the
+  reconciler read the absence as a retraction, and the edge was removed —
+  then re-asserted by its owner, then removed again. Measured on a bench: the
+  edge joining the gateway to the interface that holds it was asserted and
+  retracted **about 156 times a day**, each removal reported as
+  `delete_source=producer`, which was literally true and entirely misleading
+  since that producer had never asserted it.
+
+  Edges are now reference-counted per producer exactly as entities are. An
+  edge survives while any producer asserts it and is removed when the last
+  reference goes, whether released explicitly or lapsed by interval. The
+  embedded-relationship reconciler keys its assertion set by producer **and**
+  entity, so a producer diffs only against what it itself last said.
+
+  Two behaviour changes worth knowing. An edge asserted by two producers now
+  survives one of them dropping it — that is the point, and it is a change.
+  And a producer that merely references a shared entity no longer disturbs
+  anything on it. Endpoint death is unchanged: a deleted entity still cascades
+  every incident edge, whoever asserted them.
+
+  Liveness snapshots written by earlier builds restore unchanged: their single
+  per-edge deadline becomes the anonymous producer's reference, and the first
+  re-assertion by a named producer adds its own alongside.
+
 - **The viz showed no link where a link existed.** Reported by an operator who saw
   no relation between a gateway and a dashboard it demonstrably talks to. The link
   was there: two toggles were off by default, and **both produce a canvas

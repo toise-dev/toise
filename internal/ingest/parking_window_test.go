@@ -67,7 +67,7 @@ func TestHostDepParkingWindow(t *testing.T) {
 						lr := recs.At(k)
 						lr.SetTimestamp(pcommon.NewTimestampFromTime(timeNow()))
 						_, _, _ = routeRecordVocab(b, lr, "agent-1", true)
-						_, _ = recon.handleVocab(b, lr, true)
+						_, _ = recon.handleVocab(b, lr, "", true)
 					}
 				}
 			}
@@ -93,7 +93,7 @@ func TestHostDepParkingWindow(t *testing.T) {
 							lr := recs.At(k)
 							lr.SetTimestamp(pcommon.NewTimestampFromTime(now))
 							_, _, _ = routeRecordVocab(b, lr, "agent-1", true)
-							_, _ = recon.handleVocab(b, lr, true)
+							_, _ = recon.handleVocab(b, lr, "", true)
 						}
 					}
 				}

@@ -217,7 +217,7 @@ func TestConformanceFixture(t *testing.T) {
 				}
 				// Embedded relationships ride on entity-state events (mirrors the
 				// receiver's Export path).
-				if _, herr := recon.handle(eng, lr); herr != nil {
+				if _, herr := recon.handle(eng, lr, ""); herr != nil {
 					t.Fatalf("record %d: embedded reconcile error: %v", k, herr)
 				}
 			}
