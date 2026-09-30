@@ -366,7 +366,38 @@ interface carries:
 | `mtu` | int | octets | config, not utilization |
 | `interface.type` | enum | `physical`/`virtual`/`wireless`/`loopback` | start with physical/virtual |
 | `duplex` | enum | `full`/`half`/`unknown` | renegotiable |
+| `network.interface.addresses` | string[] | `["10.10.0.60/24"]` | the interface's own addresses, each with its prefix |
+| `network.interface.subnets` | string[] | `["10.10.0.0/24"]` | the subnets those addresses sit in, deduplicated — **provisional**, see below |
 
+- **Addresses and subnets are arrays, and their value form is upstream's.** Both are
+  `string[]`, one element per address — **never** a joined string. A comma appears in
+  no IP text form, which is exactly what makes a joined value dangerous: it parses
+  cleanly as a single address, so a consumer that forgets to split shows one and is
+  never told it is wrong. The array is also the established upstream form — `host.ip`
+  and `host.mac` are both `string[]`. The notation is the one semconv specifies for
+  CIDR values: IPv4 in dotted-decimal with a prefix length of 0 to 32, IPv6 in RFC
+  5952 canonical text with a prefix length of 0 to 128.
+
+  **Host bits are the one place the two keys disagree, deliberately.** `subnets`
+  follows the frozen canonicalization and has its host bits zeroed
+  (`10.10.0.0/24`); `addresses` keeps them (`10.10.0.60/24`), because the address is
+  the point. The two values are indistinguishable by shape, so anything that
+  pattern-matches "looks like CIDR" will read one of them wrong. Read the key, never
+  the shape.
+
+  **`addresses` is the observed fact; `subnets` is derived from it.** Masking an
+  address by its prefix yields the subnet with no additional knowledge, so the two
+  can never legitimately disagree — a disagreement is a producer bug, not an
+  ambiguity for a consumer to resolve. Both keys are **absent** when no prefix is
+  known, including on a device that does not answer `ipAdEntNetMask`. Absent, never
+  present and empty: an empty string reads as an answer.
+
+  **`subnets` is provisional.** The OpenTelemetry Network Observability project lists
+  "IP subnet" among the L3 entities it intends to define, in its October 2026 to
+  January 2027 window. A subnet has an identity — its prefix — and a lifecycle, and
+  this document's own rule is that a fact which must persist belongs on an entity
+  rather than on an attribute. Expect this key to be superseded by an entity and a
+  traversal, and do not build anything that cannot absorb that.
 - **`speed` is in bit/s** (convert at the source: SNMP `ifSpeed` is bit/s, Linux `/sys` is
   Mbit/s). One `speed` key = the **negotiated/effective** rate; a separate `speed.max`
   (capability) is deferred until a use-case needs it.
@@ -511,18 +542,131 @@ attributes**. So anything a producer would have hung on an edge becomes an
 > join keys and as display names for as long as the retention window holds
 > pre-migration observations.
 
-- **Routes are entities.** A routing-table entry is a `network.route`, identity
-  **`{network.device.id, route.destination}`** (the destination as a canonical CIDR,
-  e.g. `10.20.0.0/16`), linked by **`has_route`** (device→route). Its `metric`,
-  `route.protocol`, and **`next_hop.ip`** ride as descriptive attributes. The next
-  hop stays a scalar attribute because **`network.address` is deferred**; when it
-  lands, `next_hop_via` (route→address) and `bound_to` (interface→address) follow.
+- **Routes are entities, identified by where they point.** A routing-table entry is
+  a `network.route`, identity **`{host.id, route.destination, next_hop.ip}`** on a
+  host and **`{network.device.id, route.destination, next_hop.ip}`** on a polled
+  device (the destination as a canonical CIDR, e.g. `10.20.0.0/16`), linked by
+  **`has_route`** (host/device→route). `metric`, `route.protocol` and the egress
+  interface — spelled **`network.interface.name`**, the same key the interface
+  entity is identified by — ride as descriptive attributes. `next_hop.ip` is
+  identity and is **not** repeated as an attribute. `next_hop_via` (route→address)
+  and `bound_to` (interface→address) link to the shared `network.address`, subject
+  to the rule below.
+
+  **The next hop is part of the identity and the egress interface is not**, and that
+  is not a house convention: it is what the MIB describing this exact object has said
+  since RFC 2096. `ipCidrRouteEntry` indexes on `{ipCidrRouteDest, ipCidrRouteMask,
+  ipCidrRouteTos, ipCidrRouteNextHop}` and `inetCidrRouteEntry` on the same shape
+  plus the policy, while both define the interface as an ordinary column —
+  `inetCidrRouteIfIndex` states that "a value of 0 is valid and represents the
+  scenario where no interface is specified". An identifying attribute must always be
+  present, so an attribute the source itself says may be absent cannot be one.
+
+  Without the next hop in the identity, a host with two uplinks — two NICs, or a VPN
+  — has two `0.0.0.0/0` entries differing only by gateway and metric, and they
+  collapse into a single entity whose next hop oscillates at poll cadence. That reads
+  downstream as a real topology change, and it is not one.
+
+  > **This identity and the inventory rule are now load-bearing for each other.** A
+  > direct, on-link route has no next hop at all, so the key would be absent. It is
+  > always present only because a producer emits **indirect routes only**. Anyone
+  > extending the inventory to direct routes breaks the identity, and must revisit
+  > both rules together rather than either one alone.
+
+  **A gateway change is a disappearance followed by an appearance**, not an attribute
+  change — which is what actually happened: the route through A is gone, a route
+  through B exists. Consumers reading an incident get the two events rather than one
+  mutated field.
+
+  **Documented boundary.** The MIB index also carries TOS on the older table and the
+  policy on the newer one. A producer reads neither, so two routes differing only by
+  TOS or policy collapse into one entity here. That is a known limit, stated so that
+  a reader does not mistake it for a loss.
+
+  **What a route inventory does not contain.** So that "no route to X" can be read
+  correctly, here is the complete list of what is absent by design. A producer emits
+  indirect routes only, and within those it omits a route whose next hop is
+  unspecified (`0.0.0.0`, `::` — the same rows the indirect-only rule already
+  excludes, stated again because the two filters are implemented separately),
+  loopback, or **the polled device's own management address** — that last row
+  describes the device reaching itself, not a path through another device. Exact
+  `(destination, next hop)` repeats are collapsed, which on a device is normally the
+  same route appearing in both `ipCidrRouteTable` and `inetCidrRouteTable`. Nothing
+  else is dropped: two distinct next hops are two distinct routes and both are
+  emitted, so an equal-cost pair is visible rather than arbitrated.
+
+  Read together with the TOS/policy collapse above, that means the absence of a route
+  says: no indirect route to that destination through another device was observed. It
+  does not say the destination is unreachable, and it never says a route was removed.
+- **A bare IP is not a globally unique identity — do not link the ones that
+  repeat.** `network.address` is identified by the address alone, so two producers
+  emitting the same text land on the same entity. That is correct when the value
+  really does name one thing across the fleet — a routable gateway shared by the
+  machines behind it — and **wrong when the value repeats by convention on
+  unrelated machines**. The same `172.17.0.1` exists, independently, on every host
+  running Docker. Linking each of them to one shared entity makes the graph assert
+  a neighbourhood that does not exist, and the engine cannot tell that edge from a
+  real one afterwards.
+
+  So a producer **MUST NOT** emit `next_hop_via` or `bound_to` toward a bare-IP
+  `network.address` when the address is any of:
+
+  | range | why it repeats |
+  |---|---|
+  | `0.0.0.0`, `::` | wildcard, names no host |
+  | `127.0.0.0/8`, `::1` | loopback, present on every machine |
+  | `169.254.0.0/16`, `fe80::/10` | link-local (RFC 3927 / RFC 4291), scoped to one link |
+  | `172.17.0.0/16` | Docker's default bridge — the same gateway on every Docker host |
+
+  The discriminator is **not** "is it private". A private gateway that several
+  machines genuinely share — `10.10.0.1` for the VMs behind one hypervisor bridge —
+  is exactly the case this relation exists to express, and must be linked. The
+  question is whether the value would be the same on a machine that has nothing to
+  do with this one.
+
+  **When in doubt, do not emit the relation.** A missing edge is a gap a reader can
+  see and ask about; a wrong edge is a false statement that reads exactly like a
+  true one. Per ADR 0018 the engine matches identity byte-exactly and never merges
+  on a guess — which also means it cannot un-merge what a producer asserted.
+
+  Scoping a host-local address, rather than dropping it, is a live design question
+  (the `vlan:` scope left open by ADR 0034 is the same shape) and is **not** decided
+  here. Until it is, silence is the honest answer.
+
+  **The range table is necessary and not sufficient — filter by the owning interface
+  too.** The table catches Docker's default `172.17.0.0/16` and misses every
+  user-defined Docker network, which lands on `172.18.0.0/16`, `172.19.0.0/16` or a
+  custom range and is indistinguishable by address alone. The owning interface is
+  not: `docker*`, `br-<12 hex>`, `virbr*`, `cni*`, `cbr*`, `flannel*`, `lxcbr*`,
+  `kube*`, `cali*`, `antrea*`, `weave*` and `ovs-system` all name a host-local
+  virtualization bridge. A producer knows which interface a route leaves by and which
+  interface an address is bound to; a consumer reading only the address does not.
+  That asymmetry is the whole reason this rule lives in the producer.
+
+  A route leaving by such an interface keeps `network.interface.name` and its next
+  hop — the fact is true and worth recording — and emits **no** shared
+  `network.address` and **no** `next_hop_via`.
+
+  **Match on `br-` with the hyphen, never on `br`.** Plain `br0`, `br1`, `bridge0`
+  and `vmbr0` are ordinary routed bridges on hypervisors and routers. Their gateway
+  is a genuinely shared address and must stay linked — it is often the only thing
+  joining two machines in the graph.
+
+  **Known limitation.** OpenWrt names real routed bridges `br-lan`, `br-wan` and
+  `br-guest`, which match the `br-` prefix. On such a device this rule suppresses an
+  edge that should exist. We accept it, for the reason above: a missing edge is a gap
+  a reader can see and ask about, a false one is not. A deployment for which it
+  matters needs a discriminator based on the address's reachability rather than on
+  the interface's name, and that is not decided here either.
+
 - **Address canonicalization is frozen** (identity is byte-exact, so text form IS
   identity): `route.destination` is CIDR with the prefix **always** explicit
   (`/32` and `/128` included), host bits zeroed (`10.20.3.0/24`, never
   `10.20.3.7/24`), default routes `0.0.0.0/0` / `::/0`. **Every IPv6 address in
   any identity key** is RFC 5952 text form (lowercase, single `::` compression);
-  zone indices are kept verbatim lowercased, never fabricated when absent.
+  zone indices are kept verbatim lowercased, never fabricated when absent. This now
+  binds `next_hop.ip` too: it became an identity key, so its text form is its
+  identity and an uncanonicalized gateway mints a second entity for one route.
 - **Provenance → instrumentation scope.** Which collection method observed a fact
   rides on the **instrumentation scope** — **one scope per source**
   (`senhub-agent/snmp-lldp`, `senhub-agent/snmp-route`, `senhub-agent/snmp-fdb`, …),
