@@ -233,6 +233,7 @@ in the change taxonomy (`stateKeys` → `entity.state_changed` vs
 | `host` | `host.name`, `host.arch`, `os.type`, `os.version`, `os.description` | — |
 | `container` | `container.name`, `container.image.name`, `container.image.tag`, `container.image.digest`, `container.runtime` | `status` (`running`/`stopped`/`paused`) |
 | `network.device` | `hw.vendor`, `hw.model`, `hw.firmware_version` (hardware semconv); `sysName` and `sysDescr` (SNMP, raw/descriptive); mgmt address (descriptive, **mutable**) | — (reachability / admin status is a metric) |
+| | **`hw.vendor` value form is normative** — see below. | |
 | `compute.vm` | `host.name` (vm name); guest `os.type` / `os.version` when the hypervisor reports it; `guest.host.id` when the hypervisor surfaces the guest machine-id (evidence for the `same_as` overlay, not identity); configured capacity reusing the AT10 keys — `host.cpu.logical.count` (vCPUs) and `host.memory.total` (By) — as **config**, not utilization; `host.virtualization` for the hypervisor platform (the AT11 value set: `hyperv`/`vmware`/`kvm`/…) | power state (`running` / `stopped` / `suspended`) |
 | `service.listener` | `process.executable.name`, `process.pid`, `network.transport`, `listen.address`, `port` (the port is also encoded in the `service.endpoint` identity) | — |
 | `network.endpoint` | **none by design** — the observer sees only the identity (`server.address`, `server.port`, `network.transport`) and resolves to a canonical entity at read time (#184); populating more would mint a false identity. **Host-local and link-local addresses only** (`127.0.0.0/8`, `::1`, `169.254.0.0/16`, `fe80::/10`) carry a **fourth identity key `host.id`** (the observing host's id, byte-identical to the `host` entity identity) — their scope is narrower than the observation domain, so the 3-key join would falsely merge distinct endpoints (ADR 0032 addendum). Everything else, including RFC1918 and CGNAT, stays 3-key. | — |
@@ -674,6 +675,37 @@ attributes**. So anything a producer would have hung on an edge becomes an
 - **`device.role`** (e.g. `switch`, `router`) is an **optional descriptive**
   attribute (never identity); infer best-effort from `sysServices` (L3 bit → router,
   L2 → switch) and omit when ambiguous.
+- **`hw.vendor` carries a comparable value, not the most authoritative one.** A
+  device can state its manufacturer two ways: `entPhysicalMfgName` from ENTITY-MIB,
+  which is what the device says about itself, and the enterprise that registered
+  its `sysObjectID` branch, resolved through the IANA enterprise number. The second
+  is the normative source, and **not** because it is truer — the first is arguably
+  more authoritative. Because it comes from a controlled registry, every device of
+  one vendor renders the identical string, which is the whole point of the key.
+
+  Nobody reads `hw.vendor` to display it alone; they read it to group and filter.
+  A free-form string typed by a manufacturer gives `Cisco Systems, Inc.` on one
+  device and `Cisco` on another, so "show me my Cisco estate" returns half of it
+  and the reader concludes they own less than they do. That is the same defect as
+  two keys for one fact, moved from the key to the value.
+
+  So: **`hw.vendor` is the short lowercase name derived from the IANA enterprise
+  number** (`cisco`, `juniper`, `arista`, `dell`, `extreme`, `mikrotik`, …).
+  ENTITY-MIB is the **fallback only**, used when the enterprise number is unknown.
+  The device's verbose self-description keeps its own home in `sysDescr`, so
+  nothing is lost.
+
+  **Documented boundary:** the enterprise-number-to-name mapping is a finite table
+  in the producer. A vendor absent from it falls back to the ENTITY-MIB string, so
+  its value has a different shape from its neighbours'. That is accepted, and it
+  means an unresolved enterprise number must be **visible** — counted, or warned
+  once per number — or nobody ever learns the table needs a line. An invisible
+  fallback is how a value silently stops being comparable.
+
+  The same rule governs `hw.model` and `hw.serial_number` on this entity the day a
+  producer emits them from more than one source. Today ENTITY-MIB is their only
+  source, so no form conflict exists yet.
+
 - **Descriptive key casing is dotted lowercase** (`sys.name`, `mgmt.ip` — not
   `sys_name`). Toise does not validate descriptive keys, but follow this for
   cross-producer consistency.
