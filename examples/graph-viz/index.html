@@ -6,6 +6,11 @@
 <title>Toise — Graph</title>
 <!--
   Example consumer of the Toise GraphQL API — NOT part of toise-server.
+
+  THIS SURFACE IS ENGLISH-ONLY. It is shown in international demos, so every
+  string that reaches the screen — button text, tooltips, counters, legends —
+  stays in English. Comments may be in any language; anything a viewer can read
+  may not.
   A standalone, dependency-free page (vis-network from a CDN) that loads the
   entity/relation graph with a query and then streams live changes over the
   entityChanged / relationChanged subscriptions. See README.md.
@@ -85,6 +90,8 @@ aside td.k{color:var(--dim);width:40%;}
 .muted{color:var(--dim);}
 .empty{color:var(--dim);padding:2rem;text-align:center;}
 button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:.2rem .5rem;font:inherit;cursor:pointer;}
+.layers{display:inline-flex;gap:.25rem;}
+.layers button.on{border-color:var(--accent);color:var(--accent);}
 #feed{font-size:11px;color:var(--dim);max-height:30vh;overflow:auto;margin-top:.4rem;}
 #feed div{padding:.15rem 0;border-bottom:1px solid var(--line);}
 #err{color:var(--warn);font-size:12px;}
@@ -141,6 +148,8 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
     <button id="filterMode" title="Search behaviour: dim the non-matching nodes, or show only the matches">match: dim</button>
     <label class="muted" for="tn">tenant<input id="tn" spellcheck="false" autocomplete="off" placeholder="default" title="X-Scope-OrgID — sent as a header on queries and as ?tenant= on the subscription" style="background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;padding:.1rem .35rem;width:8rem;margin-left:.3rem;"></label>
     <button id="labels" title="Toggle node labels: human-readable names vs technical ids">labels: names</button>
+    <button id="fold" title="Fold children into their owner: an interface into its device, a service into its host. 88% of a real graph is a child of something, so folding takes it from hundreds of nodes to dozens. Double-click a node to open just that one.">fold: on</button>
+    <span class="layers" id="layers" title="Show one layer at a time. A layer is a stratum of the model, not a search: you pick from what is there instead of guessing what to type."></span>
     <button id="edgemode" title="Edges: faint (default), with type labels, or hidden — to declutter a dense graph">edges: on</button>
     <button id="inferred" title="Overlay derived (not stored) edges linking IP-bearing entities to their network.address hub">inferred: off</button>
     <button id="static" title="Static layout: keep node positions fixed and don't replay the layout animation on updates">layout: animated</button>
@@ -199,15 +208,19 @@ const PALETTE=["#58a6ff","#3fb950","#d29922","#bc8cff","#f778ba","#39c5cf","#ff7
 const typeColor={};
 const colorFor=t=>{ if(!(t in typeColor)) typeColor[t]=PALETTE[Object.keys(typeColor).length%PALETTE.length]; return typeColor[t]; };
 const hidden=new Set();
+// Declared with the other state, not next to the layer buttons: rebuild() can run
+// before the wiring executes, and a temporal-dead-zone error there would blank the
+// page on load.
+let presentTypes=new Set();
 const ENT={}, REL={};
 const nodes=new vis.DataSet(), edges=new vis.DataSet();
 let fitted=false;
 
 const net=new vis.Network(document.getElementById('net'),{nodes,edges},{
   nodes:{shape:'dot',size:14,font:{color:'#c9d1d9',face:'ui-monospace, monospace',size:12,strokeWidth:3,strokeColor:'#0d1117'},borderWidth:2},
-  edges:{color:{color:'rgba(110,118,129,0.20)',highlight:'#58a6ff',hover:'#58a6ff'},
+  edges:{color:{color:'rgba(139,148,158,0.55)',highlight:'#58a6ff',hover:'#58a6ff'},
          font:{color:'#8b949e',size:10,strokeWidth:3,strokeColor:'#0d1117',align:'middle'},
-         arrows:{to:{enabled:true,scaleFactor:.45}},smooth:false,width:0.7},
+         arrows:{to:{enabled:true,scaleFactor:.55}},smooth:false,width:1.6},
   physics:{barnesHut:{gravitationalConstant:-26000,centralGravity:0.12,springLength:200,springConstant:.03,damping:.6,avoidOverlap:0.2},stabilization:{iterations:1500}},
   interaction:{hover:true,tooltipDelay:120,multiselect:true}
 });
@@ -327,18 +340,94 @@ function nameLabel(n){
 function labelOf(n){ return (labelMode==='name'?nameLabel(n):idLabel(n))||n.id.slice(0,6); }
 function titleOf(n){ const I=(n.identity||[]).map(a=>a.key+'='+a.value).join(', '); return n.type+(I?' · '+I:'')+' · '+n.id; }
 
+// --- folding: a graph of 546 entities is unreadable at any stroke weight ------
+// Measured on a real bench: 88% of entities are the CHILD of a single owner —
+// an interface belongs to a device, a service runs on a host, a route belongs to
+// a machine. Folding children into their owner takes 546 nodes to 68, which is
+// the only change that alters the order of magnitude. Everything else (edge
+// weight, node size) only reads well once that is done.
+//
+// CHILD_SIDE says, for each relation type, which END is the child. Only these
+// relations nest; everything else is a peer link and is aggregated, never folded.
+const CHILD_SIDE={has_interface:'to',has_route:'to',has_segment:'to',runs_on:'from',bound_to:'from',listens_on:'from'};
+let folded=localStorage.getItem('toise_viz_folded')!=='0';   // ON by default: the dense case is the normal case
+const expanded=new Set();                                     // owners the reader opened, by id
+
+// ownerOf maps a child to its owner, rebuilt whenever relations change.
+let OWNER={};
+function computeOwners(){
+  OWNER={};
+  for(const r of Object.values(REL)){
+    const side=CHILD_SIDE[r.type]; if(!side) continue;
+    const child=side==='from'?r.fromId:r.toId, owner=side==='from'?r.toId:r.fromId;
+    if(child!==owner && !OWNER[child]) OWNER[child]=owner;   // first owner wins; a second would be a modelling error, not ours to resolve
+  }
+}
+// repOf: the node actually drawn for x. Walk up while the parent is folded shut;
+// stop at the first ancestor the reader opened, or at the top.
+function repOf(id,guard){
+  if(!folded) return id;
+  const seen=guard||new Set();
+  let cur=id;
+  for(;;){
+    if(seen.has(cur)) return cur;   // cycle guard: a malformed graph must not hang the page
+    seen.add(cur);
+    const up=OWNER[cur];
+    if(!up || expanded.has(up) || !ENT[up]) return cur;
+    cur=up;
+  }
+}
+// What a folded node stands for, BY TYPE, so the badge says what is inside and
+// not only how much. Measured at a customer: an estate that is one host and 357
+// services, 97% of its relations a single runs_on. Folded, that is three nodes,
+// and a bare "(357)" reads as an empty graph. "(357 service.instance)" reads as
+// an accurate summary of an estate that really is shaped that way.
+function foldedInside(){
+  const n={};
+  if(!folded) return n;
+  for(const id of Object.keys(ENT)){
+    const r=repOf(id); if(r===id) continue;
+    const by=(n[r]=n[r]||{}); const t=ENT[id].type; by[t]=(by[t]||0)+1;
+  }
+  return n;
+}
+// "(357 service.instance)" for one kind, "(37 service.instance, 1 network.interface)"
+// for two, "+N" past that so a label stays a label. Full type names, never
+// abbreviated: a shortened type is a type the reader has to guess.
+function badge(by){
+  if(!by) return '';
+  const e=Object.entries(by).sort((a,b)=>b[1]-a[1]);
+  return '  ('+e.slice(0,2).map(([t,c])=>c+' '+t).join(', ')+(e.length>2?', +'+(e.length-2):'')+')';
+}
+function badgeTotal(by){ return by?Object.values(by).reduce((a,b)=>a+b,0):0; }
+function badgeFull(by){ return Object.entries(by).sort((a,b)=>b[1]-a[1]).map(([t,c])=>c+' '+t).join(', '); }
+
 let rebuildTimer=null;
 function scheduleRebuild(){ if(rebuildTimer) return; rebuildTimer=setTimeout(()=>{rebuildTimer=null;rebuild();},250); }
 function rebuild(){
+  computeOwners();
   const prevNodeIds=new Set(nodes.getIds());
   const allTypes=new Set(), nodeIds=new Set(), nUp=[];
   const q=attrQuery.trim(); let matched=0;
   const firstLoad=!fitted;   // scatter new nodes on the very first layout so stabilisation spreads them
+  const inside=foldedInside();
+  let hiddenByFold=0;
+  // Degree drives node size: dist1 with eight links must read as bigger than acc3
+  // with one, so the shape of the network is legible before a single label is.
+  const degree={};
+  Object.values(REL).forEach(r=>{ const a=repOf(r.fromId), b=repOf(r.toId);
+    if(a!==b){ degree[a]=(degree[a]||0)+1; degree[b]=(degree[b]||0)+1; } });
   Object.values(ENT).forEach(n=>{ allTypes.add(n.type); if(hidden.has(n.type)) return;
+    if(repOf(n.id)!==n.id){ hiddenByFold++; return; }            // folded into an owner
     const ok=attrMatch(n); if(q && !ok && filterOnly) return;   // "only" mode: hide non-matching outright
     nodeIds.add(n.id); if(q&&ok) matched++;
-    const node={id:n.id,label:labelOf(n),title:titleOf(n),opacity:n.deleted?0.45:(q&&!ok?0.12:1),
-              color:{background:colorFor(n.type),border:n.deleted?'#d29922':'#0d1117'}};
+    const by=inside[n.id], k=badgeTotal(by), d=degree[n.id]||0;
+    const node={id:n.id,label:labelOf(n)+badge(by),
+              title:titleOf(n)+(k?('\nfolded inside: '+badgeFull(by)+'  \u2014 double-click to open'):''),
+              opacity:n.deleted?0.45:(q&&!ok?0.12:1),
+              size:Math.min(34,12+Math.sqrt(d)*3.2)+(k?3:0),
+              borderWidth:k?3:2,
+              color:{background:colorFor(n.type),border:n.deleted?'#d29922':(k?'#8b949e':'#0d1117')}};
     if(firstLoad){ node.x=Math.random()*1600-800; node.y=Math.random()*1600-800; }
     nUp.push(node); });
   nodes.update(nUp);
@@ -347,16 +436,39 @@ function rebuild(){
   nodes.getIds().forEach(id=>{ if(!nodeIds.has(id)) nodes.remove(id); });
   const edgeIds=new Set(), eUp=[];
   let realCount=Object.values(REL).filter(r=>nodeIds.has(r.fromId)&&nodeIds.has(r.toId)).length;
+  // Folded: several relations between two owners collapse into one drawn link,
+  // thickened by how many it stands for. core1<->dist1 is one line, not two.
+  const agg={};
+  if(folded){
+    realCount=0;
+    Object.values(REL).forEach(r=>{ const a=repOf(r.fromId), b=repOf(r.toId);
+      if(a===b || !nodeIds.has(a) || !nodeIds.has(b)) return;    // internal to one owner, or filtered out
+      realCount++;
+      const k=a+'\u0000'+b+'\u0000'+r.type;
+      (agg[k]=agg[k]||{from:a,to:b,type:r.type,n:0}).n++; });
+  }
   // Edges are ALWAYS added (the springs are what lay the graph out); "off" only makes
   // them invisible, so hiding them can't fling the nodes apart.
-  const vis=showEdges?{color:{color:'rgba(110,118,129,0.20)',highlight:'#58a6ff',hover:'#58a6ff'},arrows:{to:{enabled:true,scaleFactor:.45}}}
+  const vis=showEdges?{color:{color:'rgba(139,148,158,0.55)',highlight:'#58a6ff',hover:'#58a6ff'},arrows:{to:{enabled:true,scaleFactor:.45}}}
                      :{color:{color:'rgba(0,0,0,0)',highlight:'rgba(0,0,0,0)',hover:'rgba(0,0,0,0)'},arrows:{to:{enabled:false}}};
-  Object.values(REL).forEach(r=>{ if(nodeIds.has(r.fromId)&&nodeIds.has(r.toId)){ edgeIds.add(r.id);
-    eUp.push({id:r.id,from:r.fromId,to:r.toId,title:r.type,label:(showEdges&&edgeLabels)?r.type:undefined,...vis}); } });
+  if(folded){
+    Object.values(agg).forEach(a=>{ const id='agg:'+a.from+'|'+a.to+'|'+a.type; edgeIds.add(id);
+      eUp.push({id,from:a.from,to:a.to,
+        title:a.type+(a.n>1?' \u00d7'+a.n:''),
+        label:(showEdges&&edgeLabels)?(a.type+(a.n>1?' \u00d7'+a.n:'')):undefined,
+        width:showEdges?Math.min(6,1.4+Math.log2(a.n)*1.1):0.7, ...vis}); });
+  } else {
+    Object.values(REL).forEach(r=>{ if(nodeIds.has(r.fromId)&&nodeIds.has(r.toId)){ edgeIds.add(r.id);
+      eUp.push({id:r.id,from:r.fromId,to:r.toId,title:r.type,label:(showEdges&&edgeLabels)?r.type:undefined,...vis}); } });
+  }
   if(showEdges && inferred) inferredEdges(nodeIds).forEach(e=>{ if(!edgeIds.has(e.id)){ edgeIds.add(e.id); eUp.push(e); } });
   edges.update(eUp);
   edges.getIds().forEach(id=>{ if(!edgeIds.has(id)) edges.remove(id); });
-  document.getElementById('nNodes').textContent=nodeIds.size;
+  // A folded node hides its children; a count that does not say so reads as a
+  // graph that simply has fewer things in it (#378).
+  const nN=document.getElementById('nNodes');
+  nN.textContent=nodeIds.size+(hiddenByFold?'  (+'+hiddenByFold+' folded)':'');
+  nN.title=hiddenByFold?(hiddenByFold+' entities are folded into their owner \u2014 double-click a node to open it'):'';
   // Never let a hidden thing read as an absent thing: when edges are painted
   // invisible the canvas is indistinguishable from a graph with no relations, so
   // the counter says which of the two it is.
@@ -364,6 +476,7 @@ function rebuild(){
   const inf=inferred?' +'+(edgeIds.size-realCount)+' inferred':'';
   nE.textContent=realCount+inf+(showEdges?'':' — HIDDEN, click "edges"');
   nE.style.color=showEdges?'':'var(--warn)';
+  presentTypes=allTypes; renderLayers();
   const leg=document.getElementById('legend'); leg.innerHTML='';
   if(inferred){ const s=document.createElement('span'); s.style.cursor='default'; s.style.opacity='.85';
     s.innerHTML='<i style="background:none;border-top:2px dashed #d29922;border-radius:0;height:0;width:14px"></i>inferred (derived, not stored)';
@@ -647,6 +760,49 @@ tnInput.addEventListener('change',()=>{ const v=tnInput.value.trim(); const p=ne
   if(v) p.set('tenant',v); else p.delete('tenant'); location.search=p.toString(); });
 const attrInput=document.getElementById('attr');
 attrInput.addEventListener('input',()=>{ attrQuery=attrInput.value; rebuild(); });
+// --- fold, layers, and opening one node -------------------------------------
+const foldBtn=document.getElementById('fold');
+function syncFoldBtn(){ foldBtn.textContent='fold: '+(folded?'on':'off'); foldBtn.style.color=folded?'var(--accent)':''; }
+syncFoldBtn();
+foldBtn.onclick=()=>{ folded=!folded; localStorage.setItem('toise_viz_folded',folded?'1':'0');
+  expanded.clear(); syncFoldBtn(); rebuild(); settle(2200); };
+
+// Double-click opens one owner, or closes it again. Single click already selects
+// and fills the side panel, so it cannot be reused for this.
+net.on('doubleClick',p=>{ if(!folded || !p.nodes || !p.nodes.length) return;
+  const id=p.nodes[0];
+  if(expanded.has(id)) expanded.delete(id); else expanded.add(id);
+  rebuild(); settle(1800); });
+
+// Layers are strata of the model, not a text search: the reader picks from what
+// exists. They drive the same per-type hiding the legend already uses, so the two
+// stay consistent — clicking a legend entry still works and is not overridden.
+const LAYERS=[
+  ['network',   ['network.device','network.interface','network.segment']],
+  ['machines',  ['host','compute.vm']],
+  ['workloads', ['service.instance','service.listener','container','pod','db','process']],
+  ['addressing',['network.address','network.route','network.endpoint']],
+];
+function layerTypes(name){ const l=LAYERS.find(x=>x[0]===name); return l?l[1]:[]; }
+function layerOn(name){ const t=layerTypes(name).filter(x=>presentTypes.has(x)); return t.length>0 && t.every(x=>!hidden.has(x)); }
+function renderLayers(){
+  const box=document.getElementById('layers'); if(!box) return;
+  box.innerHTML='';
+  LAYERS.forEach(([name,types])=>{
+    if(!types.some(t=>presentTypes.has(t))) return;          // a layer this instance has nothing in is not offered
+    const b=document.createElement('button');
+    b.textContent=name; b.className=layerOn(name)?'on':'';
+    b.title=name+' — '+types.filter(t=>presentTypes.has(t)).join(', ');
+    b.onclick=()=>{ const on=layerOn(name);
+      // Deliberately NOT persisted: the legend is not either, and a hidden layer
+      // that survives the session is a graph missing a third of itself with
+      // nothing on screen to say why — the exact trap this file already fixed
+      // once for the inferred overlay.
+      types.filter(t=>presentTypes.has(t)).forEach(t=>{ if(on) hidden.add(t); else hidden.delete(t); });
+      rebuild(); settle(2000); };
+    box.appendChild(b); });
+}
+
 const fmBtn=document.getElementById('filterMode');
 fmBtn.onclick=()=>{ filterOnly=!filterOnly; fmBtn.textContent='match: '+(filterOnly?'only':'dim');
   fmBtn.style.color=filterOnly?'var(--accent)':''; rebuild(); };
