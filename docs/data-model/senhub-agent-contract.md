@@ -511,12 +511,46 @@ attributes**. So anything a producer would have hung on an edge becomes an
 > join keys and as display names for as long as the retention window holds
 > pre-migration observations.
 
-- **Routes are entities.** A routing-table entry is a `network.route`, identity
-  **`{network.device.id, route.destination}`** (the destination as a canonical CIDR,
-  e.g. `10.20.0.0/16`), linked by **`has_route`** (device→route). Its `metric`,
-  `route.protocol`, and **`next_hop.ip`** ride as descriptive attributes. The next
-  hop stays a scalar attribute because **`network.address` is deferred**; when it
-  lands, `next_hop_via` (route→address) and `bound_to` (interface→address) follow.
+- **Routes are entities, identified by where they point.** A routing-table entry is
+  a `network.route`, identity **`{host.id, route.destination, next_hop.ip}`** on a
+  host and **`{network.device.id, route.destination, next_hop.ip}`** on a polled
+  device (the destination as a canonical CIDR, e.g. `10.20.0.0/16`), linked by
+  **`has_route`** (host/device→route). `metric`, `route.protocol` and the egress
+  interface — spelled **`network.interface.name`**, the same key the interface
+  entity is identified by — ride as descriptive attributes. `next_hop.ip` is
+  identity and is **not** repeated as an attribute. `next_hop_via` (route→address)
+  and `bound_to` (interface→address) link to the shared `network.address`, subject
+  to the rule below.
+
+  **The next hop is part of the identity and the egress interface is not**, and that
+  is not a house convention: it is what the MIB describing this exact object has said
+  since RFC 2096. `ipCidrRouteEntry` indexes on `{ipCidrRouteDest, ipCidrRouteMask,
+  ipCidrRouteTos, ipCidrRouteNextHop}` and `inetCidrRouteEntry` on the same shape
+  plus the policy, while both define the interface as an ordinary column —
+  `inetCidrRouteIfIndex` states that "a value of 0 is valid and represents the
+  scenario where no interface is specified". An identifying attribute must always be
+  present, so an attribute the source itself says may be absent cannot be one.
+
+  Without the next hop in the identity, a host with two uplinks — two NICs, or a VPN
+  — has two `0.0.0.0/0` entries differing only by gateway and metric, and they
+  collapse into a single entity whose next hop oscillates at poll cadence. That reads
+  downstream as a real topology change, and it is not one.
+
+  > **This identity and the inventory rule are now load-bearing for each other.** A
+  > direct, on-link route has no next hop at all, so the key would be absent. It is
+  > always present only because a producer emits **indirect routes only**. Anyone
+  > extending the inventory to direct routes breaks the identity, and must revisit
+  > both rules together rather than either one alone.
+
+  **A gateway change is a disappearance followed by an appearance**, not an attribute
+  change — which is what actually happened: the route through A is gone, a route
+  through B exists. Consumers reading an incident get the two events rather than one
+  mutated field.
+
+  **Documented boundary.** The MIB index also carries TOS on the older table and the
+  policy on the newer one. A producer reads neither, so two routes differing only by
+  TOS or policy collapse into one entity here. That is a known limit, stated so that
+  a reader does not mistake it for a loss.
 - **A bare IP is not a globally unique identity — do not link the ones that
   repeat.** `network.address` is identified by the address alone, so two producers
   emitting the same text land on the same entity. That is correct when the value
@@ -557,7 +591,9 @@ attributes**. So anything a producer would have hung on an edge becomes an
   (`/32` and `/128` included), host bits zeroed (`10.20.3.0/24`, never
   `10.20.3.7/24`), default routes `0.0.0.0/0` / `::/0`. **Every IPv6 address in
   any identity key** is RFC 5952 text form (lowercase, single `::` compression);
-  zone indices are kept verbatim lowercased, never fabricated when absent.
+  zone indices are kept verbatim lowercased, never fabricated when absent. This now
+  binds `next_hop.ip` too: it became an identity key, so its text form is its
+  identity and an uncanonicalized gateway mints a second entity for one route.
 - **Provenance → instrumentation scope.** Which collection method observed a fact
   rides on the **instrumentation scope** — **one scope per source**
   (`senhub-agent/snmp-lldp`, `senhub-agent/snmp-route`, `senhub-agent/snmp-fdb`, …),
