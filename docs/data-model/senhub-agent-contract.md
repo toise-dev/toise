@@ -582,6 +582,22 @@ attributes**. So anything a producer would have hung on an edge becomes an
   policy on the newer one. A producer reads neither, so two routes differing only by
   TOS or policy collapse into one entity here. That is a known limit, stated so that
   a reader does not mistake it for a loss.
+
+  **What a route inventory does not contain.** So that "no route to X" can be read
+  correctly, here is the complete list of what is absent by design. A producer emits
+  indirect routes only, and within those it omits a route whose next hop is
+  unspecified (`0.0.0.0`, `::` — the same rows the indirect-only rule already
+  excludes, stated again because the two filters are implemented separately),
+  loopback, or **the polled device's own management address** — that last row
+  describes the device reaching itself, not a path through another device. Exact
+  `(destination, next hop)` repeats are collapsed, which on a device is normally the
+  same route appearing in both `ipCidrRouteTable` and `inetCidrRouteTable`. Nothing
+  else is dropped: two distinct next hops are two distinct routes and both are
+  emitted, so an equal-cost pair is visible rather than arbitrated.
+
+  Read together with the TOS/policy collapse above, that means the absence of a route
+  says: no indirect route to that destination through another device was observed. It
+  does not say the destination is unreachable, and it never says a route was removed.
 - **A bare IP is not a globally unique identity — do not link the ones that
   repeat.** `network.address` is identified by the address alone, so two producers
   emitting the same text land on the same entity. That is correct when the value
