@@ -162,3 +162,97 @@ func TestInterfaceNameBothSpellings(t *testing.T) {
 		t.Fatal("the two spellings must remain distinct identities")
 	}
 }
+
+// TestEveryRegisteredTypeDecidesOnADisplayName is the invariant that outlives the
+// three types it was written for. Before it existed, displayNameKeys held ten of
+// the fourteen registered types and nothing failed: network.address, db and
+// network.segment shipped in 0.18.0 with no display name and no test protesting,
+// because the suite asserted hand-written cases and never enumerated the
+// registry. A type added later fell in the same hole silently.
+//
+// The point is not that every type has a name. It is that having none is written
+// down, in displayNameNone, with the reason — so the next type added forces a
+// decision instead of inheriting an omission.
+func TestEveryRegisteredTypeDecidesOnADisplayName(t *testing.T) {
+	for typ := range entityTypes {
+		_, keyed := displayNameKeys[typ]
+		_, composed := displayNameComposed[typ]
+		reason, none := displayNameNone[typ]
+		switch {
+		case none && (keyed || composed):
+			t.Errorf("%s is in displayNameNone and also has a name source: decide one way", typ)
+		case none && reason == "":
+			t.Errorf("%s is in displayNameNone with no reason: the reason is the decision", typ)
+		case !keyed && !composed && !none:
+			t.Errorf("%s has no display name and does not declare that it has none: "+
+				"add it to displayNameKeys, to displayNameComposed, or to displayNameNone with a reason", typ)
+		}
+	}
+	for typ := range displayNameNone {
+		if _, ok := entityTypes[typ]; !ok {
+			t.Errorf("displayNameNone names %s, which is not a registered entity type", typ)
+		}
+	}
+}
+
+func TestDisplayNameOfTheTypesThatHadNoneIn0180(t *testing.T) {
+	cases := []struct {
+		name     string
+		entity   Entity
+		want     string
+		wantLbl  string
+		wantNone bool
+	}{{
+		name:   "an address is named by its own value, as an endpoint is",
+		entity: ent(TypeNetworkAddress, []KeyValue{kv("network.address", "10.90.0.3")}, nil),
+		want:   "10.90.0.3",
+		// LabelName drops it: the label prints the identifying attributes right
+		// after the name, so rendering both would read the address twice.
+		wantLbl: "",
+	}, {
+		name: "a database is named by its technology and where it answers, not by its opaque key",
+		entity: ent(TypeDatabase,
+			[]KeyValue{kv("db.instance.id", "7269126174968421745")},
+			[]KeyValue{kv("db.system.name", "postgresql"), kv("server.address", "10.0.0.5"), kv("server.port", "5432")}),
+		want:    "postgresql@10.0.0.5:5432",
+		wantLbl: "postgresql@10.0.0.5:5432",
+	}, {
+		name: "an IPv6 database address is bracketed so the port stays legible",
+		entity: ent(TypeDatabase, []KeyValue{kv("db.instance.id", "x")},
+			[]KeyValue{kv("db.system.name", "mysql"), kv("server.address", "2a01:db8::1"), kv("server.port", "3306")}),
+		want:    "mysql@[2a01:db8::1]:3306",
+		wantLbl: "mysql@[2a01:db8::1]:3306",
+	}, {
+		name: "a database with no address is named by its technology alone",
+		entity: ent(TypeDatabase, []KeyValue{kv("db.instance.id", "x")},
+			[]KeyValue{kv("db.system.name", "oracle")}),
+		want:    "oracle",
+		wantLbl: "oracle",
+	}, {
+		name:     "a database that reports no technology is not given an invented name",
+		entity:   ent(TypeDatabase, []KeyValue{kv("db.instance.id", "x")}, nil),
+		wantNone: true,
+	}, {
+		name:     "a segment declares that it has no name rather than rendering its opaque id",
+		entity:   ent(TypeNetworkSegment, []KeyValue{kv("network.segment.id", "swarm:5f3a9c1d")}, nil),
+		wantNone: true,
+	}}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := DisplayName(c.entity)
+			if c.wantNone {
+				if got != "" {
+					t.Fatalf("DisplayName = %q, want none", got)
+				}
+				return
+			}
+			if got != c.want {
+				t.Fatalf("DisplayName = %q, want %q", got, c.want)
+			}
+			if lbl := LabelName(c.entity); lbl != c.wantLbl {
+				t.Fatalf("LabelName = %q, want %q", lbl, c.wantLbl)
+			}
+		})
+	}
+}

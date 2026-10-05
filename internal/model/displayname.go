@@ -6,9 +6,9 @@ import "strings"
 // calls the thing, in order of preference. A key may be an identifying one: an
 // entity identified by its own name still has a name to show.
 //
-// A type absent from this map and from displayNameComposed has no display name.
-// service.listener is the deliberate case: its identity is one composed string
-// containing a host uuid, and nothing observed on it reads better.
+// Every type in the registry must appear here, in displayNameComposed, or in
+// displayNameNone — a type that is in none of the three is an omission, not a
+// decision, and TestEveryRegisteredTypeDecidesOnADisplayName fails on it.
 //
 // These keys are for RENDERING ONLY. A display name drifts — a host is renamed
 // while its host.id does not — so nothing may key, join, or match on one.
@@ -32,6 +32,22 @@ var displayNameKeys = map[string][]string{
 	TypePod:             {"k8s.pod.name"},
 	TypeComputeVM:       {"vm.name", "host.name"},
 	TypeNetworkRoute:    {"route.destination"},
+	// The address is what a human says for it. Rendering an identifying value is
+	// already what network.endpoint does when it composes "127.0.0.1:5432" out of
+	// its own identity keys, and LabelName drops the duplicate so a label does not
+	// read "network.address 10.0.0.5 network.address=10.0.0.5".
+	TypeNetworkAddress: {"network.address"},
+}
+
+// displayNameNone holds the types that deliberately have no display name, with
+// the reason. Being in this map is a decision; being in none of the three maps
+// is an omission, which is the distinction the registry test enforces.
+var displayNameNone = map[string]string{
+	// An assigned, opaque identifier (ADR 0034): "swarm:<network-id>" names the
+	// segment no better than its identity already does, unlike an IP address,
+	// which a human reads fluently. No producer emits one yet, so there is no
+	// observed attribute to compose from either. Revisit with real segments.
+	TypeNetworkSegment: "its id is an assigned opaque value and no producer emits a name",
 }
 
 // DisplayName returns what a human calls an entity — "dash172", "senhub-ping",
@@ -80,6 +96,7 @@ func LabelName(e Entity) string {
 // attributes rather than read from one.
 var displayNameComposed = map[string]func(Entity) string{
 	TypeNetworkEndpoint: endpointName,
+	TypeDatabase:        databaseName,
 }
 
 // endpointName renders an endpoint as address:port, bracketing an IPv6 literal
@@ -97,6 +114,30 @@ func endpointName(e Entity) string {
 		return addr + ":" + port
 	}
 	return addr
+}
+
+// databaseName renders a database as "postgresql@10.0.0.5:5432". Its identity is
+// db.instance.id, which the contract defines as a stable source identifier — a
+// PostgreSQL system_identifier or a MySQL server_uuid — correct as a key and
+// unreadable as a name, so the name is composed from the descriptive attributes
+// the contract already requires. That it moves when a VIP moves is not an
+// objection: a display name drifts by definition, which is why it is not a key.
+func databaseName(e Entity) string {
+	system := attrValue(e, "db.system.name")
+	if system == "" {
+		return ""
+	}
+	addr := attrValue(e, "server.address")
+	if addr == "" {
+		return system
+	}
+	if strings.Contains(addr, ":") && !strings.HasPrefix(addr, "[") {
+		addr = "[" + addr + "]"
+	}
+	if port := attrValue(e, "server.port"); port != "" {
+		return system + "@" + addr + ":" + port
+	}
+	return system + "@" + addr
 }
 
 // attrValue reads a key from either attribute list. Identity is searched first:
