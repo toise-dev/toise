@@ -645,20 +645,30 @@ attributes**. So anything a producer would have hung on an edge becomes an
   real one afterwards.
 
   So a producer **MUST NOT** emit `next_hop_via` or `bound_to` toward a bare-IP
-  `network.address` when the address is any of:
+  `network.address` when the address repeats by convention on unrelated machines.
+  **The ranges below are a floor, not the test.** They are the cases known to
+  repeat, listed so nobody has to rediscover them; a range absent from the table
+  is not thereby allowed.
 
   | range | why it repeats |
   |---|---|
   | `0.0.0.0`, `::` | wildcard, names no host |
   | `127.0.0.0/8`, `::1` | loopback, present on every machine |
   | `169.254.0.0/16`, `fe80::/10` | link-local (RFC 3927 / RFC 4291), scoped to one link |
-  | `172.17.0.0/16` | Docker's default bridge — the same gateway on every Docker host |
+  | `172.17.0.0/16` | Docker's default bridge, the same gateway on every Docker host |
+  | pod and overlay networks | a cluster CNI gives every node the same bridge gateway: `10.42.0.1` on k3s/flannel `cni0`, a Calico or Cilium block, a non-default Docker bridge on `172.18+`. The addresses differ per distribution, so no range can be enumerated here |
 
-  The discriminator is **not** "is it private". A private gateway that several
-  machines genuinely share — `10.10.0.1` for the VMs behind one hypervisor bridge —
-  is exactly the case this relation exists to express, and must be linked. The
-  question is whether the value would be the same on a machine that has nothing to
-  do with this one.
+  **The test, which the table only approximates: would this value be the same on a
+  machine that has nothing to do with this one?** The discriminator is **not** "is
+  it private". A private gateway that several machines genuinely share —
+  `10.10.0.1` for the VMs behind one hypervisor bridge — is exactly the case this
+  relation exists to express, and must be linked.
+
+  A producer that can see which interface a route leaves by has a second,
+  independent filter available, and it is not redundant with the table: a gateway
+  reached through a container bridge, a virtual switch, a `veth`, `cilium` or
+  `vEthernet` interface is local to its host whatever its address. Where both
+  filters are available, apply both.
 
   **When in doubt, do not emit the relation.** A missing edge is a gap a reader can
   see and ask about; a wrong edge is a false statement that reads exactly like a
