@@ -9,6 +9,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
+## [0.19.0] - 2026-10-05
+
+**The release that closes two gaps 0.18.0 left, both found by consumers running it
+in production.** `display_name` arrived in 0.18.0 as the readable name every
+consumer needs, and three of the fourteen entity types never got one. Separately, on
+a server carrying several tenants, the ingest counters could say that something had
+been refused and not whose. Both are fixed, and the first comes with the test that
+keeps it from happening to the next type added.
+
+Drop-in: no wire-contract break, no data migration. A 0.18 deployment upgrades in
+place.
+
+**If you read the ingest metrics, read the `Changed` section.** Aggregating
+`toise_ingest_records_total` now returns one series per tenant where it returned one
+line.
+
+### Fixed
+
+- **`display_name` is absent on no type by accident.** It was empty on
+  `network.address`, `db` and `network.segment`: measured 0 of 60 and 0 of 10 on the
+  first two in a production tenant, with `identity_fingerprint` present on all of
+  them. An address now renders its own value, which is what a human says for it and
+  what `network.endpoint` already did when composing an address:port out of its
+  identity. A database composes its technology and where it answers —
+  `postgresql@10.0.0.5:5432` — because `db.instance.id` is a PostgreSQL
+  `system_identifier` or a MySQL `server_uuid`, correct as a key and unreadable as a
+  name. A segment **declares that it has none**, its id being an assigned opaque
+  value that reads no better than the identity, with no producer emitting a name to
+  compose from yet.
+
+  The omission was invisible because the test suite asserted hand-written cases and
+  nothing enumerated the registry, so a type added after the table was written
+  inherited no name and no failing test. A registry test now requires every type to
+  carry a name, to compose one, or to declare that it has none **with the reason**.
+  Having no display name is a decision that is written down; it is no longer
+  something that can happen by omission.
+
+- **An ingest rejection names its tenant.** One OTLP stream can carry several
+  tenants through the `tenant.id` resource attribute, and the per-record counters
+  were export-wide totals, so on a shared server a non-zero rejection count could
+  not be attributed. The counters now tally per `ResourceLogs`, where the tenant is
+  resolved, and a tenant's three result series are created at zero the first time it
+  is seen: a missing series and a zero series do not mean the same thing to whoever
+  reads them, and only one of them is an answer. The warning logged on a rejection
+  carries the tenant beside the first error, since it logs one error per batch and a
+  tenant whose records were all refused was invisible whenever another tenant's
+  error came first.
+
+  Two counters stay unlabeled on purpose. `toise_ingest_exports_total` counts
+  requests, and a request is not per-tenant — one rejected before tenant resolution
+  has none at all. `toise_ingest_tenant_rejections_total` counts ids that **failed**
+  validation, and on an open server that value is caller-supplied: labeling it would
+  hand an unauthenticated caller a way to mint unbounded series.
+
+### Changed
+
+- **`toise_ingest_records_total`, `toise_ingest_unknown_type_records_total` and
+  `toise_ingest_attr_values_dropped_total` carry a `tenant` label.** A query that
+  returned one line now returns one series per tenant; sum without the label to keep
+  the previous shape. Cardinality is bounded by the tenant count, which is already
+  the unit of the existing `toise_tenants_open` and `toise_tenants_quarantined`
+  gauges.
+
+- **A consumer that composed its own name for `network.address` or `db` will stop
+  doing so.** Those two types returned an empty `display_name` in 0.18.0 and now
+  return one. This is an appearance rather than a mutation — no value that was
+  already served has moved — but a fallback of the form "if empty, compose it
+  myself" stops firing for them, and labels change on that day if the fallback
+  produced a different form.
+
+### Documentation
+
+- **The relay provenance set names the first *participating* hop, not the first.**
+  "First relay wins" assumed every hop implements the convention; a hop that does not
+  take part leaves no trace, so the next participating hop stamps itself and the
+  value names the wrong relay. The guarantee is reduced rather than patched, because
+  the gap cannot be closed from inside the convention: a participating hop cannot
+  observe a non-participating one, and an ordered chain has the same gap. The
+  amendment is kept byte-identical to
+  [semconv#4024](https://github.com/open-telemetry/semantic-conventions/issues/4024).
+  A reader also gets guidance the rule never gave: a **partial** set is read as an
+  absence, and the key that is present is not a join key.
+
 ## [0.18.0] - 2026-09-30
 
 **The release that makes the graph legible.** 0.17.0 set out to say what an answer
@@ -1652,7 +1735,12 @@ contract converged with the senhub-agent reference producer.
   default and are intended for trusted networks only; the WebSocket subscription
   endpoint enforces an origin check.
 
-[Unreleased]: https://github.com/toise-dev/toise/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/toise-dev/toise/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/toise-dev/toise/compare/v0.18.0...v0.19.0
+[0.18.0]: https://github.com/toise-dev/toise/compare/v0.17.1...v0.18.0
+[0.17.1]: https://github.com/toise-dev/toise/compare/v0.17.0...v0.17.1
+[0.17.0]: https://github.com/toise-dev/toise/compare/v0.16.0...v0.17.0
+[0.16.0]: https://github.com/toise-dev/toise/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/toise-dev/toise/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/toise-dev/toise/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/toise-dev/toise/compare/v0.12.0...v0.13.0
