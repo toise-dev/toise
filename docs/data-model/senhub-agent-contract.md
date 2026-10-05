@@ -486,6 +486,41 @@ Rules:
 - **Toise does not ingest traces** (entity events only): these keys serve the
   trace backend. A "relayed-by" edge in the graph must be emitted as a
   relationship carried by an entity the agent already emits.
+- **What the set can and cannot say.** Both rules are stated as if every hop
+  implements the convention. In a mixed pipeline that is not guaranteed, and a
+  hop that does not take part leaves no trace, so the next participating hop
+  cannot tell that it is not the first. The guarantee is therefore narrower
+  than "first relay wins": a present set names the first participating relay,
+  which is the first hop only when every hop takes part; and an absent set
+  means no participating relay marked the payload, not that the payload was
+  never relayed. For liveness, absence has to be read as "relay unknown". The
+  two failures are not symmetric: an absent set invites a question, while a
+  present set that names the wrong relay invites a conclusion, which is how a
+  dead node collector can leave a live relay named in the data of every host
+  behind it. This cannot be closed from inside the convention, since a
+  participating hop cannot observe a non-participating one, and an ordered
+  chain has the same gap. It is not closed so much as compensated, out of
+  band, by knowing the deployment topology, which is the very knowledge the
+  keys were meant to supply. Credit to @Santoshkumarpuppala for raising it;
+  our own pipeline is homogeneous and we had not seen it.
+- **A partial set is read as an absence.** The set is atomic by rule, so a
+  conformant producer cannot emit one; receiving one means a non-conformant hop
+  or a lossy processor touched the payload, and a relaying agent passes it
+  through untouched rather than completing or stripping it. Do not use the key
+  that is present as a join key: `telemetry.relay.host.id` without
+  `telemetry.relay.instance.id` invites a join on the host that misses the
+  per-producer key, which is the false join atomicity exists to prevent,
+  arriving by another door. This guidance is for the trace backend and for any
+  consumer joining relay provenance. Toise is not among them: it ingests entity
+  events only and never sees these keys, so it has neither handled this case nor
+  been exposed to it.
+
+The **"What the set can and cannot say"** bullet is kept **byte-identical** to the body of
+[semconv#4024](https://github.com/open-telemetry/semantic-conventions/issues/4024).
+Two wordings of one fact in two documents is where the next divergence starts:
+amend both or neither. The bullet that follows it is ours alone: it tells a
+reader how to read a partial set, which the convention governs for writers and
+leaves unsaid for readers.
 
 ### Vocabulary & rollout lots
 
