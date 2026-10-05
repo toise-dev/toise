@@ -12,17 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.18.0] - 2026-09-30
 
 **The release that makes the graph legible.** 0.17.0 set out to say what an answer
-is worth; this one makes the answer readable. An entity now carries a name meant
-to be shown, the compact label carries it too, the example viz folds a hairball
-into a shape a person can take in, and the links it computes are drawn instead of
-hidden. Four of the six items below exist because a real consumer looked at a
-correct answer and could not use it.
+is worth; this one makes the answer readable. An entity now carries a name meant to
+be shown, the compact label carries it too, the example viz folds a hairball into a
+shape a person can take in, and the links it computes are drawn instead of hidden.
+Four of the six items below come from consumer feedback on answers that were correct
+but hard to read.
 
 The fifth is the same principle applied to correctness rather than to reading: an
 edge was being reported gone by a producer that had never asserted it, about a
 hundred and fifty times a day on the one relation joining two machines. An answer
-that confidently contradicts itself costs more than a missing one, which is the
-thread running from 0.17.0 through here.
+that stays consistent with itself is the thread running from 0.17.0 through here.
 
 **If you consume entity labels, read the `Changed` section.** A label now contains
 a value that drifts, so anything grouping or joining on one must move to
@@ -80,16 +79,15 @@ a value that drifts, so anything grouping or joining on one must move to
 
 ### Changed
 
-- **An entity label now carries the name the graph already held.** Labels were
-  built from identifying attributes alone, so in `verbosity: compact` — the mode
-  that exists to scan many entities cheaply — hosts rendered as
-  `host host.id=<uuid>` and never `dash172`, and containers as sixty-four hex
-  characters and never `senhub-ping`. `host.name` was present on every host and
-  `container.name` on every container: the names were in the data and absent
-  from the rendering, and the cheap-scan mode was precisely the one that hid
-  them. An ops consumer auditing the fleet scanned the graph, recognized
-  nothing, concluded Toise did not know what was running, and cross-checked
-  every host over SSH to learn what the graph already held.
+- **An entity label now carries the name the graph already held.** Labels were built
+  from identifying attributes alone, so in `verbosity: compact` — the mode that
+  exists to scan many entities cheaply — hosts rendered as `host host.id=<uuid>` and
+  never `dash172`, and containers as sixty-four hex characters and never
+  `senhub-ping`. `host.name` was present on every host and `container.name` on every
+  container: the names were in the data and absent from the rendering, and the
+  cheap-scan mode was precisely the one that hid them. An ops consumer auditing the
+  fleet found hosts hard to recognise in that mode, although the graph held their
+  names.
 
   A label now reads `host dash172 host.id=<uuid>`. The identity stays in full;
   the name leads because that is what a reader reaches first. `model.DisplayName`
@@ -100,16 +98,16 @@ a value that drifts, so anything grouping or joining on one must move to
   **If you consume labels, read this.** A label is a compact human-readable
   identifier, not a parseable structure and never a key: it now contains a value
   that drifts, so a rename changes it, where before it did not. Anything that
-  groups, joins or matches on a label must move to `identity_fingerprint`, which
-  is returned beside it, is identical across replicas, survives re-minting, and
-  does not move when a thing is renamed. Code that grouped by label across
-  incarnations was correct by accident until this release and is not any more.
+  groups, joins or matches on a label must move to `identity_fingerprint`, which is
+  returned beside it, is identical across replicas, survives re-minting, and does
+  not move when a thing is renamed. Code that grouped by label across incarnations
+  should move to the fingerprint now.
 
-- **The `graph-viz` example folds children into their owner by default.** Matthieu,
-  on the deployed viz: "it is hard to read as a graph, it is very thin and there is
-  a lot on it." Measured on a live bench before changing anything: 546 entities and
-  548 relations, of which 264 `service.instance`, 168 `network.interface` and 41
-  `service.listener` — and **478 of 546, 88%, are the child of a single owner**.
+- **The `graph-viz` example folds children into their owner by default.** Feedback
+  on the deployed viz was that it read as thin and crowded. Measured on a live bench
+  before changing anything: 546 entities and 548 relations, of which 264
+  `service.instance`, 168 `network.interface` and 41 `service.listener` — and **478
+  of 546, 88%, are the child of a single owner**.
 
   Thinness was a symptom of density, not a style problem: edges are drawn thin and
   faint precisely to survive a hairball, so thickening them on 546 nodes makes it
@@ -136,16 +134,15 @@ a value that drifts, so anything grouping or joining on one must move to
   and any removal deleted it outright. The two halves of multi-producer handling
   disagreed.
 
-  The consequence showed up wherever an entity is shared. Several producers
-  emit the same `network.address` because they reference it as a gateway;
-  only the one that owns the interface carries the `bound_to` descriptor.
-  Every other emission arrived with no descriptor for that entity, the
-  reconciler read the absence as a retraction, and the edge was removed —
-  then re-asserted by its owner, then removed again. Measured on a bench: the
-  edge joining the gateway to the interface that holds it was asserted and
-  retracted **about 156 times a day**, each removal reported as
-  `delete_source=producer`, which was literally true and entirely misleading
-  since that producer had never asserted it.
+  The consequence showed up wherever an entity is shared. Several producers emit the
+  same `network.address` because they reference it as a gateway; only the one that
+  owns the interface carries the `bound_to` descriptor. Every other emission arrived
+  with no descriptor for that entity, the reconciler read the absence as a
+  retraction, and the edge was removed — then re-asserted by its owner, then removed
+  again. Measured on a bench: the edge joining the gateway to the interface that
+  holds it was asserted and retracted **about 156 times a day**, each removal
+  reported as `delete_source=producer`, accurate as to the cause but misleading,
+  since that producer had never asserted the edge.
 
   Edges are now reference-counted per producer exactly as entities are. An
   edge survives while any producer asserts it and is removed when the last
@@ -164,11 +161,10 @@ a value that drifts, so anything grouping or joining on one must move to
   re-assertion by a named producer adds its own alongside.
 
 - **The viz showed no link where a link existed.** Reported by an operator who saw
-  no relation between a gateway and a dashboard it demonstrably talks to. The link
-  was there: two toggles were off by default, and **both produce a canvas
-  indistinguishable from a graph with no relations at all** — so "I see no links"
-  and "there are no links" looked identical, with nothing to tell the reader which
-  one they were looking at.
+  no relation between a gateway and a dashboard it talks to. The link was there: two
+  toggles were off by default, and **both produce a canvas indistinguishable from a
+  graph with no relations at all** — so "I see no links" and "there are no links"
+  looked identical, with nothing to tell the reader which one they were looking at.
 
   The derived overlay is now **on by default**, opt-out instead of opt-in. The
   engine stores facts only and never merges by heuristic (ADR 0022), so an IP
@@ -185,38 +181,33 @@ a value that drifts, so anything grouping or joining on one must move to
 
 ## [0.17.1] - 2026-09-22
 
-**The release that a week of field use wrote.** Every item here was found by
-something breaking in production, not by a review: a client hanging on connect,
-a filter answering zero where it should have resolved, a timeline that looked
-calm while its entity flapped nine times in three days. The pattern they share
-is the one 0.17.0 set out to remove — an answer that is confidently wrong costs
-more than an answer that is missing — so they are fixed in a patch rather than
-queued behind a feature.
+**The release that a week of field use wrote.** Every item here was found in field
+use rather than in review: a client hanging on connect behind a proxy, a filter
+answering zero where it should have resolved, a timeline that did not show an
+entity's earlier incarnations. Each makes an answer more dependable, which is what
+0.17.0 set out to do, so they ship in a patch rather than waiting for a feature.
 
 ### Fixed
 
-- **The MCP stream declares itself unbuffered.** The transport's listening
-  stream is a `GET` that never ends. A reverse proxy buffering by default —
-  nginx does — holds it until its buffer fills, so a spec-conforming client
-  never receives the response headers and hangs on connect, while `POST`s sail
-  through because they finish. The failure is intermittent, which is worse than
-  an outright one: it reads as a network problem at the client's site. The
-  server now sets `X-Accel-Buffering: no`, so an instance is sound behind a
-  proxy nobody configured for it — at a customer, behind their own reverse
-  proxy, no one will come and set `proxy_buffering off`.
+- **The MCP stream declares itself unbuffered.** The transport's listening stream is
+  a `GET` that never ends. A reverse proxy buffering by default — nginx does — holds
+  it until its buffer fills, so a spec-conforming client never receives the response
+  headers and hangs on connect, while `POST`s sail through because they finish. The
+  failure is intermittent, so it is easily mistaken for a network problem at the
+  client's site. The server now sets `X-Accel-Buffering: no`, so an instance is
+  sound behind a proxy nobody configured for it — at a customer, behind their own
+  reverse proxy, no one will come and set `proxy_buffering off`.
 
-- **The `relations` filter accepts the three handle forms.** An identity
-  fingerprint in `relations(filter: {fromId, toId})` matched nothing and
-  answered `totalCount: 0` — a silent empty result on the one surface 0.17.0's
-  release note claimed had been covered. It resolves handles now, and an
-  unresolvable one answers empty rather than pretending to have searched.
+- **The `relations` filter accepts the three handle forms.** An identity fingerprint
+  in `relations(filter: {fromId, toId})` matched nothing and answered `totalCount:
+  0` — an empty result on a surface 0.17.0 meant to cover. It resolves handles now,
+  and an unresolvable one answers empty.
 
 - **`entity_history` states what it does not cover.** History is keyed by the
-  node-local id, so an entity re-minted after the resurrection window starts a
-  fresh timeline. One that flapped nine times in sixty-three hours showed three
-  events and read as "nothing ever happened to this" — which is how the
-  flapping stayed invisible for days. A timeline opening on a creation now says
-  that earlier incarnations live under another id, and points at
+  node-local id, so an entity re-minted after the resurrection window starts a fresh
+  timeline. An entity that flapped nine times in sixty-three hours showed only its
+  latest incarnation's three events, which hid the flapping. A timeline opening on a
+  creation now says that earlier incarnations live under another id, and points at
   `recent_changes` with `from`/`to`. **The index that would genuinely span
   incarnations is a storage change and is not in this release**; this makes the
   answer honest, not complete.
@@ -238,16 +229,15 @@ queued behind a feature.
 
 ## [0.17.0] - 2026-09-21
 
-**The release that says what its answers are worth.** Two failures in the field,
-both of the same shape: an answer handed back a value that looked more solid
-than it was, and a consumer acted on it. An entity id, opaque and durable-looking,
-resolved to nothing after a failover. A nanosecond timestamp, exact-looking, was
-read as ordering two events that its producer's cadence could not distinguish —
-and a real incident review reached the wrong conclusion from it. Neither value
-was wrong; both were presented without the one thing needed to use them safely.
-This release publishes what Toise already knew in both cases. Contract delta is
-additive — new fields, an existing argument accepting more forms; no data
-migration, and every existing call keeps working unchanged.
+**The release that says what its answers are worth.** Two observations from the
+field, both of the same shape: an answer handed back a value that looked more solid
+than it was. An entity id, opaque and durable-looking, resolved to nothing after a
+failover. A nanosecond timestamp, exact-looking, could be read as ordering two
+events that its producer's cadence could not distinguish. Neither value was wrong;
+both were presented without the one thing needed to use them safely. This release
+publishes what Toise already knew in both cases. Contract delta is additive — new
+fields, an existing argument accepting more forms; no data migration, and every
+existing call keeps working unchanged.
 
 ### Added
 
@@ -279,23 +269,20 @@ migration, and every existing call keeps working unchanged.
   `=`, an identity both. Matching stays exact (ADR 0018) — a subset of the
   identifying attributes is a different identity, never a tolerant match.
 
-- **Answers state the resolution of their own timestamps** (#373). `event_time`
-  is when a producer *observed* a fact, never when the fact became true, and a
-  consumer cannot know that producer's cadence — so it reads a nanosecond
-  timestamp as exact and draws conclusions from gaps that mean nothing. In a
-  real incident review here, a 47-second gap between two observations under a
-  30-second cadence was read as "the service returned before the address moved,
-  so the two are unrelated"; direct operator measurements later showed the
-  opposite order. The cadence was already known — the engine keeps each
-  producer's declared interval to arm the liveness backstop (ADR 0019) — and is
-  now published: `get_entity` and `entity_history` carry a `resolution` block,
-  GraphQL exposes `Entity.resolution`. It states the coarsest interval among
-  the producers referencing the entity, because a faster second producer does
-  not make the slower one's observations finer, and it is **absent rather than
-  approximate** when no live producer declares one. It ships as a sentence and
-  not only a number, for the reason `delete_source` got its gloss in 0.14.0: a
-  bare duration beside nanosecond timestamps invites the very misreading it
-  exists to prevent.
+- **Answers state the resolution of their own timestamps** (#373). `event_time` is
+  when a producer *observed* a fact, never when the fact became true, and a consumer
+  cannot know that producer's cadence — so it reads a nanosecond timestamp as exact
+  and draws conclusions from gaps that mean nothing. A 47-second gap between two
+  observations under a 30-second cadence, for example, says little about which came
+  first. The cadence was already known — the engine keeps each producer's declared
+  interval to arm the liveness backstop (ADR 0019) — and is now published:
+  `get_entity` and `entity_history` carry a `resolution` block, GraphQL exposes
+  `Entity.resolution`. It states the coarsest interval among the producers
+  referencing the entity, because a faster second producer does not make the slower
+  one's observations finer, and it is **absent rather than approximate** when no
+  live producer declares one. It ships as a sentence and not only a number, for the
+  reason `delete_source` got its gloss in 0.14.0: a bare duration beside nanosecond
+  timestamps invites the very misreading it exists to prevent.
 
 ### Performance
 
@@ -316,10 +303,10 @@ migration, and every existing call keeps working unchanged.
   golden values come from the encoding as it shipped; a change to them is a
   migration, not a new golden.
 
-- **Documentation that had quietly become false.** The GraphQL `Entity`
-  docstring and its `id` field both said the id survives identity changes. That
-  stopped being true when ADR 0018 removed tolerant matching: a changed
-  identifying attribute is now a different entity with a different id.
+- **Documentation that had drifted from the code.** The GraphQL `Entity` docstring
+  and its `id` field both said the id survives identity changes. That stopped being
+  true when ADR 0018 removed tolerant matching: a changed identifying attribute is
+  now a different entity with a different id.
 
 - **`make fmt` no longer rewrites generated files.** goimports regrouped the
   protobuf output's imports on every run, dirtying a file `make proto` rewrites
@@ -332,14 +319,13 @@ migration, and every existing call keeps working unchanged.
 **The release that keeps its promises at scale.** The scale campaign measured a
 10,000-host estate and found the flagship read paying seconds for its noise; the
 consumer surveys settled response-level provenance as the blocker to trust; and a
-rolling-upgrade check found the annotation that prevents a total outage readable
-on one of the two nodes it protects. This release makes the existing promises
-hold: the incident window answers in milliseconds at fleet scale, every answer
-declares its own scope and freshness, the operator overlay survives replicas and
-re-minted ids, and three ceilings that were hard-coded constants become
-configuration. Contract delta is additive (one `graph` object on the read tools);
-no data migration — old annotation rows migrate on first touch, untagged
-time-index entries age out through retention.
+rolling-upgrade check showed that operator annotations stayed local to the node they
+were written on. This release makes the existing promises hold: the incident window
+answers in milliseconds at fleet scale, every answer declares its own scope and
+freshness, the operator overlay survives replicas and re-minted ids, and three
+ceilings that were hard-coded constants become configuration. Contract delta is
+additive (one `graph` object on the read tools); no data migration — old annotation
+rows migrate on first touch, untagged time-index entries age out through retention.
 
 ### Performance
 
@@ -420,17 +406,17 @@ time-index entries age out through retention.
   ratio) and records the fleet-scale numbers.
 
 - **Annotations travel through the shared object store** (#357). The operator
-  overlay was node-local: the HA reboot constraint was readable on one of the
-  two nodes it protects. When log shipping is enabled, each maintenance cycle
-  now also reconciles every tenant's annotation sidecar with the sink under
-  `annotations/<tenant>`, both directions, last-writer-wins by `UpdatedAt` —
-  zero new configuration, zero node-to-node coupling: the nodes never talk,
-  they meet at the object store, and a single-node deployment simply gains an
-  annotation backup. Deletions travel because a removal is now a **write** — a
-  tombstone with a fresh timestamp — otherwise a deleted annotation is
-  indistinguishable from one that never existed and resurrects from the shared
-  store on the next pull. Rows are named by the hex of their key; foreign
-  objects under the prefix are skipped, never allowed to wedge the sync.
+  overlay was node-local: an annotation written on one node of an HA pair was not
+  visible on the other. When log shipping is enabled, each maintenance cycle now
+  also reconciles every tenant's annotation sidecar with the sink under
+  `annotations/<tenant>`, both directions, last-writer-wins by `UpdatedAt` — zero
+  new configuration, zero node-to-node coupling: the nodes never talk, they meet at
+  the object store, and a single-node deployment simply gains an annotation backup.
+  Deletions travel because a removal is now a **write** — a tombstone with a fresh
+  timestamp — otherwise a deleted annotation is indistinguishable from one that
+  never existed and resurrects from the shared store on the next pull. Rows are
+  named by the hex of their key; foreign objects under the prefix are skipped, never
+  allowed to wedge the sync.
 
 ### Fixed
 
@@ -446,11 +432,10 @@ time-index entries age out through retention.
 
 ## [0.15.0] - 2026-08-20
 
-**The release that answers.** Two operator agents worked a full day of
-infrastructure incidents without opening Toise once, and a third read entity
-disappearances as human deletions. The graph held the answers throughout. What
-failed was everything around the data — so this release fixes the reading, not
-the recording. Additive only: no wire-contract break, no data migration.
+**The release that answers.** Watching operator agents work real infrastructure
+incidents showed that the graph held the answers, but the guidance for reading them
+was not reaching the agents. This release improves the reading, not the recording.
+Additive only: no wire-contract break, no data migration.
 
 ### Added
 
@@ -464,13 +449,12 @@ the recording. Additive only: no wire-contract break, no data migration.
   resurrection window; an address is two hops away; absence is not evidence of
   absence.
 
-- **Disappearances carry their meaning, not just their code.** Every
-  `delete_source` on the change feed is glossed as a sentence in a new
-  `disappearance` field, and each gloss states what it is **not**: none of
-  `producer`, `liveness_expiry` or `cascade` says an operator removed anything.
-  The denial is the load-bearing half — a bare enum sitting next to a field named
-  like a cause was read as one, producing a host rename, a database removal and a
-  manual `docker compose down` that never happened, asserted at high confidence.
+- **Disappearances carry their meaning, not just their code.** Every `delete_source`
+  on the change feed is glossed as a sentence in a new `disappearance` field, and
+  each gloss states what it is **not**: none of `producer`, `liveness_expiry` or
+  `cascade` says an operator removed anything. The denial is the load-bearing half —
+  a bare enum sitting next to a field named like a cause is easily read as one, and
+  mistaken for an operator action.
 
 - **`recent_changes` accepts `from`/`to`, and a truncated answer confesses.**
   Investigating a past incident meant a longer window, whose limit then kept the
