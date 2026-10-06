@@ -27,6 +27,7 @@ tool find_entities
     newest_event string
     oldest_answerable string
     relations int
+  no_match string
   total int
   truncated bool
 tool get_entity

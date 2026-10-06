@@ -1646,3 +1646,58 @@ func TestTelemetryKeysOwnershipOnly(t *testing.T) {
 		t.Errorf("network.device.id source = %q, want inherited via has_route", devID.Source)
 	}
 }
+
+// TestEmptyAnswerNamesWhatWasSearched is #364: two consumers, two months apart,
+// asked which processes ran on a fleet by filtering service.instance, got a
+// clean zero, and concluded no Windows machine was represented. A process is a
+// service.listener here, under process.executable.name. Both types exist, both
+// are plausible, and the wrong one answers zero rather than erroring.
+//
+// The issue proposed a paragraph of guidance. Prose in the instructions does
+// not reach a reader at the moment they hold a zero and draw a conclusion from
+// it; the answer does.
+func TestEmptyAnswerNamesWhatWasSearched(t *testing.T) {
+	ctx := context.Background()
+	s := newTestServer()
+
+	// The trap itself: a plausible key asked of the wrong type.
+	_, out, err := s.findEntities(ctx, nil, FindEntitiesInput{
+		Type:  model.TypeServiceInstance,
+		Match: map[string]string{"process.pid": "4242"},
+	})
+	if err != nil {
+		t.Fatalf("find: %v", err)
+	}
+	if len(out.Entities) != 0 {
+		t.Fatalf("expected an empty result to exercise the explanation, got %d", len(out.Entities))
+	}
+	if out.NoMatch == "" {
+		t.Fatal("an empty answer carried no explanation: a clean zero to a well-formed question is the defect")
+	}
+	if !strings.Contains(out.NoMatch, model.TypeServiceInstance) {
+		t.Errorf("the explanation does not name the type that was searched: %q", out.NoMatch)
+	}
+	if !strings.Contains(out.NoMatch, "process.pid") {
+		t.Errorf("the explanation does not name the key that was filtered on: %q", out.NoMatch)
+	}
+
+	// A key no type carries must say so rather than point at a sibling.
+	_, out2, err := s.findEntities(ctx, nil, FindEntitiesInput{
+		Match: map[string]string{"no.such.key.anywhere": "x"},
+	})
+	if err != nil {
+		t.Fatalf("find: %v", err)
+	}
+	if !strings.Contains(out2.NoMatch, "No entity type in this graph carries") {
+		t.Errorf("a key absent everywhere should say so: %q", out2.NoMatch)
+	}
+
+	// And a result that matched must not carry the explanation at all.
+	_, out3, err := s.findEntities(ctx, nil, FindEntitiesInput{Type: model.TypeHost})
+	if err != nil {
+		t.Fatalf("find: %v", err)
+	}
+	if len(out3.Entities) > 0 && out3.NoMatch != "" {
+		t.Errorf("a result that matched carries a no-match explanation: %q", out3.NoMatch)
+	}
+}
