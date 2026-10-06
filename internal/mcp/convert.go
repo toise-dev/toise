@@ -297,6 +297,36 @@ func (s *Server) entityWithProducers(e model.Entity, deleted, compact bool) Enti
 	return out
 }
 
+// horizonWarning compares a requested window against the retention horizon and
+// states the part that cannot be answered, or "" when the window is wholly
+// within reach.
+//
+// The horizon was already on every answer as graph.oldest_answerable, and that
+// was not enough: nothing compared it to the window the caller asked for, so a
+// window reaching before it came back short with no statement that it had been
+// cut. It cost a morning of wrong conclusions and a transport outage reported to
+// another team that never happened — with the horizon sitting in the payload the
+// whole time. Carrying a fact is not the same as drawing the conclusion from it,
+// and the consumer that cannot ask a follow-up question needs the conclusion.
+func (s *Server) horizonWarning(from, to time.Time) string {
+	if s.store == nil {
+		return ""
+	}
+	h := s.store.PruneHorizon()
+	if h.IsZero() || !from.Before(h) {
+		return ""
+	}
+	if !to.After(h) {
+		return "EMPTY BY RETENTION, not by absence: the whole window you asked for (" +
+			formatTime(from) + " to " + formatTime(to) + ") lies before the retention horizon " +
+			formatTime(h) + ". Those events were pruned and cannot be counted. A zero here is NOT evidence that nothing happened."
+	}
+	return "PARTIAL BY RETENTION: your window starts at " + formatTime(from) +
+		", before the retention horizon " + formatTime(h) +
+		". Events older than the horizon were pruned, so this answer can only cover " +
+		formatTime(h) + " to " + formatTime(to) + ". Counts below are for that shorter period, not for the window you asked for."
+}
+
 // Resolution states how finely an answer's timestamps may be read. Toise's
 // event_time is when a PRODUCER OBSERVED a fact, not when the fact became true,
 // so the truth lies somewhere in the interval before it. Two changes closer

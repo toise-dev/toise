@@ -50,6 +50,11 @@ type GraphDiffOutput struct {
 	From    string    `json:"from"`
 	To      string    `json:"to"`
 	Summary string    `json:"summary" jsonschema:"a one-line natural-language summary of the net difference"`
+	// Covered is set when retention cut the window short: a diff whose from
+	// instant lies before the prune horizon compares against a baseline rather
+	// than against reality at that instant, and a reader must not take the
+	// result as the change over the period they asked for.
+	Covered string `json:"covered,omitempty" jsonschema:"set when retention cut the asked-for window: which period this answer can actually speak for. A small diff here is NOT evidence that little changed"`
 
 	EntitiesCreated   []Entity        `json:"entities_created,omitempty" jsonschema:"entities present at to but not at from"`
 	EntitiesDeleted   []DeletedEntity `json:"entities_deleted,omitempty" jsonschema:"entities present at from but not at to"`
@@ -267,6 +272,9 @@ func (s *Server) graphDiff(ctx context.Context, _ *mcpsdk.CallToolRequest, in Gr
 	}
 
 	out.Summary = diffSummary(out)
+	if w := s.horizonWarning(from, to); w != "" {
+		out.Covered = w
+	}
 	out.Graph = s.graphMeta(s.graph, "")
 	return nil, out, nil
 }

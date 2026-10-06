@@ -1701,3 +1701,71 @@ func TestEmptyAnswerNamesWhatWasSearched(t *testing.T) {
 		t.Errorf("a result that matched carries a no-match explanation: %q", out3.NoMatch)
 	}
 }
+
+// TestWindowBeforeTheHorizonSaysSo is #397. The retention horizon was already
+// on every answer as graph.oldest_answerable, and that was not enough: nothing
+// compared it to the window the caller asked for, so a window reaching before
+// it came back short with no statement that it had been cut. It cost a morning
+// of wrong conclusions, including a transport outage reported to another team
+// that never happened — with the horizon sitting in the payload the whole time.
+//
+// Carrying a fact is not the same as drawing the conclusion from it, and the
+// consumer this product is for cannot ask a follow-up question.
+func TestWindowBeforeTheHorizonSaysSo(t *testing.T) {
+	ctx := context.Background()
+	s := newTestServer()
+	// A horizon one hour in the past: anything older was pruned.
+	horizon := s.now().Add(-time.Hour)
+	s.store = horizonStore{EventReader: s.store, horizon: horizon}
+
+	// Wholly before the horizon: a zero here is retention, not absence.
+	_, out, err := s.recentChanges(ctx, nil, RecentChangesInput{
+		From: formatTime(s.now().Add(-5 * time.Hour)),
+		To:   formatTime(s.now().Add(-4 * time.Hour)),
+	})
+	if err != nil {
+		t.Fatalf("recent_changes: %v", err)
+	}
+	if !strings.Contains(out.Covered, "EMPTY BY RETENTION") {
+		t.Errorf("a window entirely before the horizon did not say so: %q", out.Covered)
+	}
+
+	// Straddling it: the answer must say which shorter period it can speak for.
+	_, out2, err := s.recentChanges(ctx, nil, RecentChangesInput{Window: "3h"})
+	if err != nil {
+		t.Fatalf("recent_changes: %v", err)
+	}
+	if !strings.Contains(out2.Covered, "PARTIAL BY RETENTION") {
+		t.Errorf("a window straddling the horizon did not say so: %q", out2.Covered)
+	}
+	if !strings.Contains(out2.Covered, formatTime(horizon)) {
+		t.Errorf("the warning does not name the horizon, so a caller cannot correct the window: %q", out2.Covered)
+	}
+
+	// Wholly within reach: no warning at all, or it becomes noise.
+	_, out3, err := s.recentChanges(ctx, nil, RecentChangesInput{Window: "5m"})
+	if err != nil {
+		t.Fatalf("recent_changes: %v", err)
+	}
+	if strings.Contains(out3.Covered, "RETENTION") {
+		t.Errorf("a window within the horizon warned anyway: %q", out3.Covered)
+	}
+
+	// graph_diff carries it too: a diff from before the horizon compares against
+	// a baseline, not against reality at that instant.
+	_, d, err := s.graphDiff(ctx, nil, GraphDiffInput{Window: "3h"})
+	if err != nil {
+		t.Fatalf("graph_diff: %v", err)
+	}
+	if !strings.Contains(d.Covered, "RETENTION") {
+		t.Errorf("graph_diff did not declare the horizon: %q", d.Covered)
+	}
+}
+
+// horizonStore wraps the test store to report a retention horizon.
+type horizonStore struct {
+	EventReader
+	horizon time.Time
+}
+
+func (h horizonStore) PruneHorizon() time.Time { return h.horizon }

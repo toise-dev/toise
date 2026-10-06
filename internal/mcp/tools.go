@@ -432,6 +432,21 @@ func (s *Server) entityHistory(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 	for i, ev := range filtered {
 		out.Changes[i] = changeOut(ev)
 	}
+	// A since that reaches before the retention horizon returns a short timeline
+	// for a reason the caller cannot see from the events themselves.
+	if !since.IsZero() {
+		upper := until
+		if upper.IsZero() {
+			upper = s.now()
+		}
+		if w := s.horizonWarning(since, upper); w != "" {
+			if out.TimelineScope == "" {
+				out.TimelineScope = w
+			} else {
+				out.TimelineScope = w + " ALSO: " + out.TimelineScope
+			}
+		}
+	}
 	out.finishDigest()
 	out.Graph = s.graphMeta(s.graph, "")
 	return nil, out, nil
@@ -541,17 +556,28 @@ func (s *Server) recentChanges(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 	}
 	out.Truncated = out.Total > limit
 	out.Count = len(out.Changes)
+	// Retention first: a window reaching before the horizon is short for a
+	// reason the caller cannot see, and that reason outranks truncation.
+	if w := s.horizonWarning(from, to); w != "" {
+		out.Covered = w
+	}
 	if out.Truncated && len(out.Changes) > 0 {
 		// The limit keeps the NEWEST changes, so a truncated answer silently
 		// covers only the tail of the window it was asked for — which is how a
 		// graph holding the answer reads as a graph that has none (#346). Say
 		// which slice was actually returned, and how to get the rest.
 		oldest := out.Changes[len(out.Changes)-1].EventTime
-		out.Covered = fmt.Sprintf(
+		trunc := fmt.Sprintf(
 			"PARTIAL: %d of %d matching changes returned, covering %s to %s — NOT the whole window you asked for (%s to %s). "+
 				"%d older changes in the window are not shown. To see them, ask again with from/to bounding the sub-window you care about "+
 				"(that is how you investigate the minutes before an incident), or narrow with kind/change_type.",
 			out.Count, out.Total, oldest, out.WindowTo, out.WindowFrom, out.WindowTo, out.Total-out.Count)
+		if out.Covered == "" {
+			out.Covered = trunc
+		} else {
+			// Both cuts apply: say so in the order a reader must act on them.
+			out.Covered += " AND " + trunc
+		}
 	}
 	out.finishDigest()
 	out.Graph = s.graphMeta(s.graph, "")
