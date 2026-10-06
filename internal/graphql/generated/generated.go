@@ -1174,15 +1174,21 @@ type Query {
 
   """
   List entities (current state) in ascending id order (ULIDs are time-sortable,
-  so this is oldest-first), with Relay pagination. Use ` + "`" + `first` + "`" + ` (default 50) and
-  ` + "`" + `after` + "`" + ` (an ` + "`" + `endCursor` + "`" + ` from a previous page). Provide ` + "`" + `asOf` + "`" + ` (RFC 3339) to
-  list the graph as it was at that instant.
+  so this is oldest-first), with Relay pagination. Use ` + "`" + `first` + "`" + ` (default 50,
+  **maximum 200**) and ` + "`" + `after` + "`" + ` (an ` + "`" + `endCursor` + "`" + ` from a previous page). Provide
+  ` + "`" + `asOf` + "`" + ` (RFC 3339) to list the graph as it was at that instant.
+
+  A ` + "`" + `first` + "`" + ` above 200 is an **error**, not a smaller page: being served fewer
+  than asked without being told is how a partial answer gets read as a complete
+  one. Read ` + "`" + `totalCount` + "`" + ` and ` + "`" + `pageInfo.hasNextPage` + "`" + ` to know whether you hold
+  everything.
   """
   entities(filter: EntityFilter, first: Int = 50, after: String, asOf: String): EntityConnection!
 
   """
-  List relations (current state) with Relay pagination. Provide ` + "`" + `asOf` + "`" + `
-  (RFC 3339) to list the graph as it was at that instant.
+  List relations (current state) with Relay pagination. ` + "`" + `first` + "`" + ` defaults to 50
+  and is capped at 200; asking for more is an error rather than a smaller page.
+  Provide ` + "`" + `asOf` + "`" + ` (RFC 3339) to list the graph as it was at that instant.
   """
   relations(filter: RelationFilter, first: Int = 50, after: String, asOf: String): RelationConnection!
 
@@ -1192,6 +1198,15 @@ type Query {
   switch to the audit view: only events Toise had recorded by that instant.
   ` + "`" + `entity.unchanged` + "`" + ` heartbeats are excluded unless ` + "`" + `includeHeartbeats` + "`" + ` is set,
   matching the MCP ` + "`" + `entity_history` + "`" + ` tool — they dominate a raw timeline.
+
+  **This timeline pages oldest-first, and ` + "`" + `first` + "`" + ` is capped at 200.** Asking for
+  more is an error rather than a smaller page: a caller who requested five
+  hundred, received two hundred and took the last element read a three-hour-old
+  event as the newest, on a host that had emitted twice in the previous forty
+  minutes. ` + "`" + `pageInfo.hasNextPage` + "`" + ` answers "is there more", not "what you hold is
+  not the end". To reach the recent end directly, bound the query with ` + "`" + `since` + "`" + `,
+  or use the MCP ` + "`" + `entity_history` + "`" + ` tool, which keeps the NEWEST changes when it
+  truncates.
   """
   entityHistory(id: ID!, since: String, until: String, asKnownAt: String, includeHeartbeats: Boolean! = false, first: Int = 100, after: String): ChangeConnection!
 

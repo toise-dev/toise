@@ -52,16 +52,26 @@ func TestEntityHistoryCarriesResolution(t *testing.T) {
 	}
 }
 
-// Unknown cadence says nothing rather than inventing a bound, and a server with
-// no cadence source at all behaves exactly as before.
+// No declared cadence is STATED, not left silent (#363): such an entity never
+// expires, and a reader cannot tell it apart from one asserted a minute ago
+// unless the answer admits it. No bound is invented — that part is unchanged. A
+// server with no cadence source at all still answers nothing, because there the
+// question cannot be asked rather than answered in the negative.
 func TestResolutionAbsentWhenUnknown(t *testing.T) {
 	ctx := context.Background()
 
 	withCadence := newTestServer().SetCadence(fakeCadence{})
 	if _, out, err := withCadence.getEntity(ctx, nil, GetEntityInput{EntityID: "01HOST_WEB"}); err != nil {
 		t.Fatal(err)
-	} else if out.Resolution != nil {
-		t.Errorf("resolution invented for an entity with no declared cadence: %+v", out.Resolution)
+	} else if out.Resolution == nil {
+		t.Error("an entity no producer promised to refresh got no resolution block: the absence is the thing a reader needs told")
+	} else {
+		if out.Resolution.ObservationInterval != "none" {
+			t.Errorf("observation_interval = %q, want \"none\"", out.Resolution.ObservationInterval)
+		}
+		if !strings.Contains(out.Resolution.Meaning, "will NOT expire") {
+			t.Errorf("the meaning does not state the consequence: %q", out.Resolution.Meaning)
+		}
 	}
 
 	none := newTestServer()
