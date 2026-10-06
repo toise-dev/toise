@@ -818,3 +818,35 @@ func TestRecentChangesFromTo(t *testing.T) {
 		t.Error("to without from was accepted")
 	}
 }
+
+// TestOverCapFirstIsRefused is #366: a caller asking for five hundred used to
+// get two hundred with no statement that the request had been reduced, took the
+// last element of an oldest-first page, and read a three-hour-old event as the
+// newest — on a host that had emitted twice in the previous forty minutes.
+// hasNextPage was set and technically honest, but it answers "is there more",
+// not "what you hold is not the end". Being served fewer than asked without
+// being told is how a partial answer gets read as a complete one, so an
+// over-cap request is now an error.
+func TestOverCapFirstIsRefused(t *testing.T) {
+	st := newStack(t)
+	c := client.New(graphql.NewHandler(st.res, graphql.Config{}))
+
+	var resp struct {
+		Entities struct{ TotalCount int }
+	}
+	err := c.Post(`{ entities(first: 500) { totalCount } }`, &resp)
+	if err == nil {
+		t.Fatal("first: 500 was served instead of refused; a silently smaller page is the defect")
+	}
+	if !strings.Contains(err.Error(), "200") {
+		t.Errorf("the error does not name the cap, so a caller cannot correct the request: %v", err)
+	}
+
+	// At the cap it must still work: the fix refuses more than 200, not 200.
+	var ok struct {
+		Entities struct{ TotalCount int }
+	}
+	if err := c.Post(`{ entities(first: 200) { totalCount } }`, &ok); err != nil {
+		t.Errorf("first: 200 is at the cap and must be served: %v", err)
+	}
+}
