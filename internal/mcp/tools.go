@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,6 +31,14 @@ type FindEntitiesOutput struct {
 	Entities  []Entity  `json:"entities"`
 	Total     int       `json:"total" jsonschema:"number of entities matching the filter before the limit was applied"`
 	Truncated bool      `json:"truncated" jsonschema:"true if more entities matched than were returned; narrow the filter or raise the limit"`
+	// NoMatch is set only on an empty result and names what was actually
+	// searched, plus the types that DO carry the keys the filter asked for. An
+	// empty answer to a well-formed question is the failure this product keeps
+	// working to remove: two consumers two months apart asked which processes
+	// ran on a fleet by looking at service.instance, got a clean zero, and
+	// concluded no Windows machine was represented. A process is a
+	// service.listener here, under process.executable.name.
+	NoMatch string `json:"no_match,omitempty" jsonschema:"set only when nothing matched: what was searched, and which other types carry the keys you filtered on. An empty answer usually means the fact lives on another type, not that the fleet lacks the thing"`
 }
 
 func (s *Server) findEntities(ctx context.Context, _ *mcpsdk.CallToolRequest, in FindEntitiesInput) (*mcpsdk.CallToolResult, FindEntitiesOutput, error) {
@@ -56,9 +65,99 @@ func (s *Server) findEntities(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 	out.Entities = make([]Entity, len(matched))
 	for i, e := range matched {
 		out.Entities[i] = entityOutV(e, false, compact)
+		s.attachProducers(&out.Entities[i], e.ID, compact)
+	}
+	if len(matched) == 0 {
+		out.NoMatch = noMatchReason(g, in.Type, in.Match)
 	}
 	out.Graph = s.graphMeta(g, in.AsOf)
 	return nil, out, nil
+}
+
+// noMatchReason says what an empty answer actually covered. It is mechanical on
+// purpose: #364's own suggestion was a paragraph of guidance, and prose in the
+// instructions does not reach the reader at the moment they hold a clean zero
+// and draw a conclusion from it. What reaches them is the answer itself.
+//
+// It reports the searched scope, and — the part that resolves the trap — which
+// types in this graph actually carry the keys the filter asked for.
+func noMatchReason(g Graph, typ string, match map[string]string) string {
+	var b strings.Builder
+	counts := g.CountByType()
+	if typ != "" {
+		b.WriteString("nothing matched among the " + strconv.Itoa(counts[typ]) + " live " + typ + " entities")
+		if counts[typ] == 0 {
+			b.WriteString(" (this graph holds none of that type at all)")
+		}
+	} else {
+		b.WriteString("nothing matched across all " + strconv.Itoa(g.EntityCount()) + " live entities")
+	}
+	if len(match) == 0 {
+		b.WriteString(". ")
+		b.WriteString(emptyAnswerAdvice)
+		return b.String()
+	}
+
+	keys := make([]string, 0, len(match))
+	for k := range match {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	b.WriteString(", filtering on " + strings.Join(keys, ", "))
+
+	// Which types carry each key, regardless of value: that is the question the
+	// reader is really asking and cannot see from a zero.
+	for _, k := range keys {
+		carriers := typesCarryingKey(g, k)
+		switch {
+		case len(carriers) == 0:
+			b.WriteString(". No entity type in this graph carries " + k + " at all")
+		case typ != "" && len(carriers) == 1 && carriers[0] == typ:
+			b.WriteString(". " + k + " exists on " + typ + ", so the key is right and the value is not present")
+		default:
+			b.WriteString(". " + k + " is carried by " + strings.Join(carriers, ", ") + " — ask describe_type on those before concluding the fact is absent")
+		}
+	}
+	b.WriteString(". ")
+	b.WriteString(emptyAnswerAdvice)
+	return b.String()
+}
+
+const emptyAnswerAdvice = "An empty answer here means this filter found nothing, not that the fleet lacks the thing: the same fact often lives on another entity type under another key."
+
+// typesCarryingKey lists the entity types that carry a key, in this graph, as
+// observed rather than as declared. It samples the same way describe_type does:
+// the question is what the data has, not what the registry allows.
+func typesCarryingKey(g Graph, key string) []string {
+	seen := map[string]bool{}
+	for typ := range g.CountByType() {
+		for _, e := range g.ListEntities(typ) {
+			if hasKey(e, key) {
+				seen[typ] = true
+				break
+			}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for t := range seen {
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func hasKey(e model.Entity, key string) bool {
+	for _, kv := range e.Identity {
+		if kv.Key == key {
+			return true
+		}
+	}
+	for _, kv := range e.Attributes {
+		if kv.Key == key {
+			return true
+		}
+	}
+	return false
 }
 
 // --- get_entity ---
@@ -103,7 +202,7 @@ func (s *Server) getEntity(ctx context.Context, _ *mcpsdk.CallToolRequest, in Ge
 	return nil, GetEntityOutput{
 		Graph:       s.graphMeta(g, in.AsOf),
 		Resolution:  s.resolutionFor(id),
-		Entity:      entityOutV(e, deleted, compact),
+		Entity:      s.entityWithProducers(e, deleted, compact),
 		Annotations: s.annotationFor(string(id)),
 		Canonical:   s.canonicalGroup(g, id),
 	}, nil

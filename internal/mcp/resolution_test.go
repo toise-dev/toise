@@ -17,6 +17,11 @@ func (f fakeCadence) ObservationInterval(id model.EntityID) (time.Duration, bool
 	return d, ok && d > 0
 }
 
+// fakeCadence carries no provenance: the tests that use it are about the
+// resolution block, and an empty list is the honest answer for a fake that
+// knows nothing about producers.
+func (f fakeCadence) AssertingProducers(model.EntityID) []string { return nil }
+
 // An answer states the resolution of its own timestamps, so a consumer knows how
 // finely it may read them without having to know the producer's configuration.
 func TestGetEntityCarriesResolution(t *testing.T) {
