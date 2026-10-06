@@ -70,3 +70,40 @@ func TestObservationIntervalUnknown(t *testing.T) {
 		t.Error("an unknown entity reported a cadence")
 	}
 }
+
+// TestNoIntervalIsStatedNotSilent is #363: an entity nobody promised to refresh
+// never expires, and the read surfaces used to return no resolution block at
+// all — which a consumer cannot tell from a field that simply was not
+// populated. The engine's contract is unchanged (no interval means no bound,
+// and none is invented); what changed is that the surfaces now say so. This
+// pins the engine side they depend on.
+func TestNoIntervalIsStatedNotSilent(t *testing.T) {
+	e, _, _ := newEngine(t)
+
+	// Observed once with no interval: the producer promised nothing.
+	ev, err := e.ObserveEntity(EntityObservation{
+		Type: model.TypeHost, Identity: []model.KeyValue{kv("host.id", "immortal-1")},
+		EventTime: t0, Producer: "agent-a",
+	})
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	id := ev.Entity.Entity.ID
+
+	interval, ok := e.ObservationInterval(id)
+	if ok {
+		t.Fatalf("reported a promise that was never made: %v", interval)
+	}
+	if interval != 0 {
+		t.Errorf("interval = %v, want zero: a default would be a promise no producer made", interval)
+	}
+
+	// And a sweep must not reap it. The missing deadline is deliberate, so the
+	// remedy is to describe the entity, never to expire it on a guess.
+	if _, err := e.Sweep(); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if _, ok := e.ObservationInterval(id); ok {
+		t.Error("sweep armed an interval that no producer declared")
+	}
+}

@@ -738,8 +738,10 @@ func TestEntityResolution(t *testing.T) {
 		}
 	}
 	c.MustPost(`query($id:ID!){ entity(id:$id){ resolution{ observationInterval meaning } } }`, &before, client.Var("id", string(s.hostID)))
-	if before.Entity.Resolution != nil {
-		t.Fatalf("resolution invented with no declared cadence: %+v", before.Entity.Resolution)
+	if before.Entity.Resolution == nil {
+		t.Fatal("an entity no producer promised to refresh got no resolution: the absence is the thing a reader needs told (#363)")
+	} else if before.Entity.Resolution.ObservationInterval != "none" {
+		t.Fatalf("observationInterval = %q, want \"none\" before any cadence is declared", before.Entity.Resolution.ObservationInterval)
 	}
 
 	// The producer now declares a cadence; the same query starts answering.

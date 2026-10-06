@@ -11,16 +11,25 @@ import (
 //
 // It is a field resolver rather than a fixed part of every Entity payload
 // because the cost is a lookup and the need is occasional: a client comparing
-// event times asks for it, one listing an inventory does not. Null when no live
-// producer declares a cadence — saying nothing is the honest answer, where
-// inventing a bound would be worse than the silence.
+// event times asks for it, one listing an inventory does not.
+//
+// When no producer declares a cadence it reports "none" with the consequence
+// rather than returning null (#363). Such an entity never expires, and a reader
+// cannot tell it apart from one asserted a minute ago unless the answer admits
+// it. Refusing to invent a bound is the honest part and is unchanged; staying
+// silent about the absence was the defect.
+// noLivenessPromise is kept byte-identical in wording to the MCP surface's
+// constant: two phrasings of one fact in two surfaces is where the next
+// divergence starts.
+const noLivenessPromise = "no producer declared a refresh interval for this entity, so Toise has no liveness promise to hold it to: its presence here means it was observed at least once and never explicitly deleted, and it will NOT expire on its own however long its producers stay silent. Read it as \"something asserted this and nothing has contradicted it\", not as \"a producer vouched for this recently\". The timestamps carry no resolution bound either, so no ordering or causal conclusion may be drawn from how close two of them are. Toise does not invent a default interval: that would be a promise no producer made."
+
 func (r *entityResolver) Resolution(_ context.Context, obj *generated.Entity) (*generated.Resolution, error) {
 	if r.Engine == nil {
 		return nil, nil
 	}
 	interval, ok := r.Engine.ObservationInterval(model.EntityID(obj.ID))
 	if !ok {
-		return nil, nil
+		return &generated.Resolution{ObservationInterval: "none", Meaning: noLivenessPromise}, nil
 	}
 	d := interval.String()
 	return &generated.Resolution{

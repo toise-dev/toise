@@ -284,21 +284,30 @@ func (s *Server) graphMeta(g Graph, asOf string) GraphMeta {
 // service returned 47 s BEFORE the address moved, so the two are unrelated" from
 // two event_times 47 s apart, under a 30 s cadence — the gap was shorter than
 // the resolution and meant nothing.
+// noLivenessPromise is the Meaning for an entity no producer promised to
+// refresh. It is one sentence doing the job delete_source's gloss does: a
+// consumer that cannot ask a follow-up question needs the consequence spelled
+// out, not a missing field to interpret.
+const noLivenessPromise = "no producer declared a refresh interval for this entity, so Toise has no liveness promise to hold it to: its presence here means it was observed at least once and never explicitly deleted, and it will NOT expire on its own however long its producers stay silent. Read it as \"something asserted this and nothing has contradicted it\", not as \"a producer vouched for this recently\". The timestamps carry no resolution bound either, so no ordering or causal conclusion may be drawn from how close two of them are. Toise does not invent a default interval: that would be a promise no producer made."
+
 type Resolution struct {
-	ObservationInterval string `json:"observation_interval" jsonschema:"the liveness interval this entity's producers declared, e.g. 30s — an UPPER BOUND on the uncertainty, deliberately padded above the real reporting cadence, never below it"`
+	ObservationInterval string `json:"observation_interval" jsonschema:"the liveness interval this entity's producers declared, e.g. 30s — an UPPER BOUND on the uncertainty, deliberately padded above the real reporting cadence, never below it; the literal \"none\" means NO producer promised a refresh, so the entity never expires on its own and its presence is not evidence of recency"`
 	Meaning             string `json:"meaning" jsonschema:"what that implies for reading the timestamps in this answer, including what they cannot tell you"`
 }
 
-// resolutionFor renders the resolution block for an entity, or nil when no live
-// producer declares an interval — in which case the honest answer is to say
-// nothing rather than to invent a bound.
+// resolutionFor renders the resolution block for an entity. When no producer
+// declares an interval it says so instead of returning nothing (#363): an
+// entity nobody promised to refresh never expires, and a reader cannot tell it
+// apart from one asserted a minute ago unless the answer admits it. Saying
+// nothing was the earlier behavior and it was the defect, not the honesty — the
+// honesty is refusing to invent a bound, which this still does.
 func (s *Server) resolutionFor(id model.EntityID) *Resolution {
 	if s.cadence == nil {
 		return nil
 	}
 	interval, ok := s.cadence.ObservationInterval(id)
 	if !ok {
-		return nil
+		return &Resolution{ObservationInterval: "none", Meaning: noLivenessPromise}
 	}
 	return &Resolution{
 		ObservationInterval: interval.String(),
