@@ -352,6 +352,7 @@ tool graph_diff
   to string
   window string
   out:
+  covered string
   entities_changed []object
     asserted_by []string
     attributes []object
