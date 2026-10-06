@@ -28,6 +28,11 @@ type Entity struct {
 	Identity            []Attribute `json:"identity,omitempty" jsonschema:"the identifying attributes that together identify this entity; omitted in compact verbosity"`
 	Attributes          []Attribute `json:"attributes,omitempty" jsonschema:"descriptive, non-identifying attributes; omitted in compact verbosity"`
 	Deleted             bool        `json:"deleted" jsonschema:"true if the entity has been observed deleted"`
+	// AssertedBy names the producers currently asserting this entity. One name
+	// means one source said it; several mean they agree on its existence, not
+	// on its attribute values, which the last writer sets. Absent in compact
+	// verbosity and when no cadence source is wired.
+	AssertedBy []string `json:"asserted_by,omitempty" jsonschema:"the producers asserting this entity right now, so a suspect value has someone to go and ask; several names mean they agree it EXISTS, not that they agree on its attributes - the last writer sets those"`
 }
 
 // Relation is a typed directed edge rendered for an LLM.
@@ -271,6 +276,25 @@ func (s *Server) graphMeta(g Graph, asOf string) GraphMeta {
 		m.OldestAnswerable = formatTime(h)
 	}
 	return m
+}
+
+// attachProducers fills AssertedBy from the engine's per-producer references.
+// Compact verbosity omits it, like identity and attributes: that mode exists to
+// scan many entities cheaply, and provenance is a question asked about one.
+func (s *Server) attachProducers(out *Entity, id model.EntityID, compact bool) {
+	if s.cadence == nil || compact {
+		return
+	}
+	if p := s.cadence.AssertingProducers(id); len(p) > 0 {
+		out.AssertedBy = p
+	}
+}
+
+// entityWithProducers renders an entity and names who is asserting it.
+func (s *Server) entityWithProducers(e model.Entity, deleted, compact bool) Entity {
+	out := entityOutV(e, deleted, compact)
+	s.attachProducers(&out, e.ID, compact)
+	return out
 }
 
 // Resolution states how finely an answer's timestamps may be read. Toise's

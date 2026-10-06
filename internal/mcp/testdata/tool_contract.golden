@@ -7,6 +7,7 @@ tool find_entities
   verbosity string
   out:
   entities []object
+    asserted_by []string
     attributes []object
       key string
       type string
@@ -51,6 +52,7 @@ tool get_entity
       from string
       to string
   entity object
+    asserted_by []string
     attributes []object
       key string
       type string
@@ -91,6 +93,7 @@ tool get_neighbors
     oldest_answerable string
     relations int
   neighbors []object
+    asserted_by []string
     attributes []object
       key string
       type string
@@ -108,6 +111,7 @@ tool get_neighbors
     depth int
     direction string
     resolved_entity object
+      asserted_by []string
       attributes []object
         key string
         type string
@@ -144,6 +148,7 @@ tool find_path
   path []object
     direction string
     entity object
+      asserted_by []string
       attributes []object
         key string
         type string
@@ -179,6 +184,7 @@ tool impact_of
     oldest_answerable string
     relations int
   impacted []object
+    asserted_by []string
     attributes []object
       key string
       type string
@@ -196,6 +202,7 @@ tool impact_of
     depth int
     via string
   root object
+    asserted_by []string
     attributes []object
       key string
       type string
@@ -237,6 +244,7 @@ tool entity_history
     delete_source string
     disappearance string
     entity object
+      asserted_by []string
       attributes []object
         key string
         type string
@@ -299,6 +307,7 @@ tool recent_changes
     delete_source string
     disappearance string
     entity object
+      asserted_by []string
       attributes []object
         key string
         type string
@@ -344,6 +353,7 @@ tool graph_diff
   window string
   out:
   entities_changed []object
+    asserted_by []string
     attributes []object
       key string
       type string
@@ -361,6 +371,7 @@ tool graph_diff
     changed_keys []string
     state_changed bool
   entities_created []object
+    asserted_by []string
     attributes []object
       key string
       type string
@@ -376,6 +387,7 @@ tool graph_diff
     label string
     type string
   entities_deleted []object
+    asserted_by []string
     attributes []object
       key string
       type string
@@ -393,6 +405,7 @@ tool graph_diff
     delete_reason string
     delete_source string
   entities_transient []object
+    asserted_by []string
     attributes []object
       key string
       type string
@@ -514,6 +527,7 @@ tool telemetry_keys
   entity_id string
   out:
   entity object
+    asserted_by []string
     attributes []object
       key string
       type string

@@ -44,6 +44,10 @@ type Graph interface {
 // satisfies it; nil leaves the resolution block off every answer.
 type Cadence interface {
 	ObservationInterval(id model.EntityID) (time.Duration, bool)
+	// AssertingProducers lists the producers currently asserting an entity. The
+	// engine has held this per entity since per-producer reference counting
+	// (ADR 0019) and no read surface returned it (#394).
+	AssertingProducers(id model.EntityID) []string
 }
 
 // EventReader is the subset of the event log the MCP tools read history from

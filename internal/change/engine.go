@@ -494,6 +494,32 @@ func (e *Engine) observeEntityLocked(obs EntityObservation) (model.Event, error)
 // more precise. Live producers only — an entity no one references any more has
 // no current cadence, and a past one is not recoverable from the log, since the
 // interval is liveness state and was never an event field.
+// AssertingProducers lists the producers currently asserting an entity, sorted,
+// as the per-producer reference counting already holds them (ADR 0019). The
+// engine knew which scope observed a fact and no read surface returned it
+// (#394): a consumer looking at a suspect value could not tell whether one
+// producer said it or three agreed, nor which one to go and ask.
+//
+// It reports live references only. A producer that released its reference is
+// gone from this list, which is the point: the question is who is asserting the
+// entity now, not who ever did.
+func (e *Engine) AssertingProducers(id model.EntityID) []string {
+	e.obsMu.Lock()
+	defer e.obsMu.Unlock()
+
+	out := make([]string, 0, len(e.refs[id]))
+	for producer := range e.refs[id] {
+		if producer == "" {
+			// The anonymous producer: a pre-refcount snapshot restores under it,
+			// and naming it would invent an identity the data does not carry.
+			continue
+		}
+		out = append(out, producer)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func (e *Engine) ObservationInterval(id model.EntityID) (time.Duration, bool) {
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()

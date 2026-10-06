@@ -65,6 +65,7 @@ func (s *Server) findEntities(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 	out.Entities = make([]Entity, len(matched))
 	for i, e := range matched {
 		out.Entities[i] = entityOutV(e, false, compact)
+		s.attachProducers(&out.Entities[i], e.ID, compact)
 	}
 	if len(matched) == 0 {
 		out.NoMatch = noMatchReason(g, in.Type, in.Match)
@@ -201,7 +202,7 @@ func (s *Server) getEntity(ctx context.Context, _ *mcpsdk.CallToolRequest, in Ge
 	return nil, GetEntityOutput{
 		Graph:       s.graphMeta(g, in.AsOf),
 		Resolution:  s.resolutionFor(id),
-		Entity:      entityOutV(e, deleted, compact),
+		Entity:      s.entityWithProducers(e, deleted, compact),
 		Annotations: s.annotationFor(string(id)),
 		Canonical:   s.canonicalGroup(g, id),
 	}, nil
