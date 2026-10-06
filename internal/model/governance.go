@@ -12,14 +12,30 @@ package model
 //
 // service.namespace and service.criticality are reused verbatim from OTel
 // semconv (service-scoped there; Toise applies the same keys to any entity).
-// The entity.* keys are Toise-provisional where semconv is silent — candidates
-// to raise with the OpenTelemetry Resources & Entities SIG.
+//
+// The keys Toise invented live under senhub.*, not under entity.*. The semconv
+// naming rule is explicit: "It is not recommended to use existing OpenTelemetry
+// semantic convention namespace as a prefix for a new company- or
+// application-specific attribute name." entity.* is the entity-events
+// convention's own namespace, so inventing governance keys inside it was a
+// squat: if upstream ever defines entity.owner.team differently, data already in
+// the field means two things at once and nothing can tell them apart.
+//
+// Previous spellings stay listed on each entry rather than being deleted.
+// Governance attributes are descriptive, so the engine kept whatever producers
+// sent and data emitted before the rename is still in the graph: a consumer
+// needs to know both the key to use and the key to find.
 type GovernanceAttribute struct {
 	Key     string   // the attribute key producers should use
 	Summary string   // one-line meaning, surfaced to consumers
 	Example string   // an example value, to show the shape
 	Values  []string // well-known values when the key is an open enum (else nil)
 	Semconv bool     // true when Key is an OTel semconv key reused verbatim
+	// Was lists spellings this key used to have. They are not rejected and not
+	// rewritten: data carrying them predates the rename and is still readable,
+	// so a consumer filtering on history needs both. Empty for a key that never
+	// moved.
+	Was []string
 }
 
 var governanceAttributes = []GovernanceAttribute{
@@ -30,14 +46,16 @@ var governanceAttributes = []GovernanceAttribute{
 		Semconv: true,
 	},
 	{
-		Key:     "entity.owner.team",
+		Key:     "senhub.owner.team",
 		Summary: "owning team for any entity type, where service.namespace does not apply",
 		Example: "sre-platform",
+		Was:     []string{"entity.owner.team"},
 	},
 	{
-		Key:     "entity.owner.contact",
+		Key:     "senhub.owner.contact",
 		Summary: "escalation contact for the owning team (optional)",
 		Example: "sre@acme.io",
+		Was:     []string{"entity.owner.contact"},
 	},
 	{
 		Key:     "service.criticality",
@@ -47,30 +65,35 @@ var governanceAttributes = []GovernanceAttribute{
 		Semconv: true,
 	},
 	{
-		Key:     "entity.location.site",
+		Key:     "senhub.location.site",
 		Summary: "physical site or campus (on-prem; semconv covers only cloud regions)",
 		Example: "paris",
+		Was:     []string{"entity.location.site"},
 	},
 	{
-		Key:     "entity.location.datacenter",
+		Key:     "senhub.location.datacenter",
 		Summary: "physical datacenter",
 		Example: "dc-eq5",
+		Was:     []string{"entity.location.datacenter"},
 	},
 	{
-		Key:     "entity.location.rack",
+		Key:     "senhub.location.rack",
 		Summary: "physical rack",
 		Example: "R12",
+		Was:     []string{"entity.location.rack"},
 	},
 	{
-		Key:     "entity.location.room",
+		Key:     "senhub.location.room",
 		Summary: "physical room or hall",
 		Example: "hall-2",
+		Was:     []string{"entity.location.room"},
 	},
 	{
-		Key:     "entity.lifecycle.status",
+		Key:     "senhub.lifecycle.status",
 		Summary: "operator-asserted lifecycle / maintenance state (open enum)",
 		Example: "maintenance",
 		Values:  []string{"active", "maintenance", "decommissioning", "retired"},
+		Was:     []string{"entity.lifecycle.status"},
 	},
 }
 

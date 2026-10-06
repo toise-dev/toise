@@ -320,7 +320,7 @@ standardizes no network entities, only `network.*` span/metric attributes) is:
 
 | Entity | Identity | Descriptive attributes | Attached by |
 | --- | --- | --- | --- |
-| `network.device` | `{network.device.id}` (precedence ladder below) | `sys.name`, `mgmt.ip`, `device.role`, … | — (the discovered asset) |
+| `network.device` | `{network.device.id}` (precedence ladder below) | `sys.name`, `mgmt.ip`, `senhub.device.role`, … | — (the discovered asset) |
 | `network.interface` (a port) | `{network.device.id, network.interface.name}` | `oper_state` (state key), `speed`, … | `has_interface` (device→interface) |
 | `network.route` | `{network.device.id, route.destination}` (CIDR) | `metric`, `route.protocol`, `next_hop.ip` | `has_route` (device→route) |
 

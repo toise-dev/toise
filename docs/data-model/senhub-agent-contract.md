@@ -308,14 +308,18 @@ the keys before any are observed) and filters it via `find_entities` (toise#231)
 | Dimension | Key | Source | Notes |
 | --- | --- | --- | --- |
 | Owning team (services) | `service.namespace` | semconv (Stable) | reuse when the entity is a service; do not override an existing value |
-| Owning team (any entity) | `entity.owner.team` | Toise-provisional | where `service.namespace` does not apply |
-| Escalation contact | `entity.owner.contact` | Toise-provisional | optional |
+| Owning team (any entity) | `senhub.owner.team` | ours (was `entity.owner.team`) | where `service.namespace` does not apply |
+| Escalation contact | `senhub.owner.contact` | ours (was `entity.owner.contact`) | optional |
 | Criticality / tier | `service.criticality` | semconv (Development) | values `critical`/`high`/`medium`/`low`; semconv scopes it to services, Toise applies it to any entity |
-| Physical location | `entity.location.site` / `.datacenter` / `.rack` / `.room` | Toise-provisional | on-prem; semconv covers only cloud regions |
-| Lifecycle / maintenance | `entity.lifecycle.status` | Toise-provisional | open enum, e.g. `active` (in service) / `maintenance` / `decommissioning` / `retired`; **distinct from `deployment.environment.name`** (prod/staging/dev) — orthogonal axes |
-| Free-form operator labels | `entity.label.<key>` | Toise-provisional | arbitrary operator keys under one prefix (e.g. `entity.label.cost_center`), string values; the prefix lets a consumer surface all operator labels at once |
+| Physical location | `senhub.location.site` / `.datacenter` / `.rack` / `.room` | ours (was `entity.location.*`) | on-prem; semconv covers only cloud regions |
+| Lifecycle / maintenance | `senhub.lifecycle.status` | ours (was `entity.lifecycle.status`) | open enum, e.g. `active` (in service) / `maintenance` / `decommissioning` / `retired`; **distinct from `deployment.environment.name`** (prod/staging/dev) — orthogonal axes |
+| Free-form operator labels | `senhub.label.<key>` | ours (was `entity.label.<key>`) | arbitrary operator keys under one prefix (e.g. `senhub.label.cost_center`), string values; the prefix lets a consumer surface all operator labels at once |
 
-All optional. Emit what the operator supplies (config/labels); never fabricate. `entity.owner.contact` is free-form (email, Slack, pager) — not email-only. `service.criticality` keeps the semconv value set (`critical`/`high`/`medium`/`low`); do not invent a parallel `tier_0/1/2`.
+All optional. Emit what the operator supplies (config/labels); never fabricate. `senhub.owner.contact` is free-form (email, Slack, pager) — not email-only.
+
+**Why these keys left `entity.*`.** The semconv naming rule is explicit: "It is not recommended to use existing OpenTelemetry semantic convention namespace as a prefix for a new company- or application-specific attribute name." `entity.*` is the entity-events convention's own namespace, and `entity.id`, `entity.type`, `entity.state` and the event names come from it — those stay. The governance keys never did: they were ours, inside someone else's namespace. If upstream defines `entity.owner.team` with other semantics, data already in the field would mean two things at once with nothing to tell them apart, and it would happen after a 1.0 freeze rather than before it.
+
+**Old spellings are not rejected and not rewritten.** Governance attributes are descriptive, so the engine kept whatever a producer sent (ADR 0022) and the `entity.*` values emitted before the rename are still in the graph. `describe_schema` lists each key's previous spellings in a `was` field, because a consumer filtering over history needs both the key to use and the key to find. A producer migrates by emitting the new spelling; nothing re-keys and no entity is re-minted, these never being identity. `service.criticality` keeps the semconv value set (`critical`/`high`/`medium`/`low`); do not invent a parallel `tier_0/1/2`.
 
 ### AT10 — host capacity attributes
 
@@ -735,9 +739,12 @@ attributes**. So anything a producer would have hung on an edge becomes an
   rides on the **instrumentation scope** — **one scope per source**
   (`senhub-agent/snmp-lldp`, `senhub-agent/snmp-route`, `senhub-agent/snmp-fdb`, …),
   not a `source` attribute on the entity or edge.
-- **`device.role`** (e.g. `switch`, `router`) is an **optional descriptive**
+- **`senhub.device.role`** (e.g. `switch`, `router`) is an **optional descriptive**
   attribute (never identity); infer best-effort from `sysServices` (L3 bit → router,
-  L2 → switch) and omit when ambiguous.
+  L2 → switch) and omit when ambiguous. It was spelled `device.role`, which squatted
+  semconv's `device.*` namespace — reserved there for the end-user device a telemetry
+  SDK runs on, not for a polled network asset. Same rename, same reason as the
+  governance keys above; the old spelling is still readable in older data.
 - **`hw.vendor` carries a comparable value, not the most authoritative one.** A
   device can state its manufacturer two ways: `entPhysicalMfgName` from ENTITY-MIB,
   which is what the device says about itself, and the enterprise that registered

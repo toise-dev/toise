@@ -549,6 +549,7 @@ tool describe_schema
     semconv bool
     summary string
     values []string
+    was []string
   graph object
     as_of string
     entities int
