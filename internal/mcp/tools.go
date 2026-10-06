@@ -587,6 +587,11 @@ type DescribeSchemaInput struct {
 type TypeCount struct {
 	Type  string `json:"type"`
 	Count int    `json:"count"`
+	// DisplayNameAbsent marks a type Toise has DECIDED not to give a display
+	// name, so one call is enough to check every type present (#408). Unset
+	// means the type has one, and an entity of that type returning none is a
+	// gap rather than a decision.
+	DisplayNameAbsent bool `json:"display_name_absent,omitempty" jsonschema:"true when this type deliberately has NO display_name; ask describe_type for the reason. When false the type has one, so an entity missing it is a gap, not a decision"`
 }
 
 // GovernanceAttributeInfo advertises one cross-cutting governance attribute key
@@ -621,6 +626,13 @@ func (s *Server) describeSchema(ctx context.Context, _ *mcpsdk.CallToolRequest, 
 		return nil, DescribeSchemaOutput{}, err
 	}
 	entTypes := sortedCounts(g.CountByType())
+	// Only entity types can declare they have no display name; sortedCounts is
+	// shared with relation types, so the flag is set here rather than in it.
+	for i := range entTypes {
+		if _, declared := model.DisplayNameAbsentReason(entTypes[i].Type); declared {
+			entTypes[i].DisplayNameAbsent = true
+		}
+	}
 	relTypes := sortedCounts(relationCounts(g.ListRelations("", "", "")))
 	out := DescribeSchemaOutput{
 		EntityTypes:          entTypes,

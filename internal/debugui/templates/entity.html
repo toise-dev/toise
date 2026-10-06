@@ -1,6 +1,10 @@
 {{define "entity"}}{{template "head" .}}
 <h1>{{.Label}} {{if .Deleted}}<span class="pill del">deleted</span>{{end}}</h1>
-<p class="muted"><span class="ct">{{.Type}}</span> · <code>{{.ID}}</code></p>
+<p class="muted"><span class="ct">{{.Type}}</span></p>
+<table class="handles">
+<tr><th>identity_fingerprint</th><td><code>{{.Fingerprint}}</code></td><td class="muted">carry this one: identical on every replica, survives a re-mint, unmoved by a rename</td></tr>
+<tr><th>id</th><td><code>{{.ID}}</code></td><td class="muted">local detail: differs between replicas and is re-minted after a silence, so one copied from here may resolve to nothing later</td></tr>
+</table>
 
 <h2>Identity</h2>
 {{template "attrtable" .Identity}}

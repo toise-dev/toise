@@ -169,6 +169,7 @@ tool impact_of
   aliases int
   by_type []object
     count int
+    display_name_absent bool
     type string
   graph object
     as_of string
@@ -223,6 +224,7 @@ tool entity_history
   out:
   by_change_type []object
     count int
+    display_name_absent bool
     type string
   heartbeats_excluded int
   total int
@@ -284,6 +286,7 @@ tool recent_changes
   out:
   by_change_type []object
     count int
+    display_name_absent bool
     type string
   heartbeats_excluded int
   total int
@@ -475,6 +478,7 @@ tool describe_type
     seen int
   count int
   description string
+  display_name_absent string
   endpoint_shapes []object
     count int
     from_type string
@@ -497,6 +501,7 @@ tool describe_type
     direction string
     peer_types []object
       count int
+      display_name_absent bool
       type string
     relation_type string
   samples []string
@@ -542,6 +547,7 @@ tool describe_schema
   description string
   entity_types []object
     count int
+    display_name_absent bool
     type string
   governance_attributes []object
     example string
@@ -558,6 +564,7 @@ tool describe_schema
     relations int
   relation_types []object
     count int
+    display_name_absent bool
     type string
   total_entities int
   total_relations int

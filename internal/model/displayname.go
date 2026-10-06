@@ -50,6 +50,18 @@ var displayNameNone = map[string]string{
 	TypeNetworkSegment: "its id is an assigned opaque value and no producer emits a name",
 }
 
+// DisplayNameAbsentReason reports why a type deliberately has no display name,
+// and whether that is the case at all. Being in displayNameNone is a decision;
+// being in none of the three maps is an omission, and the two must not look
+// alike to a consumer either — keeping the reason inside the binary preserved
+// the distinction for whoever reads the source and lost it for everyone else,
+// which is the half that matters (#408). A consumer that cannot tell a declared
+// absence from a missing name writes a fallback for a type we chose not to name.
+func DisplayNameAbsentReason(entityType string) (reason string, declared bool) {
+	reason, declared = displayNameNone[entityType]
+	return reason, declared
+}
+
 // DisplayName returns what a human calls an entity — "dash172", "senhub-ping",
 // "10.0.0.5:5432" — or "" when nothing observed on it reads better than its
 // identity.

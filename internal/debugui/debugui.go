@@ -229,24 +229,31 @@ func (h *Handler) entity(w http.ResponseWriter, r *http.Request) {
 	}
 	data := struct {
 		pageMeta
-		ID         string
-		Type       string
-		Label      string
-		Deleted    bool
-		Identity   []attrView
-		Attributes []attrView
-		Neighbors  []neighborView
-		History    []changeRow
+		ID          string
+		Fingerprint string
+		Type        string
+		Label       string
+		Deleted     bool
+		Identity    []attrView
+		Attributes  []attrView
+		Neighbors   []neighborView
+		History     []changeRow
 	}{
-		pageMeta:   h.meta(label(e)),
-		ID:         string(e.ID),
-		Type:       e.Type,
-		Label:      label(e),
-		Deleted:    deleted,
-		Identity:   attrsView(e.Identity),
-		Attributes: attrsView(e.Attributes),
-		Neighbors:  h.neighbors(id),
-		History:    h.changeRows(evs, "", 0),
+		pageMeta: h.meta(label(e)),
+		// Both handles, with the durable one first and said to be the one to
+		// carry (#409). This page is where someone looks when an answer
+		// surprises them, and it used to hand them the id alone — the handle the
+		// documentation tells every consumer not to carry, because it is
+		// re-minted after a silence and differs between replicas.
+		ID:          string(e.ID),
+		Fingerprint: e.IdentityHash(),
+		Type:        e.Type,
+		Label:       label(e),
+		Deleted:     deleted,
+		Identity:    attrsView(e.Identity),
+		Attributes:  attrsView(e.Attributes),
+		Neighbors:   h.neighbors(id),
+		History:     h.changeRows(evs, "", 0),
 	}
 	h.render(w, "entity", data)
 }
