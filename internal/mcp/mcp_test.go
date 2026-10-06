@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -554,12 +555,17 @@ func TestDescribeSchemaEmpty(t *testing.T) {
 		if g.Key == "service.criticality" && g.Semconv {
 			sawSemconv = true
 		}
-		if g.Key == "entity.owner.team" && !g.Semconv {
+		if g.Key == "senhub.owner.team" && !g.Semconv {
 			sawProvisional = true
+			// The previous spelling must reach the consumer: data emitted before
+			// the rename still carries it and is not rewritten.
+			if !slices.Contains(g.Was, "entity.owner.team") {
+				t.Errorf("senhub.owner.team does not advertise its previous spelling, got %v", g.Was)
+			}
 		}
 	}
 	if !sawSemconv || !sawProvisional {
-		t.Errorf("expected both a semconv key and an entity.* provisional key advertised, got %+v", out.GovernanceAttributes)
+		t.Errorf("expected both a semconv key and a senhub.* key of ours advertised, got %+v", out.GovernanceAttributes)
 	}
 }
 

@@ -278,7 +278,7 @@ func fabricTopology(producer string, hosts, devices int) *topo {
 	for m := 0; m < devices; m++ {
 		devVal := fmt.Sprintf("name:sw-%03d", m)
 		dID := id("network.device.id", devVal)
-		t.addEntity(fmt.Sprintf("dev-%d", m), &entity{model.TypeNetworkDevice, dID, attr("device.role", "switch", "sys.name", fmt.Sprintf("sw-%03d", m), "vendor", "acme")})
+		t.addEntity(fmt.Sprintf("dev-%d", m), &entity{model.TypeNetworkDevice, dID, attr("senhub.device.role", "switch", "sys.name", fmt.Sprintf("sw-%03d", m), "vendor", "acme")})
 		t.addRel(fmt.Sprintf("mon-dev-%d", m), relation{model.RelMonitors, model.TypeServiceInstance, model.TypeNetworkDevice, agentID, dID})
 		// A switch's ports are network.interface entities (topology-as-entities, ADR
 		// 0022): Gi0/1 faces the previous switch, Gi0/2 the next. has_interface

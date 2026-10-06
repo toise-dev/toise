@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
+### Changed
+
+- **The governance keys Toise invented left the `entity.*` namespace.** They are
+  now `senhub.owner.team`, `senhub.owner.contact`, `senhub.location.site` /
+  `.datacenter` / `.rack` / `.room`, `senhub.lifecycle.status` and
+  `senhub.label.<key>`; the network device role is `senhub.device.role`. The
+  semconv naming rule is explicit that an existing OpenTelemetry namespace must
+  not be used as a prefix for application-specific keys, and `entity.*` is the
+  entity-events convention's own. `entity.id`, `entity.type`, `entity.state`,
+  `entity.relationships` and the event names come from that convention and are
+  unchanged.
+
+  **Nothing is rejected and nothing is rewritten.** These are descriptive
+  attributes, so the engine kept whatever producers sent (ADR 0022) and the
+  `entity.*` values already in a graph are still there and still readable. No
+  entity is re-minted, these never having been identity. `describe_schema` now
+  lists each key's previous spellings in a `was` field, because a consumer
+  filtering over history needs the key to find as well as the key to use.
+
+  A producer migrates by emitting the new spelling. Done before 1.0 rather than
+  after: had upstream later defined `entity.owner.team` with other semantics,
+  field data would have meant two things at once with nothing to separate them.
+
 ## [0.19.0] - 2026-10-05
 
 **The release that closes two gaps 0.18.0 left, both found by consumers running it

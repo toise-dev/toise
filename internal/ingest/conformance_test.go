@@ -129,10 +129,10 @@ func buildConformanceLogs() plog.Logs {
 	entity(evEntityState, model.TypeNetworkInterface, porta, map[string]any{"oper_state": "up", "speed": int64(1_000_000_000)},
 		embRel{model.RelConnectedTo, model.TypeNetworkInterface, portb})
 	entity(evEntityState, model.TypeNetworkRoute, route1, map[string]any{"metric": int64(10), "route.protocol": "ospf", "next_hop.ip": "10.0.0.254"})
-	entity(evEntityState, model.TypeNetworkDevice, sw1, map[string]any{"device.role": "switch", "sys.name": "core-sw-01", "mgmt.ip": "10.0.0.1"},
+	entity(evEntityState, model.TypeNetworkDevice, sw1, map[string]any{"senhub.device.role": "switch", "sys.name": "core-sw-01", "mgmt.ip": "10.0.0.1"},
 		embRel{model.RelHasInterface, model.TypeNetworkInterface, porta},
 		embRel{model.RelHasRoute, model.TypeNetworkRoute, route1})
-	entity(evEntityState, model.TypeNetworkDevice, sw2, map[string]any{"device.role": "switch", "sys.name": "core-sw-02", "mgmt.ip": "10.0.0.2"},
+	entity(evEntityState, model.TypeNetworkDevice, sw2, map[string]any{"senhub.device.role": "switch", "sys.name": "core-sw-02", "mgmt.ip": "10.0.0.2"},
 		embRel{model.RelHasInterface, model.TypeNetworkInterface, portb})
 
 	// 13-14: a HOST-SCOPED network.endpoint (ADR 0032 addendum): a loopback

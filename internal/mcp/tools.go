@@ -597,6 +597,7 @@ type GovernanceAttributeInfo struct {
 	Example string   `json:"example,omitempty"`
 	Values  []string `json:"values,omitempty" jsonschema:"well-known values when the key is an open enum"`
 	Semconv bool     `json:"semconv" jsonschema:"true when this is a standard OTel semantic-convention key reused verbatim"`
+	Was     []string `json:"was,omitempty" jsonschema:"spellings this key used to have; data emitted before the rename still carries them and is not rewritten, so filter on both when reading history"`
 }
 
 // DescribeSchemaOutput summarizes the graph's contents.
@@ -645,6 +646,7 @@ func governanceVocabulary() []GovernanceAttributeInfo {
 			Example: a.Example,
 			Values:  a.Values,
 			Semconv: a.Semconv,
+			Was:     a.Was,
 		}
 	}
 	return out
