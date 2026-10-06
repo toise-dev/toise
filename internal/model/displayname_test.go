@@ -256,3 +256,32 @@ func TestDisplayNameOfTheTypesThatHadNoneIn0180(t *testing.T) {
 		})
 	}
 }
+
+// TestDeclaredNamelessTypeIsReadable is #408: a type Toise decided not to name
+// said so only in unexported Go, so a consumer could not tell a decision from a
+// build missing a name. Keeping the reason inside the binary preserved the
+// distinction for whoever reads the source and lost it for everyone else, which
+// is the half that matters: a consumer that cannot see the decision writes a
+// fallback for a type we chose not to name.
+func TestDeclaredNamelessTypeIsReadable(t *testing.T) {
+	reason, declared := DisplayNameAbsentReason(TypeNetworkSegment)
+	if !declared {
+		t.Fatal("network.segment is in displayNameNone but the accessor does not report it")
+	}
+	if reason == "" {
+		t.Error("the reason IS the decision; an empty one is an omission wearing a decision's clothes")
+	}
+
+	if _, declared := DisplayNameAbsentReason(TypeHost); declared {
+		t.Error("host has a display name and must not be reported as deliberately nameless")
+	}
+
+	// Every declared entry must be reachable with its reason: the accessor is
+	// the only way out of the binary, so a gap here is a gap for every consumer.
+	for typ, want := range displayNameNone {
+		got, declared := DisplayNameAbsentReason(typ)
+		if !declared || got != want {
+			t.Errorf("%s: accessor returned (%q, %v), want (%q, true)", typ, got, declared, want)
+		}
+	}
+}

@@ -54,12 +54,16 @@ type EndpointShape struct {
 // DescribeTypeOutput zooms on one type: its registration, its observed shape,
 // and how it connects.
 type DescribeTypeOutput struct {
-	Graph       GraphMeta `json:"graph" jsonschema:"what the answering graph holds and how fresh it is; read this before treating absence as fact"`
-	Kind        string    `json:"kind" jsonschema:"entity, relation, or unknown"`
-	Type        string    `json:"type"`
-	Registered  bool      `json:"registered" jsonschema:"true if the type is in the built-in registry"`
-	Count       int       `json:"count" jsonschema:"live instances in the graph"`
-	Description string    `json:"description" jsonschema:"a natural-language summary"`
+	Graph      GraphMeta `json:"graph" jsonschema:"what the answering graph holds and how fresh it is; read this before treating absence as fact"`
+	Kind       string    `json:"kind" jsonschema:"entity, relation, or unknown"`
+	Type       string    `json:"type"`
+	Registered bool      `json:"registered" jsonschema:"true if the type is in the built-in registry"`
+	Count      int       `json:"count" jsonschema:"live instances in the graph"`
+	// DisplayNameAbsent is set only for a type Toise has DECIDED not to name,
+	// and carries the reason. Its absence means the type does have a display
+	// name; an entity of such a type returning none is a gap, not a decision.
+	DisplayNameAbsent string `json:"display_name_absent,omitempty" jsonschema:"set only when this type deliberately has NO display_name, and states why; when unset the type has one, so an entity without it is a gap rather than a decision"`
+	Description       string `json:"description" jsonschema:"a natural-language summary"`
 
 	// Entity kinds.
 	IdentityKeys  []AttributeUsage        `json:"identity_keys,omitempty" jsonschema:"observed identifying attribute keys (sampled)"`
@@ -103,6 +107,10 @@ func isRegisteredRelation(t string) bool {
 
 func describeEntityType(g Graph, typ string, ents []model.Entity) DescribeTypeOutput {
 	out := DescribeTypeOutput{Kind: "entity", Type: typ, Registered: model.IsKnownEntityType(typ), Count: len(ents)}
+	if reason, declared := model.DisplayNameAbsentReason(typ); declared {
+		out.DisplayNameAbsent = "this type deliberately has no display_name: " + reason +
+			". An entity of this type returning none is that decision, not a missing value — do not compose a name for it, and do not treat the absence as a gap."
+	}
 
 	sample := ents
 	if len(sample) > keyUsageSample {
