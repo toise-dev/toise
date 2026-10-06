@@ -670,6 +670,24 @@ attributes**. So anything a producer would have hung on an edge becomes an
   `vEthernet` interface is local to its host whatever its address. Where both
   filters are available, apply both.
 
+  **On a polled network device that second filter does not exist, so the rule is
+  narrower there.** A switch's interfaces are all real network interfaces:
+  `Vlan1`, `Port-channel1`, `mgmt0` tell a reader nothing about whether a next hop
+  is locally scoped, and the MIB does not either — `ipCidrRouteType` /
+  `inetCidrRouteType` distinguish local from remote destinations, not shared from
+  private next hops. A device route therefore links **only a next hop that is
+  public and routable**, which can name one machine in the world; a private next
+  hop keeps `next_hop.ip` as a descriptive attribute and gets no edge.
+
+  **This is a deliberate asymmetry and a reader must not mistake it for a fact.**
+  The same private gateway can carry an edge from a `host` — `10.10.0.1` behind one
+  hypervisor bridge is exactly the case the relation exists to express — and carry
+  none from a switch that routes through it too. The graph then understates the
+  device's path rather than asserting a false one, which is the trade this contract
+  takes everywhere: a missing edge is a gap a reader can see and ask about. So "the
+  device has no route via that gateway" **cannot** be read off a missing
+  `next_hop_via`; read `next_hop.ip` on the route.
+
   **When in doubt, do not emit the relation.** A missing edge is a gap a reader can
   see and ask about; a wrong edge is a false statement that reads exactly like a
   true one. Per ADR 0018 the engine matches identity byte-exactly and never merges
