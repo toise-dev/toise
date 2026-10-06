@@ -283,3 +283,27 @@ func TestNoSwitcherWithoutList(t *testing.T) {
 		t.Error("the tenant must still be named without the switcher")
 	}
 }
+
+// TestEntityPageOffersTheDurableHandle is #409: this page is where someone
+// looks when an answer surprises them, and it used to show the id alone — the
+// handle the documentation tells every consumer not to carry, because it is
+// re-minted after a silence and differs between replicas. A reader could copy
+// it into a tool call and get nothing back later, with no hint on the page that
+// the two handles are not equivalent.
+func TestEntityPageOffersTheDurableHandle(t *testing.T) {
+	h := newTestHandler(t)
+
+	code, body := get(t, h, "/entity?id=01HOST_WEB")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", code)
+	}
+
+	if !strings.Contains(body, "identity_fingerprint") {
+		t.Error("the entity page does not show identity_fingerprint, the handle a reader is told to carry")
+	}
+	// And it must say which of the two to use: showing both without saying is
+	// the same trap one level up.
+	if !strings.Contains(body, "carry this one") {
+		t.Error("the page shows both handles without saying which one is durable")
+	}
+}
