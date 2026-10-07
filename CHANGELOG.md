@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A commit groups its events, and says so.** Every change event now carries
+  `commit_seq` (`commitSeq` on GraphQL): the events of one producer observation
+  share it, and events from different commits do not. A gateway change is
+  deliberately a route deleted plus a route created, and the engine committed
+  both in one durable append while telling no one — so every consumer had to
+  re-invent the pairing with its own tolerance window, and `recorded_at` is set
+  per event, so not even equality on it was guaranteed to hold within a commit.
+  Pair on equality now, with no window. Toise still does not say *what* the
+  pairing means: that a route moved is the consumer's conclusion, not the
+  engine's (ADR 0022). Absent on events written before the field, where absence
+  means unknown rather than a commit of its own. (#407)
+
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
 ### Changed

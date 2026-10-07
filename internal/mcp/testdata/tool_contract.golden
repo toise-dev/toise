@@ -250,6 +250,7 @@ tool entity_history
   changes []object
     change_type string
     changed_keys []string
+    commit_seq uint64
     delete_reason string
     delete_source string
     disappearance string
@@ -315,6 +316,7 @@ tool recent_changes
   changes []object
     change_type string
     changed_keys []string
+    commit_seq uint64
     delete_reason string
     delete_source string
     disappearance string

@@ -49,7 +49,12 @@ type Relation struct {
 // EventTime is when the fact became true in the world, RecordedAt is when Toise
 // learned it (ADR 0005). Exactly one of Entity or Relation is set.
 type Change struct {
-	EventID     string   `json:"event_id"`
+	EventID string `json:"event_id"`
+	// CommitSeq groups the events of ONE producer observation. Two changes with
+	// the same value were committed together; two with different values were
+	// not. Zero means unknown (an event older than the field), never "its own
+	// commit".
+	CommitSeq   uint64   `json:"commit_seq,omitempty" jsonschema:"groups the events of ONE producer observation: two changes sharing this value were committed together by the same producer in one append, and two with different values were not. Pair them on EQUALITY, with no tolerance window — recorded_at is set per event and may differ inside one commit. A route deleted and a route created sharing a commit_seq is one observation of a changed route; whether that means a gateway change is YOUR conclusion, not Toise's. Absent on events older than this field, where absence means unknown rather than a commit of its own"`
 	ChangeType  string   `json:"change_type" jsonschema:"the taxonomy name, e.g. entity.created, relation.added"`
 	EventTime   string   `json:"event_time" jsonschema:"RFC 3339; when the change became true in the real world"`
 	RecordedAt  string   `json:"recorded_at" jsonschema:"RFC 3339; when Toise recorded the change"`
@@ -202,6 +207,7 @@ func changeOut(ev model.Event) Change {
 	case ev.Entity != nil:
 		ee := ev.Entity
 		c.EventID = ee.EventID
+		c.CommitSeq = ee.CommitSeq
 		c.ChangeType = ee.ChangeType.String()
 		c.EventTime = formatTime(ee.EventTime)
 		c.RecordedAt = formatTime(ee.RecordedAt)
@@ -216,6 +222,7 @@ func changeOut(ev model.Event) Change {
 	case ev.Relation != nil:
 		re := ev.Relation
 		c.EventID = re.EventID
+		c.CommitSeq = re.CommitSeq
 		c.ChangeType = re.ChangeType.String()
 		c.EventTime = formatTime(re.EventTime)
 		c.RecordedAt = formatTime(re.RecordedAt)

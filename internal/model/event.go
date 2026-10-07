@@ -48,6 +48,23 @@ type EntityEvent struct {
 	EventTime time.Time
 	// RecordedAt is when Toise recorded the event (ingestion).
 	RecordedAt time.Time
+
+	// CommitSeq groups the events of ONE producer observation: every event of a
+	// single durable append carries the sequence number of that append's first
+	// event. Two events with the same CommitSeq were committed together; two
+	// with different values were not.
+	//
+	// It exists because the grouping was a fact Toise held and no consumer could
+	// reach (#407). A gateway change is deliberately a route deleted plus a route
+	// created, and the engine commits both in one batch — but RecordedAt is set
+	// per event, so not even equality on it is guaranteed to hold within a
+	// commit, and every consumer had to invent its own tolerance window.
+	//
+	// Set by the store at append time, not by the caller: the commit is the
+	// store's own unit, so every writer gets a consistent value without having
+	// to remember one. Zero means unknown (an event written before the field
+	// existed), never "a commit of its own".
+	CommitSeq uint64
 	// SchemaVersion is the schema version of this event.
 	SchemaVersion string
 	// ChangedKeys lists the attribute keys that changed, for
@@ -64,11 +81,14 @@ type EntityEvent struct {
 
 // RelationEvent is a classified change about a relation. Bi-temporal: ADR 0005.
 type RelationEvent struct {
-	EventID       string
-	ChangeType    ChangeType
-	Relation      Relation
-	EventTime     time.Time
-	RecordedAt    time.Time
+	EventID    string
+	ChangeType ChangeType
+	Relation   Relation
+	EventTime  time.Time
+	RecordedAt time.Time
+
+	// CommitSeq groups the events of one producer observation; see EntityEvent.
+	CommitSeq     uint64
 	SchemaVersion string
 	ChangedKeys   []string
 	// DeleteSource attributes the author of a relation_removed event
@@ -188,6 +208,7 @@ func (e EntityEvent) ToProto() *toisev1.EntityEvent {
 		Entity:             e.Entity.ToProto(),
 		EventTimeUnixNano:  nanoOf(e.EventTime),
 		RecordedAtUnixNano: nanoOf(e.RecordedAt),
+		CommitSeq:          e.CommitSeq,
 		SchemaVersion:      e.SchemaVersion,
 		ChangedKeys:        e.ChangedKeys,
 		DeleteReason:       e.DeleteReason,
@@ -206,6 +227,7 @@ func EntityEventFromProto(p *toisev1.EntityEvent) EntityEvent {
 		Entity:        EntityFromProto(p.GetEntity()),
 		EventTime:     timeOf(p.GetEventTimeUnixNano()),
 		RecordedAt:    timeOf(p.GetRecordedAtUnixNano()),
+		CommitSeq:     p.GetCommitSeq(),
 		SchemaVersion: p.GetSchemaVersion(),
 		ChangedKeys:   p.GetChangedKeys(),
 		DeleteReason:  p.GetDeleteReason(),
@@ -221,6 +243,7 @@ func (r RelationEvent) ToProto() *toisev1.RelationEvent {
 		Relation:           r.Relation.ToProto(),
 		EventTimeUnixNano:  nanoOf(r.EventTime),
 		RecordedAtUnixNano: nanoOf(r.RecordedAt),
+		CommitSeq:          r.CommitSeq,
 		SchemaVersion:      r.SchemaVersion,
 		ChangedKeys:        r.ChangedKeys,
 		DeleteSource:       r.DeleteSource.toProto(),
@@ -238,6 +261,7 @@ func RelationEventFromProto(p *toisev1.RelationEvent) RelationEvent {
 		Relation:      RelationFromProto(p.GetRelation()),
 		EventTime:     timeOf(p.GetEventTimeUnixNano()),
 		RecordedAt:    timeOf(p.GetRecordedAtUnixNano()),
+		CommitSeq:     p.GetCommitSeq(),
 		SchemaVersion: p.GetSchemaVersion(),
 		ChangedKeys:   p.GetChangedKeys(),
 		DeleteSource:  deleteSourceFromProto(p.GetDeleteSource()),

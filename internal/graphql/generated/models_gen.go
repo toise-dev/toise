@@ -109,6 +109,23 @@ type ChangeEvent struct {
 	EventTime string `json:"eventTime"`
 	// When Toise recorded the event (RFC 3339).
 	RecordedAt string `json:"recordedAt"`
+	// Groups the events of ONE producer observation.
+	//
+	// Two changes sharing this value were committed together, in a single durable
+	// append by one producer; two with different values were not. Pair them on
+	// **equality, with no tolerance window** — `recordedAt` is set per event and may
+	// differ inside one commit, so a time-based pairing needs a guess about clock
+	// granularity and this does not.
+	//
+	// A route deleted and a route created sharing a `commitSeq` is one observation of
+	// a route that changed. **Whether that means a gateway change is your conclusion,
+	// not Toise's**: the engine stores facts, and two such events can also be
+	// unrelated observations that happened to be committed together by the same
+	// producer.
+	//
+	// Null on events written before this field existed, where null means unknown
+	// rather than "a commit of its own".
+	CommitSeq *string `json:"commitSeq,omitempty"`
 	// Toise schema version of the event, e.g. `1.0`.
 	SchemaVersion string `json:"schemaVersion"`
 	// For attribute/state changes, the keys that changed.

@@ -79,6 +79,7 @@ type ComplexityRoot struct {
 	ChangeEvent struct {
 		ChangeType    func(childComplexity int) int
 		ChangedKeys   func(childComplexity int) int
+		CommitSeq     func(childComplexity int) int
 		DeleteReason  func(childComplexity int) int
 		DeleteSource  func(childComplexity int) int
 		Dropped       func(childComplexity int) int
@@ -342,6 +343,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ChangeEvent.ChangedKeys(childComplexity), true
+	case "ChangeEvent.commitSeq":
+		if e.ComplexityRoot.ChangeEvent.CommitSeq == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ChangeEvent.CommitSeq(childComplexity), true
 	case "ChangeEvent.deleteReason":
 		if e.ComplexityRoot.ChangeEvent.DeleteReason == nil {
 			break
@@ -1119,6 +1126,25 @@ type ChangeEvent {
   eventTime: String!
   "When Toise recorded the event (RFC 3339)."
   recordedAt: String!
+  """
+  Groups the events of ONE producer observation.
+
+  Two changes sharing this value were committed together, in a single durable
+  append by one producer; two with different values were not. Pair them on
+  **equality, with no tolerance window** — ` + "`" + `recordedAt` + "`" + ` is set per event and may
+  differ inside one commit, so a time-based pairing needs a guess about clock
+  granularity and this does not.
+
+  A route deleted and a route created sharing a ` + "`" + `commitSeq` + "`" + ` is one observation of
+  a route that changed. **Whether that means a gateway change is your conclusion,
+  not Toise's**: the engine stores facts, and two such events can also be
+  unrelated observations that happened to be committed together by the same
+  producer.
+
+  Null on events written before this field existed, where null means unknown
+  rather than "a commit of its own".
+  """
+  commitSeq: String
   "Toise schema version of the event, e.g. ` + "`" + `1.0` + "`" + `."
   schemaVersion: String!
   "For attribute/state changes, the keys that changed."
@@ -1500,6 +1526,8 @@ func (ec *executionContext) childFields_ChangeEvent(ctx context.Context, field g
 		return ec.fieldContext_ChangeEvent_eventTime(ctx, field)
 	case "recordedAt":
 		return ec.fieldContext_ChangeEvent_recordedAt(ctx, field)
+	case "commitSeq":
+		return ec.fieldContext_ChangeEvent_commitSeq(ctx, field)
 	case "schemaVersion":
 		return ec.fieldContext_ChangeEvent_schemaVersion(ctx, field)
 	case "changedKeys":
@@ -2695,6 +2723,29 @@ func (ec *executionContext) _ChangeEvent_recordedAt(ctx context.Context, field g
 	)
 }
 func (ec *executionContext) fieldContext_ChangeEvent_recordedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ChangeEvent", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ChangeEvent_commitSeq(ctx context.Context, field graphql.CollectedField, obj *ChangeEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ChangeEvent_commitSeq(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.CommitSeq, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_ChangeEvent_commitSeq(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("ChangeEvent", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
@@ -6026,6 +6077,8 @@ func (ec *executionContext) _ChangeEvent(ctx context.Context, sel ast.SelectionS
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "commitSeq":
+			out.Values[i] = ec._ChangeEvent_commitSeq(ctx, field, obj)
 		case "schemaVersion":
 			out.Values[i] = ec._ChangeEvent_schemaVersion(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
