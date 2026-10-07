@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **A change page says which end it holds.** `ChangeConnection` now declares
+  `order` (`OLDEST_FIRST` / `NEWEST_FIRST`) plus `holdsNewest` and
+  `holdsOldest`. The two change pages run in opposite directions while sharing
+  one type — `entityHistory` oldest-first, `recentChanges` newest-first — and
+  nothing said which. `pageInfo.hasNextPage` answers "is there more"; these
+  answer "is the newest event in what I am holding", which is the question a
+  reader acts on. A reader who asked for a generous history page and took the
+  last edge believed they held the newest event while holding one days old.
+  (#366)
 
 - **A commit groups its events, and says so.** Every change event now carries
   `commit_seq` (`commitSeq` on GraphQL): the events of one producer observation

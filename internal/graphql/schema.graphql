@@ -346,11 +346,52 @@ type ChangeEdge {
   node: ChangeEvent!
 }
 
+"""
+The direction a change page runs in.
+
+It is declared because the two change pages on this surface run in OPPOSITE
+directions — `entityHistory` oldest-first, `recentChanges` newest-first — and
+they share this connection type. A consumer holding one could not tell which,
+and the mistake is silent: an ordered list of events looks complete whichever
+end was cut off.
+"""
+enum ChangeOrder {
+  "Oldest event first; the page's LAST edge is its most recent."
+  OLDEST_FIRST
+  "Newest event first; the page's FIRST edge is its most recent."
+  NEWEST_FIRST
+}
+
 "A paginated list of change events."
 type ChangeConnection {
   edges: [ChangeEdge!]!
   pageInfo: PageInfo!
   totalCount: Int!
+
+  "Which end of the matching set this page starts from. See `ChangeOrder`."
+  order: ChangeOrder!
+
+  """
+  Whether the most recent matching event is inside this page.
+
+  `pageInfo.hasNextPage` answers "is there more"; this answers **"is the newest
+  event in what I am holding"**, which is the question a reader actually acts on.
+  They are not the same question, and the difference has produced a confident
+  wrong conclusion: `entityHistory` pages oldest-first, so a reader who asks for
+  a generous page and takes the last element believes they hold the newest event
+  while holding one that can be days old. `hasNextPage: true` was present and
+  technically honest the whole time.
+  """
+  holdsNewest: Boolean!
+
+  """
+  Whether the oldest matching event is inside this page.
+
+  The mirror of `holdsNewest`, and the one that matters on `recentChanges`: that
+  page runs newest-first, so what a truncation removes is the far end of the
+  window — the beginning of an incident rather than its tail.
+  """
+  holdsOldest: Boolean!
 }
 
 "Filter for the entities query."
