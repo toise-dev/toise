@@ -146,7 +146,7 @@ type ComplexityRoot struct {
 		Entity        func(childComplexity int, id string, asOf *string) int
 		EntityHistory func(childComplexity int, id string, since *string, until *string, asKnownAt *string, includeHeartbeats bool, first *int, after *string) int
 		GraphScope    func(childComplexity int, asOf *string) int
-		RecentChanges func(childComplexity int, window *string, from *string, to *string, scope *string, includeHeartbeats bool, first *int, after *string) int
+		RecentChanges func(childComplexity int, window *string, from *string, to *string, scope *string, match []AttributeMatch, includeHeartbeats bool, first *int, after *string) int
 		Relations     func(childComplexity int, filter *RelationFilter, first *int, after *string, asOf *string) int
 	}
 
@@ -203,7 +203,7 @@ type QueryResolver interface {
 	Entities(ctx context.Context, filter *EntityFilter, first *int, after *string, asOf *string) (*EntityConnection, error)
 	Relations(ctx context.Context, filter *RelationFilter, first *int, after *string, asOf *string) (*RelationConnection, error)
 	EntityHistory(ctx context.Context, id string, since *string, until *string, asKnownAt *string, includeHeartbeats bool, first *int, after *string) (*ChangeConnection, error)
-	RecentChanges(ctx context.Context, window *string, from *string, to *string, scope *string, includeHeartbeats bool, first *int, after *string) (*ChangeConnection, error)
+	RecentChanges(ctx context.Context, window *string, from *string, to *string, scope *string, match []AttributeMatch, includeHeartbeats bool, first *int, after *string) (*ChangeConnection, error)
 	Canonical(ctx context.Context, id string, asOf *string) (*CanonicalGroup, error)
 }
 type SubscriptionResolver interface {
@@ -676,7 +676,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Query.RecentChanges(childComplexity, args["window"].(*string), args["from"].(*string), args["to"].(*string), args["scope"].(*string), args["includeHeartbeats"].(bool), args["first"].(*int), args["after"].(*string)), true
+		return e.ComplexityRoot.Query.RecentChanges(childComplexity, args["window"].(*string), args["from"].(*string), args["to"].(*string), args["scope"].(*string), args["match"].([]AttributeMatch), args["includeHeartbeats"].(bool), args["first"].(*int), args["after"].(*string)), true
 	case "Query.relations":
 		if e.ComplexityRoot.Query.Relations == nil {
 			break
@@ -1521,7 +1521,7 @@ type Query {
   absent from an answer that claims to cover it; bounding the window is how you
   avoid concluding that nothing happened.
   """
-  recentChanges(window: String, from: String, to: String, scope: String, includeHeartbeats: Boolean! = false, first: Int = 100, after: String): ChangeConnection!
+  recentChanges(window: String, from: String, to: String, scope: String, match: [AttributeMatch!], includeHeartbeats: Boolean! = false, first: Int = 100, after: String): ChangeConnection!
 
   """
   The canonical group of an entity: everything believed to be the same real
@@ -2191,30 +2191,38 @@ func (ec *executionContext) field_Query_recentChanges_args(ctx context.Context, 
 		return nil, err
 	}
 	args["scope"] = arg3
-	arg4, err := graphql.ProcessArgField(ctx, rawArgs, "includeHeartbeats",
+	arg4, err := graphql.ProcessArgField(ctx, rawArgs, "match",
+		func(ctx context.Context, v any) ([]AttributeMatch, error) {
+			return ec.unmarshalOAttributeMatch2ᚕgithubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐAttributeMatchᚄ(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["match"] = arg4
+	arg5, err := graphql.ProcessArgField(ctx, rawArgs, "includeHeartbeats",
 		func(ctx context.Context, v any) (bool, error) {
 			return ec.unmarshalNBoolean2bool(ctx, v)
 		})
 	if err != nil {
 		return nil, err
 	}
-	args["includeHeartbeats"] = arg4
-	arg5, err := graphql.ProcessArgField(ctx, rawArgs, "first",
+	args["includeHeartbeats"] = arg5
+	arg6, err := graphql.ProcessArgField(ctx, rawArgs, "first",
 		func(ctx context.Context, v any) (*int, error) {
 			return ec.unmarshalOInt2ᚖint(ctx, v)
 		})
 	if err != nil {
 		return nil, err
 	}
-	args["first"] = arg5
-	arg6, err := graphql.ProcessArgField(ctx, rawArgs, "after",
+	args["first"] = arg6
+	arg7, err := graphql.ProcessArgField(ctx, rawArgs, "after",
 		func(ctx context.Context, v any) (*string, error) {
 			return ec.unmarshalOString2ᚖstring(ctx, v)
 		})
 	if err != nil {
 		return nil, err
 	}
-	args["after"] = arg6
+	args["after"] = arg7
 	return args, nil
 }
 
@@ -4137,7 +4145,7 @@ func (ec *executionContext) _Query_recentChanges(ctx context.Context, field grap
 		},
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().RecentChanges(ctx, fc.Args["window"].(*string), fc.Args["from"].(*string), fc.Args["to"].(*string), fc.Args["scope"].(*string), fc.Args["includeHeartbeats"].(bool), fc.Args["first"].(*int), fc.Args["after"].(*string))
+			return ec.Resolvers.Query().RecentChanges(ctx, fc.Args["window"].(*string), fc.Args["from"].(*string), fc.Args["to"].(*string), fc.Args["scope"].(*string), fc.Args["match"].([]AttributeMatch), fc.Args["includeHeartbeats"].(bool), fc.Args["first"].(*int), fc.Args["after"].(*string))
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *ChangeConnection) graphql.Marshaler {

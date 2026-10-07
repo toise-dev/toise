@@ -595,7 +595,7 @@ type Query {
   absent from an answer that claims to cover it; bounding the window is how you
   avoid concluding that nothing happened.
   """
-  recentChanges(window: String, from: String, to: String, scope: String, includeHeartbeats: Boolean! = false, first: Int = 100, after: String): ChangeConnection!
+  recentChanges(window: String, from: String, to: String, scope: String, match: [AttributeMatch!], includeHeartbeats: Boolean! = false, first: Int = 100, after: String): ChangeConnection!
 
   """
   The canonical group of an entity: everything believed to be the same real

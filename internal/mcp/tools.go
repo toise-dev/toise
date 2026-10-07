@@ -466,10 +466,11 @@ type RecentChangesInput struct {
 	Kind string `json:"kind,omitempty" jsonschema:"filter: entity, relation, structural, or all (default all)"`
 	// Budget controls (#115): a live window is heartbeat-dominated, so
 	// heartbeats are excluded and the result is bounded by default.
-	ChangeType        string `json:"change_type,omitempty" jsonschema:"only changes of this type, e.g. entity.created or relation.removed (omit for all)"`
-	Scope             string `json:"scope,omitempty" jsonschema:"only changes observed by this instrumentation scope — one per collection method, e.g. senhub-agent/snmp-route. This is how you answer which of several producers is losing entities. COSTS MORE than the other filters: the scope is not in the time index, so each candidate in the window must be decoded to test it; narrow the window when using it. Exact match, no wildcards"`
-	IncludeHeartbeats bool   `json:"include_heartbeats,omitempty" jsonschema:"include entity.unchanged heartbeats (excluded by default; they dominate raw windows)"`
-	Limit             int    `json:"limit,omitempty" jsonschema:"maximum changes to return (default 50, max 200); the newest are kept"`
+	ChangeType        string            `json:"change_type,omitempty" jsonschema:"only changes of this type, e.g. entity.created or relation.removed (omit for all)"`
+	Scope             string            `json:"scope,omitempty" jsonschema:"only changes observed by this instrumentation scope — one per collection method, e.g. senhub-agent/snmp-route. This is how you answer which of several producers is losing entities. COSTS MORE than the other filters: the scope is not in the time index, so each candidate in the window must be decoded to test it; narrow the window when using it. Exact match, no wildcards"`
+	Match             map[string]string `json:"match,omitempty" jsonschema:"only changes to entities carrying every one of these key=value pairs, matched against identifying AND descriptive attributes. Tested against the entity AS THE EVENT SAW IT, not as it is now — so an entity DELETED during the window still matches on the attribute it died with, which is usually the one you are looking for. RELATION changes never match an attribute filter (they carry no entity) and are excluded while this is set. COSTS MORE: an attribute is not in the time index, so each candidate must be decoded; narrow the window when using it"`
+	IncludeHeartbeats bool              `json:"include_heartbeats,omitempty" jsonschema:"include entity.unchanged heartbeats (excluded by default; they dominate raw windows)"`
+	Limit             int               `json:"limit,omitempty" jsonschema:"maximum changes to return (default 50, max 200); the newest are kept"`
 }
 
 // RecentChangesOutput carries the changes, newest first.
@@ -501,7 +502,7 @@ func (s *Server) recentChanges(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 	default:
 		return nil, RecentChangesOutput{}, fmt.Errorf("invalid kind %q: use entity, relation, structural, or all", in.Kind)
 	}
-	filter, err := newChangeFilterScoped(in.ChangeType, in.Scope, in.IncludeHeartbeats)
+	filter, err := newChangeFilterFull(in.ChangeType, in.Scope, in.Match, in.IncludeHeartbeats)
 	if err != nil {
 		return nil, RecentChangesOutput{}, err
 	}
@@ -659,6 +660,7 @@ func (d *ChangeDigest) finishDigest() {
 type changeFilter struct {
 	changeType        model.ChangeType
 	scope             string
+	match             map[string]string
 	includeHeartbeats bool
 }
 
@@ -680,22 +682,59 @@ func newChangeFilter(changeType string, includeHeartbeats bool) (changeFilter, e
 // be invisible behind newer ones from another. That is the truncation-that-lies
 // defect, bought for a performance win.
 func newChangeFilterScoped(changeType, scope string, includeHeartbeats bool) (changeFilter, error) {
+	return newChangeFilterFull(changeType, scope, nil, includeHeartbeats)
+}
+
+// newChangeFilterFull adds the attribute filter (#380).
+//
+// The attribute is tested against the entity AS THE EVENT SAW IT, not against
+// the live projection, and that choice is the whole design.
+//
+// Resolving the matching id set from the live graph first — the shape the issue
+// proposed — answers "changes to entities that carry this attribute NOW". An
+// entity deleted during the window is no longer in the projection, so its
+// changes would vanish from the filtered view. For an incident that is exactly
+// backwards: the entities worth looking at are the ones that died. A filter that
+// silently dropped every deletion would reproduce, inside the feature meant to
+// fix a partial answer, the defect of a partial answer.
+//
+// Testing the event's own snapshot avoids the trap instead of handling it. A
+// deletion event carries the last-known state, so an entity that dies mid-window
+// still matches on the attribute it died with — and no store-format change is
+// needed, which is what the issue priced this feature at.
+//
+// The cost is decoding: an attribute is not in the index tag. So this filter,
+// like the scope filter, resolves each candidate — and it is applied before the
+// page bound, never on the bounded page.
+func newChangeFilterFull(changeType, scope string, match map[string]string, includeHeartbeats bool) (changeFilter, error) {
 	ct, err := parseChangeType(changeType)
 	if err != nil {
 		return changeFilter{}, err
 	}
-	return changeFilter{changeType: ct, scope: scope, includeHeartbeats: includeHeartbeats}, nil
+	return changeFilter{changeType: ct, scope: scope, match: match, includeHeartbeats: includeHeartbeats}, nil
 }
 
 // needsRecord reports whether this filter can decide from the index alone.
-func (f changeFilter) needsRecord() bool { return f.scope != "" }
+func (f changeFilter) needsRecord() bool { return f.scope != "" || len(f.match) > 0 }
 
-// keepScope tests the resolved record against the scope filter.
+// keepScope tests the resolved record against the scope and attribute filters.
 func (f changeFilter) keepScope(ev model.Event) bool {
-	if f.scope == "" {
-		return true
+	if f.scope != "" && eventScope(ev) != f.scope {
+		return false
 	}
-	return eventScope(ev) == f.scope
+	if len(f.match) > 0 {
+		// A relation change carries no entity, so it cannot answer a question
+		// about entity attributes. It is excluded rather than guessed at — and
+		// the tool says so, because an exclusion a caller does not know about is
+		// the partial answer this feature exists to prevent.
+		if ev.Entity == nil {
+			return false
+		}
+		if !ev.Entity.Entity.MatchAll(f.match) {
+			return false
+		}
+	}
+	return true
 }
 
 func eventScope(ev model.Event) string {

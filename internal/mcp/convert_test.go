@@ -74,3 +74,70 @@ func TestEntityOutCarriesDisplayName(t *testing.T) {
 		t.Fatalf("endpoint display_name = %q, want 10.0.0.5:5432", got)
 	}
 }
+
+// TestAttributeFilterKeepsAnEntityThatDied is the trap #380 warned about, and the
+// reason this filter tests the event's own snapshot rather than the live graph.
+//
+// Resolving the matching id set from the projection first — the shape the issue
+// proposed — answers "changes to entities carrying the attribute NOW". An entity
+// deleted during the window is gone from the projection, so its changes would
+// vanish from the filtered view. For an incident that is exactly backwards: the
+// entities worth looking at are the ones that died. A filter that silently
+// dropped every deletion would reproduce, inside the feature meant to fix a
+// partial answer, the defect of a partial answer.
+func TestAttributeFilterKeepsAnEntityThatDied(t *testing.T) {
+	f, err := newChangeFilterFull("", "", map[string]string{"entity.label.trial": "X"}, false)
+	if err != nil {
+		t.Fatalf("filter: %v", err)
+	}
+	if !f.needsRecord() {
+		t.Fatal("an attribute filter must resolve records; it cannot be answered from the index tag")
+	}
+
+	trial := model.Entity{
+		ID:         "e1",
+		Type:       model.TypeHost,
+		Identity:   []model.KeyValue{{Key: "host.id", Value: model.StringValue("h1")}},
+		Attributes: []model.KeyValue{{Key: "entity.label.trial", Value: model.StringValue("X")}},
+	}
+	other := trial
+	other.Attributes = []model.KeyValue{{Key: "entity.label.trial", Value: model.StringValue("Y")}}
+
+	// The case that matters: a DELETION carrying the last-known state. It must be
+	// kept, because it is the most interesting event in the window.
+	death := model.Event{Entity: &model.EntityEvent{
+		ChangeType:   model.EntityDeleted,
+		Entity:       trial,
+		DeleteSource: model.DeleteSourceLivenessExpiry,
+	}}
+	if !f.keepScope(death) {
+		t.Error("an entity that DIED during the window was dropped by the attribute filter; that is the trap this design avoids")
+	}
+
+	if !f.keepScope(model.Event{Entity: &model.EntityEvent{ChangeType: model.EntityCreated, Entity: trial}}) {
+		t.Error("a matching creation was dropped")
+	}
+	if f.keepScope(model.Event{Entity: &model.EntityEvent{ChangeType: model.EntityCreated, Entity: other}}) {
+		t.Error("a non-matching entity was kept; the filter does nothing")
+	}
+
+	// A relation carries no entity, so it cannot answer a question about entity
+	// attributes. Excluded rather than guessed at — and the tool description says
+	// so, because an exclusion the caller does not know about is the defect.
+	rel := model.Event{Relation: &model.RelationEvent{ChangeType: model.RelationAdded}}
+	if f.keepScope(rel) {
+		t.Error("a relation change matched an entity-attribute filter; it carries no entity to match")
+	}
+
+	// Without the filter, nothing is excluded and no decoding is forced.
+	plain, err := newChangeFilterFull("", "", nil, false)
+	if err != nil {
+		t.Fatalf("filter: %v", err)
+	}
+	if plain.needsRecord() {
+		t.Error("an unfiltered read must not pay for record resolution")
+	}
+	if !plain.keepScope(rel) {
+		t.Error("an unfiltered read dropped a relation change")
+	}
+}
