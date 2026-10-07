@@ -144,6 +144,7 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
     <span><b id="nNodes">0</b> entities</span>
     <span><b id="nEdges">0</b> relations</span>
     <span id="matchStat" class="muted"></span>
+    <span id="hint" class="muted"></span>
     <label class="muted" for="attr">attr<input id="attr" spellcheck="false" autocomplete="off" placeholder="key, key=value, or text" title="Match nodes whose identity/attributes contain the text (a key, key=value, or a free substring). Use the toggle to dim the rest or hide them entirely." style="background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;padding:.1rem .35rem;width:11rem;margin-left:.3rem;"></label>
     <button id="filterMode" title="Search behaviour: dim the non-matching nodes, or show only the matches">match: dim</button>
     <label class="muted" for="tn">tenant<input id="tn" spellcheck="false" autocomplete="off" placeholder="default" title="X-Scope-OrgID — sent as a header on queries and as ?tenant= on the subscription" style="background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;padding:.1rem .35rem;width:8rem;margin-left:.3rem;"></label>
@@ -355,6 +356,32 @@ function titleOf(n){ const I=(n.identity||[]).map(a=>a.key+'='+a.value).join(', 
 const CHILD_SIDE={has_interface:'to',has_route:'to',has_segment:'to',runs_on:'from',bound_to:'from',listens_on:'from'};
 let folded=localStorage.getItem('toise_viz_folded')!=='0';   // ON by default: the dense case is the normal case
 const expanded=new Set();                                     // owners the reader opened, by id
+const expandedKinds=new Set();                                // "<owner>\u0000<type>" the reader opened past the kind step
+
+// Opening an owner used to hand back every child at once: double-click a host
+// holding 357 services and you got 357 nodes — the hairball you folded to escape.
+// Measured at two customers: 367 entities to 3 drawn nodes, 548 to 6, because 97%
+// of their relations are a single runs_on. From an unreadable hairball to a nearly
+// empty graph, and both useless.
+//
+// So expansion has three levels, not two: owner -> kinds -> things. A switch with
+// twelve ports opens to "12 network.interface" and then to the ports, which costs
+// one click and loses nothing. A host with 357 services opens to
+// "357 service.instance" and STOPS there until the reader narrows it.
+//
+// A per-type fold switch was checked against those numbers first and rejected: on
+// both estates the density IS one type, so folding everything except services
+// leaves 360 of 367 nodes. A knob that does nothing on the shape that needs it.
+const KIND='\u0000kind\u0000';
+function kindId(owner,type){ return KIND+owner+'\u0000'+type; }
+function isKind(id){ return typeof id==='string' && id.slice(0,KIND.length)===KIND; }
+function kindParts(id){ const a=id.slice(KIND.length).split('\u0000'); return {owner:a[0],type:a[1]}; }
+
+// Past this many children of one kind, opening draws the hairball again, so the
+// reader is handed to the attribute filter instead. 60 is above any real port or
+// interface count (the cases where opening everything is right) and far below the
+// densities that produced this issue.
+const KIND_OPEN_MAX=60;
 
 // ownerOf maps a child to its owner, rebuilt whenever relations change.
 let OWNER={};
@@ -376,7 +403,13 @@ function repOf(id,guard){
     if(seen.has(cur)) return cur;   // cycle guard: a malformed graph must not hang the page
     seen.add(cur);
     const up=OWNER[cur];
-    if(!up || expanded.has(up) || !ENT[up]) return cur;
+    if(!up || !ENT[up]) return cur;
+    if(expanded.has(up)){
+      // The owner is open. Its children are represented by one node per KIND
+      // until the reader opens that kind too — the middle of the three levels.
+      const t=ENT[cur]?ENT[cur].type:'';
+      return (t && !expandedKinds.has(up+'\u0000'+t)) ? kindId(up,t) : cur;
+    }
     cur=up;
   }
 }
@@ -404,6 +437,30 @@ function badge(by){
 }
 function badgeTotal(by){ return by?Object.values(by).reduce((a,b)=>a+b,0):0; }
 function badgeFull(by){ return Object.entries(by).sort((a,b)=>b[1]-a[1]).map(([t,c])=>c+' '+t).join(', '); }
+
+// kindGroups counts what each kind node stands for. Built from repOf, so it
+// cannot disagree with what is actually drawn.
+function kindGroups(){
+  const g={};
+  if(!folded) return g;
+  for(const id of Object.keys(ENT)){
+    if(hidden.has(ENT[id].type)) continue;
+    const r=repOf(id); if(!isKind(r)) continue;
+    const k=kindParts(r);
+    (g[r]=g[r]||{owner:k.owner,type:k.type,n:0}).n++;
+  }
+  return g;
+}
+
+// say shows a transient line in the toolbar. Not an alert(): a modal dialog
+// blocks the page and the layout animation behind it.
+let hintTimer=null;
+function say(msg){
+  const h=document.getElementById('hint'); if(!h) return;
+  h.textContent='\u00b7 '+msg; h.style.color='var(--warn)';
+  if(hintTimer) clearTimeout(hintTimer);
+  hintTimer=setTimeout(()=>{ h.textContent=''; h.style.color=''; },6000);
+}
 
 let rebuildTimer=null;
 function scheduleRebuild(){ if(rebuildTimer) return; rebuildTimer=setTimeout(()=>{rebuildTimer=null;rebuild();},250); }
@@ -433,6 +490,23 @@ function rebuild(){
               color:{background:colorFor(n.type),border:n.deleted?'#d29922':(k?'#8b949e':'#0d1117')}};
     if(firstLoad){ node.x=Math.random()*1600-800; node.y=Math.random()*1600-800; }
     nUp.push(node); });
+  // One node per kind under an opened owner. Drawn as a labelled count rather
+  // than a thing, because that is what it is: "357 service.instance" is an
+  // accurate summary where 357 circles are an unreadable one.
+  const kinds=kindGroups();
+  Object.entries(kinds).forEach(([id,k])=>{
+    if(!nodeIds.has(k.owner)) return;            // its owner is filtered out; the kind has nothing to hang from
+    nodeIds.add(id);
+    const openable=k.n<=KIND_OPEN_MAX;
+    nUp.push({id,label:k.n+' '+k.type,
+      title:k.n+' '+k.type+' inside '+(labelOf(ENT[k.owner])||k.owner)+'\n'+
+            (openable?'double-click to open them':'too many to draw \u2014 narrow with the attribute filter instead, then open'),
+      shape:'box', opacity:1,
+      size:Math.min(30,12+Math.sqrt(k.n)*2.4),
+      borderWidth:openable?2:3,
+      font:{color:'#c9d1d9',size:12},
+      color:{background:'#161b22',border:openable?colorFor(k.type):'var(--warn)'}});
+  });
   nodes.update(nUp);
   const ms=document.getElementById('matchStat'); ms.textContent=q?('· '+matched+' match'):'';
   const ai=document.getElementById('attr'); if(ai) ai.style.color=(q&&matched===0)?'var(--warn)':'var(--fg)';
@@ -768,13 +842,31 @@ const foldBtn=document.getElementById('fold');
 function syncFoldBtn(){ foldBtn.textContent='fold: '+(folded?'on':'off'); foldBtn.style.color=folded?'var(--accent)':''; }
 syncFoldBtn();
 foldBtn.onclick=()=>{ folded=!folded; localStorage.setItem('toise_viz_folded',folded?'1':'0');
-  expanded.clear(); syncFoldBtn(); rebuild(); settle(2200); };
+  expanded.clear(); expandedKinds.clear(); syncFoldBtn(); rebuild(); settle(2200); };
 
 // Double-click opens one owner, or closes it again. Single click already selects
 // and fills the side panel, so it cannot be reused for this.
 net.on('doubleClick',p=>{ if(!folded || !p.nodes || !p.nodes.length) return;
   const id=p.nodes[0];
-  if(expanded.has(id)) expanded.delete(id); else expanded.add(id);
+  if(isKind(id)){
+    // The middle level. Past the threshold, refuse and SAY why: drawing them
+    // would rebuild the hairball the fold exists to escape, and a double-click
+    // that silently does nothing reads as a broken control.
+    const k=kindParts(id), n=(kindGroups()[id]||{}).n||0;
+    if(n>KIND_OPEN_MAX){
+      say(n+' '+k.type+' is too many to draw. Narrow with the attribute filter, then open.');
+      return;
+    }
+    const key=k.owner+'\u0000'+k.type;
+    if(expandedKinds.has(key)) expandedKinds.delete(key); else expandedKinds.add(key);
+    rebuild(); settle(1800); return;
+  }
+  if(expanded.has(id)){
+    expanded.delete(id);
+    // Closing an owner closes its kinds with it, or reopening it would spill the
+    // children straight out and skip the middle level.
+    for(const key of Array.from(expandedKinds)) if(key.split('\u0000')[0]===id) expandedKinds.delete(key);
+  } else expanded.add(id);
   rebuild(); settle(1800); });
 
 // Layers are strata of the model, not a text search: the reader picks from what
