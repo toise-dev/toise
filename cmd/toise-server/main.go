@@ -407,9 +407,13 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	}
 	// Auth wraps the data surfaces; the operational probes/scrape stay public.
 	public := map[string]bool{"/healthz": true, "/readyz": true, "/metrics": true}
+	// CORS sits OUTSIDE auth, because a preflight carries no Authorization
+	// header: a browser asks whether it may send one before it sends it. An
+	// empty allowlist makes this a no-op, so same-origin stays the default.
+	handler := graphql.CORSMiddleware(cfg.AllowedOrigins, authn.HTTPMiddleware(public)(mux))
 	httpSrv := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           authn.HTTPMiddleware(public)(mux),
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		TLSConfig:         tlsConf,
 	}

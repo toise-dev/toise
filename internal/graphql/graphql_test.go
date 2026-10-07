@@ -3,6 +3,8 @@ package graphql_test
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -848,5 +850,65 @@ func TestOverCapFirstIsRefused(t *testing.T) {
 	}
 	if err := c.Post(`{ entities(first: 200) { totalCount } }`, &ok); err != nil {
 		t.Errorf("first: 200 is at the cap and must be served: %v", err)
+	}
+}
+
+// TestCORSForAnAllowlistedOrigin is #367: allowed_origins was documented as
+// governing "WebSocket subscriptions and CORS" and governed only the first. The
+// server sent no Access-Control header, so a preflight got 400 and a browser
+// refused an answer it had already received — surfacing to the consumer as a
+// bare "Failed to fetch" with an empty graph. Two browser consumers hit it
+// within one hour, one only getting through by disabling web security.
+func TestCORSForAnAllowlistedOrigin(t *testing.T) {
+	const allowed = "http://127.0.0.1:8099"
+	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	h := graphql.CORSMiddleware([]string{allowed}, inner)
+
+	// Preflight must be answered here, not reach a handler that does not route
+	// OPTIONS.
+	req := httptest.NewRequest(http.MethodOptions, "/graphql", nil)
+	req.Header.Set("Origin", allowed)
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("preflight status = %d, want 204", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != allowed {
+		t.Errorf("preflight Allow-Origin = %q, want the echoed origin %q", got, allowed)
+	}
+	if !strings.Contains(rec.Header().Get("Access-Control-Allow-Headers"), "Authorization") {
+		t.Error("Authorization is not allowed, so an authenticated browser read cannot work")
+	}
+
+	// A real request from the allowed origin carries the header.
+	post := httptest.NewRequest(http.MethodPost, "/graphql", nil)
+	post.Header.Set("Origin", allowed)
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, post)
+	if rec2.Header().Get("Access-Control-Allow-Origin") != allowed {
+		t.Error("an allowlisted origin got no Access-Control-Allow-Origin on a real request")
+	}
+	if !strings.Contains(rec2.Header().Get("Vary"), "Origin") {
+		t.Error("Vary: Origin missing, so a shared cache could serve one origin's response to another")
+	}
+
+	// An origin NOT on the list gets nothing, and never a wildcard.
+	other := httptest.NewRequest(http.MethodPost, "/graphql", nil)
+	other.Header.Set("Origin", "http://evil.example")
+	rec3 := httptest.NewRecorder()
+	h.ServeHTTP(rec3, other)
+	if got := rec3.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Errorf("an unlisted origin was allowed: %q", got)
+	}
+
+	// An empty allowlist is a no-op: same-origin stays the default posture.
+	none := graphql.CORSMiddleware(nil, inner)
+	rec4 := httptest.NewRecorder()
+	req4 := httptest.NewRequest(http.MethodPost, "/graphql", nil)
+	req4.Header.Set("Origin", allowed)
+	none.ServeHTTP(rec4, req4)
+	if rec4.Header().Get("Access-Control-Allow-Origin") != "" {
+		t.Error("an empty allowlist sent a CORS header, changing the zero-config posture")
 	}
 }

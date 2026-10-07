@@ -98,7 +98,13 @@ type Config struct {
 	Playground           bool `yaml:"playground"`
 	DebugUI              bool `yaml:"debug_ui"`
 	// AllowedOrigins is the browser Origin allowlist for WebSocket subscriptions
-	// (and CORS). Empty means same-origin only.
+	// AND for CORS on the HTTP read surfaces. Empty means same-origin only: no
+	// Access-Control header is sent at all, which is the zero-config posture.
+	//
+	// A listed origin is echoed back in Access-Control-Allow-Origin, never "*",
+	// and a preflight is answered for it. The wildcard is deliberately not an
+	// option: these surfaces take a bearer token, and a wildcard beside
+	// credentials turns a read API into a cross-site read primitive.
 	AllowedOrigins []string `yaml:"allowed_origins"`
 
 	// AcceptUnknownTypes opens the producer vocabulary: entity/relation types

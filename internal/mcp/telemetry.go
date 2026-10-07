@@ -103,11 +103,11 @@ func (s *Server) telemetryKeys(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 	}
 	entID, ok := g.ResolveHandle(in.EntityID)
 	if !ok {
-		return nil, TelemetryKeysOutput{}, fmt.Errorf("no entity found for handle %q; use find_entities to discover entities", in.EntityID)
+		return nil, TelemetryKeysOutput{}, s.notFoundMsg(in.EntityID, in.AsOf)
 	}
 	ent, ok, deleted := g.GetEntity(entID)
 	if !ok {
-		return nil, TelemetryKeysOutput{}, fmt.Errorf("no entity found for handle %q; use find_entities to discover entities", in.EntityID)
+		return nil, TelemetryKeysOutput{}, s.notFoundMsg(in.EntityID, in.AsOf)
 	}
 
 	out := TelemetryKeysOutput{Entity: entityOut(ent, deleted)}

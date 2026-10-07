@@ -58,6 +58,56 @@ func originChecker(allowed []string) func(*http.Request) bool {
 	}
 }
 
+// CORSMiddleware answers the browser's cross-origin questions for an origin on
+// the allowlist, and says nothing for any other (#367).
+//
+// The allowlist was documented as governing "WebSocket subscriptions and CORS"
+// and governed only the first: the server sent no Access-Control header at all,
+// so a preflight got 400 and a browser refused an answer it had already
+// received. The failure reached the consumer as a bare "Failed to fetch" with
+// an empty graph. Two independent browser consumers hit it within one hour, one
+// of them only getting through by disabling web security.
+//
+// Three deliberate limits:
+//   - An empty allowlist sends nothing, so the zero-config posture is unchanged
+//     and same-origin stays the default.
+//   - The allowed origin is echoed, never "*": the read surfaces take a bearer
+//     token, and a wildcard beside credentials is how a read API becomes a
+//     cross-site read primitive.
+//   - Vary: Origin is always set when an Origin was considered, so a shared
+//     cache cannot serve one origin's allowed response to another.
+func CORSMiddleware(allowed []string, next http.Handler) http.Handler {
+	check := originChecker(allowed)
+	set := make(map[string]struct{}, len(allowed))
+	for _, o := range allowed {
+		set[o] = struct{}{}
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Add("Vary", "Origin")
+		// Only an explicitly allowlisted origin gets a header. A same-host
+		// Origin needs none: the browser does not ask for one.
+		if _, ok := set[origin]; ok && check(r) {
+			h := w.Header()
+			h.Set("Access-Control-Allow-Origin", origin)
+			h.Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			h.Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Scope-OrgID")
+			h.Set("Access-Control-Max-Age", "600")
+			if r.Method == http.MethodOptions {
+				// Preflight: answer it here rather than let it reach a handler
+				// that does not route OPTIONS and returns 400.
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // timeoutBody is returned (HTTP 503) when a request exceeds the timeout.
 const timeoutBody = `{"errors":[{"message":"query timed out: narrow your selection, lower first:, or split it into smaller queries"}]}`
 

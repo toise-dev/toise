@@ -1769,3 +1769,50 @@ type horizonStore struct {
 }
 
 func (h horizonStore) PruneHorizon() time.Time { return h.horizon }
+
+// TestNotFoundAtAnInstantNamesTheRightReason is #381. An as_of read of an
+// entity created later failed with a message offering one reason — deletion
+// with an evicted tombstone — and offering it always. Every clause that
+// mattered was wrong: nothing was deleted, no tombstone was evicted, and the
+// one true reason, that the instant precedes the entity's creation, was never
+// mentioned. It was read as a retention defect by everyone in the chain.
+//
+// "Not found" was correct. A wrong explanation is worse than none, because it
+// is actionable.
+func TestNotFoundAtAnInstantNamesTheRightReason(t *testing.T) {
+	s := newTestServer()
+
+	// Exists now, asked for at an instant: the message must say so and must not
+	// blame deletion.
+	err := s.notFoundMsg("01HOST_WEB", "2026-01-01T00:00:00Z")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "EXISTS NOW") {
+		t.Errorf("the message does not say the entity exists now: %q", msg)
+	}
+	if strings.Contains(msg, "tombstone may have been evicted") {
+		t.Errorf("the message still blames deletion for an entity that exists: %q", msg)
+	}
+	if !strings.Contains(msg, "before this entity was created") {
+		t.Errorf("the message does not offer the true reason: %q", msg)
+	}
+
+	// Unknown handle at an instant: no claim that it exists now, and the horizon
+	// is pointed at rather than deletion asserted. The handle is written in
+	// fingerprint form because the test graph resolves any bare string.
+	msg2 := s.notFoundMsg("host:0000000000000000000000000000dead", "2026-01-01T00:00:00Z").Error()
+	if strings.Contains(msg2, "EXISTS NOW") {
+		t.Errorf("an unknown handle was reported as existing now: %q", msg2)
+	}
+	if !strings.Contains(msg2, "oldest_answerable") {
+		t.Errorf("the message does not point at the retention horizon: %q", msg2)
+	}
+
+	// No instant asked for: the original message, which was right for that case.
+	msg3 := s.notFoundMsg("host:0000000000000000000000000000dead", "").Error()
+	if !strings.Contains(msg3, "tombstone") {
+		t.Errorf("a present-tense miss lost its explanation: %q", msg3)
+	}
+}

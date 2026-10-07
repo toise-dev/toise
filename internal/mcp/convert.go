@@ -297,6 +297,29 @@ func (s *Server) entityWithProducers(e model.Entity, deleted, compact bool) Enti
 	return out
 }
 
+// notFoundMsg explains a handle that did not resolve, and the explanation
+// depends on whether an instant was asked for (#381).
+//
+// The old message offered one reason — deletion with an evicted tombstone — and
+// offered it always. For an as_of read of something created later, every clause
+// that mattered was wrong: nothing was deleted, no tombstone was evicted, and
+// the one true reason was never mentioned. It was read as a retention defect by
+// everyone in the chain, including me. "Not found" was correct; the explanation
+// was not, and a wrong explanation is worse than none because it is actionable.
+//
+// The discriminator costs nothing: resolve the same handle against the CURRENT
+// graph. Resolving there and not at the instant means the entity exists and did
+// not then, which is almost always "you asked before it was created".
+func (s *Server) notFoundMsg(handle, asOf string) error {
+	if asOf != "" && s.graph != nil {
+		if _, ok := s.graph.ResolveHandle(handle); ok {
+			return fmt.Errorf("no entity found for handle %q AT %s — but it EXISTS NOW. Nothing was deleted and no tombstone was evicted: you asked for an instant before this entity was created, or before the identity it carries today. Ask entity_history for its timeline to see when it appeared, or drop as_of to read it as it is now", handle, asOf)
+		}
+		return fmt.Errorf("no entity found for handle %q at %s, and none now either; use find_entities to discover entities. If the instant is older than the retention horizon the answer cannot be built at all — graph.oldest_answerable on any answer gives that horizon", handle, asOf)
+	}
+	return fmt.Errorf("no entity found for handle %q; use find_entities to discover entities — if it was deleted a while ago its tombstone may have been evicted, but entity_history still has its past", handle)
+}
+
 // horizonWarning compares a requested window against the retention horizon and
 // states the part that cannot be answered, or "" when the window is wholly
 // within reach.

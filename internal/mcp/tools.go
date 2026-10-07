@@ -193,11 +193,11 @@ func (s *Server) getEntity(ctx context.Context, _ *mcpsdk.CallToolRequest, in Ge
 	}
 	id, ok := g.ResolveHandle(in.EntityID)
 	if !ok {
-		return nil, GetEntityOutput{}, fmt.Errorf("no entity found for handle %q; use find_entities to discover entities — if it was deleted a while ago its tombstone may have been evicted, but entity_history still has its past", in.EntityID)
+		return nil, GetEntityOutput{}, s.notFoundMsg(in.EntityID, in.AsOf)
 	}
 	e, ok, deleted := g.GetEntity(id)
 	if !ok {
-		return nil, GetEntityOutput{}, fmt.Errorf("no entity found for handle %q; use find_entities to discover entities — if it was deleted a while ago its tombstone may have been evicted, but entity_history still has its past", in.EntityID)
+		return nil, GetEntityOutput{}, s.notFoundMsg(in.EntityID, in.AsOf)
 	}
 	return nil, GetEntityOutput{
 		Graph:       s.graphMeta(g, in.AsOf),
@@ -264,10 +264,10 @@ func (s *Server) getNeighbors(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 	}
 	start, ok := g.ResolveHandle(in.EntityID)
 	if !ok {
-		return nil, GetNeighborsOutput{}, fmt.Errorf("no entity found for handle %q; use find_entities to discover entities", in.EntityID)
+		return nil, GetNeighborsOutput{}, s.notFoundMsg(in.EntityID, in.AsOf)
 	}
 	if _, ok, _ := g.GetEntity(start); !ok {
-		return nil, GetNeighborsOutput{}, fmt.Errorf("no entity found for handle %q; use find_entities to discover entities", in.EntityID)
+		return nil, GetNeighborsOutput{}, s.notFoundMsg(in.EntityID, in.AsOf)
 	}
 	// BFS through the edge view so each neighbor carries how it was reached;
 	// the first (shallowest) edge to reach an entity wins, like a shortest path.
@@ -374,7 +374,7 @@ func (s *Server) entityHistory(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 	// which is the same answer an evicted id gets.
 	histID, ok := s.graph.ResolveHandle(in.EntityID)
 	if !ok {
-		return nil, EntityHistoryOutput{}, fmt.Errorf("no entity found for handle %q; use find_entities to discover entities", in.EntityID)
+		return nil, EntityHistoryOutput{}, s.notFoundMsg(in.EntityID, "")
 	}
 	evs, err := s.store.ReadByEntity(ctx, histID)
 	if err != nil {
