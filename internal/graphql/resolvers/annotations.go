@@ -101,3 +101,37 @@ func annotationToGQL(a annotations.Annotation) *generated.Annotation {
 	}
 	return out
 }
+
+// AssertedBy names the producers currently asserting an entity, and CollectedBy
+// the collection methods they used (#359, #394).
+//
+// GraphQL carried neither: it had no provenance on an entity at all, while MCP
+// has had asserted_by since the per-producer reference counting shipped. That is
+// the divergence #346 documented with heartbeats — a consumer on one surface
+// falling into a trap the other had already fixed — and a source that cannot
+// declare where its facts came from loses an arbitration by default.
+//
+// Both return an empty list rather than an error when the engine is absent: a
+// read surface wired without the engine is a configuration, not a failure, and
+// an empty list reads as "not recorded" where an error would read as broken.
+func (r *entityResolver) AssertedBy(_ context.Context, obj *generated.Entity) ([]string, error) {
+	if r.Engine == nil || obj == nil {
+		return []string{}, nil
+	}
+	out := r.Engine.AssertingProducers(model.EntityID(obj.ID))
+	if out == nil {
+		return []string{}, nil
+	}
+	return out, nil
+}
+
+func (r *entityResolver) CollectedBy(_ context.Context, obj *generated.Entity) ([]string, error) {
+	if r.Engine == nil || obj == nil {
+		return []string{}, nil
+	}
+	out := r.Engine.AssertingScopes(model.EntityID(obj.ID))
+	if out == nil {
+		return []string{}, nil
+	}
+	return out, nil
+}

@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **GraphQL answers are no longer a mute source.** `graphScope` now reports
+  freshness (`newestEvent`, read from the journal — when a producer last spoke —
+  not from when the projection was rebuilt) and accepts `asOf`, under which the
+  counts come from the folded graph rather than the live one. `Entity` gained
+  `assertedBy` and `collectedBy`, which GraphQL had never carried in any form.
+  A source that cannot declare its own scope and freshness loses an arbitration
+  by default, and GraphQL consumers were holding one. A test now asserts the
+  invariant the issue named: both surfaces report the same numbers for the same
+  question at the same instant. (#359, #394)
 - **An entity names the collection methods asserting it**, not only the
   producers: `collected_by` beside `asserted_by`. `asserted_by` is who sends it,
   at the resource grain the reference counting is keyed on; `collected_by` is how

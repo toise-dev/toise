@@ -247,6 +247,22 @@ type Entity struct {
 	// These are an overlay kept in a per-tenant sidecar — never producer truth and
 	// never part of the event log.
 	Annotations *Annotation `json:"annotations,omitempty"`
+	// The producers asserting this entity right now — who sends it.
+	//
+	// Several names mean they agree it EXISTS, not that they agree on its attributes:
+	// the last writer sets those. A suspect value therefore has someone to go and ask.
+	AssertedBy []string `json:"assertedBy"`
+	// The collection methods asserting this entity right now — how it was gathered.
+	//
+	// One instrumentation scope per method (`senhub-agent/snmp-route`, ...), which is
+	// the grain the producer contract makes normative and the one a producer debugs
+	// in. `assertedBy` is who sends it; this is how. **Two scopes mean two methods see
+	// the same thing, which is a different situation from one method reported by two
+	// agents** — and those two cases were indistinguishable from the outside.
+	//
+	// Empty when no asserting producer recorded a scope, which reads as not recorded
+	// rather than as a collector with no name.
+	CollectedBy []string `json:"collectedBy"`
 	// How finely any timestamp about this entity may be read, or null when no live
 	// producer declares a cadence. Ask for it before comparing event times.
 	Resolution *Resolution `json:"resolution,omitempty"`
@@ -297,6 +313,12 @@ type GraphScope struct {
 	NewestEvent *string `json:"newestEvent,omitempty"`
 	// The retention horizon. History and asOf reads reach no further back, and a window starting before it cannot be answered in full.
 	OldestAnswerable *string `json:"oldestAnswerable,omitempty"`
+	// The past instant this scope describes, or null when it describes the present.
+	//
+	// Under `asOf` the counts above come from the folded graph, not the live one: an
+	// answer about a past instant whose scope describes the present is the mute
+	// source this block exists to end, wearing a provenance block.
+	AsOf *string `json:"asOf,omitempty"`
 }
 
 type Mutation struct {
