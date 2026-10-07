@@ -21,7 +21,7 @@ type FindEntitiesInput struct {
 	Type      string            `json:"type,omitempty" jsonschema:"restrict to this entity type (omit for all types)"`
 	Match     map[string]string `json:"match,omitempty" jsonschema:"attribute key/value pairs every result must have (string comparison, against identity and attributes)"`
 	Limit     int               `json:"limit,omitempty" jsonschema:"maximum entities to return (default 50, max 200)"`
-	AsOf      string            `json:"as_of,omitempty" jsonschema:"RFC 3339 instant: read the graph as it was then (event-time), instead of now"`
+	AsOf      string            `json:"as_of,omitempty" jsonschema:"RFC 3339 instant: read the graph as it was then (event-time), instead of now — COSTLY: this is a full REPLAY of the event log from the origin into a fresh graph, not a filter. Its cost tracks the size of this tenant's log, NOT how far back you asked: two minutes costs the same as twenty-four hours. Folds are bounded process-wide (NumCPU/2 at once) across every tenant and surface, so several queue behind each other and behind other readers. One per displayed row will take an instance down. A live read is in memory and entity_history is a linear range read: neither is in this class"`
 	Verbosity string            `json:"verbosity,omitempty" jsonschema:"compact returns only id/type/label (cheap to scan many); full (default) adds identity and attributes"`
 }
 
@@ -165,7 +165,7 @@ func hasKey(e model.Entity, key string) bool {
 // GetEntityInput names the entity to fetch.
 type GetEntityInput struct {
 	EntityID  string `json:"entity_id" jsonschema:"the entity to fetch, by identity_fingerprint (preferred, stable across replicas), by identity written inline as type:key=value, or by id"`
-	AsOf      string `json:"as_of,omitempty" jsonschema:"RFC 3339 instant: read the entity as it was then (event-time), instead of now"`
+	AsOf      string `json:"as_of,omitempty" jsonschema:"RFC 3339 instant: read the entity as it was then (event-time), instead of now — COSTLY: this is a full REPLAY of the event log from the origin into a fresh graph, not a filter. Its cost tracks the size of this tenant's log, NOT how far back you asked: two minutes costs the same as twenty-four hours. Folds are bounded process-wide (NumCPU/2 at once) across every tenant and surface, so several queue behind each other and behind other readers. One per displayed row will take an instance down. A live read is in memory and entity_history is a linear range read: neither is in this class"`
 	Verbosity string `json:"verbosity,omitempty" jsonschema:"compact returns only id/type/label; full (default) adds identity and attributes"`
 }
 
@@ -216,7 +216,7 @@ type GetNeighborsInput struct {
 	RelationType string `json:"relation_type,omitempty" jsonschema:"only follow relations of this type (omit to follow any)"`
 	MaxDepth     int    `json:"max_depth,omitempty" jsonschema:"how many relation hops to traverse, 1 to 5 (default 1); same name as find_path and impact_of"`
 	Limit        int    `json:"limit,omitempty" jsonschema:"maximum neighbors to return (default 50, max 200); the closest are kept and totals always cover everything"`
-	AsOf         string `json:"as_of,omitempty" jsonschema:"RFC 3339 instant: traverse the graph as it was then (event-time), instead of now"`
+	AsOf         string `json:"as_of,omitempty" jsonschema:"RFC 3339 instant: traverse the graph as it was then (event-time), instead of now — COSTLY: this is a full REPLAY of the event log from the origin into a fresh graph, not a filter. Its cost tracks the size of this tenant's log, NOT how far back you asked: two minutes costs the same as twenty-four hours. Folds are bounded process-wide (NumCPU/2 at once) across every tenant and surface, so several queue behind each other and behind other readers. One per displayed row will take an instance down. A live read is in memory and entity_history is a linear range read: neither is in this class"`
 	Verbosity    string `json:"verbosity,omitempty" jsonschema:"compact returns only id/type/label per neighbor; full (default) adds identity and attributes"`
 }
 
@@ -705,7 +705,7 @@ func clampLimit(limit int) int {
 
 // DescribeSchemaInput optionally pins the instant to describe.
 type DescribeSchemaInput struct {
-	AsOf string `json:"as_of,omitempty" jsonschema:"RFC 3339 instant: describe the graph as it was then (event-time), instead of now"`
+	AsOf string `json:"as_of,omitempty" jsonschema:"RFC 3339 instant: describe the graph as it was then (event-time), instead of now — COSTLY: this is a full REPLAY of the event log from the origin into a fresh graph, not a filter. Its cost tracks the size of this tenant's log, NOT how far back you asked: two minutes costs the same as twenty-four hours. Folds are bounded process-wide (NumCPU/2 at once) across every tenant and surface, so several queue behind each other and behind other readers. One per displayed row will take an instance down. A live read is in memory and entity_history is a linear range read: neither is in this class"`
 }
 
 // TypeCount pairs a type name with the number of instances in the graph.

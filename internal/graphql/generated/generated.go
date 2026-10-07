@@ -1263,6 +1263,15 @@ type Query {
   """
   Fetch a single entity by its logical id. Returns null if unknown. Provide
   ` + "`" + `asOf` + "`" + ` (RFC 3339) to read the entity as it was at that instant (event-time).
+
+  **` + "`" + `asOf` + "`" + ` is a full REPLAY of the event log from the origin into a fresh graph,
+  not a filter.** Its cost tracks the size of this tenant's log, not how far back
+  you asked: two minutes costs the same as twenty-four hours. Folds are bounded
+  process-wide to NumCPU/2 at once, across every tenant and every surface, so
+  several queue behind each other and behind other readers of the instance. One
+  per displayed row will take an instance down — a before/after display of thirty
+  lines is thirty replays. A live read is in memory and ` + "`" + `entityHistory` + "`" + ` is a
+  linear range read over the log; neither is in this class.
   """
   entity(id: ID!, asOf: String): Entity
 
@@ -1271,6 +1280,15 @@ type Query {
   so this is oldest-first), with Relay pagination. Use ` + "`" + `first` + "`" + ` (default 50,
   **maximum 200**) and ` + "`" + `after` + "`" + ` (an ` + "`" + `endCursor` + "`" + ` from a previous page). Provide
   ` + "`" + `asOf` + "`" + ` (RFC 3339) to list the graph as it was at that instant.
+
+  **` + "`" + `asOf` + "`" + ` is a full REPLAY of the event log from the origin into a fresh graph,
+  not a filter.** Its cost tracks the size of this tenant's log, not how far back
+  you asked: two minutes costs the same as twenty-four hours. Folds are bounded
+  process-wide to NumCPU/2 at once, across every tenant and every surface, so
+  several queue behind each other and behind other readers of the instance. One
+  per displayed row will take an instance down — a before/after display of thirty
+  lines is thirty replays. A live read is in memory and ` + "`" + `entityHistory` + "`" + ` is a
+  linear range read over the log; neither is in this class.
 
   A ` + "`" + `first` + "`" + ` above 200 is an **error**, not a smaller page: being served fewer
   than asked without being told is how a partial answer gets read as a complete
@@ -1283,6 +1301,15 @@ type Query {
   List relations (current state) with Relay pagination. ` + "`" + `first` + "`" + ` defaults to 50
   and is capped at 200; asking for more is an error rather than a smaller page.
   Provide ` + "`" + `asOf` + "`" + ` (RFC 3339) to list the graph as it was at that instant.
+
+  **` + "`" + `asOf` + "`" + ` is a full REPLAY of the event log from the origin into a fresh graph,
+  not a filter.** Its cost tracks the size of this tenant's log, not how far back
+  you asked: two minutes costs the same as twenty-four hours. Folds are bounded
+  process-wide to NumCPU/2 at once, across every tenant and every surface, so
+  several queue behind each other and behind other readers of the instance. One
+  per displayed row will take an instance down — a before/after display of thirty
+  lines is thirty replays. A live read is in memory and ` + "`" + `entityHistory` + "`" + ` is a
+  linear range read over the log; neither is in this class.
   """
   relations(filter: RelationFilter, first: Int = 50, after: String, asOf: String): RelationConnection!
 

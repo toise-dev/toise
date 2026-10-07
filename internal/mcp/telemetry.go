@@ -73,7 +73,7 @@ var ownerDirection = map[string]string{
 // TelemetryKeysInput names the entity.
 type TelemetryKeysInput struct {
 	EntityID string `json:"entity_id" jsonschema:"the entity whose telemetry join keys to derive, by identity_fingerprint (preferred, stable across replicas), by identity written inline as type:key=value, or by id"`
-	AsOf     string `json:"as_of,omitempty" jsonschema:"RFC 3339 instant: derive the keys from the graph as it was then (event-time), instead of now"`
+	AsOf     string `json:"as_of,omitempty" jsonschema:"RFC 3339 instant: derive the keys from the graph as it was then (event-time), instead of now — COSTLY: this is a full REPLAY of the event log from the origin into a fresh graph, not a filter. Its cost tracks the size of this tenant's log, NOT how far back you asked: two minutes costs the same as twenty-four hours. Folds are bounded process-wide (NumCPU/2 at once) across every tenant and surface, so several queue behind each other and behind other readers. One per displayed row will take an instance down. A live read is in memory and entity_history is a linear range read: neither is in this class"`
 }
 
 // TelemetryKey is one attribute usable to find the entity's metrics and logs.

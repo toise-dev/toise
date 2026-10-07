@@ -53,7 +53,7 @@ type FindPathInput struct {
 	ToID         string `json:"to_id" jsonschema:"the destination entity, by identity_fingerprint (preferred), by identity written inline as type:key=value, or by id"`
 	RelationType string `json:"relation_type,omitempty" jsonschema:"only traverse relations of this type (omit to traverse any)"`
 	MaxDepth     int    `json:"max_depth,omitempty" jsonschema:"maximum hops to explore, 1 to 10 (default 10)"`
-	AsOf         string `json:"as_of,omitempty" jsonschema:"RFC 3339 instant: search the graph as it was then (event-time), instead of now"`
+	AsOf         string `json:"as_of,omitempty" jsonschema:"RFC 3339 instant: search the graph as it was then (event-time), instead of now — COSTLY: this is a full REPLAY of the event log from the origin into a fresh graph, not a filter. Its cost tracks the size of this tenant's log, NOT how far back you asked: two minutes costs the same as twenty-four hours. Folds are bounded process-wide (NumCPU/2 at once) across every tenant and surface, so several queue behind each other and behind other readers. One per displayed row will take an instance down. A live read is in memory and entity_history is a linear range read: neither is in this class"`
 }
 
 // PathHop is one entity along the path with the edge that reached it.
