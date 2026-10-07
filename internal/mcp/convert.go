@@ -253,8 +253,13 @@ func matches(e model.Entity, want map[string]string) bool {
 // bypassed. Absence is not evidence of absence, and this block is where an
 // answer says how much absence it can even speak for.
 type GraphMeta struct {
-	Entities  int `json:"entities" jsonschema:"entities the answering graph holds"`
-	Relations int `json:"relations" jsonschema:"relations the answering graph holds"`
+	// Tenant names the tenant THIS answer was built from. It is not an echo of
+	// what the caller asked for: in derive-only tenancy the tenant comes from
+	// the credential and a client-supplied X-Scope-OrgID is ignored, so the two
+	// can differ and only this one is the truth about the data below.
+	Tenant    string `json:"tenant,omitempty" jsonschema:"the tenant this answer was built from — NOT an echo of your request: a scoped credential decides the tenant and your X-Scope-OrgID may have been ignored. Compare it with what you asked for before concluding anything about the data"`
+	Entities  int    `json:"entities" jsonschema:"entities the answering graph holds"`
+	Relations int    `json:"relations" jsonschema:"relations the answering graph holds"`
 	// NewestEvent dates the log, not the projection: a live graph with a stale
 	// log means producers stopped talking, which is itself the finding.
 	NewestEvent string `json:"newest_event,omitempty" jsonschema:"RFC 3339 event time of the newest event in this tenant's log; how fresh this instance is"`
@@ -268,7 +273,7 @@ type GraphMeta struct {
 // graphMeta assembles the provenance block from the graph that actually
 // answered (live or an as-of fold) and the tenant's log.
 func (s *Server) graphMeta(g Graph, asOf string) GraphMeta {
-	m := GraphMeta{Entities: g.EntityCount(), Relations: g.RelationCount(), AsOf: asOf}
+	m := GraphMeta{Tenant: s.tenant, Entities: g.EntityCount(), Relations: g.RelationCount(), AsOf: asOf}
 	if t, ok, err := s.store.NewestEventTime(); err == nil && ok {
 		m.NewestEvent = formatTime(t)
 	}

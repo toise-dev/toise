@@ -51,6 +51,9 @@ type Graph interface {
 // Resolver wires the GraphQL API to the projection, the log, and the change
 // engine (for subscriptions).
 type Resolver struct {
+	// Tenant names the tenant this resolver answers for, surfaced by the
+	// graphScope query (#399). Empty on a single-tenant instance.
+	Tenant      string
 	Graph       Graph
 	Store       EventReader
 	Engine      *change.Engine

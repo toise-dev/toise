@@ -115,6 +115,9 @@ func observe[I, O any](s *Server, tool string, fn func(context.Context, *mcpsdk.
 
 // Server exposes Toise's read model as MCP tools over stdio and Streamable HTTP.
 type Server struct {
+	// tenant names the tenant this server answers for, so every answer can say
+	// so (#399). Empty on a single-tenant instance.
+	tenant  string
 	graph   Graph
 	store   EventReader
 	now     func() time.Time
@@ -135,6 +138,19 @@ const defaultIdentityThreshold = 0.9
 // SetAnnotations attaches the per-tenant annotation sidecar, enabling
 // annotate_entity and the annotations block on get_entity; returns s for
 // chaining. nil leaves annotations disabled.
+// SetTenant records which tenant this server answers for, so every answer can
+// name it (#399). In derive-only tenancy the tenant comes from the credential
+// and the client's X-Scope-OrgID is ignored: the isolation is right, and a
+// client that asked for one tenant was handed another with a 200 and no way to
+// learn its header had been dropped. It cost someone a wrong diagnosis.
+//
+// Naming the tenant served turns a check that required a trick — send a header
+// for a tenant you cannot reach, compare counts — into reading one field.
+func (s *Server) SetTenant(id string) *Server {
+	s.tenant = id
+	return s
+}
+
 func (s *Server) SetAnnotations(a *annotations.Store) *Server {
 	s.ann = a
 	return s

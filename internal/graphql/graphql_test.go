@@ -912,3 +912,43 @@ func TestCORSForAnAllowlistedOrigin(t *testing.T) {
 		t.Error("an empty allowlist sent a CORS header, changing the zero-config posture")
 	}
 }
+
+// TestGraphScopeNamesTheTenantServed is #399. In derive-only tenancy the tenant
+// comes from the credential and a client-supplied X-Scope-OrgID is ignored. The
+// isolation is exactly right — that credential can never reach another tenant —
+// but a client asking for tenant 12 was answered from tenant 10 with a 200 and
+// no way to learn its header had been dropped. A probe went red on a correct
+// server.
+func TestGraphScopeNamesTheTenantServed(t *testing.T) {
+	st := newStack(t)
+	st.res.Tenant = "10"
+	c := client.New(graphql.NewHandler(st.res, graphql.Config{}))
+
+	var resp struct {
+		GraphScope struct {
+			Tenant           *string
+			Entities         int
+			Relations        int
+			OldestAnswerable *string
+		}
+	}
+	c.MustPost(`{ graphScope { tenant entities relations oldestAnswerable } }`, &resp)
+
+	if resp.GraphScope.Tenant == nil || *resp.GraphScope.Tenant != "10" {
+		t.Fatalf("graphScope.tenant = %v, want the tenant actually served", resp.GraphScope.Tenant)
+	}
+	if resp.GraphScope.Entities == 0 {
+		t.Error("graphScope reported an empty graph for a stack that holds entities")
+	}
+
+	// A single-tenant instance leaves it null rather than inventing a name.
+	st2 := newStack(t)
+	c2 := client.New(graphql.NewHandler(st2.res, graphql.Config{}))
+	var resp2 struct {
+		GraphScope struct{ Tenant *string }
+	}
+	c2.MustPost(`{ graphScope { tenant } }`, &resp2)
+	if resp2.GraphScope.Tenant != nil {
+		t.Errorf("a single-tenant instance named a tenant: %v", *resp2.GraphScope.Tenant)
+	}
+}
