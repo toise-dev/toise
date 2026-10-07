@@ -952,3 +952,75 @@ func TestGraphScopeNamesTheTenantServed(t *testing.T) {
 		t.Errorf("a single-tenant instance named a tenant: %v", *resp2.GraphScope.Tenant)
 	}
 }
+
+// TestAChangePageSaysWhichEndItHolds is the direction half of #366.
+//
+// The two change pages on this surface run in OPPOSITE directions while sharing
+// one connection type: entityHistory oldest-first, recentChanges newest-first.
+// Nothing in the payload said which. The failure is silent — an ordered list of
+// events looks complete whichever end was cut off — and it produced a confident
+// wrong conclusion: a reader who asked for a generous page and took the last
+// edge believed they held the newest event while holding one days old, with
+// hasNextPage: true present and technically honest the whole time.
+func TestAChangePageSaysWhichEndItHolds(t *testing.T) {
+	s := newStack(t)
+	c := s.client(t)
+
+	var hist struct {
+		EntityHistory struct {
+			Order       string
+			HoldsNewest bool
+			HoldsOldest bool
+			TotalCount  int
+			PageInfo    struct{ HasNextPage bool }
+		}
+	}
+	q := `query($id:ID!,$n:Int){ entityHistory(id:$id, first:$n){ order holdsNewest holdsOldest totalCount pageInfo{ hasNextPage } } }`
+
+	// A page covering everything holds both ends.
+	c.MustPost(q, &hist, client.Var("id", string(s.hostID)), client.Var("n", 50))
+	if hist.EntityHistory.Order != "OLDEST_FIRST" {
+		t.Errorf("entityHistory order = %q, want OLDEST_FIRST", hist.EntityHistory.Order)
+	}
+	if !hist.EntityHistory.HoldsNewest || !hist.EntityHistory.HoldsOldest {
+		t.Errorf("a complete page claims to be missing an end: newest=%v oldest=%v",
+			hist.EntityHistory.HoldsNewest, hist.EntityHistory.HoldsOldest)
+	}
+
+	// A page cut short on an oldest-first list is missing the NEWEST event, which
+	// is precisely what a reader taking the last edge assumes they hold.
+	c.MustPost(q, &hist, client.Var("id", string(s.hostID)), client.Var("n", 1))
+	if !hist.EntityHistory.PageInfo.HasNextPage {
+		t.Fatalf("setup: first:1 on a %d-event timeline should have a next page", hist.EntityHistory.TotalCount)
+	}
+	if hist.EntityHistory.HoldsNewest {
+		t.Error("a truncated oldest-first page claims to hold the newest event; the last edge is NOT the most recent")
+	}
+	if !hist.EntityHistory.HoldsOldest {
+		t.Error("an oldest-first page should still hold the oldest event")
+	}
+
+	// recentChanges runs the other way, so a truncation removes the FAR end of
+	// the window — the beginning of an incident rather than its tail.
+	var recent struct {
+		RecentChanges struct {
+			Order       string
+			HoldsNewest bool
+			HoldsOldest bool
+			PageInfo    struct{ HasNextPage bool }
+		}
+	}
+	c.MustPost(`query($n:Int){ recentChanges(window:"24h", first:$n){ order holdsNewest holdsOldest pageInfo{ hasNextPage } } }`,
+		&recent, client.Var("n", 1))
+	if recent.RecentChanges.Order != "NEWEST_FIRST" {
+		t.Errorf("recentChanges order = %q, want NEWEST_FIRST", recent.RecentChanges.Order)
+	}
+	if recent.RecentChanges.PageInfo.HasNextPage {
+		if recent.RecentChanges.HoldsOldest {
+			t.Error("a truncated newest-first page claims to hold the oldest event; the start of the window is absent")
+		}
+		if !recent.RecentChanges.HoldsNewest {
+			t.Error("a newest-first page should hold the newest event")
+		}
+	}
+}

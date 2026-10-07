@@ -266,7 +266,7 @@ func (r *queryResolver) EntityHistory(ctx context.Context, id string, since, unt
 		ej, _ := filtered[j].Times()
 		return ei.Before(ej)
 	})
-	return r.changeConnection(filtered, first, after)
+	return r.changeConnection(filtered, first, after, generated.ChangeOrderOldestFirst)
 }
 
 // defaultRecentChangesWindow matches the MCP recent_changes default, so the same
@@ -342,10 +342,24 @@ func (r *queryResolver) RecentChanges(ctx context.Context, window, from, to *str
 	if err != nil {
 		return nil, err
 	}
-	return r.changeConnection(evs, first, after)
+	return r.changeConnection(evs, first, after, generated.ChangeOrderNewestFirst)
 }
 
-func (r *queryResolver) changeConnection(evs []model.Event, first *int, after *string) (*generated.ChangeConnection, error) {
+// changeConnection pages a change list and DECLARES which end it started from.
+//
+// The order is a parameter rather than a constant because the two callers run in
+// opposite directions — entityHistory oldest-first, recentChanges newest-first —
+// while sharing this type. A consumer holding one page could not tell which, and
+// the mistake is silent: an ordered list of events looks complete whichever end
+// was cut off (#366).
+//
+// holdsNewest/holdsOldest answer the question a reader acts on, which is not the
+// one hasNextPage answers. hasNextPage says "there is more"; these say "the
+// newest event is not in what you are holding". On a page running oldest-first,
+// a reader who asked for a generous page and took the last edge believed they
+// held the newest event while holding one that could be days old — with
+// hasNextPage: true present and technically honest the whole time.
+func (r *queryResolver) changeConnection(evs []model.Event, first *int, after *string, order generated.ChangeOrder) (*generated.ChangeConnection, error) {
 	page, end, hasNext, err := paginate(evs, eventID, first, after)
 	if err != nil {
 		return nil, err
@@ -354,10 +368,26 @@ func (r *queryResolver) changeConnection(evs []model.Event, first *int, after *s
 	for i, ev := range page {
 		edges[i] = generated.ChangeEdge{Cursor: encodeCursor(eventID(ev)), Node: eventToChangeGQL(ev)}
 	}
+	// The far end of the matching set is reachable only when this page runs to
+	// the end of it. An empty match holds both ends trivially: there is nothing
+	// absent to warn about, and claiming otherwise would read as a truncation.
+	reachesFarEnd := !hasNext
+	holdsNewest, holdsOldest := true, true
+	if len(evs) > 0 {
+		switch order {
+		case generated.ChangeOrderOldestFirst:
+			holdsNewest = reachesFarEnd
+		case generated.ChangeOrderNewestFirst:
+			holdsOldest = reachesFarEnd
+		}
+	}
 	return &generated.ChangeConnection{
-		Edges:      edges,
-		PageInfo:   &generated.PageInfo{HasNextPage: hasNext, EndCursor: end},
-		TotalCount: len(evs),
+		Edges:       edges,
+		PageInfo:    &generated.PageInfo{HasNextPage: hasNext, EndCursor: end},
+		TotalCount:  len(evs),
+		Order:       order,
+		HoldsNewest: holdsNewest,
+		HoldsOldest: holdsOldest,
 	}, nil
 }
 

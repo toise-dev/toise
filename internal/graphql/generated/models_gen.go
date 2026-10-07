@@ -88,6 +88,24 @@ type ChangeConnection struct {
 	Edges      []ChangeEdge `json:"edges"`
 	PageInfo   *PageInfo    `json:"pageInfo"`
 	TotalCount int          `json:"totalCount"`
+	// Which end of the matching set this page starts from. See `ChangeOrder`.
+	Order ChangeOrder `json:"order"`
+	// Whether the most recent matching event is inside this page.
+	//
+	// `pageInfo.hasNextPage` answers "is there more"; this answers **"is the newest
+	// event in what I am holding"**, which is the question a reader actually acts on.
+	// They are not the same question, and the difference has produced a confident
+	// wrong conclusion: `entityHistory` pages oldest-first, so a reader who asks for
+	// a generous page and takes the last element believes they hold the newest event
+	// while holding one that can be days old. `hasNextPage: true` was present and
+	// technically honest the whole time.
+	HoldsNewest bool `json:"holdsNewest"`
+	// Whether the oldest matching event is inside this page.
+	//
+	// The mirror of `holdsNewest`, and the one that matters on `recentChanges`: that
+	// page runs newest-first, so what a truncation removes is the far end of the
+	// window — the beginning of an incident rather than its tail.
+	HoldsOldest bool `json:"holdsOldest"`
 }
 
 type ChangeEdge struct {
@@ -352,6 +370,70 @@ type SameAsLink struct {
 }
 
 type Subscription struct {
+}
+
+// The direction a change page runs in.
+//
+// It is declared because the two change pages on this surface run in OPPOSITE
+// directions — `entityHistory` oldest-first, `recentChanges` newest-first — and
+// they share this connection type. A consumer holding one could not tell which,
+// and the mistake is silent: an ordered list of events looks complete whichever
+// end was cut off.
+type ChangeOrder string
+
+const (
+	// Oldest event first; the page's LAST edge is its most recent.
+	ChangeOrderOldestFirst ChangeOrder = "OLDEST_FIRST"
+	// Newest event first; the page's FIRST edge is its most recent.
+	ChangeOrderNewestFirst ChangeOrder = "NEWEST_FIRST"
+)
+
+var AllChangeOrder = []ChangeOrder{
+	ChangeOrderOldestFirst,
+	ChangeOrderNewestFirst,
+}
+
+func (e ChangeOrder) IsValid() bool {
+	switch e {
+	case ChangeOrderOldestFirst, ChangeOrderNewestFirst:
+		return true
+	}
+	return false
+}
+
+func (e ChangeOrder) String() string {
+	return string(e)
+}
+
+func (e *ChangeOrder) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = ChangeOrder(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid ChangeOrder", str)
+	}
+	return nil
+}
+
+func (e ChangeOrder) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *ChangeOrder) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e ChangeOrder) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
 }
 
 // The classification of a change, per the Toise change taxonomy. Use this to ask

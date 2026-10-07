@@ -66,9 +66,12 @@ type ComplexityRoot struct {
 	}
 
 	ChangeConnection struct {
-		Edges      func(childComplexity int) int
-		PageInfo   func(childComplexity int) int
-		TotalCount func(childComplexity int) int
+		Edges       func(childComplexity int) int
+		HoldsNewest func(childComplexity int) int
+		HoldsOldest func(childComplexity int) int
+		Order       func(childComplexity int) int
+		PageInfo    func(childComplexity int) int
+		TotalCount  func(childComplexity int) int
 	}
 
 	ChangeEdge struct {
@@ -305,6 +308,24 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ChangeConnection.Edges(childComplexity), true
+	case "ChangeConnection.holdsNewest":
+		if e.ComplexityRoot.ChangeConnection.HoldsNewest == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ChangeConnection.HoldsNewest(childComplexity), true
+	case "ChangeConnection.holdsOldest":
+		if e.ComplexityRoot.ChangeConnection.HoldsOldest == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ChangeConnection.HoldsOldest(childComplexity), true
+	case "ChangeConnection.order":
+		if e.ComplexityRoot.ChangeConnection.Order == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ChangeConnection.Order(childComplexity), true
 	case "ChangeConnection.pageInfo":
 		if e.ComplexityRoot.ChangeConnection.PageInfo == nil {
 			break
@@ -1216,11 +1237,52 @@ type ChangeEdge {
   node: ChangeEvent!
 }
 
+"""
+The direction a change page runs in.
+
+It is declared because the two change pages on this surface run in OPPOSITE
+directions — ` + "`" + `entityHistory` + "`" + ` oldest-first, ` + "`" + `recentChanges` + "`" + ` newest-first — and
+they share this connection type. A consumer holding one could not tell which,
+and the mistake is silent: an ordered list of events looks complete whichever
+end was cut off.
+"""
+enum ChangeOrder {
+  "Oldest event first; the page's LAST edge is its most recent."
+  OLDEST_FIRST
+  "Newest event first; the page's FIRST edge is its most recent."
+  NEWEST_FIRST
+}
+
 "A paginated list of change events."
 type ChangeConnection {
   edges: [ChangeEdge!]!
   pageInfo: PageInfo!
   totalCount: Int!
+
+  "Which end of the matching set this page starts from. See ` + "`" + `ChangeOrder` + "`" + `."
+  order: ChangeOrder!
+
+  """
+  Whether the most recent matching event is inside this page.
+
+  ` + "`" + `pageInfo.hasNextPage` + "`" + ` answers "is there more"; this answers **"is the newest
+  event in what I am holding"**, which is the question a reader actually acts on.
+  They are not the same question, and the difference has produced a confident
+  wrong conclusion: ` + "`" + `entityHistory` + "`" + ` pages oldest-first, so a reader who asks for
+  a generous page and takes the last element believes they hold the newest event
+  while holding one that can be days old. ` + "`" + `hasNextPage: true` + "`" + ` was present and
+  technically honest the whole time.
+  """
+  holdsNewest: Boolean!
+
+  """
+  Whether the oldest matching event is inside this page.
+
+  The mirror of ` + "`" + `holdsNewest` + "`" + `, and the one that matters on ` + "`" + `recentChanges` + "`" + `: that
+  page runs newest-first, so what a truncation removes is the far end of the
+  window — the beginning of an incident rather than its tail.
+  """
+  holdsOldest: Boolean!
 }
 
 "Filter for the entities query."
@@ -1502,6 +1564,12 @@ func (ec *executionContext) childFields_ChangeConnection(ctx context.Context, fi
 		return ec.fieldContext_ChangeConnection_pageInfo(ctx, field)
 	case "totalCount":
 		return ec.fieldContext_ChangeConnection_totalCount(ctx, field)
+	case "order":
+		return ec.fieldContext_ChangeConnection_order(ctx, field)
+	case "holdsNewest":
+		return ec.fieldContext_ChangeConnection_holdsNewest(ctx, field)
+	case "holdsOldest":
+		return ec.fieldContext_ChangeConnection_holdsOldest(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type ChangeConnection", field.Name)
 }
@@ -2577,6 +2645,75 @@ func (ec *executionContext) _ChangeConnection_totalCount(ctx context.Context, fi
 }
 func (ec *executionContext) fieldContext_ChangeConnection_totalCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("ChangeConnection", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _ChangeConnection_order(ctx context.Context, field graphql.CollectedField, obj *ChangeConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ChangeConnection_order(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Order, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v ChangeOrder) graphql.Marshaler {
+			return ec.marshalNChangeOrder2githubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐChangeOrder(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ChangeConnection_order(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ChangeConnection", field, false, false, errors.New("field of type ChangeOrder does not have child fields"))
+}
+
+func (ec *executionContext) _ChangeConnection_holdsNewest(ctx context.Context, field graphql.CollectedField, obj *ChangeConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ChangeConnection_holdsNewest(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.HoldsNewest, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ChangeConnection_holdsNewest(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ChangeConnection", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _ChangeConnection_holdsOldest(ctx context.Context, field graphql.CollectedField, obj *ChangeConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ChangeConnection_holdsOldest(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.HoldsOldest, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ChangeConnection_holdsOldest(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ChangeConnection", field, false, false, errors.New("field of type Boolean does not have child fields"))
 }
 
 func (ec *executionContext) _ChangeEdge_cursor(ctx context.Context, field graphql.CollectedField, obj *ChangeEdge) (ret graphql.Marshaler) {
@@ -5979,6 +6116,21 @@ func (ec *executionContext) _ChangeConnection(ctx context.Context, sel ast.Selec
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "order":
+			out.Values[i] = ec._ChangeConnection_order(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "holdsNewest":
+			out.Values[i] = ec._ChangeConnection_holdsNewest(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "holdsOldest":
+			out.Values[i] = ec._ChangeConnection_holdsOldest(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -7471,6 +7623,16 @@ func (ec *executionContext) marshalNChangeEvent2ᚖgithubᚗcomᚋtoiseᚑdevᚋ
 		return graphql.Null
 	}
 	return ec._ChangeEvent(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNChangeOrder2githubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐChangeOrder(ctx context.Context, v any) (ChangeOrder, error) {
+	var res ChangeOrder
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNChangeOrder2githubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐChangeOrder(ctx context.Context, sel ast.SelectionSet, v ChangeOrder) graphql.Marshaler {
+	return v
 }
 
 func (ec *executionContext) unmarshalNChangeType2githubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐChangeType(ctx context.Context, v any) (ChangeType, error) {
