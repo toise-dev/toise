@@ -677,7 +677,24 @@ type EntityEvent struct {
 	//
 	// Zero on events written before this field existed. Zero means unknown, never
 	// "its own commit".
-	CommitSeq     uint64 `protobuf:"varint,10,opt,name=commit_seq,json=commitSeq,proto3" json:"commit_seq,omitempty"`
+	CommitSeq uint64 `protobuf:"varint,10,opt,name=commit_seq,json=commitSeq,proto3" json:"commit_seq,omitempty"`
+	// scope is the instrumentation scope that observed this change — one scope per
+	// collection method (senhub-agent/snmp-route, senhub-agent/snmp-fdb, ...).
+	//
+	// The producer contract makes the instrumentation scope the carrier of
+	// provenance, deliberately, rather than a source attribute on the entity. No
+	// read surface could reach it (#394), so "which of my collection methods is
+	// losing its entities" was unanswerable — the first question anyone asks of a
+	// graph fed by more than one source.
+	//
+	// On a liveness expiry the scope is the one that HAD been asserting the entity
+	// and went silent, not an author of the deletion: the expiry is Toise's own
+	// act. That is the reading the question needs — which collector stopped
+	// speaking, not who reaped it.
+	//
+	// Empty when the producer sent no scope name, and on events written before
+	// this field existed.
+	Scope         string `protobuf:"bytes,11,opt,name=scope,proto3" json:"scope,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -782,6 +799,13 @@ func (x *EntityEvent) GetCommitSeq() uint64 {
 	return 0
 }
 
+func (x *EntityEvent) GetScope() string {
+	if x != nil {
+		return x.Scope
+	}
+	return ""
+}
+
 // RelationEvent is a classified change about a relation. Bi-temporal: ADR 0005.
 type RelationEvent struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
@@ -800,7 +824,10 @@ type RelationEvent struct {
 	// commit_seq groups the events of one producer observation; see EntityEvent.
 	// Zero on events written before this field existed, and zero means unknown
 	// rather than "its own commit".
-	CommitSeq     uint64 `protobuf:"varint,9,opt,name=commit_seq,json=commitSeq,proto3" json:"commit_seq,omitempty"`
+	CommitSeq uint64 `protobuf:"varint,9,opt,name=commit_seq,json=commitSeq,proto3" json:"commit_seq,omitempty"`
+	// scope is the instrumentation scope that observed this change; see
+	// EntityEvent. Empty when unknown.
+	Scope         string `protobuf:"bytes,10,opt,name=scope,proto3" json:"scope,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -896,6 +923,13 @@ func (x *RelationEvent) GetCommitSeq() uint64 {
 		return x.CommitSeq
 	}
 	return 0
+}
+
+func (x *RelationEvent) GetScope() string {
+	if x != nil {
+		return x.Scope
+	}
+	return ""
 }
 
 // Event is the envelope stored in the append-only event log.
@@ -1026,7 +1060,7 @@ const file_toise_v1_events_proto_rawDesc = "" +
 	"attributes\x12\x1e\n" +
 	"\n" +
 	"structural\x18\x06 \x01(\bR\n" +
-	"structural\"\xb8\x03\n" +
+	"structural\"\xce\x03\n" +
 	"\vEntityEvent\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x125\n" +
 	"\vchange_type\x18\x02 \x01(\x0e2\x14.toise.v1.ChangeTypeR\n" +
@@ -1040,7 +1074,8 @@ const file_toise_v1_events_proto_rawDesc = "" +
 	"\rdelete_source\x18\t \x01(\x0e2\x16.toise.v1.DeleteSourceR\fdeleteSource\x12\x1d\n" +
 	"\n" +
 	"commit_seq\x18\n" +
-	" \x01(\x04R\tcommitSeq\"\x9b\x03\n" +
+	" \x01(\x04R\tcommitSeq\x12\x14\n" +
+	"\x05scope\x18\v \x01(\tR\x05scope\"\xb1\x03\n" +
 	"\rRelationEvent\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x125\n" +
 	"\vchange_type\x18\x02 \x01(\x0e2\x14.toise.v1.ChangeTypeR\n" +
@@ -1052,7 +1087,9 @@ const file_toise_v1_events_proto_rawDesc = "" +
 	"\fchanged_keys\x18\a \x03(\tR\vchangedKeys\x12;\n" +
 	"\rdelete_source\x18\b \x01(\x0e2\x16.toise.v1.DeleteSourceR\fdeleteSource\x12\x1d\n" +
 	"\n" +
-	"commit_seq\x18\t \x01(\x04R\tcommitSeq\"\x8e\x01\n" +
+	"commit_seq\x18\t \x01(\x04R\tcommitSeq\x12\x14\n" +
+	"\x05scope\x18\n" +
+	" \x01(\tR\x05scope\"\x8e\x01\n" +
 	"\x05Event\x12:\n" +
 	"\fentity_event\x18\x01 \x01(\v2\x15.toise.v1.EntityEventH\x00R\ventityEvent\x12@\n" +
 	"\x0erelation_event\x18\x02 \x01(\v2\x17.toise.v1.RelationEventH\x00R\rrelationEventB\a\n" +

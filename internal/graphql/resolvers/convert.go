@@ -82,6 +82,7 @@ func eventToChangeGQL(ev model.Event) *generated.ChangeEvent {
 		ce.EventTime = ee.EventTime.UTC().Format(time.RFC3339Nano)
 		ce.RecordedAt = ee.RecordedAt.UTC().Format(time.RFC3339Nano)
 		ce.CommitSeq = commitSeqOf(ee.CommitSeq)
+		ce.Scope = strPtrOrNil(ee.Scope)
 		ce.SchemaVersion = ee.SchemaVersion
 		if ee.ChangedKeys != nil {
 			ce.ChangedKeys = ee.ChangedKeys
@@ -102,6 +103,7 @@ func eventToChangeGQL(ev model.Event) *generated.ChangeEvent {
 		ce.EventTime = re.EventTime.UTC().Format(time.RFC3339Nano)
 		ce.RecordedAt = re.RecordedAt.UTC().Format(time.RFC3339Nano)
 		ce.CommitSeq = commitSeqOf(re.CommitSeq)
+		ce.Scope = strPtrOrNil(re.Scope)
 		ce.SchemaVersion = re.SchemaVersion
 		if re.ChangedKeys != nil {
 			ce.ChangedKeys = re.ChangedKeys
@@ -209,4 +211,15 @@ func commitSeqOf(seq uint64) *string {
 	}
 	s := strconv.FormatUint(seq, 10)
 	return &s
+}
+
+// strPtrOrNil leaves an unknown value null rather than rendering an empty
+// string. An empty scope would read as "observed by a collector with no name",
+// where null reads as "not recorded" — and the difference decides whether a
+// consumer treats the gap as a producer defect or as an old event.
+func strPtrOrNil(v string) *string {
+	if v == "" {
+		return nil
+	}
+	return &v
 }

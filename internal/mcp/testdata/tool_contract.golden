@@ -283,6 +283,7 @@ tool entity_history
       structural bool
       to_id string
       type string
+    scope string
   count int
   graph object
     as_of string
@@ -303,6 +304,7 @@ tool recent_changes
   include_heartbeats bool
   kind string
   limit int
+  scope string
   to string
   window string
   out:
@@ -349,6 +351,7 @@ tool recent_changes
       structural bool
       to_id string
       type string
+    scope string
   count int
   covered string
   graph object

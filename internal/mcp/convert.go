@@ -54,7 +54,13 @@ type Change struct {
 	// the same value were committed together; two with different values were
 	// not. Zero means unknown (an event older than the field), never "its own
 	// commit".
-	CommitSeq   uint64   `json:"commit_seq,omitempty" jsonschema:"groups the events of ONE producer observation: two changes sharing this value were committed together by the same producer in one append, and two with different values were not. Pair them on EQUALITY, with no tolerance window — recorded_at is set per event and may differ inside one commit. A route deleted and a route created sharing a commit_seq is one observation of a changed route; whether that means a gateway change is YOUR conclusion, not Toise's. Absent on events older than this field, where absence means unknown rather than a commit of its own"`
+	CommitSeq uint64 `json:"commit_seq,omitempty" jsonschema:"groups the events of ONE producer observation: two changes sharing this value were committed together by the same producer in one append, and two with different values were not. Pair them on EQUALITY, with no tolerance window — recorded_at is set per event and may differ inside one commit. A route deleted and a route created sharing a commit_seq is one observation of a changed route; whether that means a gateway change is YOUR conclusion, not Toise's. Absent on events older than this field, where absence means unknown rather than a commit of its own"`
+
+	// Scope names the collection method that observed this change — one
+	// instrumentation scope per method, which is where the producer contract puts
+	// provenance. On a liveness expiry it is the scope that went SILENT, not an
+	// author of the deletion.
+	Scope       string   `json:"scope,omitempty" jsonschema:"the instrumentation scope that observed this change — one per collection method, e.g. senhub-agent/snmp-route. On a liveness_expiry it names the collector that STOPPED speaking, not the author of the deletion (Toise expired it). Use it to answer which of several producers is losing entities. Absent when the producer sent no scope name or on older events"`
 	ChangeType  string   `json:"change_type" jsonschema:"the taxonomy name, e.g. entity.created, relation.added"`
 	EventTime   string   `json:"event_time" jsonschema:"RFC 3339; when the change became true in the real world"`
 	RecordedAt  string   `json:"recorded_at" jsonschema:"RFC 3339; when Toise recorded the change"`
@@ -208,6 +214,7 @@ func changeOut(ev model.Event) Change {
 		ee := ev.Entity
 		c.EventID = ee.EventID
 		c.CommitSeq = ee.CommitSeq
+		c.Scope = ee.Scope
 		c.ChangeType = ee.ChangeType.String()
 		c.EventTime = formatTime(ee.EventTime)
 		c.RecordedAt = formatTime(ee.RecordedAt)
@@ -223,6 +230,7 @@ func changeOut(ev model.Event) Change {
 		re := ev.Relation
 		c.EventID = re.EventID
 		c.CommitSeq = re.CommitSeq
+		c.Scope = re.Scope
 		c.ChangeType = re.ChangeType.String()
 		c.EventTime = formatTime(re.EventTime)
 		c.RecordedAt = formatTime(re.RecordedAt)
