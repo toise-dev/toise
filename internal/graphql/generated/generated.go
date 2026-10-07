@@ -975,6 +975,13 @@ type Entity {
   deleted: Boolean!
   """
   Operator annotations attached out-of-band, or null if the entity has none.
+
+  **Replica-local.** Annotations live in a per-tenant sidecar that log shipping
+  does not replicate, so null means EITHER no note exists OR this replica is not
+  the one that received the write. Absence is not proof. The notes an operator
+  most wants during maintenance are exactly those written before the primary went
+  down, and the reader is then served by the replica that may lack them. An
+  operator can compare ` + "`" + `toise_annotations_entities` + "`" + ` across the pair.
   These are an overlay kept in a per-tenant sidecar — never producer truth and
   never part of the event log.
   """
