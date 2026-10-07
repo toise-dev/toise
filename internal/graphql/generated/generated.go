@@ -120,6 +120,7 @@ type ComplexityRoot struct {
 		OldestAnswerable func(childComplexity int) int
 		Relations        func(childComplexity int) int
 		Tenant           func(childComplexity int) int
+		TenantName       func(childComplexity int) int
 	}
 
 	Mutation struct {
@@ -519,6 +520,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.GraphScope.Tenant(childComplexity), true
+	case "GraphScope.tenantName":
+		if e.ComplexityRoot.GraphScope.TenantName == nil {
+			break
+		}
+
+		return e.ComplexityRoot.GraphScope.TenantName(childComplexity), true
 
 	case "Mutation.annotateEntity":
 		if e.ComplexityRoot.Mutation.AnnotateEntity == nil {
@@ -1225,6 +1232,8 @@ data.
 type GraphScope {
   "The tenant this answer was built from. Empty on a single-tenant instance."
   tenant: String
+  "The operator's human label for that tenant, when one is configured. Render this; compare ` + "`" + `tenant` + "`" + `. No name resolves back to a tenant, so it can never become a second identity for the same thing."
+  tenantName: String
   "Entities the answering graph holds."
   entities: Int!
   "Relations the answering graph holds."
@@ -1527,6 +1536,8 @@ func (ec *executionContext) childFields_GraphScope(ctx context.Context, field gr
 	switch field.Name {
 	case "tenant":
 		return ec.fieldContext_GraphScope_tenant(ctx, field)
+	case "tenantName":
+		return ec.fieldContext_GraphScope_tenantName(ctx, field)
 	case "entities":
 		return ec.fieldContext_GraphScope_entities(ctx, field)
 	case "relations":
@@ -3260,6 +3271,29 @@ func (ec *executionContext) _GraphScope_tenant(ctx context.Context, field graphq
 	)
 }
 func (ec *executionContext) fieldContext_GraphScope_tenant(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("GraphScope", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _GraphScope_tenantName(ctx context.Context, field graphql.CollectedField, obj *GraphScope) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_GraphScope_tenantName(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.TenantName, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_GraphScope_tenantName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("GraphScope", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
@@ -6250,6 +6284,8 @@ func (ec *executionContext) _GraphScope(ctx context.Context, sel ast.SelectionSe
 			out.Values[i] = graphql.MarshalString("GraphScope")
 		case "tenant":
 			out.Values[i] = ec._GraphScope_tenant(ctx, field, obj)
+		case "tenantName":
+			out.Values[i] = ec._GraphScope_tenantName(ctx, field, obj)
 		case "entities":
 			out.Values[i] = ec._GraphScope_entities(ctx, field, obj)
 			if out.Values[i] == graphql.Null {

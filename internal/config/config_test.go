@@ -324,3 +324,48 @@ func TestLoadColdSkipsRuntimeValidation(t *testing.T) {
 		t.Errorf("LoadCold lost the bucket: %q", cfg.LogShipS3Bucket)
 	}
 }
+
+// TestTenantNamesMap is #361: a tenant id must be the one identifier every
+// backend accepts, and the Victoria family takes nothing but an integer — so
+// ids are 1, 3, 5. That is the right key and a poor label, and every surface
+// said "tenant 3" where a human says "imagroupe".
+//
+// The parsing is strict on purpose. A label that does not appear reads as "this
+// tenant has no name", so a typo would be indistinguishable from a deliberate
+// omission — the same confusion between an absence and a decision that this
+// project keeps removing elsewhere.
+func TestTenantNamesMap(t *testing.T) {
+	ok := Config{TenantNames: []string{"1", "3:imagroupe", "5:LNA Sante"}}
+	ok.TenantNames = []string{"3:imagroupe", "5:LNA Sante"}
+	m, err := ok.TenantNamesMap()
+	if err != nil {
+		t.Fatalf("valid pairs rejected: %v", err)
+	}
+	if m["3"] != "imagroupe" || m["5"] != "LNA Sante" {
+		t.Errorf("parsed %v, want 3=imagroupe and 5=LNA Sante", m)
+	}
+	if _, named := m["1"]; named {
+		t.Error("an unlisted tenant was given a name")
+	}
+
+	for _, bad := range []struct {
+		name  string
+		pairs []string
+	}{
+		{"no separator", []string{"3 imagroupe"}},
+		{"empty name", []string{"3:"}},
+		{"same tenant twice", []string{"3:one", "3:two"}},
+		{"non-canonical id", []string{"../3:imagroupe"}},
+		{"name too long", []string{"3:" + strings.Repeat("x", 65)}},
+	} {
+		if _, err := (Config{TenantNames: bad.pairs}).TenantNamesMap(); err == nil {
+			t.Errorf("%s: accepted %v, want a hard error at boot", bad.name, bad.pairs)
+		}
+	}
+
+	// Nothing resolves a name back to an id: there is no reverse lookup to call,
+	// which is what keeps a label from becoming a second identity.
+	if m2, _ := (Config{TenantNames: []string{"3:imagroupe"}}).TenantNamesMap(); m2["imagroupe"] != "" {
+		t.Error("a name resolved as if it were a tenant id")
+	}
+}

@@ -53,10 +53,20 @@ type Handler struct {
 	graph       Graph
 	store       EventReader
 	tenant      string
+	tenantName  string          // operator label beside the id (#361); empty = unnamed
 	listTenants func() []string // nil = no switcher (claim-derived tenancy)
 	tmpl        *template.Template
 	now         func() time.Time
 	mux         *http.ServeMux
+}
+
+// SetTenantName attaches the operator's label for this tenant (#361). It is
+// rendered beside the id, never instead of it: the id is what the switcher, the
+// URL and every other surface use, so hiding it would make this page
+// unmatchable against them.
+func (h *Handler) SetTenantName(name string) *Handler {
+	h.tenantName = name
+	return h
 }
 
 // New builds a debug UI handler reading from the given projection and event log.
@@ -92,13 +102,18 @@ type pageMeta struct {
 	// indistinguishable from "nothing was emitted" — the misreading that costs a
 	// diagnosis in any multi-tenant deployment (#335).
 	Tenant string
+	// TenantName is the operator's label for that tenant (#361), rendered beside
+	// the id rather than instead of it: the id is what the switcher, the URL and
+	// every other surface use, so hiding it would make the page unmatchable
+	// against them.
+	TenantName string
 	// Tenants, when non-empty, feeds the switcher. Empty under claim-derived
 	// tenancy: the reader must not learn which other tenants exist.
 	Tenants []string
 }
 
 func (h *Handler) meta(title string) pageMeta {
-	m := pageMeta{Title: title, Version: version.String(), Tenant: h.tenant}
+	m := pageMeta{Title: title, Version: version.String(), Tenant: h.tenant, TenantName: h.tenantName}
 	if h.listTenants != nil {
 		m.Tenants = h.listTenants()
 	}

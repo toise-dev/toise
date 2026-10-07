@@ -36,6 +36,10 @@ func (r *queryResolver) GraphScope(_ context.Context) (*generated.GraphScope, er
 		t := r.Tenant
 		out.Tenant = &t
 	}
+	if r.TenantName != "" {
+		n := r.TenantName
+		out.TenantName = &n
+	}
 	if r.Store != nil {
 		if h := r.Store.PruneHorizon(); !h.IsZero() {
 			s := h.UTC().Format(time.RFC3339Nano)

@@ -117,17 +117,21 @@ func observe[I, O any](s *Server, tool string, fn func(context.Context, *mcpsdk.
 type Server struct {
 	// tenant names the tenant this server answers for, so every answer can say
 	// so (#399). Empty on a single-tenant instance.
-	tenant  string
-	graph   Graph
-	store   EventReader
-	now     func() time.Time
-	timeout time.Duration // per-tool-call budget
-	srv     *mcpsdk.Server
-	obs     Observer
-	ann     *annotations.Store // per-tenant annotation sidecar; nil disables annotate_entity
-	audit   *audit.Auditor     // nil/disabled = no audit records (ADR 0028)
-	idThr   float64            // same_as confidence threshold for the canonical view (ADR 0020 Lot B)
-	cadence Cadence            // producer observation cadence; nil omits the resolution block
+	tenant string
+	// tenantName is an optional human label for that tenant (#361). It never
+	// replaces the id: the id is what a consumer compares against what it asked
+	// for, and what routing, storage and the audit log use.
+	tenantName string
+	graph      Graph
+	store      EventReader
+	now        func() time.Time
+	timeout    time.Duration // per-tool-call budget
+	srv        *mcpsdk.Server
+	obs        Observer
+	ann        *annotations.Store // per-tenant annotation sidecar; nil disables annotate_entity
+	audit      *audit.Auditor     // nil/disabled = no audit records (ADR 0028)
+	idThr      float64            // same_as confidence threshold for the canonical view (ADR 0020 Lot B)
+	cadence    Cadence            // producer observation cadence; nil omits the resolution block
 }
 
 // defaultIdentityThreshold is the same_as confidence at or above which an alias
@@ -148,6 +152,16 @@ const defaultIdentityThreshold = 0.9
 // for a tenant you cannot reach, compare counts — into reading one field.
 func (s *Server) SetTenant(id string) *Server {
 	s.tenant = id
+	return s
+}
+
+// SetTenantName attaches a human label to the tenant this server answers for
+// (#361). A tenant id has to be the one identifier every backend accepts, and
+// the Victoria family takes nothing but an integer — so ids are 1, 3, 5, which
+// is the right key and a poor label. The name is decoration beside the id and
+// never a substitute: nothing resolves a name back to a tenant.
+func (s *Server) SetTenantName(name string) *Server {
+	s.tenantName = name
 	return s
 }
 

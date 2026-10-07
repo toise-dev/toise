@@ -53,7 +53,10 @@ type Graph interface {
 type Resolver struct {
 	// Tenant names the tenant this resolver answers for, surfaced by the
 	// graphScope query (#399). Empty on a single-tenant instance.
-	Tenant      string
+	Tenant string
+	// TenantName is the operator's label for that tenant (#361). Decoration:
+	// compare Tenant, render TenantName. Nothing resolves a name to an id.
+	TenantName  string
 	Graph       Graph
 	Store       EventReader
 	Engine      *change.Engine

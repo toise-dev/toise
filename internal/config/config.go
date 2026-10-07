@@ -86,10 +86,22 @@ type Config struct {
 	// so it must be expressible per tenant (#350). Storage becomes a per-tenant
 	// variable — see the storage-sizing guide. Changing it requires a restart.
 	TenantRetentionMaxAge []string `yaml:"tenant_retention_max_age"`
-	CompactionInterval    Duration `yaml:"retention_compaction_interval"`
-	SnapshotInterval      Duration `yaml:"snapshot_interval"` // 0 = disabled (replay full log on start)
-	LogFormat             string   `yaml:"log_format"`        // "text" or "json"
-	LogLevel              string   `yaml:"log_level"`         // debug | info | warn | error
+	// TenantNames maps a tenant id to a human label, as "id:name" pairs. A tenant
+	// id must be the one identifier that works across every backend, and the
+	// Victoria family accepts nothing but an integer account id — so tenants are
+	// named 1, 3, 5. That is the right id and a poor label: every surface, and
+	// every LLM consumer, says "tenant 3" where a human says "imagroupe".
+	//
+	// Purely presentational, and deliberately one-way. The id stays the routing
+	// key, the on-disk directory, the allowlist entry and the audit field. A name
+	// is NEVER accepted as a tenant selector, so it cannot become a second
+	// identity for the same thing — which is the mistake this project spends most
+	// of its time undoing elsewhere.
+	TenantNames        []string `yaml:"tenant_names"`
+	CompactionInterval Duration `yaml:"retention_compaction_interval"`
+	SnapshotInterval   Duration `yaml:"snapshot_interval"` // 0 = disabled (replay full log on start)
+	LogFormat          string   `yaml:"log_format"`        // "text" or "json"
+	LogLevel           string   `yaml:"log_level"`         // debug | info | warn | error
 
 	// Production is a hardening profile: when true it forces GraphQLIntrospection,
 	// Playground, and DebugUI off regardless of their individual values.
@@ -282,6 +294,9 @@ func (c Config) Validate() error {
 	default:
 		return fmt.Errorf("unknown log_format %q: use text or json", c.LogFormat)
 	}
+	if _, err := c.TenantNamesMap(); err != nil {
+		return err
+	}
 	if _, err := c.TenantTokensMap(); err != nil {
 		return err
 	}
@@ -367,6 +382,40 @@ func (c Config) TenantRetentionMap() (map[string]time.Duration, error) {
 			return nil, fmt.Errorf("invalid tenant_retention_max_age: tenant %q appears twice; one bound per tenant", id)
 		}
 		out[id] = d
+	}
+	return out, nil
+}
+
+// TenantNamesMap parses TenantNames ("tenant:name" pairs) into tenant -> label.
+// A malformed pair is a hard error at boot rather than a silently unnamed
+// tenant: a label that does not appear is read as "this tenant has no name",
+// and a typo would make that indistinguishable from a deliberate omission.
+//
+// The name is free text, bounded, and never parsed back: nothing resolves a
+// name to an id.
+func (c Config) TenantNamesMap() (map[string]string, error) {
+	if len(c.TenantNames) == 0 {
+		return nil, nil
+	}
+	const maxNameLen = 64
+	out := make(map[string]string, len(c.TenantNames))
+	for _, pair := range c.TenantNames {
+		id, raw, found := strings.Cut(pair, ":")
+		san, ok := tenant.Sanitize(id)
+		if !found || !ok || san != id {
+			return nil, fmt.Errorf("invalid tenant_names entry %q: want \"<tenant>:<name>\" with a canonical tenant id", pair)
+		}
+		name := strings.TrimSpace(raw)
+		if name == "" {
+			return nil, fmt.Errorf("invalid tenant_names entry %q: the name is empty; omit the entry instead of naming a tenant nothing", pair)
+		}
+		if len(name) > maxNameLen {
+			return nil, fmt.Errorf("invalid tenant_names entry %q: name longer than %d characters", pair, maxNameLen)
+		}
+		if _, dup := out[id]; dup {
+			return nil, fmt.Errorf("invalid tenant_names: tenant %q appears twice; one name per tenant", id)
+		}
+		out[id] = name
 	}
 	return out, nil
 }
@@ -476,6 +525,9 @@ func (c *Config) applyEnv(getenv func(string) string) error {
 	}
 	if v := getenv("TOISE_TENANT_RETENTION_MAX_AGE"); v != "" {
 		c.TenantRetentionMaxAge = splitOrigins(v)
+	}
+	if v := getenv("TOISE_TENANT_NAMES"); v != "" {
+		c.TenantNames = splitOrigins(v)
 	}
 	if v := getenv("TOISE_TENANT_ALLOWLIST"); v != "" {
 		c.TenantAllowlist = splitOrigins(v)
@@ -712,6 +764,7 @@ func resolve(args []string, getenv func(string) string) (Config, error) {
 	acceptUnknownTypes := fs.Bool("accept-unknown-types", cfg.AcceptUnknownTypes, "accept entity/relation types outside the built-in registry (shape still validated)")
 	tenantAutoCreate := fs.Bool("tenant-auto-create", cfg.TenantAutoCreate, "allow a first write to a new tenant id to create its stack")
 	tenantAllowlist := fs.String("tenant-allowlist", strings.Join(cfg.TenantAllowlist, ","), "comma-separated tenant ids allowed to be created (empty: any)")
+	tenantNames := fs.String("tenant-names", strings.Join(cfg.TenantNames, ","), "comma-separated tenant:name pairs, a human label beside the id (presentational only; never a tenant selector)")
 	maxTenants := fs.Int("max-tenants", cfg.MaxTenants, "cap on open tenants, 0 = unbounded")
 	tenantTrustMode := fs.String("tenant-trust-mode", cfg.TenantTrustMode, "how a request's tenant is decided: trust-header (default) or derive-only (derive a scoped token's tenant, ignore the client header)")
 	oidcIssuer := fs.String("oidc-issuer", cfg.OIDCIssuer, "OIDC issuer URL to verify JWT bearers on the read surfaces; empty = OIDC off")
@@ -752,6 +805,7 @@ func resolve(args []string, getenv func(string) string) (Config, error) {
 	cfg.AcceptUnknownTypes = *acceptUnknownTypes
 	cfg.TenantAutoCreate = *tenantAutoCreate
 	cfg.TenantAllowlist = splitOrigins(*tenantAllowlist)
+	cfg.TenantNames = splitOrigins(*tenantNames)
 	cfg.MaxTenants = *maxTenants
 	cfg.TenantTrustMode = *tenantTrustMode
 	cfg.OIDCIssuer = *oidcIssuer
