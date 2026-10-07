@@ -230,6 +230,8 @@ type EntityFilter struct {
 type GraphScope struct {
 	// The tenant this answer was built from. Empty on a single-tenant instance.
 	Tenant *string `json:"tenant,omitempty"`
+	// The operator's human label for that tenant, when one is configured. Render this; compare `tenant`. No name resolves back to a tenant, so it can never become a second identity for the same thing.
+	TenantName *string `json:"tenantName,omitempty"`
 	// Entities the answering graph holds.
 	Entities int `json:"entities"`
 	// Relations the answering graph holds.

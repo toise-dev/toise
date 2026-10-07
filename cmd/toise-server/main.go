@@ -327,13 +327,21 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		logger.Info("audit log enabled", "path", cfg.AuditLog)
 	}
 
+	// Tenant labels: presentational only (#361), and already validated at boot by
+	// the config, so a malformed pair never reaches here.
+	tenantNames, err := cfg.TenantNamesMap()
+	if err != nil {
+		return fmt.Errorf("tenant_names: %w", err)
+	}
+
 	// The GraphQL, MCP and debug-UI surfaces are scoped per tenant: a router builds
 	// one handler per tenant on first use, bound to that tenant's stack, and
 	// dispatches by the X-Scope-OrgID header (ADR 0025).
 	graphqlRouter := newTenantRouter(reg, logger, func(st *registry.Stack) (http.Handler, error) {
 		res := &resolvers.Resolver{
-			Tenant: st.Tenant,
-			Graph:  st.Graph, Store: st.Store, Engine: st.Engine,
+			Tenant:     st.Tenant,
+			TenantName: tenantNames[st.Tenant],
+			Graph:      st.Graph, Store: st.Store, Engine: st.Engine,
 			Annotations: st.Annotations, Audit: auditor,
 			IdentityThreshold: cfg.IdentityThreshold,
 		}
@@ -343,7 +351,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		}), nil
 	})
 	mcpRouter := newTenantRouter(reg, logger, func(st *registry.Stack) (http.Handler, error) {
-		return mcp.New(st.Graph, st.Store).SetTenant(st.Tenant).SetCadence(st.Engine).SetObserver(queryMetrics).SetAnnotations(st.Annotations).SetAuditor(auditor).SetIdentityThreshold(cfg.IdentityThreshold).HTTPHandler(), nil
+		return mcp.New(st.Graph, st.Store).SetTenant(st.Tenant).SetTenantName(tenantNames[st.Tenant]).SetCadence(st.Engine).SetObserver(queryMetrics).SetAnnotations(st.Annotations).SetAuditor(auditor).SetIdentityThreshold(cfg.IdentityThreshold).HTTPHandler(), nil
 	})
 	if cfg.DeriveOnlyTenancy() || cfg.OIDCEnabled() {
 		// Route to the effective tenant: a derive-only scoped token's own tenant,
@@ -397,7 +405,11 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 			}
 		}
 		debugRouter := newTenantRouter(reg, logger, func(st *registry.Stack) (http.Handler, error) {
-			return debugui.New(st.Graph, st.Store, st.Tenant, listTenants)
+			h, derr := debugui.New(st.Graph, st.Store, st.Tenant, listTenants)
+			if derr != nil {
+				return nil, derr
+			}
+			return h.SetTenantName(tenantNames[st.Tenant]), nil
 		})
 		if cfg.DeriveOnlyTenancy() || cfg.OIDCEnabled() {
 			debugRouter.resolve = authn.EffectiveTenantHTTP

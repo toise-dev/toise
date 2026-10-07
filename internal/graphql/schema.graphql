@@ -369,6 +369,8 @@ data.
 type GraphScope {
   "The tenant this answer was built from. Empty on a single-tenant instance."
   tenant: String
+  "The operator's human label for that tenant, when one is configured. Render this; compare `tenant`. No name resolves back to a tenant, so it can never become a second identity for the same thing."
+  tenantName: String
   "Entities the answering graph holds."
   entities: Int!
   "Relations the answering graph holds."

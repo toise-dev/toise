@@ -29,6 +29,7 @@ tool find_entities
     oldest_answerable string
     relations int
     tenant string
+    tenant_name string
   no_match string
   total int
   truncated bool
@@ -75,6 +76,7 @@ tool get_entity
     oldest_answerable string
     relations int
     tenant string
+    tenant_name string
   resolution object
     meaning string
     observation_interval string
@@ -95,6 +97,7 @@ tool get_neighbors
     oldest_answerable string
     relations int
     tenant string
+    tenant_name string
   neighbors []object
     asserted_by []string
     attributes []object
@@ -147,6 +150,7 @@ tool find_path
     oldest_answerable string
     relations int
     tenant string
+    tenant_name string
   hops int
   max_depth int
   path []object
@@ -188,6 +192,7 @@ tool impact_of
     oldest_answerable string
     relations int
     tenant string
+    tenant_name string
   impacted []object
     asserted_by []string
     attributes []object
@@ -285,6 +290,7 @@ tool entity_history
     oldest_answerable string
     relations int
     tenant string
+    tenant_name string
   resolution object
     meaning string
     observation_interval string
@@ -350,6 +356,7 @@ tool recent_changes
     oldest_answerable string
     relations int
     tenant string
+    tenant_name string
   window_from string
   window_to string
 tool graph_diff
@@ -438,6 +445,7 @@ tool graph_diff
     oldest_answerable string
     relations int
     tenant string
+    tenant_name string
   relations_added []object
     attributes []object
       key string
@@ -513,6 +521,7 @@ tool describe_type
     oldest_answerable string
     relations int
     tenant string
+    tenant_name string
   identity_keys []object
     example string
     key string
@@ -559,6 +568,7 @@ tool telemetry_keys
     oldest_answerable string
     relations int
     tenant string
+    tenant_name string
   guidance string
   keys []object
     key string
@@ -589,6 +599,7 @@ tool describe_schema
     oldest_answerable string
     relations int
     tenant string
+    tenant_name string
   relation_types []object
     count int
     display_name_absent bool

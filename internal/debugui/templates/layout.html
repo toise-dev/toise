@@ -41,7 +41,7 @@ footer { color:var(--dim); padding:1rem; text-align:center; border-top:1px solid
 </head>
 <body>
 <header>
-<a href="/" class="brand">Toise</a><span class="tag">debug UI</span><span class="tag">tenant {{.Tenant}}</span>
+<a href="/" class="brand">Toise</a><span class="tag">debug UI</span><span class="tag">tenant {{if .TenantName}}{{.TenantName}} ({{.Tenant}}){{else}}{{.Tenant}}{{end}}</span>
 {{if .Tenants}}<form class="tenantswitch" method="get" action=""><select name="tenant">{{range .Tenants}}<option{{if eq . $.Tenant}} selected{{end}}>{{.}}</option>{{end}}</select><button>switch</button></form>{{end}}
 <nav>
 <a href="/">Dashboard</a>
@@ -53,6 +53,6 @@ footer { color:var(--dim); padding:1rem; text-align:center; border-top:1px solid
 <main>{{end}}
 
 {{define "foot"}}</main>
-<footer>{{.Version}} · tenant {{.Tenant}} · development aid — off under --production</footer>
+<footer>{{.Version}} · tenant {{if .TenantName}}{{.TenantName}} ({{.Tenant}}){{else}}{{.Tenant}}{{end}} · development aid — off under --production</footer>
 </body>
 </html>{{end}}
