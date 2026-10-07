@@ -34,6 +34,11 @@ type EventReader interface {
 	// PruneHorizon is the latest retention cutoff ever applied (zero = never
 	// pruned): the oldest instant an as-of read can answer completely.
 	PruneHorizon() time.Time
+	// NewestEventTime is when a producer last spoke — freshness measured from the
+	// journal, not from when a projection was rebuilt. The distinction matters:
+	// a restarted replica has a brand-new projection over an old graph, and
+	// reporting the rebuild would claim freshness it does not have.
+	NewestEventTime() (time.Time, bool, error)
 }
 
 // Graph is the subset of the projection the resolvers read current state from.

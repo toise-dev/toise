@@ -123,6 +123,28 @@ type Entity {
   never part of the event log.
   """
   annotations: Annotation @goField(forceResolver: true)
+
+  """
+  The producers asserting this entity right now — who sends it.
+
+  Several names mean they agree it EXISTS, not that they agree on its attributes:
+  the last writer sets those. A suspect value therefore has someone to go and ask.
+  """
+  assertedBy: [String!]! @goField(forceResolver: true)
+
+  """
+  The collection methods asserting this entity right now — how it was gathered.
+
+  One instrumentation scope per method (`senhub-agent/snmp-route`, ...), which is
+  the grain the producer contract makes normative and the one a producer debugs
+  in. `assertedBy` is who sends it; this is how. **Two scopes mean two methods see
+  the same thing, which is a different situation from one method reported by two
+  agents** — and those two cases were indistinguishable from the outside.
+
+  Empty when no asserting producer recorded a scope, which reads as not recorded
+  rather than as a collector with no name.
+  """
+  collectedBy: [String!]! @goField(forceResolver: true)
   """
   How finely any timestamp about this entity may be read, or null when no live
   producer declares a cadence. Ask for it before comparing event times.
@@ -464,6 +486,15 @@ type GraphScope {
   newestEvent: String
   "The retention horizon. History and asOf reads reach no further back, and a window starting before it cannot be answered in full."
   oldestAnswerable: String
+
+  """
+  The past instant this scope describes, or null when it describes the present.
+
+  Under `asOf` the counts above come from the folded graph, not the live one: an
+  answer about a past instant whose scope describes the present is the mute
+  source this block exists to end, wearing a provenance block.
+  """
+  asOf: String
 }
 
 type Query {
@@ -473,7 +504,7 @@ type Query {
   about data you asked for by tenant: a scoped credential decides it, and your
   header may have been ignored.
   """
-  graphScope: GraphScope!
+  graphScope(asOf: String): GraphScope!
 
   """
   Fetch a single entity by its logical id. Returns null if unknown. Provide

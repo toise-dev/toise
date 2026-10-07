@@ -1024,3 +1024,66 @@ func TestAChangePageSaysWhichEndItHolds(t *testing.T) {
 		}
 	}
 }
+
+// TestBothSurfacesReportTheSameScope is the invariant #359 names: both surfaces
+// must report the same numbers for the same question at the same instant.
+//
+// MCP gave every read answer a graph provenance block. GraphQL carried none of
+// it, so GraphQL consumers were holding a mute source — and a source that cannot
+// declare its own scope and freshness loses an arbitration by default. This is
+// the divergence #346 documented with heartbeats: MCP excluded them from day one,
+// GraphQL did not until #342, and the consumer on the wrong surface fell into a
+// trap the other surface had already fixed.
+func TestBothSurfacesReportTheSameScope(t *testing.T) {
+	s := newStack(t)
+	c := s.client(t)
+
+	var resp struct {
+		GraphScope struct {
+			Entities         int
+			Relations        int
+			NewestEvent      *string
+			OldestAnswerable *string
+			AsOf             *string
+		}
+	}
+	c.MustPost(`{ graphScope { entities relations newestEvent oldestAnswerable asOf } }`, &resp)
+
+	if want := len(s.res.Graph.ListEntities("")); resp.GraphScope.Entities != want {
+		t.Errorf("graphScope.entities = %d, want %d", resp.GraphScope.Entities, want)
+	}
+	if want := len(s.res.Graph.ListRelations("", "", "")); resp.GraphScope.Relations != want {
+		t.Errorf("graphScope.relations = %d, want %d", resp.GraphScope.Relations, want)
+	}
+	// Freshness comes from the journal — when a producer last spoke — not from
+	// when the projection was built. A restarted replica has a new projection
+	// over an old graph, and reporting the rebuild would claim freshness it does
+	// not have.
+	newest, ok, err := s.res.Store.NewestEventTime()
+	if err != nil {
+		t.Fatalf("newest event: %v", err)
+	}
+	if !ok {
+		t.Fatal("setup: the store holds no events")
+	}
+	if resp.GraphScope.NewestEvent == nil {
+		t.Error("newestEvent is null; a GraphQL answer still cannot state its own freshness")
+	} else if got := *resp.GraphScope.NewestEvent; got != newest.UTC().Format(time.RFC3339Nano) {
+		t.Errorf("newestEvent = %q, want %q (the journal, not the projection)", got, newest.UTC().Format(time.RFC3339Nano))
+	}
+	if resp.GraphScope.AsOf != nil {
+		t.Errorf("asOf = %q on a present-tense answer, want null", *resp.GraphScope.AsOf)
+	}
+
+	// Under asOf the counts must come from the FOLDED graph. An answer about a
+	// past instant whose scope describes the present is the same mute source
+	// wearing a provenance block.
+	before := t0.Add(-time.Hour).UTC().Format(time.RFC3339)
+	c.MustPost(`query($t:String){ graphScope(asOf:$t){ entities relations asOf } }`, &resp, client.Var("t", before))
+	if resp.GraphScope.Entities != 0 {
+		t.Errorf("asOf before anything existed reports %d entities, want 0: the scope is describing the present", resp.GraphScope.Entities)
+	}
+	if resp.GraphScope.AsOf == nil {
+		t.Error("asOf is null on a time-travel answer; nothing distinguishes it from a present-tense one")
+	}
+}
