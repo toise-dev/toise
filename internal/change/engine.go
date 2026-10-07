@@ -534,6 +534,38 @@ func (e *Engine) AssertingProducers(id model.EntityID) []string {
 	return out
 }
 
+// AssertingScopes names the COLLECTION METHODS currently asserting an entity,
+// deduplicated and sorted.
+//
+// AssertingProducers answers "who sends this", at the resource grain the
+// reference counting is keyed on. This answers "how was it collected", which is
+// the grain the producer contract makes normative and the grain a producer
+// debugs in: an entity asserted by both snmp-route and snmp-lldp is a different
+// situation from one asserted twice by the same method from two agents (#394).
+//
+// A producer that asserted the entity before scopes were recorded contributes
+// nothing rather than an empty string: an unnamed scope in the list would read
+// as a collector with no name, where its absence reads as not recorded.
+func (e *Engine) AssertingScopes(id model.EntityID) []string {
+	e.obsMu.Lock()
+	defer e.obsMu.Unlock()
+
+	seen := make(map[string]struct{}, len(e.refs[id]))
+	out := make([]string, 0, len(e.refs[id]))
+	for _, ref := range e.refs[id] {
+		if ref.scope == "" {
+			continue
+		}
+		if _, dup := seen[ref.scope]; dup {
+			continue
+		}
+		seen[ref.scope] = struct{}{}
+		out = append(out, ref.scope)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func (e *Engine) ObservationInterval(id model.EntityID) (time.Duration, bool) {
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()

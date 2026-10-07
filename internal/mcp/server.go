@@ -48,6 +48,12 @@ type Cadence interface {
 	// engine has held this per entity since per-producer reference counting
 	// (ADR 0019) and no read surface returned it (#394).
 	AssertingProducers(id model.EntityID) []string
+
+	// AssertingScopes lists the COLLECTION METHODS currently asserting an entity.
+	// Producers answer "who sends this"; scopes answer "how was it collected",
+	// which is the grain the producer contract makes normative and the grain a
+	// producer debugs in (#394).
+	AssertingScopes(id model.EntityID) []string
 }
 
 // EventReader is the subset of the event log the MCP tools read history from
