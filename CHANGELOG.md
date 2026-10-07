@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Expanding a folded owner gives kinds, not children.** Three levels instead of
+  two: owner, then one node per child type with its count, then the things. A
+  switch with twelve ports opens to `12 network.interface` and then to the ports,
+  costing a click and losing nothing; a host with 357 services opens to
+  `357 service.instance` and stops there until the reader narrows it. Past 60 of
+  one kind, opening is refused with a line saying to use the attribute filter —
+  drawing them rebuilds the hairball the fold exists to escape. Measured at two
+  customers: 367 entities to 3 drawn nodes and 548 to 6, because 97% of their
+  relations are a single `runs_on`. (#392)
 - **GraphQL answers are no longer a mute source.** `graphScope` now reports
   freshness (`newestEvent`, read from the journal — when a producer last spoke —
   not from when the projection was rebuilt) and accepts `asOf`, under which the
