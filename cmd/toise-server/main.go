@@ -382,6 +382,27 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	metricsExtra := append(ingestMetrics.Collectors(), authFailures, quarantined, openTenants)
 	metricsExtra = append(metricsExtra, maint.Collectors()...)
 	metricsExtra = append(metricsExtra, queryMetrics.Collectors()...)
+	// Annotation counts per tenant, so a replica-local overlay is at least
+	// measurable (#365): log shipping replicates the log, not the sidecar, so a
+	// difference between the pair is real and otherwise silent.
+	metricsExtra = append(metricsExtra, metrics.NewAnnotationCounts(func() map[string]int {
+		out := map[string]int{}
+		for _, st := range reg.Stacks() {
+			if st.Annotations == nil {
+				continue
+			}
+			n, err := st.Annotations.Count()
+			if err != nil {
+				// A sidecar that cannot be read is reported as absent from the
+				// map rather than as zero: zero would read as "no notes here",
+				// which is the very confusion this metric exists to remove.
+				logger.Warn("counting annotations", "tenant", st.Tenant, "error", err)
+				continue
+			}
+			out[st.Tenant] = n
+		}
+		return out
+	}))
 	mux.Handle("/metrics", metrics.Handler(metrics.NewCollector(
 		aggregateGraph{reg}, aggregateStore{reg}, version.Version, version.Commit), metricsExtra...))
 	if cfg.Playground {

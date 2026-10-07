@@ -181,6 +181,34 @@ func (s *Store) Apply(id string, a Annotation) error {
 
 // Scan visits every row, tombstones included — the sync path's read. Reads for
 // serving go through Get, which hides tombstones.
+// Count reports how many entities carry an annotation on THIS replica.
+//
+// It exists to make a replica-local overlay measurable (#365). Annotations are
+// an operator overlay kept in a per-tenant sidecar, deliberately outside the
+// event log — and log shipping replicates the log, not the sidecar. So a pair
+// holds annotations on whichever replica received the write and on no other,
+// and the asymmetry is invisible from either side: the replica without them
+// answers the same question with the same shape and no annotations block, which
+// reads as "no note exists" rather than "this replica does not carry the notes".
+//
+// Found on a production pair: two annotated entities on the replica nginx
+// writes to, zero on the standby. The notes in question were that pair's own
+// reboot constraint — the thing an operator reads precisely when the primary is
+// the one being worked on, so the reader is served by the replica that lacks it.
+//
+// A count per replica does not fix that. It makes the divergence alertable,
+// which is the part that can be done without choosing how to replicate.
+func (s *Store) Count() (int, error) {
+	n := 0
+	if err := s.Scan(func(string, Annotation) error {
+		n++
+		return nil
+	}); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 func (s *Store) Scan(fn func(id string, a Annotation) error) error {
 	iter, err := s.db.NewIter(nil)
 	if err != nil {

@@ -165,6 +165,45 @@ func Handler(c *Collector, extra ...prometheus.Collector) http.Handler {
 	return promhttp.HandlerFor(reg, promhttp.HandlerOpts{})
 }
 
+// NewAnnotationCounts reports, per tenant, how many entities carry an operator
+// annotation ON THIS REPLICA. The closure supplies the counts at scrape time so
+// this package stays free of registry knowledge.
+//
+// The point is the comparison between replicas, not the number (#365).
+// Annotations live in a per-tenant sidecar outside the event log, and log
+// shipping replicates the log, not the sidecar — so a pair holds them on
+// whichever replica received the write. The replica without them answers with
+// the same shape and no annotations block, which reads as "no note exists"
+// rather than "this replica does not carry the notes", and the asymmetry is
+// invisible from either side.
+//
+// Alert on a difference between the pair, not on a threshold: there is no right
+// number of annotations, only a wrong disagreement.
+func NewAnnotationCounts(counts func() map[string]int) prometheus.Collector {
+	desc := prometheus.NewDesc(
+		"toise_annotations_entities",
+		"Entities carrying an operator annotation on THIS replica, by tenant. Annotations are a replica-local overlay: log shipping does not replicate them, so a difference between replicas is real and silent. Alert on the difference, not on a threshold.",
+		[]string{"tenant"}, nil,
+	)
+	return &annotationCounts{desc: desc, counts: counts}
+}
+
+type annotationCounts struct {
+	desc   *prometheus.Desc
+	counts func() map[string]int
+}
+
+func (a *annotationCounts) Describe(ch chan<- *prometheus.Desc) { ch <- a.desc }
+
+func (a *annotationCounts) Collect(ch chan<- prometheus.Metric) {
+	if a.counts == nil {
+		return
+	}
+	for tenant, n := range a.counts() {
+		ch <- prometheus.MustNewConstMetric(a.desc, prometheus.GaugeValue, float64(n), tenant)
+	}
+}
+
 // NewAuthFailures returns the counter for rejected authentications, wired to
 // auth.Authenticator.OnFailure and registered via Handler's extra collectors.
 func NewAuthFailures() prometheus.Counter {
