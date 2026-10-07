@@ -125,6 +125,27 @@ message EntityEvent {
   // delete_source attributes the author of an entity_deleted event. Only
   // meaningful on deletes; UNSPECIFIED elsewhere and on pre-1.1 events.
   DeleteSource delete_source = 9;
+  // commit_seq groups the events of ONE producer observation. Every event of a
+  // single durable append carries the sequence number of that append's first
+  // event, so two events with the same commit_seq were committed together and
+  // two with different values were not.
+  //
+  // It exists because the grouping is a fact Toise holds and could not reach a
+  // consumer (#407). A gateway change is deliberately a route deleted plus a
+  // route created — the contract gives consumers two events rather than one
+  // mutated field, which is right. But the engine commits both in one batch and
+  // said nothing, so every consumer had to re-invent the pairing with its own
+  // tolerance window: recorded_at is set per event, not once per batch, so even
+  // equality on it is not guaranteed to hold within a commit.
+  //
+  // This is NOT an interpretation. Toise does not say "this was a gateway
+  // change" — that is a conclusion about intent, and the engine stores facts
+  // (ADR 0022). It says only which events were one observation; the consumer
+  // decides what that means.
+  //
+  // Zero on events written before this field existed. Zero means unknown, never
+  // "its own commit".
+  uint64 commit_seq = 10;
 }
 
 // RelationEvent is a classified change about a relation. Bi-temporal: ADR 0005.
@@ -141,6 +162,11 @@ message RelationEvent {
   // or a per-edge liveness expiry. Relations previously had NO discriminant at
   // all — the same relation_removed covered all three origins.
   DeleteSource delete_source = 8;
+
+  // commit_seq groups the events of one producer observation; see EntityEvent.
+  // Zero on events written before this field existed, and zero means unknown
+  // rather than "its own commit".
+  uint64 commit_seq = 9;
 }
 
 // Event is the envelope stored in the append-only event log.

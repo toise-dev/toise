@@ -362,3 +362,70 @@ func TestFormatVersionMarker(t *testing.T) {
 		t.Fatalf("future-format open = %v, want a refusal", err)
 	}
 }
+
+// TestOneAppendIsOneCommitHandle is the whole of #407: the grouping a consumer
+// needs is the one the store already performs, and it must be readable without
+// a tolerance window.
+//
+// A gateway change is deliberately a route deleted plus a route created. The
+// engine commits both in one append and said nothing, so every consumer had to
+// pair them by time — and RecordedAt is set per event, so even equality on it
+// is not guaranteed to hold inside one commit. Three consumers were about to
+// write three different windows.
+func TestOneAppendIsOneCommitHandle(t *testing.T) {
+	s := newTestStore(t)
+	ts := time.Unix(1_700_000_000, 0).UTC()
+
+	// One producer observation: a route gone and a route arrived, together.
+	gone := mkEntityEvent("route-via-a", model.EntityDeleted, ts)
+	arrived := mkEntityEvent("route-via-b", model.EntityCreated, ts)
+	if err := s.Append(gone, arrived); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	first, second := gone.Entity.CommitSeq, arrived.Entity.CommitSeq
+	if first == 0 {
+		t.Fatal("the store left the commit handle unset; a consumer cannot pair")
+	}
+	if first != second {
+		t.Errorf("two events of ONE append carry different handles (%d, %d); the pairing this field exists for is impossible", first, second)
+	}
+
+	// A SEPARATE observation must not be pairable with the first, however close
+	// in time. Same instant on purpose: if the handle tracked time rather than
+	// the commit, this is where it would wrongly group.
+	unrelated := mkEntityEvent("route-elsewhere", model.EntityCreated, ts)
+	if err := s.Append(unrelated); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if unrelated.Entity.CommitSeq == first {
+		t.Errorf("a separate append shares the handle (%d); unrelated changes would be read as one observation", first)
+	}
+
+	// Relations are committed alongside entities and must carry the same handle:
+	// a cascade removes an edge in the same append as the entity that died.
+	entity := mkEntityEvent("host-dying", model.EntityDeleted, ts)
+	edge := mkRelationEvent("host-dying", "rack-7", ts)
+	if err := s.Append(entity, edge); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if entity.Entity.CommitSeq != edge.Relation.CommitSeq {
+		t.Errorf("entity %d and relation %d of one append disagree; a cascade cannot be read as one event",
+			entity.Entity.CommitSeq, edge.Relation.CommitSeq)
+	}
+
+	// The handle must survive the round trip through the log, because the live
+	// feed and a later read must agree about the same commit.
+	var readBack []uint64
+	if err := s.Scan(func(_ uint64, ev model.Event) error {
+		if ev.Entity != nil && ev.Entity.Entity.ID == "route-via-a" {
+			readBack = append(readBack, ev.Entity.CommitSeq)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if len(readBack) != 1 || readBack[0] != first {
+		t.Errorf("handle after a round trip = %v, want [%d]", readBack, first)
+	}
+}

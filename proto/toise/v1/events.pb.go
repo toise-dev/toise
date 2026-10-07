@@ -656,7 +656,28 @@ type EntityEvent struct {
 	DeleteReason string `protobuf:"bytes,8,opt,name=delete_reason,json=deleteReason,proto3" json:"delete_reason,omitempty"`
 	// delete_source attributes the author of an entity_deleted event. Only
 	// meaningful on deletes; UNSPECIFIED elsewhere and on pre-1.1 events.
-	DeleteSource  DeleteSource `protobuf:"varint,9,opt,name=delete_source,json=deleteSource,proto3,enum=toise.v1.DeleteSource" json:"delete_source,omitempty"`
+	DeleteSource DeleteSource `protobuf:"varint,9,opt,name=delete_source,json=deleteSource,proto3,enum=toise.v1.DeleteSource" json:"delete_source,omitempty"`
+	// commit_seq groups the events of ONE producer observation. Every event of a
+	// single durable append carries the sequence number of that append's first
+	// event, so two events with the same commit_seq were committed together and
+	// two with different values were not.
+	//
+	// It exists because the grouping is a fact Toise holds and could not reach a
+	// consumer (#407). A gateway change is deliberately a route deleted plus a
+	// route created — the contract gives consumers two events rather than one
+	// mutated field, which is right. But the engine commits both in one batch and
+	// said nothing, so every consumer had to re-invent the pairing with its own
+	// tolerance window: recorded_at is set per event, not once per batch, so even
+	// equality on it is not guaranteed to hold within a commit.
+	//
+	// This is NOT an interpretation. Toise does not say "this was a gateway
+	// change" — that is a conclusion about intent, and the engine stores facts
+	// (ADR 0022). It says only which events were one observation; the consumer
+	// decides what that means.
+	//
+	// Zero on events written before this field existed. Zero means unknown, never
+	// "its own commit".
+	CommitSeq     uint64 `protobuf:"varint,10,opt,name=commit_seq,json=commitSeq,proto3" json:"commit_seq,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -754,6 +775,13 @@ func (x *EntityEvent) GetDeleteSource() DeleteSource {
 	return DeleteSource_DELETE_SOURCE_UNSPECIFIED
 }
 
+func (x *EntityEvent) GetCommitSeq() uint64 {
+	if x != nil {
+		return x.CommitSeq
+	}
+	return 0
+}
+
 // RelationEvent is a classified change about a relation. Bi-temporal: ADR 0005.
 type RelationEvent struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
@@ -768,7 +796,11 @@ type RelationEvent struct {
 	// explicit/absence removal by the producer, the cascade of a dying endpoint,
 	// or a per-edge liveness expiry. Relations previously had NO discriminant at
 	// all — the same relation_removed covered all three origins.
-	DeleteSource  DeleteSource `protobuf:"varint,8,opt,name=delete_source,json=deleteSource,proto3,enum=toise.v1.DeleteSource" json:"delete_source,omitempty"`
+	DeleteSource DeleteSource `protobuf:"varint,8,opt,name=delete_source,json=deleteSource,proto3,enum=toise.v1.DeleteSource" json:"delete_source,omitempty"`
+	// commit_seq groups the events of one producer observation; see EntityEvent.
+	// Zero on events written before this field existed, and zero means unknown
+	// rather than "its own commit".
+	CommitSeq     uint64 `protobuf:"varint,9,opt,name=commit_seq,json=commitSeq,proto3" json:"commit_seq,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -857,6 +889,13 @@ func (x *RelationEvent) GetDeleteSource() DeleteSource {
 		return x.DeleteSource
 	}
 	return DeleteSource_DELETE_SOURCE_UNSPECIFIED
+}
+
+func (x *RelationEvent) GetCommitSeq() uint64 {
+	if x != nil {
+		return x.CommitSeq
+	}
+	return 0
 }
 
 // Event is the envelope stored in the append-only event log.
@@ -987,7 +1026,7 @@ const file_toise_v1_events_proto_rawDesc = "" +
 	"attributes\x12\x1e\n" +
 	"\n" +
 	"structural\x18\x06 \x01(\bR\n" +
-	"structural\"\x99\x03\n" +
+	"structural\"\xb8\x03\n" +
 	"\vEntityEvent\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x125\n" +
 	"\vchange_type\x18\x02 \x01(\x0e2\x14.toise.v1.ChangeTypeR\n" +
@@ -998,7 +1037,10 @@ const file_toise_v1_events_proto_rawDesc = "" +
 	"\x0eschema_version\x18\x06 \x01(\tR\rschemaVersion\x12!\n" +
 	"\fchanged_keys\x18\a \x03(\tR\vchangedKeys\x12#\n" +
 	"\rdelete_reason\x18\b \x01(\tR\fdeleteReason\x12;\n" +
-	"\rdelete_source\x18\t \x01(\x0e2\x16.toise.v1.DeleteSourceR\fdeleteSource\"\xfc\x02\n" +
+	"\rdelete_source\x18\t \x01(\x0e2\x16.toise.v1.DeleteSourceR\fdeleteSource\x12\x1d\n" +
+	"\n" +
+	"commit_seq\x18\n" +
+	" \x01(\x04R\tcommitSeq\"\x9b\x03\n" +
 	"\rRelationEvent\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x125\n" +
 	"\vchange_type\x18\x02 \x01(\x0e2\x14.toise.v1.ChangeTypeR\n" +
@@ -1008,7 +1050,9 @@ const file_toise_v1_events_proto_rawDesc = "" +
 	"\x15recorded_at_unix_nano\x18\x05 \x01(\x03R\x12recordedAtUnixNano\x12%\n" +
 	"\x0eschema_version\x18\x06 \x01(\tR\rschemaVersion\x12!\n" +
 	"\fchanged_keys\x18\a \x03(\tR\vchangedKeys\x12;\n" +
-	"\rdelete_source\x18\b \x01(\x0e2\x16.toise.v1.DeleteSourceR\fdeleteSource\"\x8e\x01\n" +
+	"\rdelete_source\x18\b \x01(\x0e2\x16.toise.v1.DeleteSourceR\fdeleteSource\x12\x1d\n" +
+	"\n" +
+	"commit_seq\x18\t \x01(\x04R\tcommitSeq\"\x8e\x01\n" +
 	"\x05Event\x12:\n" +
 	"\fentity_event\x18\x01 \x01(\v2\x15.toise.v1.EntityEventH\x00R\ventityEvent\x12@\n" +
 	"\x0erelation_event\x18\x02 \x01(\v2\x17.toise.v1.RelationEventH\x00R\rrelationEventB\a\n" +

@@ -212,6 +212,21 @@ func (s *Store) Append(events ...model.Event) error {
 	defer func() { _ = batch.Close() }()
 
 	localSeq := s.seq
+	// Every event of this append carries the sequence of the append's FIRST
+	// event, so a consumer can tell that two events were one producer
+	// observation (#407). Stamping it here rather than at the call sites means
+	// the commit is named by the thing that actually commits: the engine, the
+	// expiry sweeper and any future writer get a consistent value without
+	// having to remember one, and a caller cannot forge a grouping that no
+	// single append produced.
+	//
+	// This DELIBERATELY mutates the caller's events: model.Event holds pointers,
+	// and the engine notifies live subscribers after Append returns, with these
+	// same values. The mutation is what carries the grouping onto the live change
+	// feed — which is the surface the consumer that asked for this reads. Copying
+	// the inner struct before stamping would leave the stored log and the live
+	// feed disagreeing about the same commit, which is worse than the mutation.
+	commitSeq := localSeq + 1
 	validate := func(ev model.Event) error { return ev.Validate() }
 	if s.cfg.AcceptUnknownTypes {
 		// Open vocabulary (#141): shape must still be sound, membership not.
@@ -221,6 +236,12 @@ func (s *Store) Append(events ...model.Event) error {
 		ev := events[i]
 		if err := validate(ev); err != nil {
 			return fmt.Errorf("event %d invalid: %w", i, err)
+		}
+		switch {
+		case ev.Entity != nil:
+			ev.Entity.CommitSeq = commitSeq
+		case ev.Relation != nil:
+			ev.Relation.CommitSeq = commitSeq
 		}
 		localSeq++
 		data, err := proto.Marshal(ev.ToProto())

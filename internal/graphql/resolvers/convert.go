@@ -81,6 +81,7 @@ func eventToChangeGQL(ev model.Event) *generated.ChangeEvent {
 		ce.ChangeType = changeTypeGQL[ee.ChangeType]
 		ce.EventTime = ee.EventTime.UTC().Format(time.RFC3339Nano)
 		ce.RecordedAt = ee.RecordedAt.UTC().Format(time.RFC3339Nano)
+		ce.CommitSeq = commitSeqOf(ee.CommitSeq)
 		ce.SchemaVersion = ee.SchemaVersion
 		if ee.ChangedKeys != nil {
 			ce.ChangedKeys = ee.ChangedKeys
@@ -100,6 +101,7 @@ func eventToChangeGQL(ev model.Event) *generated.ChangeEvent {
 		ce.ChangeType = changeTypeGQL[re.ChangeType]
 		ce.EventTime = re.EventTime.UTC().Format(time.RFC3339Nano)
 		ce.RecordedAt = re.RecordedAt.UTC().Format(time.RFC3339Nano)
+		ce.CommitSeq = commitSeqOf(re.CommitSeq)
 		ce.SchemaVersion = re.SchemaVersion
 		if re.ChangedKeys != nil {
 			ce.ChangedKeys = re.ChangedKeys
@@ -189,4 +191,22 @@ func paginate[T any](items []T, idOf func(T) string, first *int, after *string) 
 		endCursor = &c
 	}
 	return page, endCursor, hasNext, nil
+}
+
+// commitSeqOf renders the commit grouping as a string, left null when unknown.
+//
+// A string rather than Int because GraphQL's Int is 32-bit signed and a sequence
+// outgrows it on a busy tenant; rather than a value that silently wraps or
+// overflows past two billion events, the grouping is an opaque token a consumer
+// compares for equality — which is the only operation it is for (#407).
+//
+// Null, not "0", on an event older than the field: zero would compare equal to
+// every other zero and manufacture a commit that groups every legacy event
+// together, which is the exact false pairing this field exists to prevent.
+func commitSeqOf(seq uint64) *string {
+	if seq == 0 {
+		return nil
+	}
+	s := strconv.FormatUint(seq, 10)
+	return &s
 }
