@@ -114,6 +114,14 @@ type ComplexityRoot struct {
 		Node   func(childComplexity int) int
 	}
 
+	GraphScope struct {
+		Entities         func(childComplexity int) int
+		NewestEvent      func(childComplexity int) int
+		OldestAnswerable func(childComplexity int) int
+		Relations        func(childComplexity int) int
+		Tenant           func(childComplexity int) int
+	}
+
 	Mutation struct {
 		AnnotateEntity func(childComplexity int, id string, annotations []AnnotationInput) int
 	}
@@ -128,6 +136,7 @@ type ComplexityRoot struct {
 		Entities      func(childComplexity int, filter *EntityFilter, first *int, after *string, asOf *string) int
 		Entity        func(childComplexity int, id string, asOf *string) int
 		EntityHistory func(childComplexity int, id string, since *string, until *string, asKnownAt *string, includeHeartbeats bool, first *int, after *string) int
+		GraphScope    func(childComplexity int) int
 		RecentChanges func(childComplexity int, window *string, from *string, to *string, includeHeartbeats bool, first *int, after *string) int
 		Relations     func(childComplexity int, filter *RelationFilter, first *int, after *string, asOf *string) int
 	}
@@ -178,6 +187,7 @@ type MutationResolver interface {
 	AnnotateEntity(ctx context.Context, id string, annotations []AnnotationInput) (*Annotation, error)
 }
 type QueryResolver interface {
+	GraphScope(ctx context.Context) (*GraphScope, error)
 	Entity(ctx context.Context, id string, asOf *string) (*Entity, error)
 	Entities(ctx context.Context, filter *EntityFilter, first *int, after *string, asOf *string) (*EntityConnection, error)
 	Relations(ctx context.Context, filter *RelationFilter, first *int, after *string, asOf *string) (*RelationConnection, error)
@@ -479,6 +489,37 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.EntityEdge.Node(childComplexity), true
 
+	case "GraphScope.entities":
+		if e.ComplexityRoot.GraphScope.Entities == nil {
+			break
+		}
+
+		return e.ComplexityRoot.GraphScope.Entities(childComplexity), true
+	case "GraphScope.newestEvent":
+		if e.ComplexityRoot.GraphScope.NewestEvent == nil {
+			break
+		}
+
+		return e.ComplexityRoot.GraphScope.NewestEvent(childComplexity), true
+	case "GraphScope.oldestAnswerable":
+		if e.ComplexityRoot.GraphScope.OldestAnswerable == nil {
+			break
+		}
+
+		return e.ComplexityRoot.GraphScope.OldestAnswerable(childComplexity), true
+	case "GraphScope.relations":
+		if e.ComplexityRoot.GraphScope.Relations == nil {
+			break
+		}
+
+		return e.ComplexityRoot.GraphScope.Relations(childComplexity), true
+	case "GraphScope.tenant":
+		if e.ComplexityRoot.GraphScope.Tenant == nil {
+			break
+		}
+
+		return e.ComplexityRoot.GraphScope.Tenant(childComplexity), true
+
 	case "Mutation.annotateEntity":
 		if e.ComplexityRoot.Mutation.AnnotateEntity == nil {
 			break
@@ -548,6 +589,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.EntityHistory(childComplexity, args["id"].(string), args["since"].(*string), args["until"].(*string), args["asKnownAt"].(*string), args["includeHeartbeats"].(bool), args["first"].(*int), args["after"].(*string)), true
+	case "Query.graphScope":
+		if e.ComplexityRoot.Query.GraphScope == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Query.GraphScope(childComplexity), true
 
 	case "Query.recentChanges":
 		if e.ComplexityRoot.Query.RecentChanges == nil {
@@ -1165,7 +1212,38 @@ input RelationFilter {
   toId: ID
 }
 
+"""
+What this answer was built from: which tenant, how much it holds, how fresh it
+is, and how far back it can be asked.
+
+` + "`" + `tenant` + "`" + ` is NOT an echo of your request. In derive-only tenancy the tenant comes
+from the credential and a client-supplied ` + "`" + `X-Scope-OrgID` + "`" + ` is ignored, so a
+request naming one tenant is answered from another — correctly, and silently.
+Compare this field with what you asked for before concluding anything about the
+data.
+"""
+type GraphScope {
+  "The tenant this answer was built from. Empty on a single-tenant instance."
+  tenant: String
+  "Entities the answering graph holds."
+  entities: Int!
+  "Relations the answering graph holds."
+  relations: Int!
+  "Event time of the newest event in this tenant's log: how fresh this instance is. A live graph with a stale log means producers stopped talking, which is itself the finding."
+  newestEvent: String
+  "The retention horizon. History and asOf reads reach no further back, and a window starting before it cannot be answered in full."
+  oldestAnswerable: String
+}
+
 type Query {
+  """
+  What this answer was built from: the tenant served, the size of the graph, its
+  freshness and its retention horizon. Read ` + "`" + `tenant` + "`" + ` before concluding anything
+  about data you asked for by tenant: a scoped credential decides it, and your
+  header may have been ignored.
+  """
+  graphScope: GraphScope!
+
   """
   Fetch a single entity by its logical id. Returns null if unknown. Provide
   ` + "`" + `asOf` + "`" + ` (RFC 3339) to read the entity as it was at that instant (event-time).
@@ -1443,6 +1521,22 @@ func (ec *executionContext) childFields_EntityEdge(ctx context.Context, field gr
 		return ec.fieldContext_EntityEdge_node(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type EntityEdge", field.Name)
+}
+
+func (ec *executionContext) childFields_GraphScope(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "tenant":
+		return ec.fieldContext_GraphScope_tenant(ctx, field)
+	case "entities":
+		return ec.fieldContext_GraphScope_entities(ctx, field)
+	case "relations":
+		return ec.fieldContext_GraphScope_relations(ctx, field)
+	case "newestEvent":
+		return ec.fieldContext_GraphScope_newestEvent(ctx, field)
+	case "oldestAnswerable":
+		return ec.fieldContext_GraphScope_oldestAnswerable(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type GraphScope", field.Name)
 }
 
 func (ec *executionContext) childFields_PageInfo(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -3146,6 +3240,121 @@ func (ec *executionContext) fieldContext_EntityEdge_node(_ context.Context, fiel
 	return fc, nil
 }
 
+func (ec *executionContext) _GraphScope_tenant(ctx context.Context, field graphql.CollectedField, obj *GraphScope) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_GraphScope_tenant(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Tenant, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_GraphScope_tenant(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("GraphScope", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _GraphScope_entities(ctx context.Context, field graphql.CollectedField, obj *GraphScope) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_GraphScope_entities(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Entities, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_GraphScope_entities(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("GraphScope", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _GraphScope_relations(ctx context.Context, field graphql.CollectedField, obj *GraphScope) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_GraphScope_relations(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Relations, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_GraphScope_relations(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("GraphScope", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _GraphScope_newestEvent(ctx context.Context, field graphql.CollectedField, obj *GraphScope) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_GraphScope_newestEvent(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.NewestEvent, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_GraphScope_newestEvent(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("GraphScope", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _GraphScope_oldestAnswerable(ctx context.Context, field graphql.CollectedField, obj *GraphScope) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_GraphScope_oldestAnswerable(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.OldestAnswerable, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_GraphScope_oldestAnswerable(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("GraphScope", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) _Mutation_annotateEntity(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -3234,6 +3443,38 @@ func (ec *executionContext) _PageInfo_endCursor(ctx context.Context, field graph
 }
 func (ec *executionContext) fieldContext_PageInfo_endCursor(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("PageInfo", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _Query_graphScope(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_graphScope(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Query().GraphScope(ctx)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *GraphScope) graphql.Marshaler {
+			return ec.marshalNGraphScope2ᚖgithubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐGraphScope(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Query_graphScope(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_GraphScope(ctx, field)
+		},
+	}
+	return fc, nil
 }
 
 func (ec *executionContext) _Query_entity(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
@@ -5996,6 +6237,56 @@ func (ec *executionContext) _EntityEdge(ctx context.Context, sel ast.SelectionSe
 	return out
 }
 
+var graphScopeImplementors = []string{"GraphScope"}
+
+func (ec *executionContext) _GraphScope(ctx context.Context, sel ast.SelectionSet, obj *GraphScope) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, graphScopeImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("GraphScope")
+		case "tenant":
+			out.Values[i] = ec._GraphScope_tenant(ctx, field, obj)
+		case "entities":
+			out.Values[i] = ec._GraphScope_entities(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "relations":
+			out.Values[i] = ec._GraphScope_relations(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "newestEvent":
+			out.Values[i] = ec._GraphScope_newestEvent(ctx, field, obj)
+		case "oldestAnswerable":
+			out.Values[i] = ec._GraphScope_oldestAnswerable(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var mutationImplementors = []string{"Mutation"}
 
 func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet) graphql.Marshaler {
@@ -6105,6 +6396,28 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("Query")
+		case "graphScope":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_graphScope(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
 		case "entity":
 			field := field
 
@@ -7105,6 +7418,20 @@ func (ec *executionContext) marshalNFloat2float64(ctx context.Context, sel ast.S
 		}
 	}
 	return graphql.WrapContextMarshaler(ctx, res)
+}
+
+func (ec *executionContext) marshalNGraphScope2githubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐGraphScope(ctx context.Context, sel ast.SelectionSet, v GraphScope) graphql.Marshaler {
+	return ec._GraphScope(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNGraphScope2ᚖgithubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐGraphScope(ctx context.Context, sel ast.SelectionSet, v *GraphScope) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._GraphScope(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalNID2string(ctx context.Context, v any) (string, error) {

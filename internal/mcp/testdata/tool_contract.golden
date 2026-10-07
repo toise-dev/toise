@@ -28,6 +28,7 @@ tool find_entities
     newest_event string
     oldest_answerable string
     relations int
+    tenant string
   no_match string
   total int
   truncated bool
@@ -73,6 +74,7 @@ tool get_entity
     newest_event string
     oldest_answerable string
     relations int
+    tenant string
   resolution object
     meaning string
     observation_interval string
@@ -92,6 +94,7 @@ tool get_neighbors
     newest_event string
     oldest_answerable string
     relations int
+    tenant string
   neighbors []object
     asserted_by []string
     attributes []object
@@ -143,6 +146,7 @@ tool find_path
     newest_event string
     oldest_answerable string
     relations int
+    tenant string
   hops int
   max_depth int
   path []object
@@ -183,6 +187,7 @@ tool impact_of
     newest_event string
     oldest_answerable string
     relations int
+    tenant string
   impacted []object
     asserted_by []string
     attributes []object
@@ -279,6 +284,7 @@ tool entity_history
     newest_event string
     oldest_answerable string
     relations int
+    tenant string
   resolution object
     meaning string
     observation_interval string
@@ -343,6 +349,7 @@ tool recent_changes
     newest_event string
     oldest_answerable string
     relations int
+    tenant string
   window_from string
   window_to string
 tool graph_diff
@@ -430,6 +437,7 @@ tool graph_diff
     newest_event string
     oldest_answerable string
     relations int
+    tenant string
   relations_added []object
     attributes []object
       key string
@@ -504,6 +512,7 @@ tool describe_type
     newest_event string
     oldest_answerable string
     relations int
+    tenant string
   identity_keys []object
     example string
     key string
@@ -549,6 +558,7 @@ tool telemetry_keys
     newest_event string
     oldest_answerable string
     relations int
+    tenant string
   guidance string
   keys []object
     key string
@@ -578,6 +588,7 @@ tool describe_schema
     newest_event string
     oldest_answerable string
     relations int
+    tenant string
   relation_types []object
     count int
     display_name_absent bool

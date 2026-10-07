@@ -356,7 +356,38 @@ input RelationFilter {
   toId: ID
 }
 
+"""
+What this answer was built from: which tenant, how much it holds, how fresh it
+is, and how far back it can be asked.
+
+`tenant` is NOT an echo of your request. In derive-only tenancy the tenant comes
+from the credential and a client-supplied `X-Scope-OrgID` is ignored, so a
+request naming one tenant is answered from another — correctly, and silently.
+Compare this field with what you asked for before concluding anything about the
+data.
+"""
+type GraphScope {
+  "The tenant this answer was built from. Empty on a single-tenant instance."
+  tenant: String
+  "Entities the answering graph holds."
+  entities: Int!
+  "Relations the answering graph holds."
+  relations: Int!
+  "Event time of the newest event in this tenant's log: how fresh this instance is. A live graph with a stale log means producers stopped talking, which is itself the finding."
+  newestEvent: String
+  "The retention horizon. History and asOf reads reach no further back, and a window starting before it cannot be answered in full."
+  oldestAnswerable: String
+}
+
 type Query {
+  """
+  What this answer was built from: the tenant served, the size of the graph, its
+  freshness and its retention horizon. Read `tenant` before concluding anything
+  about data you asked for by tenant: a scoped credential decides it, and your
+  header may have been ignored.
+  """
+  graphScope: GraphScope!
+
   """
   Fetch a single entity by its logical id. Returns null if unknown. Provide
   `asOf` (RFC 3339) to read the entity as it was at that instant (event-time).

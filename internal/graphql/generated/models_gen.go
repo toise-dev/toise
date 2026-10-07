@@ -219,6 +219,27 @@ type EntityFilter struct {
 	Match []AttributeMatch `json:"match,omitempty"`
 }
 
+// What this answer was built from: which tenant, how much it holds, how fresh it
+// is, and how far back it can be asked.
+//
+// `tenant` is NOT an echo of your request. In derive-only tenancy the tenant comes
+// from the credential and a client-supplied `X-Scope-OrgID` is ignored, so a
+// request naming one tenant is answered from another — correctly, and silently.
+// Compare this field with what you asked for before concluding anything about the
+// data.
+type GraphScope struct {
+	// The tenant this answer was built from. Empty on a single-tenant instance.
+	Tenant *string `json:"tenant,omitempty"`
+	// Entities the answering graph holds.
+	Entities int `json:"entities"`
+	// Relations the answering graph holds.
+	Relations int `json:"relations"`
+	// Event time of the newest event in this tenant's log: how fresh this instance is. A live graph with a stale log means producers stopped talking, which is itself the finding.
+	NewestEvent *string `json:"newestEvent,omitempty"`
+	// The retention horizon. History and asOf reads reach no further back, and a window starting before it cannot be answered in full.
+	OldestAnswerable *string `json:"oldestAnswerable,omitempty"`
+}
+
 type Mutation struct {
 }
 
