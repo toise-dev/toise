@@ -1057,3 +1057,71 @@ func TestDeleteSourceProvenance(t *testing.T) {
 		t.Errorf("absence removal source = %q, want producer", got)
 	}
 }
+
+// TestAChangeNamesTheCollectionMethodThatSawIt is #394's expensive half.
+//
+// The producer contract puts provenance on the instrumentation scope — one per
+// collection method — and no read surface could reach it. The question that
+// exposed it: 1312 liveness expirations in twelve hours, and the producer needed
+// to know WHICH collection method was losing its entities in order to look in
+// the right place in their code. That was unanswerable.
+//
+// The hard part is the expiry: Toise authors that event, so the scope has to
+// survive on the liveness reference and be read back when it lapses, or the
+// collector that went silent dies with the reference.
+func TestAChangeNamesTheCollectionMethodThatSawIt(t *testing.T) {
+	const scope = "senhub-agent/snmp-route"
+	now := fixedNow()
+	g := projection.New()
+	e := New(g, &fakeAppender{}, WithClock(func() time.Time { return now }))
+	var recs []record
+	e.Subscribe(func(ev model.Event, hp bool) { recs = append(recs, record{ev, hp}) })
+
+	if err := e.Batch(func(b *Batch) {
+		b.SetScope(scope)
+		if _, err := b.ObserveEntity(EntityObservation{
+			Type:      model.TypeHost,
+			Identity:  []model.KeyValue{kv("host.id", "h1")},
+			EventTime: now,
+			Producer:  "agent-a",
+			Interval:  time.Minute,
+		}); err != nil {
+			t.Errorf("observe: %v", err)
+		}
+	}); err != nil {
+		t.Fatalf("batch: %v", err)
+	}
+
+	var created *model.EntityEvent
+	for _, r := range recs {
+		if r.ev.Entity != nil && r.ev.Entity.ChangeType == model.EntityCreated {
+			created = r.ev.Entity
+		}
+	}
+	if created == nil {
+		t.Fatal("no creation event")
+	}
+	if created.Scope != scope {
+		t.Errorf("creation scope = %q, want %q; a producer-authored change must name its collector", created.Scope, scope)
+	}
+
+	// Let the reference lapse. The expiry is authored by Toise, and it must still
+	// name the collector that stopped speaking — not nothing, and not Toise.
+	now = now.Add(2 * time.Minute)
+	if _, err := e.Sweep(); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	var expired *model.EntityEvent
+	for _, r := range recs {
+		if r.ev.Entity != nil && r.ev.Entity.DeleteSource == model.DeleteSourceLivenessExpiry {
+			expired = r.ev.Entity
+		}
+	}
+	if expired == nil {
+		t.Fatal("the sweep expired nothing; setup is wrong")
+	}
+	if expired.Scope != scope {
+		t.Errorf("expiry scope = %q, want %q — the collector that went silent is the whole point of the field", expired.Scope, scope)
+	}
+}

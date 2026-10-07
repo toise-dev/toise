@@ -92,6 +92,7 @@ type ComplexityRoot struct {
 		RecordedAt    func(childComplexity int) int
 		Relation      func(childComplexity int) int
 		SchemaVersion func(childComplexity int) int
+		Scope         func(childComplexity int) int
 	}
 
 	Entity struct {
@@ -142,7 +143,7 @@ type ComplexityRoot struct {
 		Entity        func(childComplexity int, id string, asOf *string) int
 		EntityHistory func(childComplexity int, id string, since *string, until *string, asKnownAt *string, includeHeartbeats bool, first *int, after *string) int
 		GraphScope    func(childComplexity int) int
-		RecentChanges func(childComplexity int, window *string, from *string, to *string, includeHeartbeats bool, first *int, after *string) int
+		RecentChanges func(childComplexity int, window *string, from *string, to *string, scope *string, includeHeartbeats bool, first *int, after *string) int
 		Relations     func(childComplexity int, filter *RelationFilter, first *int, after *string, asOf *string) int
 	}
 
@@ -197,7 +198,7 @@ type QueryResolver interface {
 	Entities(ctx context.Context, filter *EntityFilter, first *int, after *string, asOf *string) (*EntityConnection, error)
 	Relations(ctx context.Context, filter *RelationFilter, first *int, after *string, asOf *string) (*RelationConnection, error)
 	EntityHistory(ctx context.Context, id string, since *string, until *string, asKnownAt *string, includeHeartbeats bool, first *int, after *string) (*ChangeConnection, error)
-	RecentChanges(ctx context.Context, window *string, from *string, to *string, includeHeartbeats bool, first *int, after *string) (*ChangeConnection, error)
+	RecentChanges(ctx context.Context, window *string, from *string, to *string, scope *string, includeHeartbeats bool, first *int, after *string) (*ChangeConnection, error)
 	Canonical(ctx context.Context, id string, asOf *string) (*CanonicalGroup, error)
 }
 type SubscriptionResolver interface {
@@ -424,6 +425,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ChangeEvent.SchemaVersion(childComplexity), true
+	case "ChangeEvent.scope":
+		if e.ComplexityRoot.ChangeEvent.Scope == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ChangeEvent.Scope(childComplexity), true
 
 	case "Entity.annotations":
 		if e.ComplexityRoot.Entity.Annotations == nil {
@@ -641,7 +648,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Query.RecentChanges(childComplexity, args["window"].(*string), args["from"].(*string), args["to"].(*string), args["includeHeartbeats"].(bool), args["first"].(*int), args["after"].(*string)), true
+		return e.ComplexityRoot.Query.RecentChanges(childComplexity, args["window"].(*string), args["from"].(*string), args["to"].(*string), args["scope"].(*string), args["includeHeartbeats"].(bool), args["first"].(*int), args["after"].(*string)), true
 	case "Query.relations":
 		if e.ComplexityRoot.Query.Relations == nil {
 			break
@@ -1166,6 +1173,24 @@ type ChangeEvent {
   rather than "a commit of its own".
   """
   commitSeq: String
+
+  """
+  The collection method that observed this change.
+
+  One instrumentation scope per method (` + "`" + `senhub-agent/snmp-route` + "`" + `,
+  ` + "`" + `senhub-agent/snmp-fdb` + "`" + `, ...), which is where the producer contract puts
+  provenance — deliberately, rather than on a ` + "`" + `source` + "`" + ` attribute.
+
+  **On a liveness expiry this names the collector that STOPPED speaking**, not an
+  author of the deletion: Toise expired the entity, and the scope is the one that
+  had been asserting it. That is the reading the question needs — "which of my
+  collection methods is losing its entities" was unanswerable before, and it is
+  the first question anyone asks of a graph fed by more than one source.
+
+  Null when the producer sent no scope name, and on events written before this
+  field existed.
+  """
+  scope: String
   "Toise schema version of the event, e.g. ` + "`" + `1.0` + "`" + `."
   schemaVersion: String!
   "For attribute/state changes, the keys that changed."
@@ -1437,7 +1462,7 @@ type Query {
   absent from an answer that claims to cover it; bounding the window is how you
   avoid concluding that nothing happened.
   """
-  recentChanges(window: String, from: String, to: String, includeHeartbeats: Boolean! = false, first: Int = 100, after: String): ChangeConnection!
+  recentChanges(window: String, from: String, to: String, scope: String, includeHeartbeats: Boolean! = false, first: Int = 100, after: String): ChangeConnection!
 
   """
   The canonical group of an entity: everything believed to be the same real
@@ -1596,6 +1621,8 @@ func (ec *executionContext) childFields_ChangeEvent(ctx context.Context, field g
 		return ec.fieldContext_ChangeEvent_recordedAt(ctx, field)
 	case "commitSeq":
 		return ec.fieldContext_ChangeEvent_commitSeq(ctx, field)
+	case "scope":
+		return ec.fieldContext_ChangeEvent_scope(ctx, field)
 	case "schemaVersion":
 		return ec.fieldContext_ChangeEvent_schemaVersion(ctx, field)
 	case "changedKeys":
@@ -2077,30 +2104,38 @@ func (ec *executionContext) field_Query_recentChanges_args(ctx context.Context, 
 		return nil, err
 	}
 	args["to"] = arg2
-	arg3, err := graphql.ProcessArgField(ctx, rawArgs, "includeHeartbeats",
-		func(ctx context.Context, v any) (bool, error) {
-			return ec.unmarshalNBoolean2bool(ctx, v)
-		})
-	if err != nil {
-		return nil, err
-	}
-	args["includeHeartbeats"] = arg3
-	arg4, err := graphql.ProcessArgField(ctx, rawArgs, "first",
-		func(ctx context.Context, v any) (*int, error) {
-			return ec.unmarshalOInt2ᚖint(ctx, v)
-		})
-	if err != nil {
-		return nil, err
-	}
-	args["first"] = arg4
-	arg5, err := graphql.ProcessArgField(ctx, rawArgs, "after",
+	arg3, err := graphql.ProcessArgField(ctx, rawArgs, "scope",
 		func(ctx context.Context, v any) (*string, error) {
 			return ec.unmarshalOString2ᚖstring(ctx, v)
 		})
 	if err != nil {
 		return nil, err
 	}
-	args["after"] = arg5
+	args["scope"] = arg3
+	arg4, err := graphql.ProcessArgField(ctx, rawArgs, "includeHeartbeats",
+		func(ctx context.Context, v any) (bool, error) {
+			return ec.unmarshalNBoolean2bool(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["includeHeartbeats"] = arg4
+	arg5, err := graphql.ProcessArgField(ctx, rawArgs, "first",
+		func(ctx context.Context, v any) (*int, error) {
+			return ec.unmarshalOInt2ᚖint(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["first"] = arg5
+	arg6, err := graphql.ProcessArgField(ctx, rawArgs, "after",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["after"] = arg6
 	return args, nil
 }
 
@@ -2883,6 +2918,29 @@ func (ec *executionContext) _ChangeEvent_commitSeq(ctx context.Context, field gr
 	)
 }
 func (ec *executionContext) fieldContext_ChangeEvent_commitSeq(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ChangeEvent", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ChangeEvent_scope(ctx context.Context, field graphql.CollectedField, obj *ChangeEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ChangeEvent_scope(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Scope, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_ChangeEvent_scope(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("ChangeEvent", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
@@ -3919,7 +3977,7 @@ func (ec *executionContext) _Query_recentChanges(ctx context.Context, field grap
 		},
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().RecentChanges(ctx, fc.Args["window"].(*string), fc.Args["from"].(*string), fc.Args["to"].(*string), fc.Args["includeHeartbeats"].(bool), fc.Args["first"].(*int), fc.Args["after"].(*string))
+			return ec.Resolvers.Query().RecentChanges(ctx, fc.Args["window"].(*string), fc.Args["from"].(*string), fc.Args["to"].(*string), fc.Args["scope"].(*string), fc.Args["includeHeartbeats"].(bool), fc.Args["first"].(*int), fc.Args["after"].(*string))
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *ChangeConnection) graphql.Marshaler {
@@ -6231,6 +6289,8 @@ func (ec *executionContext) _ChangeEvent(ctx context.Context, sel ast.SelectionS
 			}
 		case "commitSeq":
 			out.Values[i] = ec._ChangeEvent_commitSeq(ctx, field, obj)
+		case "scope":
+			out.Values[i] = ec._ChangeEvent_scope(ctx, field, obj)
 		case "schemaVersion":
 			out.Values[i] = ec._ChangeEvent_schemaVersion(ctx, field, obj)
 			if out.Values[i] == graphql.Null {

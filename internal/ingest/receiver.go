@@ -187,6 +187,10 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (re
 		var routeErr error
 		batchErr := engine.Batch(func(b *change.Batch) {
 			for j := 0; j < sls.Len() && routeErr == nil; j++ {
+				// One scope per collection method, and it covers the records
+				// inside it: naming it here is what lets a change say which
+				// collector observed it (#394).
+				b.SetScope(sls.At(j).Scope().Name())
 				recs := sls.At(j).LogRecords()
 				for k := 0; k < recs.Len(); k++ {
 					lr := recs.At(k)

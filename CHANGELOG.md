@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **A change names the collection method that observed it.** `scope` on every
+  change event, on both surfaces, plus a `scope` filter on `recent_changes` /
+  `recentChanges`. The producer contract puts provenance on the instrumentation
+  scope — one per collection method — and no read surface could reach it, so
+  "which of my collectors is losing its entities" was unanswerable: 1312
+  liveness expirations in twelve hours with no way to attribute them. **On a
+  liveness expiry the scope names the collector that stopped speaking**, not an
+  author of the deletion: the scope is remembered on the liveness reference and
+  read back when it lapses, because Toise authors that event. The filter is
+  applied before the page bound, not on the bounded page — and it costs decoding,
+  because the scope is not in the time index. (#394)
 - **A change page says which end it holds.** `ChangeConnection` now declares
   `order` (`OLDEST_FIRST` / `NEWEST_FIRST`) plus `holdsNewest` and
   `holdsOldest`. The two change pages run in opposite directions while sharing

@@ -144,6 +144,21 @@ type ChangeEvent struct {
 	// Null on events written before this field existed, where null means unknown
 	// rather than "a commit of its own".
 	CommitSeq *string `json:"commitSeq,omitempty"`
+	// The collection method that observed this change.
+	//
+	// One instrumentation scope per method (`senhub-agent/snmp-route`,
+	// `senhub-agent/snmp-fdb`, ...), which is where the producer contract puts
+	// provenance — deliberately, rather than on a `source` attribute.
+	//
+	// **On a liveness expiry this names the collector that STOPPED speaking**, not an
+	// author of the deletion: Toise expired the entity, and the scope is the one that
+	// had been asserting it. That is the reading the question needs — "which of my
+	// collection methods is losing its entities" was unanswerable before, and it is
+	// the first question anyone asks of a graph fed by more than one source.
+	//
+	// Null when the producer sent no scope name, and on events written before this
+	// field existed.
+	Scope *string `json:"scope,omitempty"`
 	// Toise schema version of the event, e.g. `1.0`.
 	SchemaVersion string `json:"schemaVersion"`
 	// For attribute/state changes, the keys that changed.

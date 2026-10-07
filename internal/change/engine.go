@@ -97,6 +97,12 @@ type pendingRelation struct {
 type liveRef struct {
 	deadline time.Time
 	interval time.Duration
+	// scope is the instrumentation scope that last asserted this entity for this
+	// producer. It is kept so a liveness expiry can name WHICH COLLECTION METHOD
+	// went silent (#394) — the question a producer asks when entities are
+	// vanishing is "which of my collectors stopped speaking", and the expiry
+	// event is authored by Toise, so without this the answer dies with the ref.
+	scope string
 }
 
 // staged is a batch's uncommitted unit of work: the events to flush plus an
@@ -106,6 +112,13 @@ type liveRef struct {
 // stays untouched until the durable append succeeds.
 type staged struct {
 	events []stagedEvent
+
+	// scope is the instrumentation scope of the records being routed right now.
+	// It is batch state rather than a parameter threaded through every routing
+	// function because that is the shape of the data: one scope covers a
+	// contiguous run of records, and the ingest loop sets it once per ScopeLogs
+	// block before routing them (#394).
+	scope string
 
 	entities   map[model.EntityID]model.Entity
 	deleted    map[model.EntityID]bool
@@ -449,6 +462,7 @@ func (e *Engine) observeEntityLocked(obs EntityObservation) (model.Event, error)
 		RecordedAt:    e.now(),
 		SchemaVersion: model.SchemaVersion,
 		ChangedKeys:   changedKeys,
+		Scope:         e.currentScope(),
 	}}
 	if err := e.commit(ev, false); err != nil {
 		return model.Event{}, err
@@ -461,9 +475,9 @@ func (e *Engine) observeEntityLocked(obs EntityObservation) (model.Event, error)
 		e.refs[entityID] = producers
 	}
 	if obs.Interval > 0 {
-		producers[obs.Producer] = liveRef{deadline: e.now().Add(obs.Interval), interval: obs.Interval}
+		producers[obs.Producer] = liveRef{deadline: e.now().Add(obs.Interval), interval: obs.Interval, scope: e.currentScope()}
 	} else {
-		producers[obs.Producer] = liveRef{}
+		producers[obs.Producer] = liveRef{scope: e.currentScope()}
 	}
 	// A new/updated entity may be the missing endpoint of a parked edge — but
 	// only retry the buffer when this entity is one some edge actually waits on,
@@ -573,6 +587,7 @@ func (e *Engine) deleteEntityLocked(obs EntityObservation) (ev model.Event, emit
 		SchemaVersion: model.SchemaVersion,
 		DeleteReason:  obs.DeleteReason,
 		DeleteSource:  model.DeleteSourceProducer,
+		Scope:         e.currentScope(),
 	}}
 	if err := e.commit(ev, false); err != nil {
 		return model.Event{}, false, err
@@ -643,9 +658,21 @@ func (e *Engine) Sweep() (SweepResult, error) {
 	// Drop each producer reference whose interval has lapsed; an entity with no
 	// surviving reference is expired (ADR 0019).
 	var orphaned []model.EntityID
+	// The scope that went silent, remembered as its reference is dropped: the
+	// expiry event is authored by Toise, so without capturing it here the
+	// collection method that stopped speaking dies with the ref — and that is the
+	// question a producer asks when entities vanish (#394).
+	//
+	// When several producers lapse together, the one with the LATEST deadline
+	// wins: it is the collector that spoke most recently, so it is the one whose
+	// silence is news. An earlier one had already been quiet.
+	silenced := make(map[model.EntityID]liveRef)
 	for id, producers := range e.refs {
 		for p, ref := range producers {
 			if !ref.deadline.IsZero() && now.After(ref.deadline) {
+				if prev, seen := silenced[id]; !seen || ref.deadline.After(prev.deadline) {
+					silenced[id] = ref
+				}
 				delete(producers, p)
 			}
 		}
@@ -667,6 +694,7 @@ func (e *Engine) Sweep() (SweepResult, error) {
 			RecordedAt:    now,
 			SchemaVersion: model.SchemaVersion,
 			DeleteSource:  model.DeleteSourceLivenessExpiry,
+			Scope:         silenced[id].scope,
 		}}
 		if err := e.commit(ev, false); err != nil {
 			e.logger.Error("failed to expire stale entity", "id", id, "err", err)
@@ -941,6 +969,7 @@ func (e *Engine) relationEvent(ct model.ChangeType, rel model.Relation, eventTim
 		RecordedAt:    e.now(),
 		SchemaVersion: model.SchemaVersion,
 		DeleteSource:  source,
+		Scope:         e.currentScope(),
 	}}
 }
 
@@ -1036,6 +1065,28 @@ type Batch struct{ e *Engine }
 // (the ingest reconciler's assertion sets) register its undo here, so a failed
 // flush restores it and the producer's retry re-derives the same events.
 // Dropped on success.
+// SetScope names the instrumentation scope of the records about to be routed.
+//
+// The ingest loop calls it once per ScopeLogs block, before the records inside
+// it, so every event those records produce carries the collection method that
+// observed it (#394). Carrying it as batch state rather than threading a
+// parameter through six routing signatures matches the shape of the data: one
+// scope covers a contiguous run of records.
+//
+// A caller that never calls it leaves the scope empty, which reads as unknown.
+func (b *Batch) SetScope(scope string) { b.e.staged.scope = scope }
+
+// currentScope is the scope of the records being routed, or empty outside a
+// batch. The staged state exists only for the duration of a batch, so a direct
+// read of it is a nil dereference on the single-observation path — which is how
+// most of the engine's own tests drive it.
+func (e *Engine) currentScope() string {
+	if e.staged == nil {
+		return ""
+	}
+	return e.staged.scope
+}
+
 func (b *Batch) OnRollback(fn func()) {
 	b.e.staged.rollbacks = append(b.e.staged.rollbacks, fn)
 }

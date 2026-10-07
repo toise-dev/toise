@@ -146,6 +146,24 @@ message EntityEvent {
   // Zero on events written before this field existed. Zero means unknown, never
   // "its own commit".
   uint64 commit_seq = 10;
+
+  // scope is the instrumentation scope that observed this change — one scope per
+  // collection method (senhub-agent/snmp-route, senhub-agent/snmp-fdb, ...).
+  //
+  // The producer contract makes the instrumentation scope the carrier of
+  // provenance, deliberately, rather than a source attribute on the entity. No
+  // read surface could reach it (#394), so "which of my collection methods is
+  // losing its entities" was unanswerable — the first question anyone asks of a
+  // graph fed by more than one source.
+  //
+  // On a liveness expiry the scope is the one that HAD been asserting the entity
+  // and went silent, not an author of the deletion: the expiry is Toise's own
+  // act. That is the reading the question needs — which collector stopped
+  // speaking, not who reaped it.
+  //
+  // Empty when the producer sent no scope name, and on events written before
+  // this field existed.
+  string scope = 11;
 }
 
 // RelationEvent is a classified change about a relation. Bi-temporal: ADR 0005.
@@ -167,6 +185,10 @@ message RelationEvent {
   // Zero on events written before this field existed, and zero means unknown
   // rather than "its own commit".
   uint64 commit_seq = 9;
+
+  // scope is the instrumentation scope that observed this change; see
+  // EntityEvent. Empty when unknown.
+  string scope = 10;
 }
 
 // Event is the envelope stored in the append-only event log.

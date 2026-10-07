@@ -467,6 +467,7 @@ type RecentChangesInput struct {
 	// Budget controls (#115): a live window is heartbeat-dominated, so
 	// heartbeats are excluded and the result is bounded by default.
 	ChangeType        string `json:"change_type,omitempty" jsonschema:"only changes of this type, e.g. entity.created or relation.removed (omit for all)"`
+	Scope             string `json:"scope,omitempty" jsonschema:"only changes observed by this instrumentation scope — one per collection method, e.g. senhub-agent/snmp-route. This is how you answer which of several producers is losing entities. COSTS MORE than the other filters: the scope is not in the time index, so each candidate in the window must be decoded to test it; narrow the window when using it. Exact match, no wildcards"`
 	IncludeHeartbeats bool   `json:"include_heartbeats,omitempty" jsonschema:"include entity.unchanged heartbeats (excluded by default; they dominate raw windows)"`
 	Limit             int    `json:"limit,omitempty" jsonschema:"maximum changes to return (default 50, max 200); the newest are kept"`
 }
@@ -500,7 +501,7 @@ func (s *Server) recentChanges(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 	default:
 		return nil, RecentChangesOutput{}, fmt.Errorf("invalid kind %q: use entity, relation, structural, or all", in.Kind)
 	}
-	filter, err := newChangeFilter(in.ChangeType, in.IncludeHeartbeats)
+	filter, err := newChangeFilterScoped(in.ChangeType, in.Scope, in.IncludeHeartbeats)
 	if err != nil {
 		return nil, RecentChangesOutput{}, err
 	}
@@ -536,6 +537,23 @@ func (s *Server) recentChanges(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 		}
 		if !kept {
 			return nil
+		}
+		// A scope filter cannot be answered from the index, so it resolves here —
+		// BEFORE Total is counted and before the page bound. Testing it on the
+		// bounded page instead would keep the newest changes of any scope and then
+		// discard most of them, hiding older changes from the requested scope
+		// behind newer ones from another.
+		if filter.needsRecord() {
+			if !resolved {
+				rev, ok, rerr := s.store.Resolve(e.Seq)
+				if rerr != nil || !ok {
+					return rerr
+				}
+				ev, resolved = rev, true
+			}
+			if !filter.keepScope(ev) {
+				return nil
+			}
 		}
 		out.Total++
 		out.tallyClass(ct)
@@ -640,15 +658,54 @@ func (d *ChangeDigest) finishDigest() {
 // heartbeats are excluded unless opted in.
 type changeFilter struct {
 	changeType        model.ChangeType
+	scope             string
 	includeHeartbeats bool
 }
 
 func newChangeFilter(changeType string, includeHeartbeats bool) (changeFilter, error) {
+	return newChangeFilterScoped(changeType, "", includeHeartbeats)
+}
+
+// newChangeFilterScoped adds the instrumentation-scope filter (#394).
+//
+// The scope cannot be tested from the time index: the index carries the change
+// type and the structural flag, which is what lets a heartbeat-dominated window
+// be walked without decoding millions of records (#351). So a scope filter has
+// to resolve each candidate, and it is the one filter here that costs decoding.
+//
+// It is still applied BEFORE the page bound and before Total is counted, not
+// after. Filtering the page after bounding would keep the newest N changes of
+// any scope and then discard most of them: the answer would hold fewer than the
+// limit with no reason given, and older changes from the requested scope would
+// be invisible behind newer ones from another. That is the truncation-that-lies
+// defect, bought for a performance win.
+func newChangeFilterScoped(changeType, scope string, includeHeartbeats bool) (changeFilter, error) {
 	ct, err := parseChangeType(changeType)
 	if err != nil {
 		return changeFilter{}, err
 	}
-	return changeFilter{changeType: ct, includeHeartbeats: includeHeartbeats}, nil
+	return changeFilter{changeType: ct, scope: scope, includeHeartbeats: includeHeartbeats}, nil
+}
+
+// needsRecord reports whether this filter can decide from the index alone.
+func (f changeFilter) needsRecord() bool { return f.scope != "" }
+
+// keepScope tests the resolved record against the scope filter.
+func (f changeFilter) keepScope(ev model.Event) bool {
+	if f.scope == "" {
+		return true
+	}
+	return eventScope(ev) == f.scope
+}
+
+func eventScope(ev model.Event) string {
+	switch {
+	case ev.Entity != nil:
+		return ev.Entity.Scope
+	case ev.Relation != nil:
+		return ev.Relation.Scope
+	}
+	return ""
 }
 
 func (f changeFilter) keep(ev model.Event) (kept, heartbeat bool) {

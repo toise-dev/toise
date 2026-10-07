@@ -315,7 +315,7 @@ func (r *queryResolver) changeWindow(window, from, to *string) (start, end time.
 	return now.Add(-d), now.Add(time.Nanosecond), nil
 }
 
-func (r *queryResolver) RecentChanges(ctx context.Context, window, from, to *string, includeHeartbeats bool, first *int, after *string) (*generated.ChangeConnection, error) {
+func (r *queryResolver) RecentChanges(ctx context.Context, window, from, to, scope *string, includeHeartbeats bool, first *int, after *string) (*generated.ChangeConnection, error) {
 	start, end, err := r.changeWindow(window, from, to)
 	if err != nil {
 		return nil, err
@@ -334,6 +334,14 @@ func (r *queryResolver) RecentChanges(ctx context.Context, window, from, to *str
 			return rerr
 		}
 		if !includeHeartbeats && !e.Tagged && ev.Entity != nil && ev.Entity.ChangeType == model.EntityUnchanged {
+			return nil
+		}
+		// The scope is not in the time index, so it is tested on the resolved
+		// record — before the page bound, never on the bounded page: filtering
+		// afterwards would keep the newest changes of any scope and discard most
+		// of them, hiding older changes from the requested scope behind newer ones
+		// from another (#394).
+		if scope != nil && *scope != "" && eventScopeOf(ev) != *scope {
 			return nil
 		}
 		evs = append(evs, ev)
@@ -477,4 +485,16 @@ func parseOptTime(s *string, field string) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("invalid %s %q: RFC 3339 timestamps before 1970-01-01T00:00:00Z are not supported", field, *s)
 	}
 	return t, nil
+}
+
+// eventScopeOf is the instrumentation scope that observed an event, whichever
+// kind it is.
+func eventScopeOf(ev model.Event) string {
+	switch {
+	case ev.Entity != nil:
+		return ev.Entity.Scope
+	case ev.Relation != nil:
+		return ev.Relation.Scope
+	}
+	return ""
 }

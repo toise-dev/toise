@@ -65,6 +65,21 @@ type EntityEvent struct {
 	// to remember one. Zero means unknown (an event written before the field
 	// existed), never "a commit of its own".
 	CommitSeq uint64
+
+	// Scope is the instrumentation scope that observed this change — one scope per
+	// collection method (senhub-agent/snmp-route, senhub-agent/snmp-fdb, ...).
+	//
+	// The producer contract makes the instrumentation scope the carrier of
+	// provenance, deliberately, rather than a source attribute on the entity. No
+	// read surface could reach it (#394), so "which of my collection methods is
+	// losing its entities" was unanswerable.
+	//
+	// On a liveness expiry this is the scope that HAD been asserting the entity
+	// and went silent — not an author of the deletion, which is Toise itself.
+	// That is the reading the question needs: which collector stopped speaking.
+	//
+	// Empty when the producer sent no scope name, and on older events.
+	Scope string
 	// SchemaVersion is the schema version of this event.
 	SchemaVersion string
 	// ChangedKeys lists the attribute keys that changed, for
@@ -88,7 +103,11 @@ type RelationEvent struct {
 	RecordedAt time.Time
 
 	// CommitSeq groups the events of one producer observation; see EntityEvent.
-	CommitSeq     uint64
+	CommitSeq uint64
+
+	// Scope is the instrumentation scope that observed this change; see
+	// EntityEvent. Empty when unknown.
+	Scope         string
 	SchemaVersion string
 	ChangedKeys   []string
 	// DeleteSource attributes the author of a relation_removed event
@@ -209,6 +228,7 @@ func (e EntityEvent) ToProto() *toisev1.EntityEvent {
 		EventTimeUnixNano:  nanoOf(e.EventTime),
 		RecordedAtUnixNano: nanoOf(e.RecordedAt),
 		CommitSeq:          e.CommitSeq,
+		Scope:              e.Scope,
 		SchemaVersion:      e.SchemaVersion,
 		ChangedKeys:        e.ChangedKeys,
 		DeleteReason:       e.DeleteReason,
@@ -228,6 +248,7 @@ func EntityEventFromProto(p *toisev1.EntityEvent) EntityEvent {
 		EventTime:     timeOf(p.GetEventTimeUnixNano()),
 		RecordedAt:    timeOf(p.GetRecordedAtUnixNano()),
 		CommitSeq:     p.GetCommitSeq(),
+		Scope:         p.GetScope(),
 		SchemaVersion: p.GetSchemaVersion(),
 		ChangedKeys:   p.GetChangedKeys(),
 		DeleteReason:  p.GetDeleteReason(),
@@ -244,6 +265,7 @@ func (r RelationEvent) ToProto() *toisev1.RelationEvent {
 		EventTimeUnixNano:  nanoOf(r.EventTime),
 		RecordedAtUnixNano: nanoOf(r.RecordedAt),
 		CommitSeq:          r.CommitSeq,
+		Scope:              r.Scope,
 		SchemaVersion:      r.SchemaVersion,
 		ChangedKeys:        r.ChangedKeys,
 		DeleteSource:       r.DeleteSource.toProto(),
@@ -262,6 +284,7 @@ func RelationEventFromProto(p *toisev1.RelationEvent) RelationEvent {
 		EventTime:     timeOf(p.GetEventTimeUnixNano()),
 		RecordedAt:    timeOf(p.GetRecordedAtUnixNano()),
 		CommitSeq:     p.GetCommitSeq(),
+		Scope:         p.GetScope(),
 		SchemaVersion: p.GetSchemaVersion(),
 		ChangedKeys:   p.GetChangedKeys(),
 		DeleteSource:  deleteSourceFromProto(p.GetDeleteSource()),
