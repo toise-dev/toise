@@ -33,6 +33,11 @@ type Entity struct {
 	// on its attribute values, which the last writer sets. Absent in compact
 	// verbosity and when no cadence source is wired.
 	AssertedBy []string `json:"asserted_by,omitempty" jsonschema:"the producers asserting this entity right now, so a suspect value has someone to go and ask; several names mean they agree it EXISTS, not that they agree on its attributes - the last writer sets those"`
+
+	// CollectedBy names the collection methods currently asserting this entity.
+	// AssertedBy is who sends it; this is how it was gathered — the grain the
+	// producer contract makes normative, and the one a producer debugs in.
+	CollectedBy []string `json:"collected_by,omitempty" jsonschema:"the collection methods (instrumentation scopes) asserting this entity right now, e.g. senhub-agent/snmp-route. asserted_by is WHO sends it; this is HOW it was gathered. Two scopes mean two methods see the same thing, which is a different situation from one method reported by two agents. Absent when no asserting producer recorded a scope"`
 }
 
 // Relation is a typed directed edge rendered for an LLM.
@@ -301,15 +306,19 @@ func (s *Server) graphMeta(g Graph, asOf string) GraphMeta {
 	return m
 }
 
-// attachProducers fills AssertedBy from the engine's per-producer references.
-// Compact verbosity omits it, like identity and attributes: that mode exists to
-// scan many entities cheaply, and provenance is a question asked about one.
+// attachProducers fills AssertedBy and CollectedBy from the engine's per-producer
+// references: who sends this entity, and how it was collected. Compact verbosity
+// omits both, like identity and attributes — that mode exists to scan many
+// entities cheaply, and provenance is a question asked about one.
 func (s *Server) attachProducers(out *Entity, id model.EntityID, compact bool) {
 	if s.cadence == nil || compact {
 		return
 	}
 	if p := s.cadence.AssertingProducers(id); len(p) > 0 {
 		out.AssertedBy = p
+	}
+	if sc := s.cadence.AssertingScopes(id); len(sc) > 0 {
+		out.CollectedBy = sc
 	}
 }
 

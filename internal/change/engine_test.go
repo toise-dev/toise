@@ -1125,3 +1125,53 @@ func TestAChangeNamesTheCollectionMethodThatSawIt(t *testing.T) {
 		t.Errorf("expiry scope = %q, want %q — the collector that went silent is the whole point of the field", expired.Scope, scope)
 	}
 }
+
+// TestAssertingScopesAnswersHowNotWho completes #394's second ask.
+//
+// AssertingProducers answers "who sends this", at the resource grain the
+// reference counting is keyed on. A producer debugging a collector needs "how
+// was it collected": an entity seen by both snmp-route and snmp-lldp is a
+// different situation from one seen by snmp-route from two agents, and the two
+// cases were indistinguishable.
+func TestAssertingScopesAnswersHowNotWho(t *testing.T) {
+	now := fixedNow()
+	e := New(projection.New(), &fakeAppender{}, WithClock(func() time.Time { return now }))
+	ident := []model.KeyValue{kv("host.id", "h1")}
+
+	var id model.EntityID
+	observe := func(producer, scope string) {
+		t.Helper()
+		if err := e.Batch(func(b *Batch) {
+			b.SetScope(scope)
+			ev, err := b.ObserveEntity(EntityObservation{
+				Type: model.TypeHost, Identity: ident, EventTime: now,
+				Producer: producer, Interval: time.Hour,
+			})
+			if err != nil {
+				t.Errorf("observe: %v", err)
+				return
+			}
+			id = ev.Entity.Entity.ID
+		}); err != nil {
+			t.Fatalf("batch: %v", err)
+		}
+	}
+
+	// Two agents, ONE collection method: two producers, one scope.
+	observe("agent-a", "senhub-agent/snmp-route")
+	observe("agent-b", "senhub-agent/snmp-route")
+
+	if got := e.AssertingProducers(id); len(got) != 2 {
+		t.Errorf("producers = %v, want two: the resource grain must still see both agents", got)
+	}
+	if got := e.AssertingScopes(id); len(got) != 1 || got[0] != "senhub-agent/snmp-route" {
+		t.Errorf("scopes = %v, want one senhub-agent/snmp-route: one method seen twice is not two methods", got)
+	}
+
+	// A second method on the same entity is the case that matters.
+	observe("agent-a", "senhub-agent/snmp-lldp")
+	got := e.AssertingScopes(id)
+	if len(got) != 2 || got[0] != "senhub-agent/snmp-lldp" || got[1] != "senhub-agent/snmp-route" {
+		t.Errorf("scopes = %v, want both methods sorted", got)
+	}
+}

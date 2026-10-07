@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **An entity names the collection methods asserting it**, not only the
+  producers: `collected_by` beside `asserted_by`. `asserted_by` is who sends it,
+  at the resource grain the reference counting is keyed on; `collected_by` is how
+  it was gathered, which is the grain the producer contract makes normative and
+  the one a producer debugs in. An entity seen by both `snmp-route` and
+  `snmp-lldp` is a different situation from one seen by `snmp-route` from two
+  agents, and the two were indistinguishable. (#394)
 - **A change names the collection method that observed it.** `scope` on every
   change event, on both surfaces, plus a `scope` filter on `recent_changes` /
   `recentChanges`. The producer contract puts provenance on the instrumentation
