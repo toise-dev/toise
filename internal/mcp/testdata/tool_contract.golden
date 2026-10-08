@@ -312,6 +312,7 @@ tool recent_changes
   include_heartbeats bool
   kind string
   limit int
+  match map
   scope string
   to string
   window string

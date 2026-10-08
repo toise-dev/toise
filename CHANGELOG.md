@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Filter changes by attribute, as the event saw it.** `match` on
+  `recent_changes` and `recentChanges`, applied before the page bound. The
+  attribute is tested against the entity **as the event recorded it**, not
+  against the live graph: an entity deleted during the window is gone from the
+  projection, and in an incident its changes are the ones worth looking at — so
+  an entity that dies mid-window still matches on the attribute it died with.
+  That also removes the store-format change this feature was priced at. Relation
+  changes carry no entity and are excluded while the filter is set, and the tool
+  says so. Costs decoding, like the scope filter. (#380)
 - **Expanding a folded owner gives kinds, not children.** Three levels instead of
   two: owner, then one node per child type with its count, then the things. A
   switch with twelve ports opens to `12 network.interface` and then to the ports,

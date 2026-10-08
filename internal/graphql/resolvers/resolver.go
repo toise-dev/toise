@@ -320,7 +320,7 @@ func (r *queryResolver) changeWindow(window, from, to *string) (start, end time.
 	return now.Add(-d), now.Add(time.Nanosecond), nil
 }
 
-func (r *queryResolver) RecentChanges(ctx context.Context, window, from, to, scope *string, includeHeartbeats bool, first *int, after *string) (*generated.ChangeConnection, error) {
+func (r *queryResolver) RecentChanges(ctx context.Context, window, from, to, scope *string, match []generated.AttributeMatch, includeHeartbeats bool, first *int, after *string) (*generated.ChangeConnection, error) {
 	start, end, err := r.changeWindow(window, from, to)
 	if err != nil {
 		return nil, err
@@ -329,6 +329,10 @@ func (r *queryResolver) RecentChanges(ctx context.Context, window, from, to, sco
 	// a window is heartbeat-dominated, and excluding an event must not cost a
 	// point lookup and a decode of it (#351). Only kept events are resolved —
 	// pre-tagging entries fall back to resolving, and age out with retention.
+	want := make(map[string]string, len(match))
+	for _, m := range match {
+		want[m.Key] = m.Value
+	}
 	var evs []model.Event
 	err = r.Store.ScanTimeIndex(ctx, start, end, true, func(e store.TimeIndexEntry) error {
 		if !includeHeartbeats && e.Tagged && e.ChangeType == model.EntityUnchanged {
@@ -348,6 +352,16 @@ func (r *queryResolver) RecentChanges(ctx context.Context, window, from, to, sco
 		// from another (#394).
 		if scope != nil && *scope != "" && eventScopeOf(ev) != *scope {
 			return nil
+		}
+		// The attribute is tested against the entity AS THE EVENT SAW IT, never
+		// against the live projection: an entity deleted during the window is
+		// gone from the projection, and its changes are the ones worth looking
+		// at. A relation carries no entity and so cannot answer an entity
+		// question — excluded rather than guessed at (#380).
+		if len(want) > 0 {
+			if ev.Entity == nil || !ev.Entity.Entity.MatchAll(want) {
+				return nil
+			}
 		}
 		evs = append(evs, ev)
 		return nil
