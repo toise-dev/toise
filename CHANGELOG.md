@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.20.0] - 2026-10-12
+
+**The release that closes twenty security advisories reachable from our own code,
+and makes a read surface able to enumerate.** Every binary published before this
+one was compiled against a standard library with known `net/http` and
+`html/template` advisories: the exposure is in the artefacts already deployed,
+not in a future build, so this is an upgrade rather than a choice.
+
+The functional headline is narrower and was measured by a consumer: a tenant
+holding 236 entities of one type could retrieve 200, and the remaining 36 were
+unreachable by any sequence of calls — the answer named what it was withholding
+and offered no way to obtain it. The list tools page now, ordered by a handle
+every replica computes identically, so a page sequence survives a failover.
+
+The rest came from three consumers reading production and one producer session
+reading its own code. Four of the items below exist because someone measured
+something I had asserted, and two of my own items were withdrawn the same way.
+
+### Security
+
+- **Twenty advisories reachable from our code are closed.** `govulncheck`
+  reported twenty vulnerabilities reachable **from our own call paths** — not
+  merely present in the module graph: six in `net/http`, three in
+  `html/template`, others in the standard library of go1.26.5, five in
+  `golang.org/x/net` v0.55.0 and two in `google.golang.org/grpc` v1.82.1. The
+  `go` directive now requires **1.26.9**, `x/net` moves to **v0.60.0** and grpc
+  to **v1.83.2** in both modules; both now report zero reachable
+  vulnerabilities.
+
+  **The exposure was in the artefacts, not in a future build:** the release
+  workflow compiled at 1.26.5, so every binary published before this release
+  carries the vulnerable standard library. **Upgrade rather than wait.**
+
+  grpc **v1.83.2** and not the v1.83.1 one advisory named: that version left
+  `GO-2026-6443` standing — a server panic on a missing `authority` or `Host`
+  header, reachable through the OTLP ingest receiver, which is the one surface a
+  stranger can reach.
+
 ### Added
 - **The list tools can be paged, so nothing is unreachable any more.** `after` /
   `next_cursor` on `find_entities` and `get_neighbors`, plus a `truncation`
@@ -87,7 +127,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Add new changes here under Added / Changed / Deprecated / Removed / Fixed / Security as the project evolves. -->
 
+### Fixed
+
+- **Paging no longer costs what it saved.** The first cut of the paged list
+  tools sorted by recomputing each entity's fingerprint inside the comparator,
+  which runs O(n log n) times over a hash that allocates: the bench gate
+  measured +1209% on time and +27624% on allocations. The ordering keys are now
+  read from the projection's hash index and the page is cut inside the
+  projection, so only the page is materialized. Against the pre-paging
+  baseline, time is at parity and memory is down 53%.
+- **The vocabulary is checked against the registry.** The contract and the code
+  had disagreed three times in one week, each costing a wrong answer given to a
+  producer — including a relation type the contract called unregistered that had
+  been registered for four versions. A test now fails on a registered entity
+  type that no data-model document gives an identity for, with a positive
+  control so it cannot pass by reading nothing.
+
+### Documentation
+
+- **The export size cap is declared, and the no-split rule is corrected.**
+  Producers were told to emit a full snapshot "as one OTLP export" with no
+  mention of the 4 MiB cap, past which an export is refused **whole** — an
+  instruction unreachable for a 5,000-host estate. And the only way out was
+  forbidden too strongly: a partial snapshot does **not** read as entity
+  deletes. Removal by absence is scoped to one entity's own relationship array,
+  so an omitted entity is not deleted at all. Splitting is safe **between**
+  entities, never within one, and every part must land within the shortest
+  declared interval in the batch.
+- **The Go toolchain requirement states 1.26.9 and why**, so a reader building
+  from source does not reproduce the exposure this release closes.
+
 ### Changed
+
+- **The CI workflows read the Go version from `go.mod`** instead of pinning it
+  four times. Three said 1.26.5 while the bench said 1.26.4: what was measured
+  was not what was built. One source now, so the drift cannot recur.
 
 - **The governance keys Toise invented left the `entity.*` namespace.** They are
   now `senhub.owner.team`, `senhub.owner.contact`, `senhub.location.site` /
@@ -1836,7 +1910,8 @@ contract converged with the senhub-agent reference producer.
   default and are intended for trusted networks only; the WebSocket subscription
   endpoint enforces an origin check.
 
-[Unreleased]: https://github.com/toise-dev/toise/compare/v0.19.0...HEAD
+[Unreleased]: https://github.com/toise-dev/toise/compare/v0.20.0...HEAD
+[0.20.0]: https://github.com/toise-dev/toise/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/toise-dev/toise/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/toise-dev/toise/compare/v0.17.1...v0.18.0
 [0.17.1]: https://github.com/toise-dev/toise/compare/v0.17.0...v0.17.1
