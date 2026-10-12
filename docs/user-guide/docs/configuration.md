@@ -192,18 +192,20 @@ So they are also published, and can be alerted on:
 | `toise_insecure_config{surface,addr,reason}` | one series per condition. `surface` is `listener` or `log_shipping`; `reason` is `no_auth`, `no_tls`, `no_auth_no_tls`, `cleartext` or `cleartext_public` |
 | `toise_insecure_config_last_check_timestamp_seconds` | when the conditions were last evaluated |
 
-**Alert on two rules, not one.** A zero total separates *clean* from *nothing
-answered* only while the series exists; if scraping fails it vanishes, and a
-rule on `> 0` does not fire — it goes quiet. So pair it with a presence rule,
-which is the one everybody forgets:
+**Alert on three rules, because a control can lie in three ways.** The condition
+is true; or the series is gone, and a rule on `> 0` does not fire — it goes
+quiet; or the series is there and no longer evaluated, which `absent()` cannot
+see. One rule each:
 
 ```
-ToiseConfigInsecure       toise_insecure_config_conditions > 0        for: 5m
-ToiseInsecureGaugeAbsent  absent(toise_insecure_config_conditions)    for: 15m
+ToiseConfigInsecure      toise_insecure_config_conditions > 0                              for: 5m
+ToiseInsecureGaugeAbsent absent(toise_insecure_config_conditions)                          for: 15m
+ToiseInsecureCheckStale  time() - toise_insecure_config_last_check_timestamp_seconds > 600  for: 10m
 ```
 
-The timestamp is the third cran: a fresh value proves the list was walked,
-while a zero total alone only proves that something once wrote a zero.
+The second and third are the ones that get forgotten, and they are why the
+timestamp is published at all: a fresh value proves the list was walked, while a
+zero total alone only proves that something once wrote a zero.
 
 `cleartext_public` means the shipping endpoint is an IP that is neither loopback
 nor private: the segments do not merely travel unencrypted inside a perimeter,
