@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.21.0] - 2026-10-12
+
+**The release where a warning became a control, and a convergence stopped being
+read as a route.** Three of the four fixes here were found by someone comparing
+two surfaces rather than reading one: a consumer session building a map, the
+operating session answering an unrelated question, and a test written the day
+before.
+
+Two of them matter past their own fix. `find_path` was joining any two machines
+that dial the same object store, resolver or upstream API — a convergence
+rendered as a route, and on a fleet that makes a large fraction of host pairs
+falsely reachable. And three insecure configuration conditions had been true,
+correctly detected and correctly logged, in a production log for months: the
+control worked and protected nothing, because a WARN at boot is read once, by
+nobody. Insecure configuration is now a metric with an evaluation timestamp, and
+the documentation gives the three alert rules a control needs to stop lying.
+
 ### Added
 
 - `network.neighbor` and `neighbor_of` enter the producer vocabulary in
@@ -33,6 +52,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `toise_build_info{version,commit}` on `/metrics` — so an operator could
   not ask what a file on disk was before deploying it, which is exactly when the
   question is asked, and most sharply when the binary has been renamed
+
+### Changed
+
+- `klauspost/compress` v1.18.6 to v1.18.7, the one reserve left open at 0.20.0:
+  the advisory was unreachable in source mode, and bumping it then would have
+  meant shipping a stable that nothing had qualified. Both modules now scan
+  clean of reachable advisories. One module-level finding remains and is not
+  fixable by a bump: GO-2026-5932, `golang.org/x/crypto/openpgp` is unmaintained
+  and unsafe by design. We require `x/crypto` through the MinIO client, for
+  `argon2`, and never import `openpgp` — the remedy for that advisory is not
+  using the package, which we do not
 
 ### Fixed
 
