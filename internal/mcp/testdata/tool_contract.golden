@@ -1,5 +1,6 @@
 tool find_entities
   in:
+  after string
   as_of string
   limit int
   match map
@@ -31,9 +32,11 @@ tool find_entities
     relations int
     tenant string
     tenant_name string
+  next_cursor string
   no_match string
   total int
   truncated bool
+  truncation string
 tool get_entity
   in:
   as_of string
@@ -84,6 +87,7 @@ tool get_entity
     observation_interval string
 tool get_neighbors
   in:
+  after string
   as_of string
   entity_id string
   limit int
@@ -137,8 +141,10 @@ tool get_neighbors
       label string
       type string
     via_relation string
+  next_cursor string
   total int
   truncated bool
+  truncation string
 tool find_path
   in:
   as_of string

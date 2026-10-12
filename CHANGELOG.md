@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **The list tools can be paged, so nothing is unreachable any more.** `after` /
+  `next_cursor` on `find_entities` and `get_neighbors`, plus a `truncation`
+  sentence beside the boolean. Measured on a live tenant: `describe_schema`
+  reported 236 `network.endpoint` and `find_entities` could return 200 — the
+  remaining 36 were unreachable by any sequence of calls, and that type carries
+  no attributes, so there was not even a filter to slice on. An answer declared
+  what it was withholding and offered no way to obtain it. Pages are ordered by
+  `identity_fingerprint` (replica-identical, unmoved by re-minting), and
+  neighbours by depth then fingerprint so the closest still come first. **Not an
+  offset**: over a live projection an offset silently skips and repeats. (#432)
 - **Filter changes by attribute, as the event saw it.** `match` on
   `recent_changes` and `recentChanges`, applied before the page bound. The
   attribute is tested against the entity **as the event recorded it**, not

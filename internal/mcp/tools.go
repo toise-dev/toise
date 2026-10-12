@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"sort"
 	"strconv"
@@ -23,6 +24,7 @@ type FindEntitiesInput struct {
 	Limit     int               `json:"limit,omitempty" jsonschema:"maximum entities to return (default 50, max 200)"`
 	AsOf      string            `json:"as_of,omitempty" jsonschema:"RFC 3339 instant: read the graph as it was then (event-time), instead of now — COSTLY: this is a full REPLAY of the event log from the origin into a fresh graph, not a filter. Its cost tracks the size of this tenant's log, NOT how far back you asked: two minutes costs the same as twenty-four hours. Folds are bounded process-wide (NumCPU/2 at once) across every tenant and surface, so several queue behind each other and behind other readers. One per displayed row will take an instance down. A live read is in memory and entity_history is a linear range read: neither is in this class"`
 	Verbosity string            `json:"verbosity,omitempty" jsonschema:"compact returns only id/type/label (cheap to scan many); full (default) adds identity and attributes"`
+	After     string            `json:"after,omitempty" jsonschema:"continue a previous page: pass the next_cursor the previous answer returned. Without it a type holding more entities than the limit CANNOT be enumerated at all — the limit is capped at 200 and there is no offset. Pages are ordered by identity_fingerprint, which every replica computes identically, so a sequence of pages survives a failover; but the graph is live, so an entity created or deleted between two pages appears or vanishes accordingly — a page sequence is not a snapshot"`
 }
 
 // FindEntitiesOutput carries the matching entities.
@@ -30,7 +32,19 @@ type FindEntitiesOutput struct {
 	Graph     GraphMeta `json:"graph" jsonschema:"what the answering graph holds and how fresh it is; read this before treating absence as fact"`
 	Entities  []Entity  `json:"entities"`
 	Total     int       `json:"total" jsonschema:"number of entities matching the filter before the limit was applied"`
-	Truncated bool      `json:"truncated" jsonschema:"true if more entities matched than were returned; narrow the filter or raise the limit"`
+	Truncated bool      `json:"truncated" jsonschema:"true if more entities matched than were returned"`
+	// NextCursor is the handle that makes the rest reachable. Before it existed,
+	// an answer declared total and truncated and then offered no way to obtain
+	// what it had just named: a tenant with 236 network.endpoint could return
+	// 200, and the remaining 36 were unreachable by any sequence of calls. For a
+	// type carrying no attributes there was not even a filter to slice on.
+	NextCursor string `json:"next_cursor,omitempty" jsonschema:"pass this as after to get the next page; absent when this page is the last"`
+	// Truncation is the sentence form of Truncated. A bare boolean beside a
+	// number was discarded by two separate consumers on the same day, one of
+	// whom was actively looking for exactly that information and then reported
+	// the signal as missing. A flag only reaches a reader already looking for
+	// the flag.
+	Truncation string `json:"truncation,omitempty" jsonschema:"set when the answer is incomplete: how many of how many, and that the rest is reachable with after=next_cursor. Absent means this answer is complete"`
 	// NoMatch is set only on an empty result and names what was actually
 	// searched, plus the types that DO carry the keys the filter asked for. An
 	// empty answer to a well-formed question is the failure this product keeps
@@ -58,9 +72,22 @@ func (s *Server) findEntities(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 			matched = append(matched, e)
 		}
 	}
-	out := FindEntitiesOutput{Total: len(matched), Truncated: len(matched) > limit}
-	if len(matched) > limit {
-		matched = matched[:limit]
+	// Ordered by identity_fingerprint, not by the local id: the fingerprint is
+	// what every replica computes identically, so a page sequence survives a
+	// failover, and it does not move when an entity is re-minted after a silence.
+	sort.Slice(matched, func(i, j int) bool {
+		return matched[i].IdentityHash() < matched[j].IdentityHash()
+	})
+	total := len(matched)
+	matched, cursor, err := pageByFingerprint(matched, in.After, limit)
+	if err != nil {
+		return nil, FindEntitiesOutput{}, err
+	}
+	out := FindEntitiesOutput{Total: total, Truncated: cursor != "", NextCursor: cursor}
+	if cursor != "" {
+		out.Truncation = fmt.Sprintf(
+			"%d of %d returned; the rest is reachable by calling again with after=%q, and only that way — the limit is capped at %d and there is no offset",
+			len(matched), total, cursor, maxLimit)
 	}
 	out.Entities = make([]Entity, len(matched))
 	for i, e := range matched {
@@ -215,6 +242,7 @@ type GetNeighborsInput struct {
 	EntityID     string `json:"entity_id" jsonschema:"the entity to traverse outward from, by identity_fingerprint (preferred, stable across replicas), by identity written inline as type:key=value, or by id"`
 	RelationType string `json:"relation_type,omitempty" jsonschema:"only follow relations of this type (omit to follow any)"`
 	MaxDepth     int    `json:"max_depth,omitempty" jsonschema:"how many relation hops to traverse, 1 to 5 (default 1); same name as find_path and impact_of"`
+	After        string `json:"after,omitempty" jsonschema:"continue a previous page: pass the next_cursor the previous answer returned. Without it a node with more reachable neighbors than the limit CANNOT be fully explored — the limit is capped at 200 and there is no offset. Pages run closest-first (depth, then identity_fingerprint), an order every replica computes identically; the graph is live, so a neighbor that appears or vanishes between pages is reflected accordingly"`
 	Limit        int    `json:"limit,omitempty" jsonschema:"maximum neighbors to return (default 50, max 200); the closest are kept and totals always cover everything"`
 	AsOf         string `json:"as_of,omitempty" jsonschema:"RFC 3339 instant: traverse the graph as it was then (event-time), instead of now — COSTLY: this is a full REPLAY of the event log from the origin into a fresh graph, not a filter. Its cost tracks the size of this tenant's log, NOT how far back you asked: two minutes costs the same as twenty-four hours. Folds are bounded process-wide (NumCPU/2 at once) across every tenant and surface, so several queue behind each other and behind other readers. One per displayed row will take an instance down. A live read is in memory and entity_history is a linear range read: neither is in this class"`
 	Verbosity    string `json:"verbosity,omitempty" jsonschema:"compact returns only id/type/label per neighbor; full (default) adds identity and attributes"`
@@ -238,8 +266,15 @@ type GetNeighborsOutput struct {
 	Graph     GraphMeta  `json:"graph" jsonschema:"what the answering graph holds and how fresh it is; read this before treating absence as fact"`
 	Neighbors []Neighbor `json:"neighbors"`
 	Count     int        `json:"count" jsonschema:"neighbors returned (after the limit)"`
-	Total     int        `json:"total" jsonschema:"neighbors reachable within max_depth before the limit was applied"`
-	Truncated bool       `json:"truncated" jsonschema:"true if more neighbors were reachable than returned; raise the limit or narrow relation_type"`
+	// NextCursor makes the rest of a wide neighborhood reachable. Before it, a
+	// node with more neighbors than the limit could not be fully explored at
+	// all: the answer named the total and offered no way to reach past it.
+	NextCursor string `json:"next_cursor,omitempty" jsonschema:"pass this as after to get the next page, closest-first; absent when this page is the last"`
+	// Truncation is the sentence form of Truncated, because a bare flag beside
+	// a number has twice failed to reach a reader who was looking for it.
+	Truncation string `json:"truncation,omitempty" jsonschema:"set when the neighborhood is wider than this answer: how many of how many, and that the rest is reachable with after=next_cursor. Absent means complete"`
+	Total      int    `json:"total" jsonschema:"neighbors reachable within max_depth before the limit was applied"`
+	Truncated  bool   `json:"truncated" jsonschema:"true if more neighbors were reachable than returned; raise the limit or narrow relation_type"`
 }
 
 func (s *Server) getNeighbors(ctx context.Context, _ *mcpsdk.CallToolRequest, in GetNeighborsInput) (*mcpsdk.CallToolResult, GetNeighborsOutput, error) {
@@ -307,9 +342,26 @@ func (s *Server) getNeighbors(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 	// (BFS order is shallowest-first) are returned — matching find_entities and
 	// impact_of, so get_neighbors is no longer the one list tool without a digest.
 	out.Total = len(out.Neighbors)
-	if len(out.Neighbors) > limit {
-		out.Neighbors = out.Neighbors[:limit]
-		out.Truncated = true
+	// Ordered by (depth, identity_fingerprint). Depth first keeps the property
+	// that made this answer useful — the closest neighbors matter most — and the
+	// fingerprint breaks ties into a total order that every replica computes the
+	// same way. Paging on the fingerprint alone would have destroyed the
+	// shallowest-first ordering to gain nothing.
+	sort.SliceStable(out.Neighbors, func(i, j int) bool {
+		if out.Neighbors[i].Depth != out.Neighbors[j].Depth {
+			return out.Neighbors[i].Depth < out.Neighbors[j].Depth
+		}
+		return out.Neighbors[i].IdentityFingerprint < out.Neighbors[j].IdentityFingerprint
+	})
+	page, cursor, perr := pageNeighbors(out.Neighbors, in.After, limit)
+	if perr != nil {
+		return nil, GetNeighborsOutput{}, perr
+	}
+	out.Neighbors, out.NextCursor, out.Truncated = page, cursor, cursor != ""
+	if cursor != "" {
+		out.Truncation = fmt.Sprintf(
+			"%d of %d reachable neighbors returned, closest first; the rest is reachable by calling again with after=%q, and only that way",
+			len(page), out.Total, cursor)
 	}
 	out.Count = len(out.Neighbors)
 	out.Graph = s.graphMeta(g, in.AsOf)
@@ -785,6 +837,77 @@ func eventChangeType(ev model.Event) model.ChangeType {
 	default:
 		return model.ChangeUnspecified
 	}
+}
+
+// pageByFingerprint returns one page of a fingerprint-ordered slice and the
+// cursor for the next, empty when the page is the last.
+//
+// It exists because an answer used to declare what it was withholding and then
+// offer no way to obtain it: a tenant holding 236 entities of one type returned
+// 200, and the remaining 36 were unreachable by any sequence of calls — and for
+// a type carrying no attributes there was not even a filter to slice on. A read
+// surface that cannot enumerate is broken, not merely bounded.
+//
+// The cursor is the last returned fingerprint, opaque so a caller cannot build
+// one by hand and depend on its shape. An offset was rejected: the projection is
+// live, so an offset over a changing set silently skips and repeats entities,
+// which is the quiet wrongness this whole surface works to remove. Resuming
+// AFTER a key cannot skip or repeat anything that still exists — it can only
+// reflect that the graph moved, which is the truth.
+func pageByFingerprint(all []model.Entity, after string, limit int) ([]model.Entity, string, error) {
+	if after != "" {
+		fp, derr := decodeCursor(after)
+		if derr != nil {
+			return nil, "", fmt.Errorf("invalid after %q: pass the next_cursor from the previous answer verbatim", after)
+		}
+		i := sort.Search(len(all), func(i int) bool { return all[i].IdentityHash() > fp })
+		all = all[i:]
+	}
+	if len(all) <= limit {
+		return all, "", nil
+	}
+	page := all[:limit]
+	return page, encodeCursor(page[len(page)-1].IdentityHash()), nil
+}
+
+// encodeCursor/decodeCursor keep the cursor opaque. Base64 of the fingerprint:
+// a caller that reads it and starts composing cursors has coupled itself to an
+// ordering we must then preserve forever.
+func encodeCursor(fp string) string { return base64.RawURLEncoding.EncodeToString([]byte(fp)) }
+
+func decodeCursor(c string) (string, error) {
+	b, err := base64.RawURLEncoding.DecodeString(c)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// pageNeighbors pages a (depth, fingerprint)-ordered neighbor list.
+//
+// The cursor carries both halves because depth leads the order: resuming on the
+// fingerprint alone would re-serve every shallower neighbor whose fingerprint
+// sorts after the cursor. A neighbor that vanished between two pages is simply
+// absent from the later one — the graph is live, and a page sequence is not a
+// snapshot.
+func pageNeighbors(all []Neighbor, after string, limit int) ([]Neighbor, string, error) {
+	key := func(n Neighbor) string { return fmt.Sprintf("%09d\u0000%s", n.Depth, n.IdentityFingerprint) }
+	if after != "" {
+		want, derr := decodeCursor(after)
+		if derr != nil {
+			return nil, "", fmt.Errorf("invalid after %q: pass the next_cursor from the previous answer verbatim", after)
+		}
+		i := 0
+		for i < len(all) && key(all[i]) <= want {
+			i++
+		}
+		all = all[i:]
+	}
+	if len(all) <= limit {
+		return all, "", nil
+	}
+	page := all[:limit]
+	return page, encodeCursor(key(page[len(page)-1])), nil
 }
 
 func clampLimit(limit int) int {
