@@ -322,7 +322,15 @@ standardizes no network entities, only `network.*` span/metric attributes) is:
 | --- | --- | --- | --- |
 | `network.device` | `{network.device.id}` (precedence ladder below) | `sys.name`, `mgmt.ip`, `senhub.device.role`, … | — (the discovered asset) |
 | `network.interface` (a port) | `{network.device.id, network.interface.name}` | `oper_state` (state key), `speed`, … | `has_interface` (device→interface) |
-| `network.route` | `{network.device.id, route.destination}` (CIDR) | `metric`, `route.protocol`, `next_hop.ip` | `has_route` (device→route) |
+| `network.route` | `{network.device.id, route.destination, next_hop.ip}` (destination as canonical CIDR) | `metric`, `route.protocol`, the egress `network.interface.name` | `has_route` (device→route) |
+
+**The next hop is part of a route's identity and is not repeated as an attribute.**
+RFC 2096 indexes `ipCidrRouteEntry` on the next hop and makes the interface an
+ordinary column, and without it a host with two uplinks has two `0.0.0.0/0` entries
+differing only by gateway: they collapse into one entity whose next hop oscillates at
+poll cadence, which reads downstream as a real topology change. A route on a host is
+keyed the same way with its `host.id`. The producer contract is normative on both and
+states the full reasoning.
 
 Physical adjacency is a **bare `connected_to`** (interface↔interface). Device-level
 adjacency (the former `adjacent_to` with `local_port`/`remote_port`) becomes a

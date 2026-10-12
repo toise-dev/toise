@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The mapping document keyed a `network.route` on `{network.device.id,
+  route.destination}` and listed the next hop as a descriptive attribute, while
+  the producer contract keys it on the next hop too and says why: RFC 2096
+  indexes on it, and without it a host with two uplinks collapses its two
+  default routes into one entity whose gateway oscillates at poll cadence,
+  which reads downstream as a topology change that never happened. Both
+  documents were readable, one was wrong, and a producer that followed the wrong
+  one built that oscillation. A test now fails on an identity key set no
+  document declares, which is what two documents disagreeing looks like
 - `find_path` no longer walks through an observed `network.endpoint`. The
   endpoint is declared in one pair only, as the target of `depends_on`, and
   nothing leaves it, so every transit entered by an inbound dependency and left
