@@ -224,18 +224,29 @@ var relationTypes = map[string]RelationTypeDef{
 	RelMonitors: {Type: RelMonitors, From: TypeServiceInstance, To: TypeHost, Structural: true, Impact: ImpactToFrom},
 	// "X has_route Y": the device failing drops its routes.
 	RelHasRoute: {Type: RelHasRoute, From: TypeNetworkDevice, To: TypeNetworkRoute, Structural: true, Impact: ImpactFromTo},
-	// "X neighbor_of Y": the interface that observed the neighbor failing ends the
-	// observation, so impact flows To->From like a dependency of the observer —
-	// the same argument as monitors. The reverse is NOT true and must not be
-	// modeled: an unresolved neighbor disappearing says nothing about the
-	// interface that saw it, and ImpactBoth here would put every device on a
-	// segment inside the blast radius of the host watching them.
+	// "X neighbor_of Y": an observation, and ImpactNone like same_as, because an
+	// observation is not a failure path in either direction.
+	//
+	// The first version of this read To->From, by analogy with monitors: losing the
+	// interface loses the observation, so model the observed as depending on the
+	// observer. Measured, that analogy is wrong, and expensively. monitors points
+	// at a target from OUR monitor, so coverage loss lands on something we own.
+	// Here the dependent side is a third-party device's record, and claiming it is
+	// impacted says a printer stops working because the machine watching it died.
+	// With To->From, impact_of on a host walked has_interface then every
+	// neighbor_of and reported each ARP neighbor as impacted: on a host with a few
+	// hundred ARP entries, a host failure would claim a few hundred devices. The
+	// tool whose whole value is a believable blast radius would have become
+	// unusable on any host that resolves addresses, which is all of them.
+	//
+	// Losing visibility of a segment is a coverage question, not a blast radius,
+	// and it does not belong in this answer.
 	//
 	// Structural: a device appearing on a segment is the alertable event, and it is
 	// the reason the type exists. What keeps that from flooding the change feed is
 	// the lifecycle, not the flag — a long declared interval and no retraction by
 	// absence, because an ARP cache evicts and an eviction is not a departure.
-	RelNeighborOf: {Type: RelNeighborOf, From: TypeNetworkNeighbor, To: TypeNetworkInterface, Structural: true, Impact: ImpactToFrom},
+	RelNeighborOf: {Type: RelNeighborOf, From: TypeNetworkNeighbor, To: TypeNetworkInterface, Structural: true, Impact: ImpactNone},
 	// connectivity is symmetric: either side failing breaks the link.
 	RelConnectedTo: {Type: RelConnectedTo, From: TypeNetworkInterface, To: TypeNetworkInterface, Structural: true, Impact: ImpactBoth},
 	// "X depends_on Y": the dependency target failing affects the dependent.

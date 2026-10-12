@@ -219,13 +219,15 @@ func TestRegistry(t *testing.T) {
 	if !IsKnownEntityType(TypeNetworkNeighbor) {
 		t.Error("network.neighbor must be a known entity type")
 	}
-	// The observation must not run backwards: an unresolved neighbor going away
-	// says nothing about the interface that saw it, so impact flows from the
-	// interface only. ImpactBoth here would put every device on a segment inside
-	// the blast radius of the host watching them.
+	// An observation is not a failure path, in either direction. Measured before
+	// this was pinned: with impact flowing from the interface, impact_of on a host
+	// walked has_interface then every neighbor_of and reported each ARP neighbor as
+	// impacted — a host with a few hundred ARP entries would claim a few hundred
+	// third-party devices, which is not what a blast radius means. Losing sight of
+	// a segment is a coverage question and does not belong in that answer.
 	if def, ok := RelationDef(RelNeighborOf); !ok ||
-		def.From != TypeNetworkNeighbor || def.To != TypeNetworkInterface || def.Impact != ImpactToFrom {
-		t.Errorf("neighbor_of must run network.neighbor -> network.interface with impact To->From, got %+v", def)
+		def.From != TypeNetworkNeighbor || def.To != TypeNetworkInterface || def.Impact != ImpactNone {
+		t.Errorf("neighbor_of must run network.neighbor -> network.interface and carry no impact, got %+v", def)
 	}
 	// A segment is declared by its cluster and joined by a workload, and the two
 	// edges flow opposite ways: the cluster failing drops the segments it

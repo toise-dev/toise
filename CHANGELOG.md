@@ -39,9 +39,11 @@ the documentation gives the three alert rules a control needs to stop lying.
   `network.interface`, which would be the phantom port the mapping document
   forbids. Contract, lifecycle (no retraction by absence, ~24 h interval) and
   filters are specified. The engine registers the type, the relation pair
-  (`neighbor_of`, neighbour to observing interface, impact flowing from the
-  interface only — `ImpactBoth` would put every device on a segment inside the
-  blast radius of the host watching them) and the display name, on
+  (`neighbor_of`, neighbour to observing interface, carrying **no impact in
+  either direction** like `same_as`: measured, an edge carrying impact from the
+  interface made `impact_of` on a host report every ARP neighbour as impacted,
+  so a host with a few hundred entries would have claimed a few hundred
+  third-party devices) and the display name, on
   `pkg/emit/v0.12.0`. **A producer must not enable emission until a Toise
   carrying the type is deployed**: under the default strict vocabulary the
   records are rejected per record until then, and the conformance kit cannot

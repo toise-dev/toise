@@ -465,9 +465,14 @@ and the first is the one that matters:
    retract each other's edges, at the cadence of both.
 
 **Relation: `neighbor_of`** (neighbour → the observing `network.interface`), read
-actively — this neighbour was seen on that interface. Impact flows from the interface
-to the neighbour only: losing the interface ends the observation, while an unresolved
-neighbour going away says nothing about the interface that saw it.
+actively — this neighbour was seen on that interface. It carries **no impact in
+either direction**, like `same_as`: an observation is not a failure path. Measured
+before this was settled, an edge carrying impact from the interface made `impact_of`
+on a host walk `has_interface` and then every `neighbor_of`, reporting each ARP
+neighbour as impacted — a host with a few hundred ARP entries would have claimed a
+few hundred third-party devices. A printer does not stop working because the machine
+watching it died. Losing sight of a segment is a **coverage** question, and it does
+not belong in a blast radius.
 
 **Identification later is a belief, never a merge.** When SNMP identifies the device,
 or an agent is installed on the machine, the join to its `network.interface` or `host`
