@@ -153,6 +153,25 @@ tool find_path
   relation_type string
   to_id string
   out:
+  convergence_note string
+  convergence_total int
+  convergences []object
+    asserted_by []string
+    attributes []object
+      key string
+      type string
+      value string
+    collected_by []string
+    deleted bool
+    display_name string
+    id string
+    identity []object
+      key string
+      type string
+      value string
+    identity_fingerprint string
+    label string
+    type string
   graph object
     as_of string
     entities int

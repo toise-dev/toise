@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -70,6 +71,89 @@ type FindPathOutput struct {
 	Hops      int       `json:"hops" jsonschema:"number of edges on the path (0 when from and to are the same entity)"`
 	MaxDepth  int       `json:"max_depth" jsonschema:"the hop cap that was applied; raise it if reachable=false looks wrong"`
 	Path      []PathHop `json:"path,omitempty" jsonschema:"the entities along the shortest path, start first"`
+
+	Convergences     []Entity `json:"convergences,omitempty" jsonschema:"terminal entities (an observed network.endpoint) that BOTH ends depend on. They were reached from both sides and deliberately not crossed: dialing the same destination is not evidence that the two ends communicate. Read convergence_note before concluding anything from them"`
+	ConvergenceTotal int      `json:"convergence_total,omitempty" jsonschema:"how many shared terminal entities were found, when convergences lists fewer"`
+	ConvergenceNote  string   `json:"convergence_note,omitempty" jsonschema:"what the convergences mean and what they do not mean, in words"`
+}
+
+// maxConvergences caps how many shared terminals are listed; the total is
+// reported separately so a long list is never silently cut.
+const maxConvergences = 10
+
+// cameFrom records the edge a BFS arrived by, for path reconstruction.
+type cameFrom struct {
+	prev model.EntityID
+	via  edge
+}
+
+// pathWalk is the result of one bounded BFS.
+type pathWalk struct {
+	parents   map[model.EntityID]cameFrom
+	terminals map[model.EntityID]struct{}
+	found     bool
+}
+
+// walkPaths explores g from start, breadth-first, up to depth hops, stopping
+// early if goal is reached.
+//
+// A terminal entity (ADR 0032: an observed endpoint is a destination, not a
+// waypoint) may be reached, and may be the start, but may only be LEFT by an
+// edge it is itself the source of. Walking back down a dependency that arrived
+// at it is refused: that shape can only ever mean two dependents dial the same
+// destination, and rendering it as a hop reports a convergence as a route
+// (#442). The test is the edge direction, not the type, so the address join
+// ADR 0032 section 3 still owes us (#443) will traverse the day it exists.
+// Every refusal is recorded, so the caller can be given the convergence
+// instead of a bare "not reachable".
+func (s *Server) walkPaths(g Graph, start, goal model.EntityID, relType string, depth int) pathWalk {
+	w := pathWalk{
+		parents:   map[model.EntityID]cameFrom{start: {}},
+		terminals: map[model.EntityID]struct{}{},
+		found:     start == goal,
+	}
+	frontier := []model.EntityID{start}
+	for d := 0; d < depth && len(frontier) > 0 && !w.found; d++ {
+		var next []model.EntityID
+		for _, cur := range frontier {
+			terminal := false
+			if cur != start {
+				if ent, ok, _ := g.GetEntity(cur); ok && model.IsTerminalEntityType(ent.Type) {
+					terminal = true
+				}
+			}
+			edges := edgesOf(g, cur, relType)
+			for i := range edges {
+				e := &edges[i]
+				if terminal && e.direction != "outgoing" {
+					w.terminals[cur] = struct{}{}
+					continue
+				}
+				// Alias-aware (ADR 0020 Lot B): a same_as belief connects a path only
+				// at/above the confidence threshold — a weak alias must not create a
+				// spurious route. A strong one does, and shows as a same_as hop.
+				if e.rel.Type == model.RelSameAs {
+					if c, ok := canonical.Confidence(e.rel); !ok || c < s.idThr {
+						continue
+					}
+				}
+				if _, seen := w.parents[e.other]; seen {
+					continue
+				}
+				w.parents[e.other] = cameFrom{prev: cur, via: *e}
+				if e.other == goal {
+					w.found = true
+					break
+				}
+				next = append(next, e.other)
+			}
+			if w.found {
+				break
+			}
+		}
+		frontier = next
+	}
+	return w
 }
 
 func (s *Server) findPath(ctx context.Context, _ *mcpsdk.CallToolRequest, in FindPathInput) (*mcpsdk.CallToolResult, FindPathOutput, error) {
@@ -100,42 +184,23 @@ func (s *Server) findPath(ctx context.Context, _ *mcpsdk.CallToolRequest, in Fin
 	}
 
 	out := FindPathOutput{MaxDepth: depth}
-	type cameFrom struct {
-		prev model.EntityID
-		via  edge
-	}
-	parents := map[model.EntityID]cameFrom{from: {}}
-	frontier := []model.EntityID{from}
-	found := from == to
-	for d := 0; d < depth && len(frontier) > 0 && !found; d++ {
-		var next []model.EntityID
-		for _, cur := range frontier {
-			edges := edgesOf(g, cur, in.RelationType)
-			for i := range edges {
-				e := &edges[i]
-				// Alias-aware (ADR 0020 Lot B): a same_as belief connects a path only
-				// at/above the confidence threshold — a weak alias must not create a
-				// spurious route. A strong one does, and shows as a same_as hop.
-				if e.rel.Type == model.RelSameAs {
-					if c, ok := canonical.Confidence(e.rel); !ok || c < s.idThr {
-						continue
-					}
-				}
-				if _, seen := parents[e.other]; seen {
-					continue
-				}
-				parents[e.other] = cameFrom{prev: cur, via: *e}
-				if e.other == to {
-					found = true
-					break
-				}
-				next = append(next, e.other)
-			}
-			if found {
-				break
+	w := s.walkPaths(g, from, to, in.RelationType, depth)
+	parents, found := w.parents, w.found
+	if !found && len(w.terminals) > 0 {
+		// The two ends may still share a destination. Say which one, rather than
+		// leaving the caller with a bare denial: the shared endpoint IS the finding,
+		// and it is what a false path was built out of before (#442).
+		back := s.walkPaths(g, to, from, in.RelationType, depth)
+		shared := make([]model.EntityID, 0, len(w.terminals))
+		for id := range w.terminals {
+			if _, ok := back.terminals[id]; ok {
+				shared = append(shared, id)
 			}
 		}
-		frontier = next
+		if len(shared) > 0 {
+			out.Convergences, out.ConvergenceTotal = convergenceEntities(g, shared)
+			out.ConvergenceNote = convergenceNote(out.ConvergenceTotal)
+		}
 	}
 	if !found {
 		out.Graph = s.graphMeta(g, in.AsOf)
@@ -165,4 +230,44 @@ func (s *Server) findPath(ctx context.Context, _ *mcpsdk.CallToolRequest, in Fin
 	out.Hops = len(hops) - 1
 	out.Graph = s.graphMeta(g, in.AsOf)
 	return nil, out, nil
+}
+
+// convergenceEntities renders the shared terminals, deterministically ordered
+// and capped, with the true total.
+func convergenceEntities(g Graph, ids []model.EntityID) (listed []Entity, total int) {
+	listed = make([]Entity, 0, len(ids))
+	for _, id := range ids {
+		ent, ok, deleted := g.GetEntity(id)
+		if !ok || deleted {
+			continue
+		}
+		listed = append(listed, entityOut(ent, false))
+	}
+	sort.Slice(listed, func(i, j int) bool { return listed[i].IdentityFingerprint < listed[j].IdentityFingerprint })
+	total = len(listed)
+	if total > maxConvergences {
+		listed = listed[:maxConvergences]
+	}
+	return listed, total
+}
+
+// convergenceNote states what a convergence means and what it does not, in a
+// sentence: a flag nobody reads is a flag ignored.
+func convergenceNote(n int) string {
+	subject := "this destination"
+	if n > 1 {
+		subject = "these destinations"
+	}
+	return fmt.Sprintf("no path within max_depth, but both ends depend on %d shared terminal %s. "+
+		"They were reached from both sides and NOT crossed: dialing %s is not evidence that the two ends "+
+		"communicate with each other, and treating it as a hop is how a convergence gets reported as a route. "+
+		"Call get_neighbors on one to see who else dials it.",
+		n, plural("entity", "entities", n), subject)
+}
+
+func plural(one, many string, n int) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
