@@ -459,10 +459,15 @@ and the first is the one that matters:
 2. Declare a **long** `entity.report.interval`, about 24 h, so the liveness backstop
    never expires a neighbour at the cadence of an ARP read. The interval is declared
    per entity, and must match the **slowest** method that reports it.
-3. Several collection methods describing the same entity must emit the **union** of
-   what they know of it, because removal by absence is scoped to one entity's own
-   `entity.relationships` array: two methods each emitting their own partial array
-   retract each other's edges, at the cadence of both.
+3. Each collection method emits **its own complete set** for an entity it
+   describes. Removal by absence is scoped to one entity's own
+   `entity.relationships` array **per collection method**, so a method retracts
+   only what it itself asserted before, and two methods describing one entity no
+   longer retract each other. Emit what the method observes; do not assemble a
+   union across collectors, and above all do not keep one — a cache that
+   re-asserts after a restart what a method said last is an observation that did
+   not happen, and it refreshes a liveness deadline on evidence that does not
+   exist.
 
 **Relation: `neighbor_of`** (neighbour → the observing `network.interface`), read
 actively — this neighbour was seen on that interface. It carries **no impact in
@@ -897,6 +902,19 @@ What absence removes is **edges**, and only for an entity the export *does*
 re-emit. The `entity.relationships` array is the sole on-wire relationship form,
 and removal is by absence on re-emit. So an entity you send must carry its
 **complete** array, or you delete the edges you left out of it.
+
+**Complete for the collection method that sends it**, which is the grain the diff
+is keyed on: the instrumentation scope, the producer and the entity. A method
+retracts only what that same method asserted before. That is the third spelling
+of one key — keyed by entity alone, a producer that merely mentioned an entity
+deleted another producer's edges (#396); keyed by producer, a producer running
+several methods had each method delete the others' (#455) — so if you add a
+fourth source of truth about an entity, ask first what distinguishes it from the
+other three.
+
+An **absent** array is not a reservation. It is read as an empty one, so it
+retracts everything that method had asserted on that entity. There is no way to
+say "I am not speaking about relationships this cycle"; send what you observe.
 
 Two rules follow, and the second is the one that bites at scale:
 

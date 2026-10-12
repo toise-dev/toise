@@ -44,14 +44,14 @@ func newEmbeddedReconciler() *embeddedReconciler {
 // It is a no-op for non-entity records (those are routed by routeRecord). It
 // returns the dotted keys of any non-scalar or malformed descriptor values it
 // dropped, so the caller can surface the loss rather than discard it silently.
-func (r *embeddedReconciler) handle(e engine, lr plog.LogRecord, producer string) (dropped []string, err error) {
-	return r.handleVocab(e, lr, producer, true)
+func (r *embeddedReconciler) handle(e engine, lr plog.LogRecord, producer, scope string) (dropped []string, err error) {
+	return r.handleVocab(e, lr, producer, scope, true)
 }
 
 // handleVocab is handle with the vocabulary check selectable, mirroring
 // routeRecordVocab: with strictVocab false (accept_unknown_types, #141) an
 // unknown relationship.type passes as long as the descriptor's shape is sound.
-func (r *embeddedReconciler) handleVocab(e engine, lr plog.LogRecord, producer string, strictVocab bool) (dropped []string, err error) {
+func (r *embeddedReconciler) handleVocab(e engine, lr plog.LogRecord, producer, scope string, strictVocab bool) (dropped []string, err error) {
 	attrs := lr.Attributes()
 	et := lr.EventName()
 	if et != evEntityState && et != evEntityDelete {
@@ -65,12 +65,23 @@ func (r *embeddedReconciler) handleVocab(e engine, lr plog.LogRecord, producer s
 		return idDropped, nil
 	}
 	source := change.EndpointRef{Type: sourceType, Identity: sourceID}
-	// Keyed by producer AND entity: a shared entity is emitted by several
-	// producers, and each must diff only against what it itself last asserted.
+	// Keyed by COLLECTION METHOD, producer AND entity, because each of the three
+	// has been the missing half of this key once.
+	//
 	// Keyed by entity alone, a producer that merely references the entity — and
 	// so carries no descriptor for it — removed every edge another producer had
-	// declared on it, once per emission (toise-dev/toise#396).
-	sk := producerKey(producer, source)
+	// declared on it, once per emission (toise-dev/toise#396). Adding the producer
+	// fixed that, and left the same defect one level down: a producer running
+	// several collection methods shares one entry, so each method's complete set
+	// retracts the others'. Measured on a bench as a bound_to flipping every one
+	// to three minutes between a host's interface and the same interface polled
+	// over SNMP, and as relations retracted for 120 s after every restart
+	// (toise-dev/toise#455).
+	//
+	// With the scope in the key, a method diffs against what IT last asserted, so
+	// a producer emits the complete set PER METHOD — which is what it observes
+	// anyway — instead of a union it has to assemble and keep.
+	sk := producerKey(producer, scope, source)
 
 	switch et {
 	case evEntityDelete:
@@ -254,8 +265,8 @@ func endpointKey(ep change.EndpointRef) string {
 
 // producerKey scopes a source's assertion set to the producer that made it. The
 // separator is a NUL so it cannot occur in a producer id or an identity value.
-func producerKey(producer string, ep change.EndpointRef) string {
-	return producer + "\x00" + endpointKey(ep)
+func producerKey(producer, scope string, ep change.EndpointRef) string {
+	return producer + "\x00" + scope + "\x00" + endpointKey(ep)
 }
 
 // relationKey identifies an embedded relation within its source (From is always
