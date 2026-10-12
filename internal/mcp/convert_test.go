@@ -1,6 +1,8 @@
 package mcp
 
 import (
+	"fmt"
+	"sort"
 	"testing"
 
 	"github.com/toise-dev/toise/internal/model"
@@ -139,5 +141,128 @@ func TestAttributeFilterKeepsAnEntityThatDied(t *testing.T) {
 	}
 	if !plain.keepScope(rel) {
 		t.Error("an unfiltered read dropped a relation change")
+	}
+}
+
+// TestEveryEntityIsReachableByPaging is #432: before this, an answer declared
+// what it was withholding and offered no way to obtain it.
+//
+// Measured on a live tenant: describe_schema reported 236 network.endpoint and
+// find_entities could return at most 200. Thirty-six were unreachable — not slow
+// to reach, unreachable — and for that type there was not even an attribute to
+// slice on, because network.endpoint carries none by design.
+func TestEveryEntityIsReachableByPaging(t *testing.T) {
+	const total = 236
+	all := make([]model.Entity, 0, total)
+	for i := range total {
+		all = append(all, model.Entity{
+			ID:       model.EntityID(fmt.Sprintf("e%03d", i)),
+			Type:     model.TypeHost,
+			Identity: []model.KeyValue{{Key: "host.id", Value: model.StringValue(fmt.Sprintf("h%03d", i))}},
+		})
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].IdentityHash() < all[j].IdentityHash() })
+
+	// Walk every page to exhaustion, exactly as a consumer must.
+	seen := map[string]int{}
+	cursor := ""
+	pages := 0
+	for {
+		page, next, err := pageByFingerprint(all, cursor, 200)
+		if err != nil {
+			t.Fatalf("page %d: %v", pages, err)
+		}
+		pages++
+		for _, e := range page {
+			seen[e.IdentityHash()]++
+		}
+		if next == "" {
+			break
+		}
+		cursor = next
+		if pages > 10 {
+			t.Fatal("paging does not terminate")
+		}
+	}
+
+	if len(seen) != total {
+		t.Errorf("reached %d of %d entities in %d pages; the rest is still unreachable", len(seen), total, pages)
+	}
+	for fp, n := range seen {
+		if n != 1 {
+			t.Errorf("entity %s returned %d times; a page sequence must not repeat", fp, n)
+		}
+	}
+	if pages != 2 {
+		t.Errorf("236 entities at 200 per page took %d pages, want 2", pages)
+	}
+
+	// A cursor a caller invented must be refused, not silently treated as the
+	// beginning — that would re-serve page one and look like an empty tail.
+	if _, _, err := pageByFingerprint(all, "not-base64-%%%", 200); err == nil {
+		t.Error("a malformed cursor was accepted; it would silently restart the sequence")
+	}
+
+	// The last page carries no cursor: a caller must be able to stop.
+	_, next, err := pageByFingerprint(all[:10], "", 200)
+	if err != nil || next != "" {
+		t.Errorf("a complete answer returned cursor %q; a caller cannot tell it is done", next)
+	}
+}
+
+// TestNeighborPagingKeepsClosestFirst guards the property that made the answer
+// useful in the first place. Paging on the fingerprint alone would have given a
+// deterministic order that scattered the nearest neighbors across pages.
+func TestNeighborPagingKeepsClosestFirst(t *testing.T) {
+	mk := func(depth int, fp string) Neighbor {
+		var n Neighbor
+		n.Depth = depth
+		n.IdentityFingerprint = fp
+		return n
+	}
+	// Deliberately: the deepest neighbor sorts FIRST by fingerprint alone.
+	all := []Neighbor{mk(1, "zz"), mk(1, "yy"), mk(2, "aa"), mk(2, "bb"), mk(3, "cc")}
+	sort.SliceStable(all, func(i, j int) bool {
+		if all[i].Depth != all[j].Depth {
+			return all[i].Depth < all[j].Depth
+		}
+		return all[i].IdentityFingerprint < all[j].IdentityFingerprint
+	})
+
+	page, next, err := pageNeighbors(all, "", 2)
+	if err != nil {
+		t.Fatalf("page: %v", err)
+	}
+	for _, n := range page {
+		if n.Depth != 1 {
+			t.Errorf("first page holds a depth-%d neighbor; the closest must come first", n.Depth)
+		}
+	}
+	if next == "" {
+		t.Fatal("a truncated neighborhood returned no cursor; the rest is unreachable")
+	}
+
+	// Walking on must not re-serve the shallower ones, which is what a
+	// fingerprint-only cursor would have done ("aa" < "yy").
+	seen := map[string]int{}
+	for _, n := range page {
+		seen[n.IdentityFingerprint]++
+	}
+	for next != "" {
+		page, next, err = pageNeighbors(all, next, 2)
+		if err != nil {
+			t.Fatalf("page: %v", err)
+		}
+		for _, n := range page {
+			seen[n.IdentityFingerprint]++
+		}
+	}
+	if len(seen) != len(all) {
+		t.Errorf("reached %d of %d neighbors", len(seen), len(all))
+	}
+	for fp, n := range seen {
+		if n != 1 {
+			t.Errorf("neighbor %s served %d times", fp, n)
+		}
 	}
 }
