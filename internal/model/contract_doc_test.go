@@ -101,14 +101,15 @@ func TestEveryRegisteredTypeHasADocumentedIdentity(t *testing.T) {
 // was wrong, and a producer following the wrong one builds a graph that reports
 // a topology change every poll.
 var identityForms = map[string]string{
-	"host.id":                                         "host",
-	"service.instance.id":                             "service.instance",
-	"db.instance.id":                                  "db",
-	"container.id":                                    "container",
-	"network.device.id":                               "network.device",
-	"network.segment.id":                              "network.segment",
-	"host.id,vmid":                                    "compute.vm, a VM seen from its hypervisor",
-	"process.creation.time,process.pid":               "process",
+	"host.id":                           "host",
+	"service.instance.id":               "service.instance",
+	"db.instance.id":                    "db",
+	"container.id":                      "container",
+	"network.device.id":                 "network.device",
+	"network.segment.id":                "network.segment",
+	"host.id,mac":                       "network.neighbor, scoped to the observing host",
+	"host.id,vmid":                      "compute.vm, a VM seen from its hypervisor",
+	"process.creation.time,process.pid": "process",
 	"network.device.id,network.interface.name":        "network.interface, a port on a polled device",
 	"host.id,next_hop.ip,route.destination":           "network.route, on a host",
 	"network.device.id,next_hop.ip,route.destination": "network.route, on a polled device",

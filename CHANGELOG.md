@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `network.neighbor` and `neighbor_of` enter the producer vocabulary in
+  `pkg/emit`: a link-layer neighbour an observer saw on one of its own interfaces
+  and could not resolve to anything it already holds (ARP/NDP, an FDB line, an
+  LLDP remote known by its chassis MAC alone). Identity is the **observer** plus
+  the MAC, `{host.id, mac}` — a MAC is not globally unique and a broadcast domain
+  carries no assigned identifier, so two observers on one segment hold two
+  neighbours for one device, on purpose: a wrong merge is permanent while a split
+  is reconciled by a `same_as` belief. It is deliberately not a
+  `network.interface`, which would be the phantom port the mapping document
+  forbids. Contract, lifecycle (no retraction by absence, ~24 h interval) and
+  filters are specified; the engine registry follows once `pkg/emit` is tagged
 - `toise-server --version` prints `version (commit)` and exits. Until now the
   version was reachable only from a *running* server — the first line of stdout
   and `toise_build_info{version,commit}` on `/metrics` — so an operator could

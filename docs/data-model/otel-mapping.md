@@ -376,8 +376,17 @@ network.interface.name}`. When a neighbor is known only by a MAC (FDB/ARP, some 
 remotes) and cannot be resolved to a `(device, network.interface.name)`, **do not fabricate
 a phantom port** — that would violate exact identity. Resolve the MAC→device via the
 producer's inventory before emitting the edge (as the identity ladder already
-requires); otherwise omit it. A future `network.address` of MAC subtype may carry
-such unresolved endpoints.
+requires).
+
+**The unresolved MAC now has a home, and it is not a port.** Rather than omitting the
+observation or inventing an address subtype for it, emit a **`network.neighbor`**:
+identity `{host.id, mac}` where `host.id` is the **observing** host, linked to the
+observing interface by `neighbor_of`, and joined to a port or a host later by a
+weighted `same_as` belief — never by a merge. The prohibition above is unchanged for
+`connected_to`, which still requires two interfaces of exact identity; what changed is
+that refusing to fabricate a port no longer means throwing the observation away. The
+producer contract specifies the type, its lifecycle (no retraction by absence) and the
+filters.
 
 **Cadence:** poll topology **slower than metrics** (≈5–15 min); set
 `entity.report.interval` to ≈**3× the topology cadence** (not the metric cadence) or
