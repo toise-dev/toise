@@ -119,7 +119,7 @@ func TestInsecureConditions(t *testing.T) {
 func TestExposureReportsZero(t *testing.T) {
 	e := metrics.NewExposure()
 	e.Report(nil)
-	if n := len(e.Collectors()); n != 2 {
-		t.Fatalf("collectors = %d, want 2 (the labeled family and the total)", n)
+	if n := len(e.Collectors()); n != 3 {
+		t.Fatalf("collectors = %d, want 3 (the labeled family, the total, the last-check timestamp)", n)
 	}
 }

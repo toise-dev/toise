@@ -190,6 +190,20 @@ So they are also published, and can be alerted on:
 |---|---|
 | `toise_insecure_config_conditions` | how many conditions this instance has; **published even when zero**, so an alert on `> 0` does not depend on a series existing |
 | `toise_insecure_config{surface,addr,reason}` | one series per condition. `surface` is `listener` or `log_shipping`; `reason` is `no_auth`, `no_tls`, `no_auth_no_tls`, `cleartext` or `cleartext_public` |
+| `toise_insecure_config_last_check_timestamp_seconds` | when the conditions were last evaluated |
+
+**Alert on two rules, not one.** A zero total separates *clean* from *nothing
+answered* only while the series exists; if scraping fails it vanishes, and a
+rule on `> 0` does not fire — it goes quiet. So pair it with a presence rule,
+which is the one everybody forgets:
+
+```
+ToiseConfigInsecure       toise_insecure_config_conditions > 0        for: 5m
+ToiseInsecureGaugeAbsent  absent(toise_insecure_config_conditions)    for: 15m
+```
+
+The timestamp is the third cran: a fresh value proves the list was walked,
+while a zero total alone only proves that something once wrote a zero.
 
 `cleartext_public` means the shipping endpoint is an IP that is neither loopback
 nor private: the segments do not merely travel unencrypted inside a perimeter,
