@@ -435,6 +435,93 @@ func (g *Graph) visitNeighbor(nb model.EntityID, relType, edgeType string, visit
 
 // ListEntities returns the live (non-deleted) entities, optionally filtered by
 // type, sorted by logical id for stable pagination.
+// ListEntitiesByFingerprint returns live entities of a type ordered by their
+// identity fingerprint, which is the only ordering a paged read can resume
+// against: every replica computes the same fingerprint, and it does not move
+// when an entity is re-minted after a silence, where the local id does both.
+//
+// It reads the fingerprints from the byHash index instead of recomputing them.
+// Hashing every candidate to order a page of fifty cost 11k allocations where
+// 1k sufficed, and hashing inside a sort comparator cost 278k — the comparator
+// runs O(n log n) times. The index already holds the answer.
+// PageEntitiesByFingerprint returns one fingerprint-ordered page and the
+// fingerprint to resume after, empty when the page is the last.
+//
+// It resolves ONLY the page. Returning every candidate so a caller could slice
+// fifty of them copied ten thousand entity structs per call, which the bench
+// gate measured as a 24-to-40% slowdown — under the threshold on a quiet runner
+// and over it on a noisy one, which is the worst place for a number to sit.
+//
+// Ordering keys are read from the byHash index, never recomputed: hashing every
+// candidate cost 11k allocations where 1k sufficed, and hashing inside a sort
+// comparator cost 278k, because a comparator runs O(n log n) times.
+// total counts the WHOLE matching set, independent of the cursor: a page that
+// reported its own size as the total would be the lying answer this surface
+// exists to remove.
+func (g *Graph) PageEntitiesByFingerprint(typ, after string, limit int) (page []model.Entity, next string, total int) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	type keyed struct {
+		fp string
+		id model.EntityID
+	}
+	keys := make([]keyed, 0, limit*2)
+	for fp, id := range g.byHash {
+		if g.deleted[id] {
+			continue
+		}
+		e, ok := g.entities[id]
+		if !ok || (typ != "" && e.Type != typ) {
+			continue
+		}
+		total++
+		if after != "" && fp <= after {
+			continue
+		}
+		keys = append(keys, keyed{fp: fp, id: id})
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i].fp < keys[j].fp })
+
+	if len(keys) > limit {
+		keys = keys[:limit]
+		next = keys[len(keys)-1].fp
+	}
+	page = make([]model.Entity, 0, len(keys))
+	for _, k := range keys {
+		page = append(page, g.entities[k.id])
+	}
+	return page, next, total
+}
+
+func (g *Graph) ListEntitiesByFingerprint(typ string) []model.Entity {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	type keyed struct {
+		fp string
+		id model.EntityID
+	}
+	keys := make([]keyed, 0, len(g.byHash))
+	for fp, id := range g.byHash {
+		if g.deleted[id] {
+			continue
+		}
+		e, ok := g.entities[id]
+		if !ok || (typ != "" && e.Type != typ) {
+			continue
+		}
+		keys = append(keys, keyed{fp: fp, id: id})
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i].fp < keys[j].fp })
+
+	out := make([]model.Entity, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, g.entities[k.id])
+	}
+	return out
+}
+
 func (g *Graph) ListEntities(typ string) []model.Entity {
 	g.mu.RLock()
 	defer g.mu.RUnlock()

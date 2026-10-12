@@ -65,19 +65,48 @@ func (s *Server) findEntities(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 		return nil, FindEntitiesOutput{}, err
 	}
 	limit := clampLimit(in.Limit)
-	all := g.ListEntities(in.Type)
+	// Without an attribute filter the projection pages for us and materializes
+	// only the page. With one, every candidate must be examined before the page
+	// bound, so the whole ordered set is needed — filtering a bounded page would
+	// return fewer than the limit with no reason given, and hide later matches
+	// behind earlier non-matches.
+	if len(in.Match) == 0 {
+		// A malformed cursor is refused, never treated as the beginning: that
+		// would silently re-serve page one and read as an empty tail.
+		afterFP := ""
+		if in.After != "" {
+			fp, derr := decodeCursor(in.After)
+			if derr != nil {
+				return nil, FindEntitiesOutput{}, fmt.Errorf("invalid after %q: pass the next_cursor from the previous answer verbatim", in.After)
+			}
+			afterFP = fp
+		}
+		page, next, total := g.PageEntitiesByFingerprint(in.Type, afterFP, limit)
+		out := FindEntitiesOutput{Total: total, Truncated: next != ""}
+		if next != "" {
+			out.NextCursor = encodeCursor(next)
+			out.Truncation = fmt.Sprintf(
+				"%d of %d returned; the rest is reachable by calling again with after=%q, and only that way — the limit is capped at %d and there is no offset",
+				len(page), total, out.NextCursor, maxLimit)
+		}
+		out.Entities = make([]Entity, len(page))
+		for i, e := range page {
+			out.Entities[i] = entityOutV(e, false, compact)
+			s.attachProducers(&out.Entities[i], e.ID, compact)
+		}
+		if len(page) == 0 {
+			out.NoMatch = noMatchReason(g, in.Type, in.Match)
+		}
+		out.Graph = s.graphMeta(g, in.AsOf)
+		return nil, out, nil
+	}
+	all := g.ListEntitiesByFingerprint(in.Type)
 	matched := make([]model.Entity, 0, len(all))
 	for _, e := range all {
 		if matches(e, in.Match) {
 			matched = append(matched, e)
 		}
 	}
-	// Ordered by identity_fingerprint, not by the local id: the fingerprint is
-	// what every replica computes identically, so a page sequence survives a
-	// failover, and it does not move when an entity is re-minted after a silence.
-	sort.Slice(matched, func(i, j int) bool {
-		return matched[i].IdentityHash() < matched[j].IdentityHash()
-	})
 	total := len(matched)
 	matched, cursor, err := pageByFingerprint(matched, in.After, limit)
 	if err != nil {
@@ -855,6 +884,10 @@ func eventChangeType(ev model.Event) model.ChangeType {
 // AFTER a key cannot skip or repeat anything that still exists — it can only
 // reflect that the graph moved, which is the truth.
 func pageByFingerprint(all []model.Entity, after string, limit int) ([]model.Entity, string, error) {
+	// all arrives already ordered by fingerprint, read from the projection's hash
+	// index. Nothing is hashed here: ordering a page of fifty by recomputing
+	// every candidate's fingerprint cost 11k allocations where 1k sufficed, and
+	// doing it inside a sort comparator cost 278k, which the bench gate caught.
 	if after != "" {
 		fp, derr := decodeCursor(after)
 		if derr != nil {

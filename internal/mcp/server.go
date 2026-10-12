@@ -33,6 +33,14 @@ type Graph interface {
 	// logical id (ADR 0035).
 	ResolveHandle(handle string) (model.EntityID, bool)
 	ListEntities(typ string) []model.Entity
+	// ListEntitiesByFingerprint is the same list ordered by identity
+	// fingerprint, the only ordering a paged read can resume against. The
+	// projection reads it from its hash index rather than recomputing it.
+	ListEntitiesByFingerprint(typ string) []model.Entity
+	// PageEntitiesByFingerprint is the same ordering, paged in the projection so
+	// only the page is materialized. Used when no attribute filter applies —
+	// with one, every candidate must be examined and the full list is needed.
+	PageEntitiesByFingerprint(typ, after string, limit int) (page []model.Entity, next string, total int)
 	ListRelations(typ string, from, to model.EntityID) []model.Relation
 	RelationsTouching(id model.EntityID, relType string) []model.Relation
 	CountByType() map[string]int
