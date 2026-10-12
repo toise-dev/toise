@@ -28,6 +28,20 @@ the documentation gives the three alert rules a control needs to stop lying.
 
 ### Added
 
+- An edge now says who asserts it and how it was collected:
+  `via_asserted_by` / `via_collected_by` on `get_neighbors`, and
+  `assertedBy` / `collectedBy` on the GraphQL `Relation`. Two edges of one type
+  are not the same claim — an adjacency protocol *states* a link, a forwarding
+  table or an address cache lets one be *inferred* — and both arrive as
+  `connected_to`, so a consumer drawing a map could not show a measurement
+  differently from a correlation. The engine held both answers in its
+  per-producer reference counts and no read surface returned either (#455).
+  **Read as a set across producers**: one producer running several collection
+  methods reports only the one that spoke last, because the reference key is the
+  producer. That limitation is now pinned by a test rather than left to be
+  discovered, and whether the key should become `(producer, scope)` — which
+  would make the answer truthful and remove the union rule the contract imposes
+  on producers — is open on #455
 - `network.neighbor` and `neighbor_of` enter the producer vocabulary in
   `pkg/emit`: a link-layer neighbour an observer saw on one of its own interfaces
   and could not resolve to anything it already holds (ARP/NDP, an FDB line, an

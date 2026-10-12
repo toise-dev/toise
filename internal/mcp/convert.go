@@ -37,7 +37,7 @@ type Entity struct {
 	// CollectedBy names the collection methods currently asserting this entity.
 	// AssertedBy is who sends it; this is how it was gathered — the grain the
 	// producer contract makes normative, and the one a producer debugs in.
-	CollectedBy []string `json:"collected_by,omitempty" jsonschema:"the collection methods (instrumentation scopes) asserting this entity right now, e.g. senhub-agent/snmp-route. asserted_by is WHO sends it; this is HOW it was gathered. Two scopes mean two methods see the same thing, which is a different situation from one method reported by two agents. Absent when no asserting producer recorded a scope"`
+	CollectedBy []string `json:"collected_by,omitempty" jsonschema:"the collection methods (instrumentation scopes) asserting this entity right now, e.g. senhub-agent/snmp-route. asserted_by is WHO sends it; this is HOW it was gathered. Two scopes mean two methods see the same thing, which is a different situation from one method reported by two agents. One producer running several methods reports only the one that spoke LAST, because the reference count is keyed by producer (#455) - so read this as a set across producers, not as the list of a single agent collectors. Absent when no asserting producer recorded a scope"`
 }
 
 // Relation is a typed directed edge rendered for an LLM.
@@ -304,6 +304,22 @@ func (s *Server) graphMeta(g Graph, asOf string) GraphMeta {
 		m.OldestAnswerable = formatTime(h)
 	}
 	return m
+}
+
+// attachEdgeProvenance fills a neighbor's edge provenance from the engine's
+// per-producer reference counts. Nil cadence (an as-of fold, or no engine) fills
+// nothing: a fold has no live references to read, and an empty list there would
+// read as "nobody asserts this edge" rather than "not available in this view".
+func (s *Server) attachEdgeProvenance(nb *Neighbor, id model.RelationID) {
+	if s.cadence == nil {
+		return
+	}
+	if p := s.cadence.RelationAssertingProducers(id); len(p) > 0 {
+		nb.ViaAssertedBy = p
+	}
+	if sc := s.cadence.RelationAssertingScopes(id); len(sc) > 0 {
+		nb.ViaCollectedBy = sc
+	}
 }
 
 // attachProducers fills AssertedBy and CollectedBy from the engine's per-producer

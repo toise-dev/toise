@@ -30,6 +30,7 @@ type ResolverRoot interface {
 	Entity() EntityResolver
 	Mutation() MutationResolver
 	Query() QueryResolver
+	Relation() RelationResolver
 	Subscription() SubscriptionResolver
 }
 
@@ -151,12 +152,14 @@ type ComplexityRoot struct {
 	}
 
 	Relation struct {
-		Attributes func(childComplexity int) int
-		FromID     func(childComplexity int) int
-		ID         func(childComplexity int) int
-		Structural func(childComplexity int) int
-		ToID       func(childComplexity int) int
-		Type       func(childComplexity int) int
+		AssertedBy  func(childComplexity int) int
+		Attributes  func(childComplexity int) int
+		CollectedBy func(childComplexity int) int
+		FromID      func(childComplexity int) int
+		ID          func(childComplexity int) int
+		Structural  func(childComplexity int) int
+		ToID        func(childComplexity int) int
+		Type        func(childComplexity int) int
 	}
 
 	RelationConnection struct {
@@ -205,6 +208,10 @@ type QueryResolver interface {
 	EntityHistory(ctx context.Context, id string, since *string, until *string, asKnownAt *string, includeHeartbeats bool, first *int, after *string) (*ChangeConnection, error)
 	RecentChanges(ctx context.Context, window *string, from *string, to *string, scope *string, match []AttributeMatch, includeHeartbeats bool, first *int, after *string) (*ChangeConnection, error)
 	Canonical(ctx context.Context, id string, asOf *string) (*CanonicalGroup, error)
+}
+type RelationResolver interface {
+	AssertedBy(ctx context.Context, obj *Relation) ([]string, error)
+	CollectedBy(ctx context.Context, obj *Relation) ([]string, error)
 }
 type SubscriptionResolver interface {
 	EntityChanged(ctx context.Context, filter *ChangeFilter) (<-chan *ChangeEvent, error)
@@ -689,12 +696,24 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Query.Relations(childComplexity, args["filter"].(*RelationFilter), args["first"].(*int), args["after"].(*string), args["asOf"].(*string)), true
 
+	case "Relation.assertedBy":
+		if e.ComplexityRoot.Relation.AssertedBy == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Relation.AssertedBy(childComplexity), true
 	case "Relation.attributes":
 		if e.ComplexityRoot.Relation.Attributes == nil {
 			break
 		}
 
 		return e.ComplexityRoot.Relation.Attributes(childComplexity), true
+	case "Relation.collectedBy":
+		if e.ComplexityRoot.Relation.CollectedBy == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Relation.CollectedBy(childComplexity), true
 	case "Relation.fromId":
 		if e.ComplexityRoot.Relation.FromID == nil {
 			break
@@ -1186,6 +1205,28 @@ type Relation {
   attributes: [Attribute!]!
   "Whether the relation is structural (its add/remove is significant)."
   structural: Boolean!
+  """
+  The producers asserting this EDGE right now. An edge survives while any of them
+  asserts it, so one producer's silence never retracts another's edge.
+  """
+  assertedBy: [String!]! @goField(forceResolver: true)
+  """
+  The collection methods (instrumentation scopes) asserting this EDGE right now.
+
+  **Two edges of one type are not the same claim.** An adjacency protocol
+  *states* a link; a forwarding table or an address cache lets one be *inferred*.
+  Both arrive as ` + "`" + `connected_to` + "`" + `, and told apart one is a measurement and the other
+  a correlation — which is the difference a map has to draw, and the reason this
+  field exists (#455).
+
+  One producer running several methods reports only the one that spoke **last**,
+  because the reference count is keyed by producer (#455): read this as a set
+  across producers, not as the list of one agent's collectors.
+
+  Empty when no asserting producer recorded a scope, which reads as not recorded
+  rather than as no collector.
+  """
+  collectedBy: [String!]! @goField(forceResolver: true)
 }
 
 """
@@ -1796,6 +1837,10 @@ func (ec *executionContext) childFields_Relation(ctx context.Context, field grap
 		return ec.fieldContext_Relation_attributes(ctx, field)
 	case "structural":
 		return ec.fieldContext_Relation_structural(ctx, field)
+	case "assertedBy":
+		return ec.fieldContext_Relation_assertedBy(ctx, field)
+	case "collectedBy":
+		return ec.fieldContext_Relation_collectedBy(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type Relation", field.Name)
 }
@@ -4444,6 +4489,52 @@ func (ec *executionContext) _Relation_structural(ctx context.Context, field grap
 }
 func (ec *executionContext) fieldContext_Relation_structural(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("Relation", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _Relation_assertedBy(ctx context.Context, field graphql.CollectedField, obj *Relation) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Relation_assertedBy(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Relation().AssertedBy(ctx, obj)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
+			return ec.marshalNString2ᚕstringᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Relation_assertedBy(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("Relation", field, true, true, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _Relation_collectedBy(ctx context.Context, field graphql.CollectedField, obj *Relation) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Relation_collectedBy(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Relation().CollectedBy(ctx, obj)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
+			return ec.marshalNString2ᚕstringᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Relation_collectedBy(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("Relation", field, true, true, errors.New("field of type String does not have child fields"))
 }
 
 func (ec *executionContext) _RelationConnection_edges(ctx context.Context, field graphql.CollectedField, obj *RelationConnection) (ret graphql.Marshaler) {
@@ -7166,33 +7257,105 @@ func (ec *executionContext) _Relation(ctx context.Context, sel ast.SelectionSet,
 		case "id":
 			out.Values[i] = ec._Relation_id(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "type":
 			out.Values[i] = ec._Relation_type(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "fromId":
 			out.Values[i] = ec._Relation_fromId(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "toId":
 			out.Values[i] = ec._Relation_toId(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "attributes":
 			out.Values[i] = ec._Relation_attributes(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "structural":
 			out.Values[i] = ec._Relation_structural(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
+		case "assertedBy":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Relation_assertedBy(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "collectedBy":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Relation_collectedBy(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
