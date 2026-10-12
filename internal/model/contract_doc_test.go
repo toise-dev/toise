@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
+	"strings"
 	"testing"
 )
 
@@ -79,6 +81,87 @@ func TestEveryRegisteredTypeHasADocumentedIdentity(t *testing.T) {
 	for typ := range identityUnspecified {
 		if documented[typ] {
 			t.Errorf("entity type %q is documented now; remove it from identityUnspecified", typ)
+		}
+	}
+}
+
+// identityForms is every identity key set the data-model documents are allowed
+// to state, with what it identifies. A type may legitimately have more than one
+// form — a route on a host and a route on a polled device are keyed
+// differently — so the test cannot infer agreement; what it can do is make
+// every form a declaration.
+//
+// It exists because presence was not enough. The identity row for a route said
+// one thing in the producer contract and another in the mapping document for
+// four versions: the contract keys a route on its next hop, with the reason
+// written out (RFC 2096 indexes on it, and without it a host with two uplinks
+// collapses its two default routes into one entity whose gateway oscillates at
+// poll cadence), while the mapping document left the next hop out of the
+// identity and listed it as a descriptive attribute. Both were readable, one
+// was wrong, and a producer following the wrong one builds a graph that reports
+// a topology change every poll.
+var identityForms = map[string]string{
+	"host.id":                                         "host",
+	"service.instance.id":                             "service.instance",
+	"db.instance.id":                                  "db",
+	"container.id":                                    "container",
+	"network.device.id":                               "network.device",
+	"network.segment.id":                              "network.segment",
+	"host.id,vmid":                                    "compute.vm, a VM seen from its hypervisor",
+	"process.creation.time,process.pid":               "process",
+	"network.device.id,network.interface.name":        "network.interface, a port on a polled device",
+	"host.id,next_hop.ip,route.destination":           "network.route, on a host",
+	"network.device.id,next_hop.ip,route.destination": "network.route, on a polled device",
+	// Not an identity: the pair the retired adjacent_to carried as edge
+	// attributes, quoted in the contract as the shape ADR 0022 forbids.
+	"local_port,remote_port": "not an identity — the retired adjacent_to edge attributes, quoted to be refused",
+}
+
+// identityKeySet matches a brace-delimited set of dotted lowercase keys, which
+// is how every data-model document writes an identity.
+var identityKeySet = regexp.MustCompile(`\{([a-z][a-z0-9._]*(?:\s*,\s*[a-z][a-z0-9._]*)*)\}`)
+
+// TestIdentityFormsAreDeclared fails on an identity key set no one declared,
+// which is what a document disagreeing with another looks like.
+func TestIdentityFormsAreDeclared(t *testing.T) {
+	root := filepath.Join("..", "..", "docs", "data-model")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("reading %s: %v", root, err)
+	}
+	seen := map[string][]string{}
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
+			continue
+		}
+		b, rerr := os.ReadFile(filepath.Join(root, e.Name()))
+		if rerr != nil {
+			t.Fatalf("reading %s: %v", e.Name(), rerr)
+		}
+		for _, m := range identityKeySet.FindAllStringSubmatch(string(b), -1) {
+			keys := strings.Split(m[1], ",")
+			for i := range keys {
+				keys[i] = strings.TrimSpace(keys[i])
+			}
+			sort.Strings(keys)
+			k := strings.Join(keys, ",")
+			seen[k] = append(seen[k], e.Name())
+		}
+	}
+	// A positive control: the form every other one is read against.
+	if _, ok := seen["host.id"]; !ok {
+		t.Fatal("the extraction found no {host.id} anywhere; it is broken, not the docs")
+	}
+	for form, files := range seen {
+		if _, declared := identityForms[form]; !declared {
+			t.Errorf("the data-model documents state the identity {%s} (in %v) and nothing declares it; "+
+				"either it is a new form that belongs in identityForms with what it identifies, "+
+				"or it is a document disagreeing with another about how an object is keyed", form, files)
+		}
+	}
+	for form := range identityForms {
+		if _, ok := seen[form]; !ok {
+			t.Errorf("identityForms declares {%s} and no document states it any more; remove it", form)
 		}
 	}
 }
