@@ -55,7 +55,7 @@ exposed deployment (see [Authentication & TLS](configuration.md#authentication-t
 
 ## Prerequisites (build from source)
 
-- **Go 1.26 or newer** ([go.dev/dl](https://go.dev/dl/)).
+- **Go 1.26.9 or newer** ([go.dev/dl](https://go.dev/dl/)). Earlier 1.26 patches carry known net/http and html/template advisories; `go.mod` requires 1.26.9 so the toolchain is acquired automatically.
 - `make` and `git`.
 - A POSIX shell (Linux or macOS). Windows builds are produced in CI.
 

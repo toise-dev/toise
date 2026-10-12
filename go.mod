@@ -1,8 +1,6 @@
 module github.com/toise-dev/toise
 
-go 1.26
-
-toolchain go1.26.5
+go 1.26.9
 
 require (
 	github.com/99designs/gqlgen v0.17.90
@@ -18,7 +16,7 @@ require (
 	github.com/toise-dev/toise/pkg/emit v0.9.0
 	github.com/vektah/gqlparser/v2 v2.5.33
 	go.opentelemetry.io/collector/pdata v1.59.0
-	google.golang.org/grpc v1.82.1
+	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -70,13 +68,13 @@ require (
 	go.opentelemetry.io/collector/featuregate v1.59.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
-	golang.org/x/crypto v0.51.0 // indirect
+	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/exp v0.0.0-20230626212559-97b1e661b5df // indirect
-	golang.org/x/net v0.55.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
-	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.45.0 // indirect
-	golang.org/x/text v0.37.0 // indirect
+	golang.org/x/sync v0.23.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	gopkg.in/ini.v1 v1.67.2 // indirect
 )
