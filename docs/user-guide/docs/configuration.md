@@ -172,6 +172,29 @@ toise-server --production        # or production: true / TOISE_PRODUCTION=true
 off, winning over any individual setting. Set `allowed_origins` to the browser
 Origins permitted for WebSocket subscriptions and CORS (empty = same-origin only).
 
+Note what `production: true` does **not** change: retention, fsync, liveness
+expiry and verbosity are untouched. It closes the three development surfaces and
+nothing else.
+
+### Insecure configuration is a metric, not just a log line
+
+Two configuration choices leave data readable or unauthenticated on the network:
+a listener that is not loopback while auth or TLS is off, and log shipping with
+`log_shipping_s3_use_ssl` off to anything but loopback. Both are logged at
+startup — and a WARN at boot is read once, by nobody, which is how all three
+conditions once sat true in a production log for months.
+
+So they are also published, and can be alerted on:
+
+| metric | meaning |
+|---|---|
+| `toise_insecure_config_conditions` | how many conditions this instance has; **published even when zero**, so an alert on `> 0` does not depend on a series existing |
+| `toise_insecure_config{surface,addr,reason}` | one series per condition. `surface` is `listener` or `log_shipping`; `reason` is `no_auth`, `no_tls`, `no_auth_no_tls`, `cleartext` or `cleartext_public` |
+
+`cleartext_public` means the shipping endpoint is an IP that is neither loopback
+nor private: the segments do not merely travel unencrypted inside a perimeter,
+they leave it. Alert on that one separately if you alert on nothing else.
+
 ## Multi-tenancy
 
 One Toise instance can serve multiple tenants with **fully isolated** graphs — a

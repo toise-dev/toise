@@ -279,17 +279,26 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	authn.OnFailure(authFailures.Inc)
 	queryMetrics := metrics.NewQueryMetrics() // per-MCP-tool call/duration, shared across tenants
 
-	// An exposed listener without auth or TLS deserves a loud line at startup:
-	// the trusted-network defaults are loopback, and leaving them is a choice
-	// that should look like one (#115).
-	if !authn.Enabled() || !cfg.TLSEnabled() {
-		for _, addr := range []string{cfg.Listen, cfg.OTLPListen} {
-			if !loopbackAddr(addr) {
-				logger.Warn("listener is not loopback but auth and/or TLS are off — exposed deployments should set TOISE_AUTH_TOKENS and TLS (ADR 0024)",
-					"addr", addr, "auth", authn.Enabled(), "tls", cfg.TLSEnabled())
-			}
+	// An exposed listener without auth or TLS, and shipping that leaves readable,
+	// deserve a loud line at startup: the trusted-network defaults are loopback
+	// and TLS, and leaving them is a choice that should look like one (#115).
+	//
+	// The same list feeds a gauge. The log line alone was not enough: three of
+	// these conditions sat in a production log for months, each one true and
+	// correct, because nobody reads a WARN at boot. A metric can carry an alert.
+	exposure := metrics.NewExposure()
+	insecure := insecureConditions(cfg, authn.Enabled())
+	for _, c := range insecure {
+		switch c.Surface {
+		case "listener":
+			logger.Warn("listener is not loopback but auth and/or TLS are off — exposed deployments should set TOISE_AUTH_TOKENS and TLS (ADR 0024)",
+				"addr", c.Addr, "auth", authn.Enabled(), "tls", cfg.TLSEnabled())
+		case "log_shipping":
+			logger.Warn("log shipping is unencrypted: log_shipping_s3_use_ssl is off and the endpoint is not loopback, so every tenant's event log leaves this host readable on the wire — set log_shipping_s3_use_ssl, or point the endpoint at loopback or an address on a link you trust",
+				"endpoint", c.Addr, "public_ip", c.Reason == "cleartext_public")
 		}
 	}
+	exposure.Report(insecure)
 
 	// errc carries a fatal serve error from either server. A receiver that dies
 	// after startup MUST reach it: otherwise the process keeps serving HTTP,
@@ -381,6 +390,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	openTenants := metrics.NewOpenTenants(func() float64 { return float64(reg.TenantCount()) })
 	metricsExtra := append(ingestMetrics.Collectors(), authFailures, quarantined, openTenants)
 	metricsExtra = append(metricsExtra, maint.Collectors()...)
+	metricsExtra = append(metricsExtra, exposure.Collectors()...)
 	metricsExtra = append(metricsExtra, queryMetrics.Collectors()...)
 	// Annotation counts per tenant, so a replica-local overlay is at least
 	// measurable (#365): log shipping replicates the log, not the sidecar, so a
@@ -622,15 +632,6 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		target := cfg.LogShipDir
 		if cfg.LogShipS3Enabled() {
 			target = "s3://" + cfg.LogShipS3Bucket
-		}
-		// Shipping in the clear is the one log-shipping misconfiguration that is
-		// invisible once it works: the segments arrive, nothing fails, and every
-		// tenant's entity log has crossed the network readable. The default is TLS,
-		// so this only fires where an operator turned it off.
-		if cleartextShipping(cfg) {
-			logger.Warn("log shipping is unencrypted: log_shipping_s3_use_ssl is off and the endpoint is not loopback, so every tenant's event log leaves this host readable on the wire — set log_shipping_s3_use_ssl, or point the endpoint at loopback or an address on a link you trust",
-				"endpoint", cfg.LogShipS3Endpoint,
-				"public_ip", publicIPEndpoint(cfg.LogShipS3Endpoint))
 		}
 		shipper := logship.New(sink)
 		wg.Add(1)
@@ -1033,6 +1034,35 @@ func buildLogSink(cfg config.Config) (logship.Sink, error) {
 		})
 	}
 	return logship.NewFileSink(cfg.LogShipDir)
+}
+
+// insecureConditions lists the configuration choices that leave data readable
+// or unauthenticated on the network. One list feeds both the startup warnings
+// and the gauge, so the two can never disagree about what is exposed.
+func insecureConditions(cfg config.Config, authEnabled bool) []metrics.Condition {
+	var out []metrics.Condition
+	if !authEnabled || !cfg.TLSEnabled() {
+		reason := "no_auth_no_tls"
+		switch {
+		case authEnabled:
+			reason = "no_tls"
+		case cfg.TLSEnabled():
+			reason = "no_auth"
+		}
+		for _, addr := range []string{cfg.Listen, cfg.OTLPListen} {
+			if addr != "" && !loopbackAddr(addr) {
+				out = append(out, metrics.Condition{Surface: "listener", Addr: addr, Reason: reason})
+			}
+		}
+	}
+	if cleartextShipping(cfg) {
+		reason := "cleartext"
+		if publicIPEndpoint(cfg.LogShipS3Endpoint) {
+			reason = "cleartext_public"
+		}
+		out = append(out, metrics.Condition{Surface: "log_shipping", Addr: cfg.LogShipS3Endpoint, Reason: reason})
+	}
+	return out
 }
 
 // cleartextShipping reports whether log shipping would put segments on the wire
