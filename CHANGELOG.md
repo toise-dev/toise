@@ -23,6 +23,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Insecure configuration is now a metric, not only a startup line:
+  `toise_insecure_config{surface,addr,reason}` names each condition and
+  `toise_insecure_config_conditions` counts them, published even when zero so an
+  alert on `> 0` needs no series to exist first, with
+  `toise_insecure_config_last_check_timestamp_seconds` beside it because a zero
+  total proves only that something wrote a zero while a fresh timestamp proves
+  the list was walked — and because a vanished series makes a `> 0` rule go
+  quiet rather than fire, which needs a presence rule next to it (documented).
+  Covers both an exposed listener
+  with auth or TLS off and unencrypted log shipping, from one list that also
+  feeds the warnings, so the two can never disagree. A WARN at boot is read
+  once, by nobody: three of these conditions were true, correctly logged and
+  unread, in a production log for months.
 - The server now warns at startup when log shipping is unencrypted to a
   non-loopback endpoint, and says whether that endpoint is a public address. A
   segment is the tenant's whole event log verbatim; `log_shipping_s3_use_ssl`
