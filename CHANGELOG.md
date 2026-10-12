@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `toise-server --version` prints `version (commit)` and exits. Until now the
+  version was reachable only from a *running* server — the first line of stdout
+  and `toise_build_info{version,commit}` on `/metrics` — so an operator could
+  not ask what a file on disk was before deploying it, which is exactly when the
+  question is asked, and most sharply when the binary has been renamed
+
 ### Fixed
 
 - The mapping document keyed a `network.route` on `{network.device.id,

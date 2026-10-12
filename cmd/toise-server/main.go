@@ -58,6 +58,16 @@ import (
 )
 
 func main() {
+	// Before anything else, and before any configuration is read: an operator
+	// verifying what they are about to deploy cannot be made to start it to find
+	// out. Until this existed, the version lived only in the boot line on stdout
+	// and in toise_build_info on /metrics — both of which require a running
+	// server, and neither of which answers "what is this file on disk".
+	if versionRequested(os.Args[1:]) {
+		fmt.Println(version.String())
+		return
+	}
+
 	if len(os.Args) > 1 && os.Args[1] == "checkpoint" {
 		if err := runCheckpoint(os.Args[2:], os.Getenv); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -1034,6 +1044,21 @@ func buildLogSink(cfg config.Config) (logship.Sink, error) {
 		})
 	}
 	return logship.NewFileSink(cfg.LogShipDir)
+}
+
+// versionRequested reports whether the first argument asks for the version.
+// Only the first: a --version buried after other flags is more likely a typo in
+// a unit file than a request, and silently printing a version instead of
+// serving would look exactly like a crash loop.
+func versionRequested(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	switch args[0] {
+	case "--version", "-version", "version", "-v":
+		return true
+	}
+	return false
 }
 
 // insecureConditions lists the configuration choices that leave data readable

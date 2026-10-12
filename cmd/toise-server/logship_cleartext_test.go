@@ -123,3 +123,30 @@ func TestExposureReportsZero(t *testing.T) {
 		t.Fatalf("collectors = %d, want 3 (the labeled family, the total, the last-check timestamp)", n)
 	}
 }
+
+// TestVersionRequested pins which invocations print the version instead of
+// serving. The negative cases matter more than the positive ones: a server that
+// prints a version and exits where it was asked to serve looks exactly like a
+// crash loop, and a unit file with a stray flag must not produce that.
+func TestVersionRequested(t *testing.T) {
+	for _, args := range [][]string{
+		{"--version"}, {"-version"}, {"version"}, {"-v"},
+	} {
+		if !versionRequested(args) {
+			t.Errorf("%v must print the version", args)
+		}
+	}
+	for _, args := range [][]string{
+		nil,
+		{},
+		{"--listen", "0.0.0.0:8080"},
+		{"--listen", "0.0.0.0:8080", "--version"},
+		{"checkpoint", "--version"},
+		{"--versions"},
+		{"restore-log"},
+	} {
+		if versionRequested(args) {
+			t.Errorf("%v must serve (or run its subcommand), not print the version", args)
+		}
+	}
+}

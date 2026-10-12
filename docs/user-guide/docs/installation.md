@@ -30,11 +30,17 @@ tar -xzf ${BASE}
 ```
 
 Each tarball contains `toise-server` and `toise-probe` (plus README, LICENSE, and
-CHANGELOG). Run the server:
+CHANGELOG). Check what you extracted, then run it:
 
 ```bash
+./toise_${VERSION}_${OSARCH}/toise-server --version     # version (commit)
 ./toise_${VERSION}_${OSARCH}/toise-server --data-dir ./toise-data
 ```
+
+`--version` answers without starting anything, which matters when the file on
+disk has been renamed — the running server also prints its version on the first
+line of stdout and publishes it as `toise_build_info{version,commit}` on
+`/metrics`, but both of those need it started first.
 
 ## Docker image
 
