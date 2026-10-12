@@ -157,6 +157,12 @@ conclusion from a correct query (#346).
 - **Topology is traversed, not listed.** An address is a ` + "`network.address`" + ` entity two
   hops from its host, not an attribute on it. Walk with ` + "`get_neighbors`" + ` depth 2
   before deciding a fact is absent.
+- **A shared destination is not a connection.** Two machines that dial the same
+  object store, resolver or upstream API meet on one ` + "`network.endpoint`" + `
+  entity. ` + "`find_path`" + ` will not walk through it, and says instead which
+  endpoint both ends depend on: an endpoint is where a dependency lands, not a
+  waypoint between its dependents. Convergence on it says they want the same
+  thing, never that they talk to each other.
 - **Absence is not evidence of absence.** The graph is exactly as complete as its
   producers; check ` + "`describe_schema`" + ` counts before treating a gap as a fact about
   the world.

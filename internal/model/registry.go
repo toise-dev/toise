@@ -241,6 +241,23 @@ func ImpactFlowOf(relType string) ImpactFlow {
 	return ImpactBoth
 }
 
+// terminalEntityTypes are the types a traversal may end on but never pass
+// through. An observed network-endpoint is terminal by ADR 0032: it is the
+// destination a producer dialed, not a thing two dependents are part of, and
+// nothing is declared to leave it. Two entities that dial the same endpoint
+// converge on it; reading that convergence as a route between them asserts a
+// link neither producer observed.
+var terminalEntityTypes = map[string]struct{}{
+	TypeNetworkEndpoint: {},
+}
+
+// IsTerminalEntityType reports whether t may be an endpoint of a traversal but
+// not an intermediate hop.
+func IsTerminalEntityType(t string) bool {
+	_, ok := terminalEntityTypes[t]
+	return ok
+}
+
 // IsKnownEntityType reports whether t is a registered entity type.
 func IsKnownEntityType(t string) bool {
 	_, ok := entityTypes[t]
