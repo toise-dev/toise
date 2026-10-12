@@ -85,6 +85,32 @@ func (g *fakeGraph) ListEntities(typ string) []model.Entity {
 	return out
 }
 
+// The fake mirrors the projection's contract: fingerprint order, which is what
+// a paged read resumes against. Sorting here is fine — the real projection
+// reads the order from its hash index instead of recomputing it.
+func (g *fakeGraph) ListEntitiesByFingerprint(typ string) []model.Entity {
+	out := g.ListEntities(typ)
+	sort.Slice(out, func(i, j int) bool { return out[i].IdentityHash() < out[j].IdentityHash() })
+	return out
+}
+
+func (g *fakeGraph) PageEntitiesByFingerprint(typ, after string, limit int) ([]model.Entity, string, int) {
+	all := g.ListEntitiesByFingerprint(typ)
+	total := len(all)
+	if after != "" {
+		k := 0
+		for k < len(all) && all[k].IdentityHash() <= after {
+			k++
+		}
+		all = all[k:]
+	}
+	if len(all) <= limit {
+		return all, "", total
+	}
+	page := all[:limit]
+	return page, page[len(page)-1].IdentityHash(), total
+}
+
 func (g *fakeGraph) ListRelations(typ string, from, to model.EntityID) []model.Relation {
 	var out []model.Relation
 	for _, r := range g.relations {
