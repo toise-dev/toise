@@ -62,6 +62,15 @@ const (
 	// restrict on top of it, so the graph says two workloads COULD address each
 	// other, never that they do.
 	TypeNetworkSegment = wire.TypeNetworkSegment
+	// TypeNetworkNeighbor is a link-layer neighbor an observer saw on one of its
+	// own interfaces and could not resolve to an entity it already holds (ARP/NDP,
+	// an FDB line, an LLDP remote known only by its chassis MAC). Identity is the
+	// observer plus the MAC: a MAC is not globally unique, and the broadcast domain
+	// it would otherwise be scoped to is exactly what carries no assigned
+	// identifier (ADR 0034). Two observers on one segment hold two neighbors for
+	// one device on purpose — a wrong merge is permanent, a split is reconciled by
+	// a same_as belief once something identifies the far end (ADR 0020).
+	TypeNetworkNeighbor = wire.TypeNetworkNeighbor
 )
 
 // Phase-1 relation types. See ADR 0004.
@@ -69,8 +78,11 @@ const (
 	RelRunsOn       = wire.RelTypeRunsOn
 	RelHasInterface = wire.RelTypeHasInterface
 	RelBoundTo      = wire.RelTypeBoundTo
-	RelNextHopVia   = wire.RelTypeNextHopVia
-	RelListensOn    = wire.RelTypeListensOn
+	// RelNeighborOf attaches an unresolved link-layer neighbor to the interface
+	// that observed it.
+	RelNeighborOf = wire.RelTypeNeighborOf
+	RelNextHopVia = wire.RelTypeNextHopVia
+	RelListensOn  = wire.RelTypeListensOn
 )
 
 // Producer-vocabulary relation types (senhub-agent integration). The From/To
@@ -129,9 +141,13 @@ const (
 	// (FDB) by connected_to to the learned port. They remain registered (so the
 	// boundary still accepts them) but the contract derives the device-level views at
 	// read time. See docs/data-model/otel-mapping.md.
-	RelRoutesVia  = wire.RelTypeRoutesVia  // legacy: use network.route + has_route + next_hop_via
-	RelForwardsTo = wire.RelTypeForwardsTo // legacy: use connected_to to the learned port
-	RelAdjacentTo = wire.RelTypeAdjacentTo // legacy: use port-to-port connected_to
+	// The deprecation markers are aimed at producers, and the engine is the one
+	// legitimate caller: the boundary must keep accepting these until 1.0, and
+	// spelling the strings by hand here instead would break the cross-check that
+	// proves the wire vocabulary and this registry are the same set.
+	RelRoutesVia  = wire.RelTypeRoutesVia  //nolint:staticcheck // legacy, still accepted at the boundary: use network.route + has_route + next_hop_via
+	RelForwardsTo = wire.RelTypeForwardsTo //nolint:staticcheck // legacy, still accepted at the boundary: use connected_to to the learned port
+	RelAdjacentTo = wire.RelTypeAdjacentTo //nolint:staticcheck // legacy, still accepted at the boundary: use port-to-port connected_to
 )
 
 // ImpactFlow says in which direction a failure propagates across a relation
@@ -184,6 +200,7 @@ var entityTypes = map[string]struct{}{
 	TypeContainer:       {},
 	TypePod:             {},
 	TypeNetworkSegment:  {},
+	TypeNetworkNeighbor: {},
 }
 
 var relationTypes = map[string]RelationTypeDef{
@@ -207,6 +224,18 @@ var relationTypes = map[string]RelationTypeDef{
 	RelMonitors: {Type: RelMonitors, From: TypeServiceInstance, To: TypeHost, Structural: true, Impact: ImpactToFrom},
 	// "X has_route Y": the device failing drops its routes.
 	RelHasRoute: {Type: RelHasRoute, From: TypeNetworkDevice, To: TypeNetworkRoute, Structural: true, Impact: ImpactFromTo},
+	// "X neighbor_of Y": the interface that observed the neighbor failing ends the
+	// observation, so impact flows To->From like a dependency of the observer —
+	// the same argument as monitors. The reverse is NOT true and must not be
+	// modeled: an unresolved neighbor disappearing says nothing about the
+	// interface that saw it, and ImpactBoth here would put every device on a
+	// segment inside the blast radius of the host watching them.
+	//
+	// Structural: a device appearing on a segment is the alertable event, and it is
+	// the reason the type exists. What keeps that from flooding the change feed is
+	// the lifecycle, not the flag — a long declared interval and no retraction by
+	// absence, because an ARP cache evicts and an eviction is not a departure.
+	RelNeighborOf: {Type: RelNeighborOf, From: TypeNetworkNeighbor, To: TypeNetworkInterface, Structural: true, Impact: ImpactToFrom},
 	// connectivity is symmetric: either side failing breaks the link.
 	RelConnectedTo: {Type: RelConnectedTo, From: TypeNetworkInterface, To: TypeNetworkInterface, Structural: true, Impact: ImpactBoth},
 	// "X depends_on Y": the dependency target failing affects the dependent.

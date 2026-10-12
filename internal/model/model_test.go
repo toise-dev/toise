@@ -199,7 +199,7 @@ func TestRegistry(t *testing.T) {
 	if def, ok := RelationDef(RelListensOn); !ok || def.From != TypeServiceListener || def.To != TypeNetworkInterface {
 		t.Error("relation def wrong")
 	}
-	if len(EntityTypes()) != 14 || len(RelationTypes()) != 15 {
+	if len(EntityTypes()) != 15 || len(RelationTypes()) != 16 {
 		t.Errorf("registry counts: %d entity, %d relation", len(EntityTypes()), len(RelationTypes()))
 	}
 	// compute.vm (hypervisor-discovered VM), container and pod are registered
@@ -211,6 +211,21 @@ func TestRegistry(t *testing.T) {
 	}
 	if !IsKnownEntityType(TypeNetworkSegment) {
 		t.Error("network.segment must be a known entity type")
+	}
+	// network.neighbor is accepted under the strict vocabulary too: a producer
+	// emitting one against a Toise too old to know the type gets a per-record
+	// rejection, which is the whole reason the type has to ship before the
+	// producer enables it.
+	if !IsKnownEntityType(TypeNetworkNeighbor) {
+		t.Error("network.neighbor must be a known entity type")
+	}
+	// The observation must not run backwards: an unresolved neighbor going away
+	// says nothing about the interface that saw it, so impact flows from the
+	// interface only. ImpactBoth here would put every device on a segment inside
+	// the blast radius of the host watching them.
+	if def, ok := RelationDef(RelNeighborOf); !ok ||
+		def.From != TypeNetworkNeighbor || def.To != TypeNetworkInterface || def.Impact != ImpactToFrom {
+		t.Errorf("neighbor_of must run network.neighbor -> network.interface with impact To->From, got %+v", def)
 	}
 	// A segment is declared by its cluster and joined by a workload, and the two
 	// edges flow opposite ways: the cluster failing drops the segments it
