@@ -59,6 +59,16 @@ TOISE_LOG_SHIPPING_S3_SECRET_KEY=...
 
 Same segment layout (`<prefix>/<tenant>/<from>-<to>.seg`), same sink-derived cursor, same restore path. Pick a directory **or** a bucket, not both.
 
+!!! warning "A segment is the event log in the clear"
+
+    A segment carries every entity, identity and relationship the tenant has,
+    verbatim. `log_shipping_s3_use_ssl` defaults to `true`; turning it off sends
+    all of that readable to whoever is on the path, and nothing fails while it
+    happens — the segments arrive exactly as asked. The server warns at startup
+    when shipping is unencrypted to anything but loopback, and the warning says
+    whether the endpoint is a public address. Point the endpoint at a link you
+    trust, or leave TLS on.
+
 Shipping and the cold/scheduled checkpoint are complementary: the checkpoint is a coarse, instantly-openable full copy; the segments are a fine-grained, append-only tail. Keep both for a small RPO **and** a fast restore.
 
 ## Restore (runbook)

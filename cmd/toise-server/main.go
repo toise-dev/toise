@@ -623,6 +623,15 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		if cfg.LogShipS3Enabled() {
 			target = "s3://" + cfg.LogShipS3Bucket
 		}
+		// Shipping in the clear is the one log-shipping misconfiguration that is
+		// invisible once it works: the segments arrive, nothing fails, and every
+		// tenant's entity log has crossed the network readable. The default is TLS,
+		// so this only fires where an operator turned it off.
+		if cleartextShipping(cfg) {
+			logger.Warn("log shipping is unencrypted: log_shipping_s3_use_ssl is off and the endpoint is not loopback, so every tenant's event log leaves this host readable on the wire — set log_shipping_s3_use_ssl, or point the endpoint at loopback or an address on a link you trust",
+				"endpoint", cfg.LogShipS3Endpoint,
+				"public_ip", publicIPEndpoint(cfg.LogShipS3Endpoint))
+		}
 		shipper := logship.New(sink)
 		wg.Add(1)
 		go func() {
@@ -1024,6 +1033,30 @@ func buildLogSink(cfg config.Config) (logship.Sink, error) {
 		})
 	}
 	return logship.NewFileSink(cfg.LogShipDir)
+}
+
+// cleartextShipping reports whether log shipping would put segments on the wire
+// readable: S3 shipping on, TLS off, and a target that is not this host.
+func cleartextShipping(cfg config.Config) bool {
+	if !cfg.LogShipS3Enabled() || cfg.LogShipS3UseSSL {
+		return false
+	}
+	// No endpoint is no wire: LogShipS3Enabled only asks for a bucket, and a
+	// bucket alone never reaches a store.
+	return cfg.LogShipS3Endpoint != "" && !loopbackAddr(cfg.LogShipS3Endpoint)
+}
+
+// publicIPEndpoint reports whether addr's host is an IP that is neither
+// loopback nor private: cleartext sent there does not merely stay unencrypted
+// inside a perimeter, it leaves the perimeter. A hostname answers false — that
+// takes a resolution this does not do.
+func publicIPEndpoint(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsLinkLocalUnicast()
 }
 
 // loopbackAddr reports whether addr binds a loopback interface.

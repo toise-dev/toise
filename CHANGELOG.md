@@ -7,7 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- `find_path` no longer walks through an observed `network.endpoint`. The
+  endpoint is declared in one pair only, as the target of `depends_on`, and
+  nothing leaves it, so every transit entered by an inbound dependency and left
+  by another one reversed: two machines that dial the same store, resolver or
+  upstream API were rendered as connected. A terminal entity may be reached, and
+  may be the start, but may only be left by an edge it is the source of — the
+  test is the edge direction, not the type. When the search then fails, the
+  answer names the shared endpoints both ends depend on (`convergences`,
+  `convergence_total`, `convergence_note`) rather than denying the link and
+  burying the only useful fact. `impact_of` was never affected; `get_neighbors`
+  is unchanged, since it claims adjacency and not a route (#442)
+
+### Security
+
+- The server now warns at startup when log shipping is unencrypted to a
+  non-loopback endpoint, and says whether that endpoint is a public address. A
+  segment is the tenant's whole event log verbatim; `log_shipping_s3_use_ssl`
+  defaults to `true`, and turning it off is the one shipping misconfiguration
+  that never shows up as a failure — the segments arrive exactly as asked.
 
 ## [0.20.0] - 2026-10-12
 
