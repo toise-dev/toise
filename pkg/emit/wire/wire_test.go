@@ -19,7 +19,7 @@ func TestVocabularyLists(t *testing.T) {
 			want: []string{TypeHost, TypeProcess, TypeNetworkInterface, TypeNetworkAddress,
 				TypeNetworkRoute, TypeServiceListener, TypeServiceInstance, TypeDatabase,
 				TypeNetworkDevice, TypeNetworkEndpoint, TypeComputeVM, TypeContainer,
-				TypePod, TypeNetworkSegment},
+				TypePod, TypeNetworkSegment, TypeNetworkNeighbor},
 		},
 		{
 			what: "relation type",
@@ -27,6 +27,7 @@ func TestVocabularyLists(t *testing.T) {
 			want: []string{RelTypeRunsOn, RelTypeHasInterface, RelTypeBoundTo, RelTypeNextHopVia,
 				RelTypeListensOn, RelTypeMonitors, RelTypeHasRoute, RelTypeConnectedTo,
 				RelTypeDependsOn, RelTypeSameAs, RelTypeAttachedTo, RelTypeHasSegment,
+				RelTypeNeighborOf,
 				RelTypeRoutesVia, RelTypeForwardsTo, RelTypeAdjacentTo},
 		},
 	} {
