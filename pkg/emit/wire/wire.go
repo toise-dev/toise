@@ -140,14 +140,14 @@ const (
 	// network policies restrict on top of it, and on a flat cluster network
 	// shared membership says almost nothing.
 	TypeNetworkSegment = "network.segment"
-	// TypeNetworkNeighbor is a link-layer neighbour an observer saw answering on
+	// TypeNetworkNeighbor is a link-layer neighbor an observer saw answering on
 	// one of its own interfaces, and could not resolve to anything it already
 	// holds: an ARP or NDP entry, an FDB line, an LLDP remote known by its chassis
 	// MAC alone. Identity is the OBSERVER plus the MAC — {host.id, mac} — because
 	// a MAC is not a globally unique identity (it repeats under virtualization and
 	// rotates under randomization) and the broadcast domain it would otherwise be
 	// scoped to is precisely what has no assigned identifier (ADR 0034). Two
-	// observers on one segment therefore hold two neighbours for one device, which
+	// observers on one segment therefore hold two neighbors for one device, which
 	// is the intended trade: a wrong merge can never be undone, while a split is
 	// reconciled by a same_as belief the day a producer identifies the far end.
 	// It is NOT a network.interface: fabricating a port for an unresolved MAC is
@@ -177,12 +177,12 @@ const (
 	RelTypeMonitors = "monitors"
 	// RelTypeHasRoute attaches a routing-table entry to the device that holds it.
 	RelTypeHasRoute = "has_route"
-	// RelTypeNeighborOf attaches an unresolved link-layer neighbour to the
-	// interface that observed it. Read actively: "this neighbour was seen on that
-	// interface". It is an observation and not a dependency, so a neighbour
+	// RelTypeNeighborOf attaches an unresolved link-layer neighbor to the
+	// interface that observed it. Read actively: "this neighbor was seen on that
+	// interface". It is an observation and not a dependency, so a neighbor
 	// failing says nothing about the interface — but losing the interface loses
 	// the observation, which is why impact flows from the interface to the
-	// neighbour and never the other way (the same argument as monitors).
+	// neighbor and never the other way (the same argument as monitors).
 	RelTypeNeighborOf = "neighbor_of"
 	// RelTypeConnectedTo is bare port-to-port link-layer adjacency (ADR 0022).
 	// The edge carries no attributes; the ports do.
