@@ -99,6 +99,7 @@ leased IP) in the identity — those are descriptive attributes. Agreed identiti
 | `compute.vm` | `{host.id, vmid}` — the **hypervisor node's** `host.id` plus the hypervisor's vm id | a VM seen **from the hypervisor**, where the guest machine-id is unavailable. **Not** a `host` (a vmid is not a machine-id). `runs_on` the hypervisor `host`. The in-guest `host` (machine-id) is a separate facet, reconciled later by a `same_as` overlay (ADR 0020), never merged. **If the hypervisor *does* surface the guest machine-id (e.g. Hyper-V KVP), carry it as the descriptive attribute `guest.host.id` — evidence, never identity (the id stays `{host.id, vmid}`) — and still do not emit a `host` facet or merge.** That attribute is the `same_as` join key the overlay will consume; per ADR 0020 the producer asserts `same_as` (basis/confidence) once the read-time collapse lands; `same_as` has been a registered relation type since v0.16.0, with endpoints unconstrained, so a producer holding a justified link may assert it today, and the evidence rides as `guest.host.id` only until then. Same pattern as AT8 (redfish/ibmi carry `hw.serial_number` on both facets). |
 | `container` | `{container.id}` | an OCI/Docker container — a compute resource, not a `service.instance`. `image`/`name` descriptive; `status` is a **state key** (see below); `runs_on` its `host`. |
 | `network.segment` | `{network.segment.id}` — a single subtype-prefixed value by **precedence**, of which only `swarm:<network-id>` is **frozen** | a broadcast/reachability domain with an **assigned** identifier (ADR 0034). `k8s:` and `vlan:` are deliberately **open**: Kubernetes has no object to identify in the default flat-network case, and a VLAN id is not globally unique while a VLAN trunked across five switches is **one** segment, not five. Emitted **with its `has_segment` edge from the declaring cluster or not at all** — a segment nobody can say whose it is has no business in the graph. Workloads join it with `attached_to` **from the entity holding the network namespace**: a `container` on Docker/Swarm, a `pod` on Kubernetes. Subnet / internal / ingress are descriptive. Membership is **necessary and not sufficient** for reachability. |
+| `network.neighbor` | `{host.id, mac}` — the **observing** host's id, plus the neighbour's MAC | a link-layer neighbour an observer saw on one of its own interfaces and could **not** resolve to an entity it already holds (ARP/NDP, an FDB line, an LLDP remote known only by its chassis MAC). **`host.id` here is a SCOPE, not an owner** — the same role it plays as the fourth key of a host-local `network.endpoint`. Scoped on the observer because a MAC is not globally unique (it repeats under virtualization, rotates under randomization) and a broadcast domain carries no assigned identifier (ADR 0034). Two observers on one segment therefore hold two neighbours for one device, on purpose: a wrong merge is permanent, a split is reconciled by a `same_as` belief. **Not** a `network.interface` — see the phantom-port rule. Our own extension: the upstream convention has no neighbour entity. |
 
 #### `db.instance.id` — the host-scoped fallback
 
@@ -420,6 +421,65 @@ interface carries:
 
   The IP-resolution / connection-topology overlay still uses only the subset that have
   addresses.
+
+### AT14 — `network.neighbor`: what an observer saw and could not name
+
+A `network.neighbor` is the home for a link-layer observation that resolves to
+nothing: an ARP or NDP entry, an FDB line, an LLDP remote known only by its chassis
+MAC. It exists so that such an observation can be recorded **without claiming
+anything the producer did not see** — and in particular without fabricating an
+interface for it.
+
+**It is our own extension.** The upstream convention has no neighbour entity, and no
+entity keyed on a MAC; `host.mac` exists as an attribute and `network.interface.name`
+is a release candidate, and that is the whole of the upstream surface here. Read this
+section as a Toise vocabulary decision, not as a convention to expect elsewhere.
+
+**Identity: `{host.id, mac}`, where `host.id` is the OBSERVER.** The same role that
+key plays as the fourth key of a host-local `network.endpoint`: a scope, never an
+owner. The MAC is written in the lowercase colon form (`aa:bb:cc:dd:ee:ff`).
+
+| Key | Type | Value | Note |
+| --- | --- | --- | --- |
+| `network.neighbor.addresses` | string[] | `["10.10.0.1"]` | the addresses observed answering at this MAC, one element per address, **never** a joined string — the same array form and the same reason as `network.interface.addresses` |
+| `network.neighbor.observed.interface` | string | `eth0` | the observing interface's `network.interface.name`. **Descriptive and not identifying**, deliberately: a neighbour seen by two NICs of one host is one neighbour, not two, and putting the local interface name in the key would also make `network.interface.name` mean the *observing* interface here while it means the entity's own name everywhere else |
+| `hw.vendor` | string | `Cisco` | the OUI owner, when the producer resolves it. The value must be **comparable** (the registry spelling), not the most literal — the rule that already governs `hw.vendor` on a device |
+
+No `first_seen` / `last_seen`. The bi-temporal log already answers both exactly, and
+an attribute holding "when I last saw this" changes every cycle, which turns every
+neighbour into a modification event per cycle and drowns the change feed.
+
+**Lifecycle: an ARP cache evicts, and an eviction is not a departure.** Three rules,
+and the first is the one that matters:
+
+1. **Never retract a neighbour by absence.** An entry missing from a read says
+   nothing about the neighbour. This follows ADR 0036 — an inventory is not a sample —
+   and a producer that cannot guarantee a read is exhaustive must not let absence
+   speak.
+2. Declare a **long** `entity.report.interval`, about 24 h, so the liveness backstop
+   never expires a neighbour at the cadence of an ARP read. The interval is declared
+   per entity, and must match the **slowest** method that reports it.
+3. Several collection methods describing the same entity must emit the **union** of
+   what they know of it, because removal by absence is scoped to one entity's own
+   `entity.relationships` array: two methods each emitting their own partial array
+   retract each other's edges, at the cadence of both.
+
+**Relation: `neighbor_of`** (neighbour → the observing `network.interface`), read
+actively — this neighbour was seen on that interface. Impact flows from the interface
+to the neighbour only: losing the interface ends the observation, while an unresolved
+neighbour going away says nothing about the interface that saw it.
+
+**Identification later is a belief, never a merge.** When SNMP identifies the device,
+or an agent is installed on the machine, the join to its `network.interface` or `host`
+is a weighted `same_as` (ADR 0020). Nothing rewrites the neighbour's identity, and
+nothing merges the two silently — which is what makes the observer scope safe: a
+split is reparable, a wrong merge is not.
+
+**Filter before emitting.** Multicast and broadcast MACs, incomplete entries, and the
+addresses that repeat by convention — the range table in this contract is the
+**floor, not the test**. The test is the one written there: would this value be the
+same on a machine that has nothing to do with this one? Locally administered random
+MACs belong in the same bin when they can be told apart.
 
 ### Time & liveness — explicit delete + interval backstop
 
