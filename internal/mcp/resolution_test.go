@@ -24,6 +24,10 @@ func (f fakeCadence) AssertingProducers(model.EntityID) []string { return nil }
 
 func (f fakeCadence) AssertingScopes(model.EntityID) []string { return nil }
 
+func (f fakeCadence) RelationAssertingProducers(model.RelationID) []string { return nil }
+
+func (f fakeCadence) RelationAssertingScopes(model.RelationID) []string { return nil }
+
 // An answer states the resolution of its own timestamps, so a consumer knows how
 // finely it may read them without having to know the producer's configuration.
 func TestGetEntityCarriesResolution(t *testing.T) {

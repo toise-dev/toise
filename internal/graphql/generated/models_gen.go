@@ -351,6 +351,24 @@ type Relation struct {
 	Attributes []Attribute `json:"attributes"`
 	// Whether the relation is structural (its add/remove is significant).
 	Structural bool `json:"structural"`
+	// The producers asserting this EDGE right now. An edge survives while any of them
+	// asserts it, so one producer's silence never retracts another's edge.
+	AssertedBy []string `json:"assertedBy"`
+	// The collection methods (instrumentation scopes) asserting this EDGE right now.
+	//
+	// **Two edges of one type are not the same claim.** An adjacency protocol
+	// *states* a link; a forwarding table or an address cache lets one be *inferred*.
+	// Both arrive as `connected_to`, and told apart one is a measurement and the other
+	// a correlation — which is the difference a map has to draw, and the reason this
+	// field exists (#455).
+	//
+	// One producer running several methods reports only the one that spoke **last**,
+	// because the reference count is keyed by producer (#455): read this as a set
+	// across producers, not as the list of one agent's collectors.
+	//
+	// Empty when no asserting producer recorded a scope, which reads as not recorded
+	// rather than as no collector.
+	CollectedBy []string `json:"collectedBy"`
 }
 
 // A paginated list of relations.

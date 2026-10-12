@@ -1174,4 +1174,125 @@ func TestAssertingScopesAnswersHowNotWho(t *testing.T) {
 	if len(got) != 2 || got[0] != "senhub-agent/snmp-lldp" || got[1] != "senhub-agent/snmp-route" {
 		t.Errorf("scopes = %v, want both methods sorted", got)
 	}
+	// And read why that passed: agent-b still holds snmp-route. It is NOT evidence
+	// that one producer can carry two scopes — see the next test, which is the
+	// shape a real multi-method agent has.
+}
+
+// TestOneProducerKeepsOnlyItsLatestScope records a limitation, not a wish.
+//
+// The reference map is keyed by producer (ADR 0019), so a producer asserting the
+// same entity through two collection methods overwrites its own reference, scope
+// included: AssertingScopes then reports whichever method spoke last, and it
+// flips at the cadence of the two. An agent running six collectors — the shape
+// senhub-agent 0.6.4 has — therefore gets a single rotating value where the
+// consumer needs the set.
+//
+// That is the measurement behind #455: making the reference key (producer,
+// scope) would make this answer truthful for entities and edges alike, and would
+// at the same time remove the union rule the contract currently imposes on
+// producers. Until that is decided, this test pins what the answer actually is,
+// so nobody reads the field as a set.
+func TestOneProducerKeepsOnlyItsLatestScope(t *testing.T) {
+	now := fixedNow()
+	e := New(projection.New(), &fakeAppender{}, WithClock(func() time.Time { return now }))
+	ident := []model.KeyValue{kv("host.id", "h-multi")}
+
+	var id model.EntityID
+	observe := func(scope string) {
+		t.Helper()
+		if err := e.Batch(func(b *Batch) {
+			b.SetScope(scope)
+			ev, err := b.ObserveEntity(EntityObservation{
+				Type: model.TypeHost, Identity: ident, EventTime: now,
+				Producer: "agent-a", Interval: time.Hour,
+			})
+			if err != nil {
+				t.Errorf("observe: %v", err)
+				return
+			}
+			id = ev.Entity.Entity.ID
+		}); err != nil {
+			t.Fatalf("batch: %v", err)
+		}
+	}
+
+	observe("senhub-agent/host-arp")
+	observe("senhub-agent/snmp-lldp")
+
+	if got := e.AssertingProducers(id); len(got) != 1 || got[0] != "agent-a" {
+		t.Errorf("producers = %v, want the one agent", got)
+	}
+	if got := e.AssertingScopes(id); len(got) != 1 || got[0] != "senhub-agent/snmp-lldp" {
+		t.Errorf("scopes = %v, want only the method that spoke last — if this now returns both, "+
+			"the reference key gained the scope and this test should assert the set instead", got)
+	}
+}
+
+// TestEdgeProvenanceIsReadable pins #455's first half: an edge now says who
+// asserts it and how it was collected, which it did not before.
+//
+// Two edges of one type are not the same claim — an adjacency protocol states a
+// link, a forwarding table lets one be inferred — and a consumer drawing a map
+// has to tell a measurement from a correlation. The engine held both answers in
+// its reference counts and no read surface returned either.
+func TestEdgeProvenanceIsReadable(t *testing.T) {
+	now := fixedNow()
+	e := New(projection.New(), &fakeAppender{}, WithClock(func() time.Time { return now }))
+
+	left := EndpointRef{Type: model.TypeNetworkInterface, Identity: []model.KeyValue{kv("network.interface.name", "eth0")}}
+	right := EndpointRef{Type: model.TypeNetworkInterface, Identity: []model.KeyValue{kv("network.interface.name", "Gi1/0/1")}}
+
+	var relID model.RelationID
+	assert := func(producer, scope string) {
+		t.Helper()
+		if err := e.Batch(func(b *Batch) {
+			b.SetScope(scope)
+			if _, err := b.ObserveEntity(EntityObservation{
+				Type: left.Type, Identity: left.Identity, EventTime: now, Producer: producer, Interval: time.Hour,
+			}); err != nil {
+				t.Errorf("observe left: %v", err)
+				return
+			}
+			if _, err := b.ObserveEntity(EntityObservation{
+				Type: right.Type, Identity: right.Identity, EventTime: now, Producer: producer, Interval: time.Hour,
+			}); err != nil {
+				t.Errorf("observe right: %v", err)
+				return
+			}
+			ev, _, err := b.ObserveRelation(RelationObservation{
+				Type: model.RelConnectedTo, From: left, To: right, EventTime: now,
+				Producer: producer, Interval: time.Hour,
+			})
+			if err != nil {
+				t.Errorf("observe relation: %v", err)
+				return
+			}
+			if ev.Relation != nil {
+				relID = ev.Relation.Relation.ID
+			}
+		}); err != nil {
+			t.Fatalf("batch: %v", err)
+		}
+	}
+
+	// The same link, stated by an adjacency protocol on one agent and inferred
+	// from a forwarding table on another.
+	assert("agent-a", "senhub-agent/snmp-lldp")
+	assert("agent-b", "senhub-agent/snmp-fdb")
+
+	if relID == "" {
+		t.Fatal("no relation id captured")
+	}
+	if got := e.RelationAssertingProducers(relID); len(got) != 2 || got[0] != "agent-a" || got[1] != "agent-b" {
+		t.Errorf("edge producers = %v, want both agents sorted", got)
+	}
+	got := e.RelationAssertingScopes(relID)
+	if len(got) != 2 || got[0] != "senhub-agent/snmp-fdb" || got[1] != "senhub-agent/snmp-lldp" {
+		t.Errorf("edge scopes = %v, want the stated and the inferred method, sorted", got)
+	}
+	// An edge nobody asserts answers nothing rather than guessing.
+	if got := e.RelationAssertingScopes(model.RelationID("no-such-edge")); len(got) != 0 {
+		t.Errorf("unknown edge = %v, want empty", got)
+	}
 }

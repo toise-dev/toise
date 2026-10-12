@@ -140,6 +140,8 @@ tool get_neighbors
       identity_fingerprint string
       label string
       type string
+    via_asserted_by []string
+    via_collected_by []string
     via_relation string
   next_cursor string
   total int

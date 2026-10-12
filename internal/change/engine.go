@@ -534,6 +534,57 @@ func (e *Engine) AssertingProducers(id model.EntityID) []string {
 	return out
 }
 
+// RelationAssertingProducers names the producers currently asserting an edge,
+// sorted. RelationAssertingScopes answers the other half: not who sends the
+// edge but HOW it was collected.
+//
+// Both exist because an edge with several sources is the normal case once a
+// producer runs several collection methods, and the two questions have different
+// answers. A link an adjacency protocol states and a link inferred from a
+// forwarding table are both a connected_to; told apart, one is a measurement and
+// the other a correlation, and a consumer drawing a map needs to draw them
+// differently (#455).
+func (e *Engine) RelationAssertingProducers(id model.RelationID) []string {
+	e.obsMu.Lock()
+	defer e.obsMu.Unlock()
+
+	out := make([]string, 0, len(e.relRefs[id]))
+	for producer := range e.relRefs[id] {
+		if producer == "" {
+			// The anonymous producer, as for entities: a pre-refcount snapshot
+			// restores under it and naming it would invent an identity.
+			continue
+		}
+		out = append(out, producer)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// RelationAssertingScopes names the collection methods currently asserting an
+// edge, deduplicated and sorted. A reference recorded before scopes were kept on
+// edges contributes nothing rather than an empty string: an unnamed scope reads
+// as a collector with no name, where its absence reads as not recorded.
+func (e *Engine) RelationAssertingScopes(id model.RelationID) []string {
+	e.obsMu.Lock()
+	defer e.obsMu.Unlock()
+
+	seen := make(map[string]struct{}, len(e.relRefs[id]))
+	out := make([]string, 0, len(e.relRefs[id]))
+	for _, ref := range e.relRefs[id] {
+		if ref.scope == "" {
+			continue
+		}
+		if _, dup := seen[ref.scope]; dup {
+			continue
+		}
+		seen[ref.scope] = struct{}{}
+		out = append(out, ref.scope)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // AssertingScopes names the COLLECTION METHODS currently asserting an entity,
 // deduplicated and sorted.
 //
@@ -869,9 +920,9 @@ func (e *Engine) observeRelationLocked(obs RelationObservation) (model.Event, bo
 		e.relRefs[rel.ID] = refs
 	}
 	if obs.Interval > 0 {
-		refs[obs.Producer] = liveRef{deadline: e.now().Add(obs.Interval), interval: obs.Interval}
+		refs[obs.Producer] = liveRef{deadline: e.now().Add(obs.Interval), interval: obs.Interval, scope: e.currentScope()}
 	} else {
-		refs[obs.Producer] = liveRef{}
+		refs[obs.Producer] = liveRef{scope: e.currentScope()}
 	}
 
 	var ct model.ChangeType

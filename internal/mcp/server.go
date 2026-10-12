@@ -62,6 +62,14 @@ type Cadence interface {
 	// which is the grain the producer contract makes normative and the grain a
 	// producer debugs in (#394).
 	AssertingScopes(id model.EntityID) []string
+
+	// RelationAssertingProducers and RelationAssertingScopes answer the same two
+	// questions for an EDGE. Without them, two edges of the same type — one an
+	// adjacency protocol states, one inferred from a forwarding table — are
+	// indistinguishable on the graph, so a consumer drawing a map cannot show a
+	// measurement differently from a correlation (#455).
+	RelationAssertingProducers(id model.RelationID) []string
+	RelationAssertingScopes(id model.RelationID) []string
 }
 
 // EventReader is the subset of the event log the MCP tools read history from

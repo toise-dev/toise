@@ -284,6 +284,10 @@ type Neighbor struct {
 	ViaRelation string `json:"via_relation" jsonschema:"relation type of the edge that first reached this entity"`
 	Direction   string `json:"direction" jsonschema:"outgoing if that edge points from the previous hop to this entity, incoming otherwise"`
 	Depth       int    `json:"depth" jsonschema:"hop distance from the start entity"`
+	// Provenance of the EDGE, not of the entity: the entity's own asserted_by /
+	// collected_by live on the embedded Entity.
+	ViaAssertedBy  []string `json:"via_asserted_by,omitempty" jsonschema:"the producers asserting that EDGE right now (the entity's own producers are in asserted_by)"`
+	ViaCollectedBy []string `json:"via_collected_by,omitempty" jsonschema:"the collection methods (instrumentation scopes) asserting that EDGE right now. Two edges of one type are not the same claim: an adjacency protocol STATES a link, a forwarding table lets one be INFERRED. Draw a measurement differently from a correlation. One producer running several methods reports only the one that spoke LAST (#455), so this is a set across producers rather than a single agent list of collectors. Absent when no asserting producer recorded a scope"`
 	// ResolvedEntity is the read-time binding of an observed network.endpoint to
 	// the canonical host/service.listener it denotes (#184). The stored edge
 	// still targets the endpoint; this is a derived overlay, never persisted.
@@ -356,6 +360,7 @@ func (s *Server) getNeighbors(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 					Direction:   e.direction,
 					Depth:       d,
 				}
+				s.attachEdgeProvenance(&nb, e.rel.ID)
 				if ent.Type == model.TypeNetworkEndpoint {
 					if resolved, ok := resolveEndpoint(g, ent); ok {
 						ro := entityOutV(resolved, false, compact)
