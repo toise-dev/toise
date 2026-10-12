@@ -109,6 +109,16 @@ func LabelName(e Entity) string {
 var displayNameComposed = map[string]func(Entity) string{
 	TypeNetworkEndpoint: endpointName,
 	TypeDatabase:        databaseName,
+	TypeNetworkNeighbor: neighborName,
+}
+
+// neighborName renders a neighbor as its MAC, which is the identifying half a
+// human reads it by. The observed addresses are deliberately not used: there can
+// be several, the set changes as leases move, and a name that changes shape with
+// the data is worse than a name that is always the same kind of thing. The
+// addresses are one attribute away for anyone who wants them.
+func neighborName(e Entity) string {
+	return attrValue(e, "mac")
 }
 
 // endpointName renders an endpoint as address:port, bracketing an IPv6 literal

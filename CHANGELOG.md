@@ -19,7 +19,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is reconciled by a `same_as` belief. It is deliberately not a
   `network.interface`, which would be the phantom port the mapping document
   forbids. Contract, lifecycle (no retraction by absence, ~24 h interval) and
-  filters are specified; the engine registry follows once `pkg/emit` is tagged
+  filters are specified. The engine registers the type, the relation pair
+  (`neighbor_of`, neighbour to observing interface, impact flowing from the
+  interface only — `ImpactBoth` would put every device on a segment inside the
+  blast radius of the host watching them) and the display name, on
+  `pkg/emit/v0.12.0`. **A producer must not enable emission until a Toise
+  carrying the type is deployed**: under the default strict vocabulary the
+  records are rejected per record until then, and the conformance kit cannot
+  catch that — it validates shape, not registry membership. The observable is
+  `toise_ingest_records_total{result="rejected"}`
 - `toise-server --version` prints `version (commit)` and exits. Until now the
   version was reachable only from a *running* server — the first line of stdout
   and `toise_build_info{version,commit}` on `/metrics` — so an operator could
