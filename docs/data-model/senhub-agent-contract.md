@@ -812,6 +812,33 @@ from this round:
 | Explicit `Warn` on dropped nested value | **done** |
 | Multi-producer liveness (per-producer ref-counting) | **done** (ADR 0019) |
 
+## One export has a size cap, and splitting a snapshot is safe
+
+`otlp_max_recv_bytes` caps one OTLP/gRPC export and defaults to gRPC's 4 MiB.
+Past it the export is refused **whole**, with `ResourceExhausted` — nothing is
+silent, and nothing partial lands. A 5,000-host inventory is around 10 MB, so an
+estate of that size cannot send its snapshot in one export (#351). Either raise
+the cap deliberately, remembering that one export is buffered in memory per
+in-flight request, or split.
+
+**Splitting between entities is safe. Splitting within an entity is not.**
+
+An entity **omitted** from an export is not deleted. Absence removes nothing at
+the entity level: an omitted entity expires only if no producer reasserts it
+within its declared `entity.report.interval`, and that expiry carries
+`liveness_expiry`, never `producer`.
+
+What absence removes is **edges**, and only for an entity the export *does*
+re-emit. The `entity.relationships` array is the sole on-wire relationship form,
+and removal is by absence on re-emit. So an entity you send must carry its
+**complete** array, or you delete the edges you left out of it.
+
+Two rules follow, and the second is the one that bites at scale:
+
+- split **between** entities, never **within** one;
+- land every part within the **shortest** `entity.report.interval` in the batch,
+  or the entities you have not sent yet expire while you are still sending.
+
 ## Follow-up
 
 - **senhub-agent #185** implements the emitter against the converged contract:

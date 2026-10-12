@@ -373,9 +373,29 @@ such unresolved endpoints.
 
 **Cadence:** poll topology **slower than metrics** (≈5–15 min); set
 `entity.report.interval` to ≈**3× the topology cadence** (not the metric cadence) or
-the liveness sweeper reaps devices between polls. Emit a **full snapshot per cycle
-as one OTLP export** (one batched durable append); **no sampling** — a partial
-snapshot would read as deletes. The committed conformance fixture carries the
+the liveness sweeper reaps devices between polls. Emit a **full snapshot per cycle**,
+batched into as few OTLP exports as the size cap allows (each export is one
+durable append); **no sampling** — a sampled snapshot drops edges, see below.
+
+**One export is capped** at `otlp_max_recv_bytes`, which defaults to gRPC's
+4 MiB. Past it the export is refused **whole**, with `ResourceExhausted` to the
+producer — nothing is silent, but nothing partial lands either. A 5,000-host
+inventory is around 10 MB, so at that scale "one export" is not reachable
+(#351). Raise the cap deliberately — one export is buffered in memory per
+in-flight request — or split the snapshot.
+
+**Splitting is safe, and the rule is exact.** An entity *omitted* from an export
+is **not** deleted: absence removes nothing at the entity level, and an omitted
+entity expires only if no producer reasserts it within its declared
+`entity.report.interval`. What absence removes is **edges**, and only for an
+entity the export *does* re-emit: the `entity.relationships` array is the sole
+on-wire relationship form, and removal is by absence on re-emit. So:
+
+- split **between** entities, never **within** one — every entity you re-emit
+  must carry its **complete** relationship array, or you delete the edges you
+  left out;
+- land every part within the shortest `entity.report.interval` in the batch, or
+  the parts you have not sent yet expire while you are sending. The committed conformance fixture carries the
 `serial:`/`mac:` switches with their **`network.interface` ports** and a bare
 **`connected_to`** edge (the topology-as-entities model).
 
