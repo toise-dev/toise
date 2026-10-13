@@ -82,6 +82,16 @@ the documentation gives the three alert rules a control needs to stop lying.
 
 ### Fixed
 
+- The MAC rendering is now normative and the same everywhere: IEEE RA
+  hexadecimal, uppercase with hyphens (`AA-BB-CC-DD-EE-FF`), which is the form
+  semconv requires for `host.mac`. The contract had never stated one, so the
+  `network.neighbor` identity line copied a lowercase-colon example from the
+  interface attribute table while the producer renders the upstream form
+  everywhere — and a MAC is exactly the value a `same_as` belief joins on when
+  SNMP later names the device a neighbour was first seen as. Two renderings of
+  six bytes are two entities under exact identity: the join silently finds
+  nothing and the duplicate surfaces months later. Caught by the producer
+  session re-reading the contract before implementing it
 - Removal by absence is now scoped per **collection method**, not per producer:
   the reconciler's diff key gains the instrumentation scope. One agent running
   several collectors had them delete each other's edges — measured on a bench as

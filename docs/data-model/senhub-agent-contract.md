@@ -95,11 +95,37 @@ leased IP) in the identity — those are descriptive attributes. Agreed identiti
 | `service.instance` | `{service.instance.id}` | the agent itself, or a monitored non-DB service (Kafka, RabbitMQ, NATS, Nginx, HAProxy, …). The id is a **stable** technology-reported identifier, else `<service.name>@<host.id>` — **never** `scheme://host:port`. `service.name` is descriptive. Datastores are `db`, not this; per the boundary rule, anything OTel semconv gives a `db.system.name` is a `db`. |
 | `process` | `{process.pid, process.creation.time}` — the OTel semconv identity (the creation time disambiguates PID reuse) | a restart = a new process (delete + create), not an update; `process.executable.name` is descriptive |
 | `db` | `{db.instance.id}` — a **stable source identifier**: PostgreSQL `system_identifier`, MySQL `server_uuid`, else an operator-configured logical instance name, else the **host-scoped fallback** `<db.system.name>:<port>@<host.id>` | **never network-derived** — `server.address`/`server.port` are mutable (DHCP/failover/VIP) so they stay descriptive attributes. See the fallback rules below. |
-| `network.device` | `{network.device.id}` — a single subtype-prefixed value by **precedence**: `serial:` (ENTITY-MIB `entPhysicalSerialNum`) > `engine:` (`snmpEngineID`) > `mac:` (LLDP chassis-id) > `name:` (`sysName`) > `mgmt:` (mgmt IP) | **anchored on SNMP-immutable facts, not LLDP** (often disabled); `mgmt:` is mutable last-resort. Producer canonicalizes (Toise is byte-exact); raw parts descriptive. Endpoints resolved to the canonical id via `ifPhysAddress` before emitting edges. Frozen for Lot 5 — see [`otel-mapping.md`](./otel-mapping.md#networkdevice-identity--snmp-topology-lot-5-frozen). |
+| `network.device` | `{network.device.id}` — a single subtype-prefixed value by **precedence**: `serial:` (ENTITY-MIB `entPhysicalSerialNum`) > `engine:` (`snmpEngineID`) > `mac:` (LLDP chassis-id, rendered per the MAC rule below) > `name:` (`sysName`) > `mgmt:` (mgmt IP) | **anchored on SNMP-immutable facts, not LLDP** (often disabled); `mgmt:` is mutable last-resort. Producer canonicalizes (Toise is byte-exact); raw parts descriptive. Endpoints resolved to the canonical id via `ifPhysAddress` before emitting edges. Frozen for Lot 5 — see [`otel-mapping.md`](./otel-mapping.md#networkdevice-identity--snmp-topology-lot-5-frozen). |
 | `compute.vm` | `{host.id, vmid}` — the **hypervisor node's** `host.id` plus the hypervisor's vm id | a VM seen **from the hypervisor**, where the guest machine-id is unavailable. **Not** a `host` (a vmid is not a machine-id). `runs_on` the hypervisor `host`. The in-guest `host` (machine-id) is a separate facet, reconciled later by a `same_as` overlay (ADR 0020), never merged. **If the hypervisor *does* surface the guest machine-id (e.g. Hyper-V KVP), carry it as the descriptive attribute `guest.host.id` — evidence, never identity (the id stays `{host.id, vmid}`) — and still do not emit a `host` facet or merge.** That attribute is the `same_as` join key the overlay will consume; per ADR 0020 the producer asserts `same_as` (basis/confidence) once the read-time collapse lands; `same_as` has been a registered relation type since v0.16.0, with endpoints unconstrained, so a producer holding a justified link may assert it today, and the evidence rides as `guest.host.id` only until then. Same pattern as AT8 (redfish/ibmi carry `hw.serial_number` on both facets). |
 | `container` | `{container.id}` | an OCI/Docker container — a compute resource, not a `service.instance`. `image`/`name` descriptive; `status` is a **state key** (see below); `runs_on` its `host`. |
 | `network.segment` | `{network.segment.id}` — a single subtype-prefixed value by **precedence**, of which only `swarm:<network-id>` is **frozen** | a broadcast/reachability domain with an **assigned** identifier (ADR 0034). `k8s:` and `vlan:` are deliberately **open**: Kubernetes has no object to identify in the default flat-network case, and a VLAN id is not globally unique while a VLAN trunked across five switches is **one** segment, not five. Emitted **with its `has_segment` edge from the declaring cluster or not at all** — a segment nobody can say whose it is has no business in the graph. Workloads join it with `attached_to` **from the entity holding the network namespace**: a `container` on Docker/Swarm, a `pod` on Kubernetes. Subnet / internal / ingress are descriptive. Membership is **necessary and not sufficient** for reachability. |
 | `network.neighbor` | `{host.id, mac}` — the **observing** host's id, plus the neighbour's MAC | a link-layer neighbour an observer saw on one of its own interfaces and could **not** resolve to an entity it already holds (ARP/NDP, an FDB line, an LLDP remote known only by its chassis MAC). **`host.id` here is a SCOPE, not an owner** — the same role it plays as the fourth key of a host-local `network.endpoint`. Scoped on the observer because a MAC is not globally unique (it repeats under virtualization, rotates under randomization) and a broadcast domain carries no assigned identifier (ADR 0034). Two observers on one segment therefore hold two neighbours for one device, on purpose: a wrong merge is permanent, a split is reconciled by a `same_as` belief. **Not** a `network.interface` — see the phantom-port rule. Our own extension: the upstream convention has no neighbour entity. |
+
+#### A MAC is rendered one way, everywhere
+
+**IEEE RA hexadecimal: uppercase, hyphen-separated octets, most significant
+first — `AA-BB-CC-DD-EE-FF`.** That is the form semconv requires for `host.mac`,
+and it applies wherever a MAC appears in this contract: the descriptive `mac` of a
+`network.interface`, the `mac:` rung of `network.device.id`, and the identifying
+`mac` of a `network.neighbor`.
+
+It is normative for the same reason the `host.id` rendering is, and the reason is
+worth restating because this is the second value to need it. **A MAC can become an
+identity**, and it is the value a `same_as` belief is joined on when SNMP later
+names the device a neighbour was first seen as. Two renderings of the same six
+bytes are two entities under exact identity (ADR 0018): nothing says they are one,
+the join silently finds nothing, and the damage is a permanent duplicate that
+surfaces months later.
+
+The form is not ours to choose. We take upstream's because the only argument that
+could outweigh it — "our own spelling reads better" — is exactly the argument that
+produces a model nobody else can join.
+
+A producer already emitting another rendering in production must **coordinate**
+the change rather than switch on upgrade: it re-keys every entity whose identity
+carries a MAC. Measuring first is cheap — the `mac:`-prefixed `network.device.id`
+values and the neighbour identities in the graph either all match the normative
+form or they do not.
 
 #### `db.instance.id` — the host-scoped fallback
 
@@ -368,7 +394,7 @@ interface carries:
 
 | Key | Type | Value | Note |
 | --- | --- | --- | --- |
-| `mac` | string | `aa:bb:cc:dd:ee:ff` | hardware address, stable per NIC |
+| `mac` | string | `AA-BB-CC-DD-EE-FF` | hardware address, stable per NIC. **Rendering normative** — see the MAC rule below |
 | `mtu` | int | octets | config, not utilization |
 | `interface.type` | enum | `physical`/`virtual`/`wireless`/`loopback` | start with physical/virtual |
 | `duplex` | enum | `full`/`half`/`unknown` | renegotiable |
@@ -437,7 +463,12 @@ section as a Toise vocabulary decision, not as a convention to expect elsewhere.
 
 **Identity: `{host.id, mac}`, where `host.id` is the OBSERVER.** The same role that
 key plays as the fourth key of a host-local `network.endpoint`: a scope, never an
-owner. The MAC is written in the lowercase colon form (`aa:bb:cc:dd:ee:ff`).
+owner.
+
+**The MAC rendering is normative, and it is upstream's: IEEE RA hexadecimal —
+uppercase, hyphen-separated octets, most significant first (`AA-BB-CC-DD-EE-FF`).**
+Not the lowercase colon form. See the rule below, which now covers every place a
+MAC appears.
 
 | Key | Type | Value | Note |
 | --- | --- | --- | --- |
