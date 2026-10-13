@@ -20,24 +20,26 @@ type Attribute struct {
 // summary derived from the identifying attributes so the model can refer to the
 // entity without re-deriving it.
 type Entity struct {
-	ID                  string      `json:"id" jsonschema:"this replica's local id for the entity (a ULID); it differs between replicas and is re-minted after a long silence, so prefer identity_fingerprint to carry between calls"`
-	IdentityFingerprint string      `json:"identity_fingerprint" jsonschema:"the handle that names the entity itself, derived from its identifying attributes; every replica computes the same one, and any tool taking an entity id takes this instead"`
-	Type                string      `json:"type" jsonschema:"the entity type, e.g. host, process, network_interface"`
-	DisplayName         string      `json:"display_name,omitempty" jsonschema:"what a human calls this entity - dash172 for a host, senhub-ping for a container - or absent when nothing observed on it reads better than its identity; render it as-is, and never group, join or match on it: a display name drifts when a thing is renamed, identity_fingerprint does not"`
-	Label               string      `json:"label" jsonschema:"a one-line summary for scanning: the type, the display name, then the identifying attributes; not a key and not meant to be shown on its own - use display_name to render and identity_fingerprint to match"`
-	Identity            []Attribute `json:"identity,omitempty" jsonschema:"the identifying attributes that together identify this entity; omitted in compact verbosity"`
-	Attributes          []Attribute `json:"attributes,omitempty" jsonschema:"descriptive, non-identifying attributes; omitted in compact verbosity"`
-	Deleted             bool        `json:"deleted" jsonschema:"true if the entity has been observed deleted"`
+	ID                  string `json:"id" jsonschema:"this replica's local id for the entity (a ULID); it differs between replicas and is re-minted after a long silence, so prefer identity_fingerprint to carry between calls"`
+	IdentityFingerprint string `json:"identity_fingerprint" jsonschema:"the handle that names the entity itself, derived from its identifying attributes; every replica computes the same one, and any tool taking an entity id takes this instead"`
+	Type                string `json:"type" jsonschema:"the entity type, e.g. host, process, network_interface"`
+	DisplayName         string `json:"display_name,omitempty" jsonschema:"what a human calls this entity - dash172 for a host, senhub-ping for a container - or absent when nothing observed on it reads better than its identity; render it as-is, and never group, join or match on it: a display name drifts when a thing is renamed, identity_fingerprint does not"`
+	Label               string `json:"label" jsonschema:"a one-line summary for scanning: the type, the display name, then the identifying attributes; not a key and not meant to be shown on its own - use display_name to render and identity_fingerprint to match"`
+	// Identity and Attributes follow the list rule stated on Attributes: an empty
+	// list and a null are two different answers, and neither is an absent field.
+	Identity   []Attribute `json:"identity" jsonschema:"the identifying attributes that together identify this entity. null in compact verbosity, where it is not rendered"`
+	Attributes []Attribute `json:"attributes" jsonschema:"descriptive, non-identifying attributes. An EMPTY list means this entity has none - which is the normal, documented case for a network.endpoint, where populating more would mint a false identity. NULL means not rendered here: compact verbosity. The two are different answers and the field is never absent, because an absent field made 'no attributes' indistinguishable from 'not rendered' on a majority of entities"`
+	Deleted    bool        `json:"deleted" jsonschema:"true if the entity has been observed deleted"`
 	// AssertedBy names the producers currently asserting this entity. One name
 	// means one source said it; several mean they agree on its existence, not
 	// on its attribute values, which the last writer sets. Absent in compact
 	// verbosity and when no cadence source is wired.
-	AssertedBy []string `json:"asserted_by,omitempty" jsonschema:"the producers asserting this entity right now, so a suspect value has someone to go and ask; several names mean they agree it EXISTS, not that they agree on its attributes - the last writer sets those"`
+	AssertedBy []string `json:"asserted_by" jsonschema:"the producers asserting this entity right now, so a suspect value has someone to go and ask; several names mean they agree it EXISTS, not that they agree on its attributes - the last writer sets those. An EMPTY list means nobody asserts it right now; NULL means not rendered here (compact verbosity, or no live-reference source wired, which is the case on an as-of read)"`
 
 	// CollectedBy names the collection methods currently asserting this entity.
 	// AssertedBy is who sends it; this is how it was gathered — the grain the
 	// producer contract makes normative, and the one a producer debugs in.
-	CollectedBy []string `json:"collected_by,omitempty" jsonschema:"the collection methods (instrumentation scopes) asserting this entity right now, e.g. senhub-agent/snmp-route. asserted_by is WHO sends it; this is HOW it was gathered. Two scopes mean two methods see the same thing, which is a different situation from one method reported by two agents. One producer running several methods reports only the one that spoke LAST, because the reference count is keyed by producer (#455) - so read this as a set across producers, not as the list of a single agent collectors. Absent when no asserting producer recorded a scope"`
+	CollectedBy []string `json:"collected_by" jsonschema:"the collection methods (instrumentation scopes) asserting this entity right now, e.g. senhub-agent/snmp-route. asserted_by is WHO sends it; this is HOW it was gathered. Two scopes mean two methods see the same thing, which is a different situation from one method reported by two agents. One producer running several methods reports only the one that spoke LAST, because the reference count is keyed by producer (#455) - so read this as a set across producers, not as the list of a single agent collectors. An EMPTY list means no asserting producer recorded a scope; NULL means not rendered here (compact verbosity, or an as-of read)"`
 }
 
 // Relation is a typed directed edge rendered for an LLM.
@@ -175,6 +177,10 @@ func entityOutV(e model.Entity, deleted, compact bool) Entity {
 		Label:               label(e),
 		Deleted:             deleted,
 	}
+	// attrsOut returns a non-nil slice, so full verbosity always renders a list —
+	// an empty one when the entity has no descriptive attributes, which is a
+	// fact and not a gap. Compact leaves both nil, which renders null: the field
+	// is present either way, and its value says which of the two answers it is.
 	if !compact {
 		out.Identity = attrsOut(e.Identity)
 		out.Attributes = attrsOut(e.Attributes)
@@ -314,12 +320,17 @@ func (s *Server) attachEdgeProvenance(nb *Neighbor, id model.RelationID) {
 	if s.cadence == nil {
 		return
 	}
-	if p := s.cadence.RelationAssertingProducers(id); len(p) > 0 {
-		nb.ViaAssertedBy = p
+	nb.ViaAssertedBy = emptyIfNil(s.cadence.RelationAssertingProducers(id))
+	nb.ViaCollectedBy = emptyIfNil(s.cadence.RelationAssertingScopes(id))
+}
+
+// emptyIfNil renders "asked and nobody" as an empty list rather than as null,
+// which is reserved for "not rendered here". The two must not look alike.
+func emptyIfNil(v []string) []string {
+	if v == nil {
+		return []string{}
 	}
-	if sc := s.cadence.RelationAssertingScopes(id); len(sc) > 0 {
-		nb.ViaCollectedBy = sc
-	}
+	return v
 }
 
 // attachProducers fills AssertedBy and CollectedBy from the engine's per-producer
@@ -330,12 +341,8 @@ func (s *Server) attachProducers(out *Entity, id model.EntityID, compact bool) {
 	if s.cadence == nil || compact {
 		return
 	}
-	if p := s.cadence.AssertingProducers(id); len(p) > 0 {
-		out.AssertedBy = p
-	}
-	if sc := s.cadence.AssertingScopes(id); len(sc) > 0 {
-		out.CollectedBy = sc
-	}
+	out.AssertedBy = emptyIfNil(s.cadence.AssertingProducers(id))
+	out.CollectedBy = emptyIfNil(s.cadence.AssertingScopes(id))
 }
 
 // entityWithProducers renders an entity and names who is asserting it.
