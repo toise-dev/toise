@@ -36,12 +36,9 @@ the documentation gives the three alert rules a control needs to stop lying.
   `connected_to`, so a consumer drawing a map could not show a measurement
   differently from a correlation. The engine held both answers in its
   per-producer reference counts and no read surface returned either (#455).
-  **Read as a set across producers**: one producer running several collection
-  methods reports only the one that spoke last, because the reference key is the
-  producer. That limitation is now pinned by a test rather than left to be
-  discovered, and whether the key should become `(producer, scope)` — which
-  would make the answer truthful and remove the union rule the contract imposes
-  on producers — is open on #455
+  The answer is a **set**, including across the collection methods of one
+  producer: the liveness reference key became the speaker in the same release
+  (see Changed), which is what makes it truthful rather than a rotating value
 - `network.neighbor` and `neighbor_of` enter the producer vocabulary in
   `pkg/emit`: a link-layer neighbour an observer saw on one of its own interfaces
   and could not resolve to anything it already holds (ARP/NDP, an FDB line, an
@@ -71,6 +68,30 @@ the documentation gives the three alert rules a control needs to stop lying.
 
 ### Changed
 
+- **A liveness reference now names the SPEAKER — a producer and the collection
+  method it spoke through — instead of the producer alone (ADR 0019 amended).**
+  Two measured consequences of the old key, and the second is a defect rather
+  than a missing answer. `collected_by` reported whichever method spoke last and
+  flipped at the cadence of the two, where a consumer needs the set: an agent
+  running six collectors got one rotating value. And one method losing sight of
+  an edge released the whole producer's reference, **deleting an edge another
+  method was still asserting**, which re-created it on its next cycle. Scoping
+  the reconciler's diff state per method (below) had fixed the case where two
+  methods see *different* things; this is the case where they see the *same*
+  thing, and with collectors whose coverage overlaps by construction — host ARP
+  and SNMP ARP see the same neighbors, LLDP and CDP the same links — that is the
+  normal case and not the corner. The rule is unchanged: an entity or edge is
+  live while any reference survives and a speaker may release only its own; the
+  grain of "its own" is now the method. **No producer change and no snapshot
+  migration**: a producer naming no instrumentation scope keys on its id alone,
+  byte for byte as before, and the collection method now survives a restart
+  instead of being rebuilt only when each producer next speaks. The key encodes
+  the producer's length rather than joining the two halves on a separator,
+  because both are strings the producer chooses: a crafted `service.instance.id`
+  could otherwise key identically to another speaker and release a reference it
+  never declared, which is the one thing ADR 0019 exists to prevent. Two such
+  holes were found by the test that pins the property, in two rounds, neither
+  reasoned out first (#455)
 - `identity`, `attributes`, `asserted_by` and `collected_by` are now **always
   rendered** on an entity, and the value says which kind of empty it is: an
   **empty list** means asked and none — the documented case for a

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -58,16 +60,17 @@ type Engine struct {
 	// every parked edge on every observation. Rebuilt whenever pending changes.
 	pendingHashes map[string]struct{}
 
-	// liveness: per-entity reference counts keyed by producer (the agent's
-	// service.instance.id; "" for an anonymous/single producer), each with an
-	// expiry deadline (zero = no interval, explicit-only). An entity is live while
-	// any producer references it; it is deleted only when the last reference is
-	// released (explicit delete or interval expiry). See ADR 0019.
+	// liveness: per-entity reference counts keyed by SPEAKER — a producer (the
+	// agent's service.instance.id; "" for an anonymous/single producer) and the
+	// collection method it spoke through — each with an expiry deadline (zero =
+	// no interval, explicit-only). An entity is live while any speaker references
+	// it; it is deleted only when the last reference is released (explicit delete
+	// or interval expiry). See ADR 0019 and refKey.
 	//
 	// relRefs is the same model for edges, and for the same reason: a shared
-	// entity is asserted by several producers, and an edge one of them declares
+	// entity is asserted by several speakers, and an edge one of them declares
 	// must not be retracted by another that never declared it. A zero deadline
-	// means the producer asserts the edge with no refresh promise (an embedded
+	// means the speaker asserts the edge with no refresh promise (an embedded
 	// edge), so only an explicit removal or the endpoint's death releases it.
 	// Guarded by obsMu.
 	refs    map[model.EntityID]map[string]liveRef
@@ -94,15 +97,81 @@ type pendingRelation struct {
 // producer-declared heartbeat interval that armed it. The interval is kept so
 // a deadline restored from a snapshot can be re-floored after downtime (see
 // RestoreLiveness). A zero deadline means explicit-only (no interval).
+//
+// The collection method is NOT a field here: it is half of the map key (refKey),
+// so there is one place holding it and no way for the two to disagree. It was a
+// field first, which is how one producer's methods came to overwrite each
+// other's reference.
 type liveRef struct {
 	deadline time.Time
 	interval time.Duration
-	// scope is the instrumentation scope that last asserted this entity for this
-	// producer. It is kept so a liveness expiry can name WHICH COLLECTION METHOD
-	// went silent (#394) — the question a producer asks when entities are
-	// vanishing is "which of my collectors stopped speaking", and the expiry
-	// event is authored by Toise, so without this the answer dies with the ref.
-	scope string
+}
+
+// silencedSpeaker is a lapsed reference's collection method, kept just long
+// enough to name it on the expiry event Toise authors. Only the scope and the
+// deadline are needed: the deadline decides which of several lapsed speakers is
+// the one whose silence is news.
+type silencedSpeaker struct {
+	scope    string
+	deadline time.Time
+}
+
+// refKey names the SPEAKER of an assertion: a producer and the collection method
+// it spoke through. It is the key of the liveness reference maps.
+//
+// This is the fourth spelling of one key, and the first three each cost a
+// production defect, so the shape of the mistake is worth stating rather than
+// only its fix. Keyed by entity alone, a producer that merely mentioned an entity
+// deleted every edge another producer had declared on it (#396). Keyed by
+// producer, a producer running several collection methods had them delete each
+// other's edges, and reported only the method that spoke last when asked how a
+// fact was collected (#455). Keyed by producer and method, each method diffs
+// against what it itself asserted.
+//
+// Two forms, and they are disjoint by their first byte, which is what makes the
+// encoding injective:
+//
+//   - a producer that named no collection method, and whose id does not begin
+//     with the marker, keys on its id ALONE. That is byte for byte what the
+//     per-producer form wrote, so a liveness blob from an earlier build restores
+//     with no migration and no special case.
+//   - anything else carries the marker, the producer's LENGTH, the marker again,
+//     then the producer and the method.
+//
+// The length rather than a separator between the two, because both halves are
+// strings the producer chooses — service.instance.id and an OTLP instrumentation
+// scope name. A separator is injective only by convention, and a producer that
+// sends one inside its own id keys identically to another producer-and-method
+// pair; it could then release a reference it never declared, which is the single
+// thing ADR 0019's reference counting exists to prevent. Encoding only the
+// method's presence is not enough either: an id that is ITSELF a well-formed
+// key collides the other way round, which is why an id beginning with the marker
+// is encoded too even when there is no method. Both holes were found by the test
+// that pins this, in two rounds; neither was reasoned out first.
+func refKey(producer, scope string) string {
+	if scope == "" && (producer == "" || producer[0] != 0) {
+		return producer
+	}
+	return "\x00" + strconv.Itoa(len(producer)) + "\x00" + producer + scope
+}
+
+// splitRefKey reads a speaker back out of its key. A key that does not carry the
+// length prefix is a producer that named no collection method — which is also
+// every key an earlier build wrote.
+func splitRefKey(key string) (producer, scope string) {
+	if key == "" || key[0] != 0 {
+		return key, ""
+	}
+	end := strings.IndexByte(key[1:], 0)
+	if end < 0 {
+		return key, ""
+	}
+	n, err := strconv.Atoi(key[1 : 1+end])
+	if err != nil || n < 0 || 1+end+1+n > len(key) {
+		return key, ""
+	}
+	body := key[1+end+1:]
+	return body[:n], body[n:]
 }
 
 // staged is a batch's uncommitted unit of work: the events to flush plus an
@@ -467,17 +536,18 @@ func (e *Engine) observeEntityLocked(obs EntityObservation) (model.Event, error)
 	if err := e.commit(ev, false); err != nil {
 		return model.Event{}, err
 	}
-	// Record this producer's reference, with its expiry deadline (zero = no
+	// Record this speaker's reference, with its expiry deadline (zero = no
 	// interval, released only by an explicit delete). See ADR 0019.
-	producers := e.refs[entityID]
-	if producers == nil {
-		producers = make(map[string]liveRef)
-		e.refs[entityID] = producers
+	speakers := e.refs[entityID]
+	if speakers == nil {
+		speakers = make(map[string]liveRef)
+		e.refs[entityID] = speakers
 	}
+	key := refKey(obs.Producer, e.currentScope())
 	if obs.Interval > 0 {
-		producers[obs.Producer] = liveRef{deadline: e.now().Add(obs.Interval), interval: obs.Interval, scope: e.currentScope()}
+		speakers[key] = liveRef{deadline: e.now().Add(obs.Interval), interval: obs.Interval}
 	} else {
-		producers[obs.Producer] = liveRef{scope: e.currentScope()}
+		speakers[key] = liveRef{}
 	}
 	// A new/updated entity may be the missing endpoint of a parked edge — but
 	// only retry the buffer when this entity is one some edge actually waits on,
@@ -521,14 +591,49 @@ func (e *Engine) AssertingProducers(id model.EntityID) []string {
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()
 
-	out := make([]string, 0, len(e.refs[id]))
-	for producer := range e.refs[id] {
+	return producersOf(e.refs[id])
+}
+
+// producersOf names the distinct producers in a reference set, sorted. One
+// producer running several collection methods holds several references and must
+// still be named once: the question is who asserts this, not how many ways.
+func producersOf(speakers map[string]liveRef) []string {
+	seen := make(map[string]struct{}, len(speakers))
+	out := make([]string, 0, len(speakers))
+	for key := range speakers {
+		producer, _ := splitRefKey(key)
 		if producer == "" {
 			// The anonymous producer: a pre-refcount snapshot restores under it,
 			// and naming it would invent an identity the data does not carry.
 			continue
 		}
+		if _, dup := seen[producer]; dup {
+			continue
+		}
+		seen[producer] = struct{}{}
 		out = append(out, producer)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// scopesOf names the distinct collection methods in a reference set, sorted. A
+// reference whose speaker named no method contributes nothing rather than an
+// empty string: an unnamed method in the list would read as a collector with no
+// name, where its absence reads as not recorded.
+func scopesOf(speakers map[string]liveRef) []string {
+	seen := make(map[string]struct{}, len(speakers))
+	out := make([]string, 0, len(speakers))
+	for key := range speakers {
+		_, scope := splitRefKey(key)
+		if scope == "" {
+			continue
+		}
+		if _, dup := seen[scope]; dup {
+			continue
+		}
+		seen[scope] = struct{}{}
+		out = append(out, scope)
 	}
 	sort.Strings(out)
 	return out
@@ -548,16 +653,7 @@ func (e *Engine) RelationAssertingProducers(id model.RelationID) []string {
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()
 
-	out := make([]string, 0, len(e.relRefs[id]))
-	for producer := range e.relRefs[id] {
-		if producer == "" {
-			// The anonymous producer, as for entities: a pre-refcount snapshot
-			// restores under it and naming it would invent an identity.
-			continue
-		}
-		out = append(out, producer)
-	}
-	sort.Strings(out)
+	out := producersOf(e.relRefs[id])
 	return out
 }
 
@@ -569,20 +665,7 @@ func (e *Engine) RelationAssertingScopes(id model.RelationID) []string {
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()
 
-	seen := make(map[string]struct{}, len(e.relRefs[id]))
-	out := make([]string, 0, len(e.relRefs[id]))
-	for _, ref := range e.relRefs[id] {
-		if ref.scope == "" {
-			continue
-		}
-		if _, dup := seen[ref.scope]; dup {
-			continue
-		}
-		seen[ref.scope] = struct{}{}
-		out = append(out, ref.scope)
-	}
-	sort.Strings(out)
-	return out
+	return scopesOf(e.relRefs[id])
 }
 
 // AssertingScopes names the COLLECTION METHODS currently asserting an entity,
@@ -601,20 +684,7 @@ func (e *Engine) AssertingScopes(id model.EntityID) []string {
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()
 
-	seen := make(map[string]struct{}, len(e.refs[id]))
-	out := make([]string, 0, len(e.refs[id]))
-	for _, ref := range e.refs[id] {
-		if ref.scope == "" {
-			continue
-		}
-		if _, dup := seen[ref.scope]; dup {
-			continue
-		}
-		seen[ref.scope] = struct{}{}
-		out = append(out, ref.scope)
-	}
-	sort.Strings(out)
-	return out
+	return scopesOf(e.refs[id])
 }
 
 func (e *Engine) ObservationInterval(id model.EntityID) (time.Duration, bool) {
@@ -646,11 +716,13 @@ func (e *Engine) deleteEntityLocked(obs EntityObservation) (ev model.Event, emit
 	if !found {
 		return model.Event{}, false, nil
 	}
-	// Release this producer; if other producers still reference the entity, it
-	// stays live.
-	if producers, ok := e.refs[id]; ok {
-		delete(producers, obs.Producer)
-		if len(producers) > 0 {
+	// Release this SPEAKER; if any other reference survives — another producer, or
+	// another collection method of this same producer — the entity stays live.
+	// A removal speaks for the method that sends it and for no other: one
+	// collector losing sight of something is not the producer retracting it.
+	if speakers, ok := e.refs[id]; ok {
+		delete(speakers, refKey(obs.Producer, e.currentScope()))
+		if len(speakers) > 0 {
 			return model.Event{}, false, nil
 		}
 		delete(e.refs, id)
@@ -749,17 +821,18 @@ func (e *Engine) Sweep() (SweepResult, error) {
 	// When several producers lapse together, the one with the LATEST deadline
 	// wins: it is the collector that spoke most recently, so it is the one whose
 	// silence is news. An earlier one had already been quiet.
-	silenced := make(map[model.EntityID]liveRef)
-	for id, producers := range e.refs {
-		for p, ref := range producers {
+	silenced := make(map[model.EntityID]silencedSpeaker)
+	for id, speakers := range e.refs {
+		for key, ref := range speakers {
 			if !ref.deadline.IsZero() && now.After(ref.deadline) {
 				if prev, seen := silenced[id]; !seen || ref.deadline.After(prev.deadline) {
-					silenced[id] = ref
+					_, scope := splitRefKey(key)
+					silenced[id] = silencedSpeaker{scope: scope, deadline: ref.deadline}
 				}
-				delete(producers, p)
+				delete(speakers, key)
 			}
 		}
-		if len(producers) == 0 {
+		if len(speakers) == 0 {
 			orphaned = append(orphaned, id)
 		}
 	}
@@ -817,13 +890,13 @@ func (e *Engine) Sweep() (SweepResult, error) {
 	// asserted without a refresh promise stays until it is removed explicitly or
 	// its endpoint dies — the pre-existing behavior of an embedded edge.
 	var expiredRelations []model.RelationID
-	for id, producers := range e.relRefs {
-		for p, ref := range producers {
+	for id, speakers := range e.relRefs {
+		for key, ref := range speakers {
 			if !ref.deadline.IsZero() && now.After(ref.deadline) {
-				delete(producers, p)
+				delete(speakers, key)
 			}
 		}
-		if len(producers) == 0 {
+		if len(speakers) == 0 {
 			expiredRelations = append(expiredRelations, id)
 		}
 	}
@@ -920,9 +993,9 @@ func (e *Engine) observeRelationLocked(obs RelationObservation) (model.Event, bo
 		e.relRefs[rel.ID] = refs
 	}
 	if obs.Interval > 0 {
-		refs[obs.Producer] = liveRef{deadline: e.now().Add(obs.Interval), interval: obs.Interval, scope: e.currentScope()}
+		refs[refKey(obs.Producer, e.currentScope())] = liveRef{deadline: e.now().Add(obs.Interval), interval: obs.Interval}
 	} else {
-		refs[obs.Producer] = liveRef{scope: e.currentScope()}
+		refs[refKey(obs.Producer, e.currentScope())] = liveRef{}
 	}
 
 	var ct model.ChangeType
@@ -1018,11 +1091,15 @@ func (e *Engine) removeRelationLocked(obs RelationObservation) (ev model.Event, 
 		return model.Event{}, false, err
 	}
 	id := model.ComputeRelationID(obs.Type, from, to)
-	// Release this producer's reference. While another producer still asserts the
-	// edge it stays live and no event is emitted: a producer that never declared
-	// an edge must not be able to retract it by falling silent about it.
+	// Release this SPEAKER's reference. While any other reference survives the edge
+	// stays live and no event is emitted: a speaker that never declared an edge
+	// must not be able to retract it by falling silent about it — and that holds
+	// between two collection methods of one producer exactly as it holds between
+	// two producers. Measured before this key existed: an adjacency protocol
+	// losing a link deleted the edge a forwarding table still asserted, which
+	// re-created it on its next cycle (#455).
 	if refs, ok := e.relRefs[id]; ok {
-		delete(refs, obs.Producer)
+		delete(refs, refKey(obs.Producer, e.currentScope()))
 		if len(refs) > 0 {
 			return model.Event{}, false, nil
 		}
@@ -1239,6 +1316,12 @@ func canonMap(kvs []model.KeyValue) map[string]string {
 // the interval maps existed decode with zero intervals and keep their stored
 // deadlines as-is.
 type livenessSnapshot struct {
+	// The inner key is a speaker (refKey): a producer, and the collection method
+	// it spoke through when it named one. Nothing here had to change when the key
+	// gained the method, and that is the point of its encoding — a scopeless
+	// speaker keys on the producer alone, so a blob written by an earlier build
+	// restores byte for byte, and the collection method now survives a restart
+	// instead of being rebuilt only when each producer next speaks.
 	Refs         map[string]map[string]time.Time     `json:"refs"`
 	RefIntervals map[string]map[string]time.Duration `json:"ref_intervals,omitempty"`
 	// RelRefs/RelRefIntervals are per-producer edge references, written since

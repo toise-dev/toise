@@ -189,22 +189,25 @@ by the **source's own `entity.report.interval`** — when the producer vanishes,
 source expires and its incident edges cascade out. There is no separate per-edge
 delete or per-edge interval; the source entity's liveness is the edge's liveness.
 
-#### Multi-producer liveness — per-producer reference counting
+#### Multi-producer liveness — reference counting per speaker
 
-Liveness is **reference-counted per producer** (ADR 0019). Toise records, per
-entity, the set of producers asserting it (keyed by the OTLP **Resource
-`service.instance.id`**, which producers already set), each with its own interval
-deadline. An entity is **live while any producer references it**; it is deleted
-only when the **last** reference is released — by that producer's explicit
-`entity.delete` or by its interval lapsing. So an explicit delete (or a crash) by
-one of several agents observing the same entity no longer flaps it: a `delete`
-from one producer is a silent release while others still observe.
+Liveness is **reference-counted per speaker** (ADR 0019 and its 0.21.0
+amendment): the OTLP **Resource `service.instance.id`** *and* the
+**instrumentation scope** the records arrived under — one scope per collection
+method, which is where this mapping already puts provenance. Toise records, per
+entity, the set of speakers asserting it, each with its own interval deadline. An
+entity is **live while any reference survives**; it is deleted only when the
+**last** one is released — by that speaker's explicit `entity.delete` or by its
+interval lapsing. So an explicit delete (or a crash) by one of several agents
+observing the same entity no longer flaps it, and neither does one collection
+method of one agent losing sight of something its sibling method still sees.
 
 This needs no producer change beyond keeping `service.instance.id` on the
 Resource. An observation with no producer is treated as a single anonymous
-producer, so single-producer deployments behave exactly as before. (Two distinct
-producers both omitting `service.instance.id` would collapse into one anonymous
-reference — a misconfiguration.)
+producer, and one with no scope keys on the producer alone, so single-producer
+deployments behave exactly as before. (Two distinct producers both omitting
+`service.instance.id` would collapse into one anonymous reference — a
+misconfiguration.)
 
 **Corollary — shared entities carry only observer-independent attributes.** Because
 `entity.state` is full-state and identity is shared across producers, a shared
