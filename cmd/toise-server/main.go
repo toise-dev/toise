@@ -301,14 +301,25 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	for _, c := range insecure {
 		switch c.Surface {
 		case "listener":
-			logger.Warn("listener is not loopback but auth and/or TLS are off — exposed deployments should set TOISE_AUTH_TOKENS and TLS (ADR 0024)",
-				"addr", c.Addr, "auth", authn.Enabled(), "tls", cfg.TLSEnabled())
+			// Name what is actually missing, and advise only that. The line used to
+			// read "auth and/or TLS are off" and recommend both while reporting
+			// auth:true, so an operator who had already done half of it was told to
+			// do it again — which is how a reader learns to stop reading a warning.
+			logger.Warn("listener is not loopback and "+listenerRemedy(c.Reason)+" (ADR 0024)",
+				"addr", c.Addr, "reason", c.Reason,
+				"auth", authn.Enabled(), "tls", cfg.TLSEnabled(),
+				"tls_terminated_upstream", cfg.TLSTerminatedUpstream)
 		case "log_shipping":
 			logger.Warn("log shipping is unencrypted: log_shipping_s3_use_ssl is off and the endpoint is not loopback, so every tenant's event log leaves this host readable on the wire — set log_shipping_s3_use_ssl, or point the endpoint at loopback or an address on a link you trust",
 				"endpoint", c.Addr, "public_ip", c.Reason == "cleartext_public")
 		}
 	}
-	exposure.Report(insecure)
+	if cfg.TLSTerminatedUpstream {
+		// Said once, at INFO, because a suppressed control must still be visible in
+		// the place an operator looks first. The metric carries it for alerting.
+		logger.Info("tls_terminated_upstream is declared: the no_tls exposure condition is suppressed on non-loopback listeners, on the operator's statement that a reverse proxy terminates TLS and the listeners are not reachable without it. Auth conditions are unaffected")
+	}
+	exposure.Report(insecure, configDeclarations(cfg))
 
 	// errc carries a fatal serve error from either server. A receiver that dies
 	// after startup MUST reach it: otherwise the process keeps serving HTTP,
@@ -1066,12 +1077,18 @@ func versionRequested(args []string) bool {
 // and the gauge, so the two can never disagree about what is exposed.
 func insecureConditions(cfg config.Config, authEnabled bool) []metrics.Condition {
 	var out []metrics.Condition
-	if !authEnabled || !cfg.TLSEnabled() {
+	// TLS counts as present when the operator declares it is terminated in front
+	// of these listeners. That declaration is theirs to make and ours to publish
+	// (configDeclarations); it cannot be derived here, because the address this
+	// process binds is the whole of what it can see — not the port publication,
+	// not the namespace, not where TLS ends.
+	tlsPresent := cfg.TLSEnabled() || cfg.TLSTerminatedUpstream
+	if !authEnabled || !tlsPresent {
 		reason := "no_auth_no_tls"
 		switch {
 		case authEnabled:
 			reason = "no_tls"
-		case cfg.TLSEnabled():
+		case tlsPresent:
 			reason = "no_auth"
 		}
 		for _, addr := range []string{cfg.Listen, cfg.OTLPListen} {
@@ -1088,6 +1105,30 @@ func insecureConditions(cfg config.Config, authEnabled bool) []metrics.Condition
 		out = append(out, metrics.Condition{Surface: "log_shipping", Addr: cfg.LogShipS3Endpoint, Reason: reason})
 	}
 	return out
+}
+
+// configDeclarations lists what the operator has stated about the perimeter, on
+// or off, so the statement is published rather than only honored. Every
+// declaration is listed whichever way it is set: a series that exists only when
+// the declaration is on makes its absence mean both "not declared" and "not
+// scraped", and a reader asking why an instance reports no conditions needs to
+// tell "nothing is exposed" from "someone said nothing is exposed".
+func configDeclarations(cfg config.Config) []metrics.Declaration {
+	return []metrics.Declaration{
+		{Name: "tls_terminated_upstream", On: cfg.TLSTerminatedUpstream},
+	}
+}
+
+// listenerRemedy says what is missing on an exposed listener, and only that.
+func listenerRemedy(reason string) string {
+	switch reason {
+	case "no_auth":
+		return "requires no authentication — set TOISE_AUTH_TOKENS (TLS is configured)"
+	case "no_tls":
+		return "serves without TLS — configure TLS, or declare TOISE_TLS_TERMINATED_UPSTREAM if a reverse proxy terminates it and these listeners are not reachable without passing through it"
+	default:
+		return "requires no authentication and serves without TLS — set TOISE_AUTH_TOKENS and configure TLS"
+	}
 }
 
 // cleartextShipping reports whether log shipping would put segments on the wire

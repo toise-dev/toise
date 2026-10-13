@@ -163,6 +163,46 @@ relation_buffer_ttl: 1m
 	}
 }
 
+// TestTLSTerminatedUpstreamReachesConfig pins that the declaration is settable
+// by all three layers, which is the whole of what it has to do — it changes no
+// behavior, only what the instance is entitled to claim about its exposure.
+//
+// A declaration that cannot be set where the deployment is described is a
+// declaration nobody makes: a container install configures through the
+// environment, a packaged one through the file, and a shell through the flag.
+func TestTLSTerminatedUpstreamReachesConfig(t *testing.T) {
+	if d := Default(); d.TLSTerminatedUpstream {
+		t.Error("the declaration defaults to set: an unspoken claim is not a claim")
+	}
+	path := writeFile(t, "tls_terminated_upstream: true\n")
+	for _, c := range []struct {
+		name   string
+		args   []string
+		getenv func(string) string
+	}{
+		{"file", []string{"--config", path}, env(nil)},
+		{"env", nil, env(map[string]string{"TOISE_TLS_TERMINATED_UPSTREAM": "true"})},
+		{"flag", []string{"--tls-terminated-upstream"}, env(nil)},
+	} {
+		cfg, err := Load(c.args, c.getenv)
+		if err != nil {
+			t.Fatalf("%s: Load: %v", c.name, err)
+		}
+		if !cfg.TLSTerminatedUpstream {
+			t.Errorf("%s: tls_terminated_upstream did not reach the config", c.name)
+		}
+	}
+	// It is a declaration, not a TLS setting: it must not make TLSEnabled lie,
+	// because that is what decides whether the listeners actually serve TLS.
+	cfg, err := Load([]string{"--tls-terminated-upstream"}, env(nil))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.TLSEnabled() {
+		t.Error("declaring upstream termination made TLSEnabled report true: the process would be expected to serve TLS it has no certificate for")
+	}
+}
+
 func TestLoadConfigPathFromEnv(t *testing.T) {
 	path := writeFile(t, "listen: 192.168.0.1:7000\n")
 	cfg, err := Load(nil, env(map[string]string{"TOISE_CONFIG": path}))
