@@ -190,7 +190,8 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (re
 				// One scope per collection method, and it covers the records
 				// inside it: naming it here is what lets a change say which
 				// collector observed it (#394).
-				b.SetScope(sls.At(j).Scope().Name())
+				scope := sls.At(j).Scope().Name()
+				b.SetScope(scope)
 				recs := sls.At(j).LogRecords()
 				for k := 0; k < recs.Len(); k++ {
 					lr := recs.At(k)
@@ -220,7 +221,7 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (re
 					}
 					// Embedded relationships ride on entity-state events (spec PR
 					// #4836); reconcile them additively alongside routeRecord.
-					edrop, eerr := reconciler.handleVocab(b, lr, producer, !s.acceptUnknown)
+					edrop, eerr := reconciler.handleVocab(b, lr, producer, scope, !s.acceptUnknown)
 					dropped = append(dropped, edrop...)
 					if eerr != nil {
 						// Same per-record split as above: an unregistered

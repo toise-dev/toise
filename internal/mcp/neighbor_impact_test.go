@@ -28,7 +28,7 @@ func TestNeighborsStayOutOfABlastRadius(t *testing.T) {
 			{Key: "mac", Value: model.StringValue(mac)},
 		}}
 	}
-	n1, n2 := neighbor("01N1", "aa:bb:cc:dd:ee:01"), neighbor("01N2", "aa:bb:cc:dd:ee:02")
+	n1, n2 := neighbor("01N1", "AA-BB-CC-DD-EE-01"), neighbor("01N2", "AA-BB-CC-DD-EE-02")
 	g := &fakeGraph{
 		entities: map[model.EntityID]model.Entity{
 			host.ID: host, iface.ID: iface, n1.ID: n1, n2.ID: n2,

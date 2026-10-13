@@ -82,6 +82,29 @@ the documentation gives the three alert rules a control needs to stop lying.
 
 ### Fixed
 
+- The MAC rendering is now normative and the same everywhere: IEEE RA
+  hexadecimal, uppercase with hyphens (`AA-BB-CC-DD-EE-FF`), which is the form
+  semconv requires for `host.mac`. The contract had never stated one, so the
+  `network.neighbor` identity line copied a lowercase-colon example from the
+  interface attribute table while the producer renders the upstream form
+  everywhere — and a MAC is exactly the value a `same_as` belief joins on when
+  SNMP later names the device a neighbour was first seen as. Two renderings of
+  six bytes are two entities under exact identity: the join silently finds
+  nothing and the duplicate surfaces months later. Caught by the producer
+  session re-reading the contract before implementing it
+- Removal by absence is now scoped per **collection method**, not per producer:
+  the reconciler's diff key gains the instrumentation scope. One agent running
+  several collectors had them delete each other's edges — measured on a bench as
+  a `bound_to` flipping every one to three minutes between a host's interface
+  and the same interface polled over SNMP, and as relations retracted for 120 s
+  after every restart, because one method's first cycle looked like a partial
+  array for all of them. It is the third spelling of one key: keyed by entity
+  alone, a producer that merely mentioned an entity deleted another producer's
+  edges (#396); keyed by producer, a producer's own methods deleted each other
+  (#455). A producer now emits the complete set **per method**, which is what
+  each method observes anyway, instead of assembling a union across collectors —
+  and must not cache one, since re-asserting after a restart what a method said
+  last refreshes a liveness deadline on an observation that never happened
 - The mapping document keyed a `network.route` on `{network.device.id,
   route.destination}` and listed the next hop as a descriptive attribute, while
   the producer contract keys it on the next hop too and says why: RFC 2096
