@@ -71,6 +71,18 @@ the documentation gives the three alert rules a control needs to stop lying.
 
 ### Changed
 
+- `identity`, `attributes`, `asserted_by` and `collected_by` are now **always
+  rendered** on an entity, and the value says which kind of empty it is: an
+  **empty list** means asked and none — the documented case for a
+  `network.endpoint`, which carries no descriptive attributes by design — while
+  **null** means not rendered here, at compact verbosity or on an as-of read
+  with no live references. The field is never absent. Measured on production
+  before changing it: `attributes` was absent on 181 of 293 entities in one
+  tenant and 211 of 241 in another, so a consumer indexing it crashed on the
+  majority of entities while one defaulting it could not tell "none" from "not
+  rendered". Same for `via_asserted_by` / `via_collected_by` on a neighbor. A
+  test pins the three states, because the tool-contract golden records names and
+  types and is blind to whether a field is rendered at all
 - `klauspost/compress` v1.18.6 to v1.18.7, the one reserve left open at 0.20.0:
   the advisory was unreachable in source mode, and bumping it then would have
   meant shipping a stable that nothing had qualified. Both modules now scan
