@@ -283,6 +283,24 @@ const (
 // library that formats it produce a silent, permanent duplicate of every host.
 const IdentityHostID = "host.id"
 
+// IdentityMAC is the key carrying a hardware address: identifying on a
+// network.neighbor, descriptive on a network.interface, and the same six bytes
+// either way.
+//
+// The contract pins the rendering to IEEE RA hexadecimal — uppercase,
+// hyphen-separated octets, most significant first (AA-BB-CC-DD-EE-FF) — which is
+// the form semconv requires for host.mac. A MAC becomes an identity, and it is
+// the value a same_as belief joins on when SNMP later names the device a
+// neighbor was first seen as: two renderings of the same address are two
+// entities under exact identity, the join silently finds nothing, and the
+// duplicate surfaces months later.
+const IdentityMAC = "mac"
+
+// IdentityNetworkDeviceID is the single subtype-prefixed identity of a polled
+// network device. Its "mac:" rung carries an LLDP chassis-id, rendered per
+// IdentityMAC.
+const IdentityNetworkDeviceID = "network.device.id"
+
 // OTLP Resource attribute keys on a ResourceLogs carrying entity events.
 const (
 	// ResServiceName names the producing service (informational).

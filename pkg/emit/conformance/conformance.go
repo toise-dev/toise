@@ -15,6 +15,7 @@ package conformance
 
 import (
 	"fmt"
+	"strings"
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
@@ -118,6 +119,7 @@ func checkRecord(where string, lr plog.LogRecord) []Problem {
 	default:
 		checkScalarMap(&out, where, "entity.id", id.Map())
 		checkHostID(&out, where, "entity.id", id.Map())
+		checkMAC(&out, where, "entity.id", id.Map())
 	}
 
 	if desc, ok := attrs.Get(wire.AttrEntityDescription); ok {
@@ -128,6 +130,11 @@ func checkRecord(where string, lr plog.LogRecord) []Problem {
 			// 0.9.0 (#259): arrays and nested maps are ingested faithfully. Only an
 			// empty key or an unsupported leaf (bytes/empty) is a problem.
 			checkDescriptionMap(&out, where, "entity.description", desc.Map())
+			// A descriptive mac is not identity, and it is still joined on: a
+			// consumer matching telemetry to an interface compares this value, so a
+			// second rendering breaks that join as thoroughly as it would an
+			// identity. Same rule, same failure.
+			checkMAC(&out, where, "entity.description", desc.Map())
 		}
 	}
 
@@ -168,6 +175,7 @@ func checkRecord(where string, lr plog.LogRecord) []Problem {
 					// here points at a host that does not exist rather than at the
 					// wrong one — the edge is parked, then dropped.
 					checkHostID(&out, rw, "entity.id", v.Map())
+					checkMAC(&out, rw, "entity.id", v.Map())
 				}
 				if rt, _ := m.Get(wire.RelType); rt.Str() == wire.RelTypeSameAs {
 					out = append(out, checkSameAsBelief(rw, m)...)
@@ -236,6 +244,70 @@ func checkHostID(out *[]Problem, where, field string, m pcommon.Map) {
 				"A producer already emitting this form in production must coordinate the change — it re-keys every host",
 			field, wire.IdentityHostID)})
 	}
+}
+
+// checkMAC flags a hardware address whose rendering is not the contract's.
+//
+// Not advisory, and for the reason that made host.id non-advisory: a MAC becomes
+// an identity. It identifies a network.neighbor, it is the "mac:" rung of a
+// network.device.id, and it is the value a same_as belief joins on when SNMP
+// later names the device a neighbor was first seen as. Two renderings of the
+// same six bytes are two entities under exact identity (ADR 0018): nothing says
+// they are one, the join silently finds nothing, and the duplicate surfaces
+// months later.
+//
+// The form is IEEE RA hexadecimal — uppercase, hyphen-separated octets, most
+// significant first — which is what semconv requires for host.mac. It is not
+// ours to choose: the only argument that could outweigh the standard is that our
+// own spelling reads better, which is the argument that produces a model nobody
+// else can join.
+//
+// The test is positive rather than a list of wrong forms, unlike host.id's: there
+// is exactly one right rendering, so anything else is flagged, including the
+// lowercase colon form a reader is most likely to write by hand.
+func checkMAC(out *[]Problem, where, field string, m pcommon.Map) {
+	flag := func(key, got string) {
+		*out = append(*out, Problem{Record: where, Issue: fmt.Sprintf(
+			"%s.%s is %q; the contract renders a MAC in IEEE RA hexadecimal — uppercase, hyphen-separated octets "+
+				"(AA-BB-CC-DD-EE-FF), the form semconv requires for host.mac. The same address written two ways is two "+
+				"entities, and the same_as join that would have united them finds nothing, silently. A producer already "+
+				"emitting another rendering in production must coordinate the change — it re-keys every entity whose "+
+				"identity carries a MAC", field, key, got)})
+	}
+	if v, ok := m.Get(wire.IdentityMAC); ok && v.Type() == pcommon.ValueTypeStr && !isCanonicalMAC(v.Str()) {
+		flag(wire.IdentityMAC, v.Str())
+	}
+	// Only the mac: rung of a device id is a MAC; the other rungs are serials,
+	// engine ids and names, and judging them against this form would be wrong.
+	if v, ok := m.Get(wire.IdentityNetworkDeviceID); ok && v.Type() == pcommon.ValueTypeStr {
+		if rest, found := strings.CutPrefix(v.Str(), "mac:"); found && !isCanonicalMAC(rest) {
+			flag(wire.IdentityNetworkDeviceID, v.Str())
+		}
+	}
+}
+
+// isCanonicalMAC reports whether s is six uppercase hex octets separated by
+// hyphens. EUI-64 (eight octets) is not accepted: no producer emits one, and
+// accepting a second length would make the check describe the data rather than
+// the contract.
+func isCanonicalMAC(s string) bool {
+	const want = 17 // 6 octets, 5 separators
+	if len(s) != want {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if i%3 == 2 {
+			if s[i] != '-' {
+				return false
+			}
+			continue
+		}
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'A' || c > 'F') {
+			return false
+		}
+	}
+	return true
 }
 
 // isRawMachineID reports whether s is 32 hex digits with no separator — the
