@@ -75,7 +75,7 @@ func TestCheckCatchesContractViolations(t *testing.T) {
 		d := lr.Attributes().PutEmptySlice("entity.relationships").AppendEmpty().SetEmptyMap()
 		d.PutStr("relationship.type", "same_as")
 		d.PutStr("entity.type", "network.device")
-		d.PutEmptyMap("entity.id").PutStr("mac", "aa:bb")
+		d.PutEmptyMap("entity.id").PutStr("mac", "AA-BB-CC-DD-EE-FF")
 		d.PutDouble("confidence", 0.9)
 	})
 	for _, p := range Check(okSameAs) {
@@ -92,7 +92,7 @@ func TestCheckCatchesContractViolations(t *testing.T) {
 		d := lr.Attributes().PutEmptySlice("entity.relationships").AppendEmpty().SetEmptyMap()
 		d.PutStr("relationship.type", "same_as")
 		d.PutStr("entity.type", "network.device")
-		d.PutEmptyMap("entity.id").PutStr("mac", "aa:bb")
+		d.PutEmptyMap("entity.id").PutStr("mac", "AA-BB-CC-DD-EE-FF")
 	})
 	foundAdvisory := false
 	for _, p := range Check(noConf) {
@@ -289,4 +289,53 @@ func TestHostIDSpelling(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestCheckFlagsMACRendering pins the second value whose rendering is normative
+// (#459). A MAC identifies a network.neighbor and is the "mac:" rung of a
+// network.device.id, and it is what a same_as belief joins on when SNMP later
+// names the device a neighbor was first seen as: two renderings of the same six
+// bytes are two entities, and the join that would have united them finds nothing.
+func TestCheckFlagsMACRendering(t *testing.T) {
+	cases := []struct {
+		name    string
+		key     string
+		value   string
+		flagged bool
+	}{
+		{"canonical", "mac", "AA-BB-CC-DD-EE-FF", false},
+		{"lowercase hyphens", "mac", "aa-bb-cc-dd-ee-ff", true},
+		{"colon form", "mac", "AA:BB:CC:DD:EE:FF", true},
+		{"lowercase colon form, what a reader writes by hand", "mac", "aa:bb:cc:dd:ee:ff", true},
+		{"no separator", "mac", "AABBCCDDEEFF", true},
+		{"too short", "mac", "AA-BB-CC", true},
+		{"device id, mac rung canonical", "network.device.id", "mac:AA-BB-CC-DD-EE-FF", false},
+		{"device id, mac rung lowercase", "network.device.id", "mac:aa:bb:cc:dd:ee:ff", true},
+		// The other rungs are serials, engine ids and names: judging them against
+		// the MAC form would reject valid identities.
+		{"device id, serial rung", "network.device.id", "serial:9:FOC1234X5YZ", false},
+		{"device id, engine rung", "network.device.id", "engine:800000090300aabbccddeeff", false},
+		{"device id, name rung", "network.device.id", "name:sw-core-01", false},
+	}
+	for _, c := range cases {
+		logs := plog.NewLogs()
+		lr := logs.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
+		lr.SetEventName("entity.state")
+		a := lr.Attributes()
+		a.PutStr("entity.type", "network.neighbor")
+		a.PutEmptyMap("entity.id").PutStr(c.key, c.value)
+
+		var hit bool
+		for _, p := range Check(logs) {
+			if strings.Contains(p.Issue, "IEEE RA hexadecimal") {
+				hit = true
+				if p.Advisory {
+					t.Errorf("%s: the MAC rendering must be a rejection, not an advisory", c.name)
+				}
+			}
+		}
+		if hit != c.flagged {
+			t.Errorf("%s (%s=%q): flagged=%v, want %v", c.name, c.key, c.value, hit, c.flagged)
+		}
+	}
 }

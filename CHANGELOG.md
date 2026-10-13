@@ -82,6 +82,18 @@ the documentation gives the three alert rules a control needs to stop lying.
 
 ### Fixed
 
+- The conformance kit now **rejects** a MAC that is not in the normative
+  rendering, wherever it appears — a neighbour's identity, the `mac:` rung of a
+  `network.device.id`, a relationship target's identity, and the descriptive
+  `mac` of an interface, which a consumer joins telemetry on. Not an advisory,
+  for the reason that made `host.id` non-advisory: the failure is silent and
+  permanent. The test is positive rather than a list of wrong forms, since there
+  is exactly one right rendering, and the other rungs of a device id (serial,
+  engine, name) are deliberately not judged against it. Measured safe to enable
+  by the operating session before turning it on: no `network.device` exists in
+  production at all, and every MAC that does exist — 54 interface attributes
+  across the three tenants — is already canonical, so this is a lint and not a
+  re-keying migration (#459)
 - The MAC rendering is now normative and the same everywhere: IEEE RA
   hexadecimal, uppercase with hyphens (`AA-BB-CC-DD-EE-FF`), which is the form
   semconv requires for `host.mac`. The contract had never stated one, so the
