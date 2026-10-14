@@ -402,6 +402,14 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 			}
 		}
 		return nil
+	}, func(err error) {
+		// The reason the probe does not write: it names the failing tenant and
+		// the storage engine's error, and /readyz answers strangers.
+		if err != nil {
+			logger.Error("not ready: a tenant store is unhealthy", "err", err)
+			return
+		}
+		logger.Info("ready again: every tenant store answers")
 	}))
 	quarantined := metrics.NewQuarantinedTenants()
 	if q := reg.Quarantined(); len(q) > 0 {
