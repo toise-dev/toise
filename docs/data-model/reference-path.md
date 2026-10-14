@@ -285,6 +285,31 @@ being reachable.
 What protects the reader from a path crossing a belief is not exclusion. It is
 that the answer says the hop is a belief, with its basis.
 
+### A conjecture, offered to be disproved: same relation in, same relation out
+
+The neighbour rule above may be general rather than a patch for one type. Every
+case constructed so far says that **entering and leaving a node by the same
+relation type is a convergence, not a path**:
+
+| node | same type in and out | what it would claim |
+|---|---|---|
+| `network.endpoint` | two `depends_on` | two clients of one store reach each other (#442, measured) |
+| `network.neighbor` | two `neighbor_of` | two interfaces seeing one MAC are linked |
+| `network.interface` (an aggregate) | two `aggregated_into` | traffic crosses from one bond member to another |
+| `host` | two `runs_on` | two processes on one host are connected |
+| `network.interface` | two `bound_to` | two addresses on one interface are a route |
+
+And the legitimate crossings all change relation type: `neighbor_of` in and
+`resolves_to` out is the real L2 descent; `aggregated_into` in and `connected_to`
+out is the real path through a bond.
+
+It is written here as a **conjecture with the cases checked**, not as a law,
+because a counterexample would be worth more than the generalisation. `same_as`
+is the candidate: a transitive identity chain legitimately walks same-type — but
+that is the canonical collapse's job, and a path should collapse those entities
+rather than traverse them. If someone finds a real one, the rule goes back to
+being per-type, which costs a comparison and no semantics.
+
 ### Which MAC belongs to whom — the part that is easy to get backwards
 
 The direction of `resolves_to` follows the MAC's **owner**, never the place it was
@@ -314,6 +339,71 @@ still accepted at the boundary so old data reads, and nothing should be built on
 them. The modern form is `network.route` as an entity plus `has_route` and
 `next_hop_via`, which is what shipped and what the route's third identity key was
 corrected for.
+
+## 6b. Link aggregation — the hop the path was missing everywhere
+
+Measured by `sa`: nothing models a LAG today, and it is not a detail. **The
+addresses, the routes and therefore the egress interface sit on the LOGICAL
+interface** (`Port-Channel1`, `bond0`), while **LLDP and the forwarding table see
+the PHYSICAL members**. The path arrives at the bond by its route and should
+leave by a member's `connected_to`, with no edge between the two — so it stops at
+every aggregate, which means at every network core and every hypervisor.
+
+**`aggregated_into`**, from the physical `network.interface` to the logical one.
+Part to whole, like `bound_to`, `attached_to` and `neighbor_of`.
+
+- **Structural: true.** A port leaving a port-channel is a real degradation that
+  operators alert on, and membership does not change every quarter hour — unlike
+  SNMP discovering ports, which is why `resolves_to` is not structural.
+- **Impact: `ImpactNone`**, and for a measurable reason rather than caution. A
+  member failing does **not** take the aggregate down — that is the entire point
+  of a LAG — so propagating member-to-aggregate would assert the false alarm the
+  aggregate exists to prevent. The real impact is **conditional** on being the
+  last active member, and the impact walk works on edges; it does not count.
+  Nobody should later "fix" this believing it an oversight.
+- The member's state and the aggregate's mode are **descriptive attributes on the
+  entities**, not on the edge: ADR 0022 carries no edge attributes, and the
+  `same_as` belief exception is a mechanism for beliefs, not a loophole. A
+  physical port is a member of at most one aggregate, so the state is unambiguous
+  on the interface. `senhub.interface.aggregation.state` on the member,
+  `senhub.interface.aggregation.mode` on the aggregate — under our own namespace
+  because `network.interface.*` is an upstream one.
+
+**The state exists only where the concept does, and that corrected a rule of
+mine.** A static port-channel has no LACP actor state, so no standby notion, so
+no member carries the state attribute. My first rule — "traverse any *active*
+member" — would therefore have traversed **nothing** on a static aggregate, which
+is most of them. The rule is its complement: **traverse a member unless its state
+says `standby`.** An absent state is normal and traversable, and the aggregate's
+`mode` is what tells a reader how to read the absence: `static` plus absent means
+there is no standby notion, `lacp` plus absent means the producer could not read
+it and that is a gap.
+
+**Crossing an aggregate does not multiply the path by its member count.** Two
+members to one switch are one path and two links; two members to two switches
+(MLAG) are genuinely two paths. The difference is read downstream on
+`connected_to`, not on the aggregate.
+
+### The borrowed MAC, which `resolves_to` walked into
+
+A bond **borrows** the MAC of one of its members, so the logical interface and a
+physical member often present the same hardware address. `resolves_to` points at
+*the interface that owns the MAC*, and with an aggregate two interfaces of one
+owner present it — the rule becomes ambiguous.
+
+Not an identity problem: the MAC is descriptive and the identity is
+`{owner, name}`, so no entity is duplicated. A **join** problem, and an ambiguous
+join produces a wrong match months later.
+
+**Rule: resolve to the interface whose MAC is its own permanent hardware address
+— the physical member. The bond's is borrowed.** Decidable on every source
+`sa` checked: `IFLA_PERM_ADDRESS` on Linux, `PermanentAddress` on Windows,
+distinct per-vmnic MACs on ESXi. SNMP has no permanent-address notion, so there
+the **structure** decides: when `ifStackTable` places an `ieee8023adLag` interface
+above a member and both carry the same `ifPhysAddress`, the owner is the member.
+And when two **non-aggregated** interfaces carry one MAC — some chassis reuse a
+base address across routed ports — it is undecidable and **no `resolves_to` is
+emitted**: one identity and a half is not two.
 
 ## 7. VLANs (`sa`'s gap 2)
 
