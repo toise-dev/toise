@@ -125,6 +125,30 @@ const (
 	// only the grouping is derived. The producer states evidence it can justify;
 	// it never pre-merges (ADR 0018/0020).
 	RelSameAs = wire.RelTypeSameAs
+	// RelResolvesTo is a resolution belief: the MAC an unresolved
+	// network.neighbor was seen by is OWNED by this interface. Not where the
+	// address was heard — RelNeighborOf already says that.
+	//
+	// Deliberately not a same_as: same_as feeds the read-time canonical collapse,
+	// so whatever it links we are saying we eventually want collapsed into one
+	// entity. A neighbor's identity CONTAINS its observer, and collapsing it into
+	// a port would drop the observer and with it the only thing making the
+	// observation attributable. The test: same_as when the collapse would lose no
+	// identifying attribute, this when it would.
+	//
+	// It carries confidence and basis, the second being a closed vocabulary
+	// because the sources are not equally strong: lldp states its own identity,
+	// arp/ndp map a MAC to an address, fdb heard it on a port.
+	RelResolvesTo = wire.RelTypeResolvesTo
+	// RelAggregatedInto links a physical interface to the logical one that
+	// aggregates it — a bond or team member to its master, a switch port to its
+	// port-channel.
+	//
+	// Without it a path stops at every aggregate, which means at every network
+	// core and every hypervisor: the addresses, the routes and therefore the
+	// egress interface sit on the LOGICAL interface while LLDP and the forwarding
+	// table see the PHYSICAL members.
+	RelAggregatedInto = wire.RelTypeAggregatedInto
 
 	// RelAttachedTo joins a workload to a network segment, FROM the entity that
 	// holds the network namespace the attachment belongs to: a container on
@@ -259,6 +283,24 @@ var relationTypes = map[string]RelationTypeDef{
 	// path); the canonical collapse is a read-time overlay, shipped and never
 	// written back (internal/canonical, ADR 0020).
 	RelSameAs: {Type: RelSameAs, From: "", To: "", Structural: false, Impact: ImpactNone},
+	// "X resolves_to Y": the interface Y owns the MAC the neighbor X was seen by.
+	// Non-structural, because a new resolution improves coverage rather than
+	// being an alertable event, and SNMP discovering ports would flood the change
+	// feed. ImpactNone for the same reason as neighbor_of: the dependent side is
+	// a third party's record, and measured, an impact there made impact_of on a
+	// host report every ARP cache entry — a few hundred devices on one failure.
+	RelResolvesTo: {Type: RelResolvesTo, From: TypeNetworkNeighbor, To: TypeNetworkInterface, Structural: false, Impact: ImpactNone},
+	// "X aggregated_into Y": the physical interface X is a member of the logical
+	// interface Y. Structural, because a port leaving a port-channel is a real
+	// degradation operators alert on and membership does not churn.
+	//
+	// ImpactNone, and for a MEASURED reason rather than caution: a member failing
+	// does not take the aggregate down, that being the entire point of a LAG, so
+	// propagating would assert the false alarm the aggregate exists to prevent.
+	// The real impact is conditional on being the LAST active member, and the
+	// impact walk works on edges without counting them. Nobody should later
+	// "fix" this believing it an oversight.
+	RelAggregatedInto: {Type: RelAggregatedInto, From: TypeNetworkInterface, To: TypeNetworkInterface, Structural: true, Impact: ImpactNone},
 	// "X attached_to Y": the segment failing takes what is attached to it. The
 	// direction states a dependency; it does not promise an event will arrive —
 	// an overlay is a control-plane construct and no producer can mark one down
@@ -293,6 +335,39 @@ func ImpactFlowOf(relType string) ImpactFlow {
 // link neither producer observed.
 var terminalEntityTypes = map[string]struct{}{
 	TypeNetworkEndpoint: {},
+}
+
+// crossOnlyByChangingRelationTypes are the types a traversal may pass through
+// ONLY by entering and leaving through DIFFERENT relation types.
+//
+// They are not terminal — a real path crosses them — but the crossing is real
+// only in one shape, and the shape is what tells it from a convergence:
+//
+//   - a network.neighbor is entered by neighbor_of (from the interface where the
+//     address was heard) and left by resolves_to (to the interface that owns it).
+//     Two neighbor_of edges mean one MAC seen on two interfaces of one host,
+//     which is a convergence: the two interfaces are not linked by it.
+//   - a network.interface entered by aggregated_into is left by connected_to.
+//     Two aggregated_into edges mean two members of one bond, and traffic does
+//     not pass from one member to another — it goes up into the logical
+//     interface and into the machine.
+//
+// Both are #442's error in a new costume, and a per-type rule is what is left
+// after the general one was refuted: a switch traversed enters and leaves by
+// has_interface, both times, and that IS forwarding. Structurally the two cases
+// are identical — the node is the From of both edges — so only the type
+// separates them. The conjecture and its refutation are recorded in
+// docs/data-model/reference-path.md.
+var crossOnlyByChangingRelationTypes = map[string]struct{}{
+	TypeNetworkNeighbor:  {},
+	TypeNetworkInterface: {},
+}
+
+// CrossingNeedsADifferentRelation reports whether a traversal passing through an
+// entity of type t must enter and leave it through different relation types.
+func CrossingNeedsADifferentRelation(t string) bool {
+	_, ok := crossOnlyByChangingRelationTypes[t]
+	return ok
 }
 
 // IsTerminalEntityType reports whether t may be an endpoint of a traversal but
