@@ -11,24 +11,29 @@ Nothing yet.
 
 ## [0.21.0] - 2026-10-14
 
-> **`v0.21.0-beta.1` is cut for qualification, not for deployment.** Three of the
-> changes below cannot be verified by reading a diff, which is why this release
-> goes through a prerelease rather than straight to stable:
+> **`v0.21.0-beta.2` is cut for a full bench qualification, not for deployment.**
+> It replaces `beta.1`, which qualified green on the two criteria that test this
+> release's own changes — the path end to end with provenance by collection
+> method, and a calm window reporting nothing — and left one check unrun. Four
+> changes landed since, and two of them cannot be verified by reading a diff:
 >
-> - the liveness reference key became the **speaker** — a producer and its
->   collection method — and an independent review found two grave defects in it
->   on the day it merged, both fixed here. A wrong key leaves an edge
->   irretractable by its own producer, silently.
-> - **the snapshot format gained a declaration** (`speaker_keys`), and what it
->   changes fires on the UPGRADE itself: a reference restored from a blob written
->   before it is marked legacy so its producer can release it.
-> - the **traversal** refuses to cross a `network.neighbor` or an aggregated
->   `network.interface` by the same relation type twice, so `find_path` answers
->   differently than it did.
+> - **the snapshot discriminator was itself wrong.** `beta.1` decided whether a
+>   restored reference predated speaker keys by reading a declaration in the
+>   blob. A blob written *between* the two fixes carries composite keys **without**
+>   that declaration, so its bare keys were mis-marked legacy — which would let
+>   one speaker release another's reference. Found by reading an upgrade plan,
+>   not the code. `beta.1` was qualified on an **empty data directory**, so this
+>   path was never exercised: an upgrade from a `beta.1` data dir is now part of
+>   what must be qualified.
+> - **a deletion's reason now reaches the sentence beside it.** A producer that
+>   reports a disappearance because it stopped watching is making the opposite
+>   claim from one that watched the thing end, and the plain-language gloss
+>   asserted the latter for both. The agent emits that reason today, so this is
+>   verifiable end to end on the bench rather than in a unit test.
 >
-> The criterion that matters most is already the bench's: `graph_diff` reporting
-> **nothing** over a window where nothing changed. That is exactly what a liveness
-> key defect breaks, and exactly what a reviewer cannot see.
+> The other two: `monitors` no longer propagates a monitored target's failure
+> into the agent watching it, and the demonstration fixture no longer
+> contradicts the identity rule it exists to teach.
 
 **The release where a warning became a control, and a convergence stopped being
 read as a route.** Three of the four fixes here were found by someone comparing
@@ -182,6 +187,62 @@ the documentation gives the three alert rules a control needs to stop lying.
   using the package, which we do not
 
 ### Fixed
+
+- **The snapshot discriminator was itself wrong, and only an upgrade could show
+  it.** Deciding whether a restored liveness reference predates speaker keys was
+  done by reading a declaration in the blob, which is correct for a blob written
+  before the change and for one written after it — but not for one written
+  *between* the two fixes of this cycle. Such a blob carries composite keys with
+  no declaration, so its bare keys were taken for legacy ones, and a legacy
+  reference is releasable by any speaker of its producer: one collection method
+  could drop another's reference and retract an edge nobody had stopped
+  asserting. A second discriminator now reads the keys themselves rather than
+  trusting the declaration alone. Found by reading the bench session's upgrade
+  plan, not the code — the bench had started on an empty data directory, which
+  is precisely the path that hides this.
+- **`monitors` propagated a monitored target's failure into the agent watching
+  it.** The relation declared `ImpactToFrom`, which says a monitored host going
+  down degrades its monitor. It does not: the agent is healthy and its reading
+  is bad, which is a different fact. One unreachable target inflated the blast
+  radius by the whole fleet that agent watches, and the error would have widened
+  with every probe shipped — the agent session is building that lot now, which
+  is what surfaced it. Its `To` was also `TypeHost` alone, while probes watch
+  local listeners, remote endpoints and bare addresses too; those two fields
+  turn out to be read by nothing (#494), so the entry was not constraining the
+  graph, only describing it falsely, and had done so for three releases with no
+  test able to notice. The new test pins the class rather than four values: a
+  relation recording what something **observed** or **believes** is not a path a
+  failure travels along.
+- **A deletion's reason could contradict the sentence beside it.** The
+  plain-language disappearance gloss took only `delete_source`, so every
+  producer deletion read as "the producer reported this gone — it either sent an
+  explicit delete or stopped listing the entity". An agent now reports
+  deletions whose reason says it merely stopped *watching* a device that may
+  well still be running; the producer's own term sat in `delete_reason`, beside
+  a sentence asserting the opposite. The gloss is the field a consumer reads,
+  which is the whole reason it exists. It now takes the reason, **quotes** it,
+  and widens the reading rather than narrowing it — without interpreting the
+  value, because the reason is an open enum in producer vocabulary and
+  paraphrasing a word Toise does not define is how a reader ends up trusting the
+  gloss over the producer's term.
+- **The demonstration fixture contradicted the identity rule it exists to
+  teach.** `internal/demo` keyed a route `{host.name, network.route.destination}`
+  while the contract keys it `{host.id, route.destination, next_hop.ip}`, and
+  carried the next hop as a *descriptive attribute* — so the scenario produced
+  exactly the defect the three-key identity eliminates, a route entity whose
+  next hop oscillates at poll cadence, and `docs/demo/scenario.md` documented
+  that as expected. The host was keyed on `host.name` and the interface on the
+  retired `interface.name` spelling, same cause: the route identity gained the
+  next hop in September and the fixture never followed. Nothing could notice,
+  because the scenario drives the engine directly and never passes through the
+  conformance kit. Found by a consumer session **running** it. The gateway change
+  is now a deletion and a creation in one batch sharing a `commit_seq`; a new
+  step changes the same route's `metric`, which is descriptive, so the entity
+  survives — the two together are the identity rule in four events. The process
+  deletion now cascades its `runs_on` edge instead of pre-retracting it, which
+  is both what a producer does and the fixture's only cascade, and the route
+  hangs off its host by `has_route`, which the contract always required and the
+  fixture never had.
 
 - The conformance kit now **rejects** a MAC that is not in the normative
   rendering, wherever it appears — a neighbour's identity, the `mac:` rung of a
