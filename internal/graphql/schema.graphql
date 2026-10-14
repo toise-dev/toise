@@ -5,8 +5,12 @@ directive @goField(
 ) on INPUT_FIELD_DEFINITION | FIELD_DEFINITION
 
 """
-The kind of a typed attribute value. Toise attribute values are scalars: a
-string, a 64-bit integer, a double, or a boolean.
+The kind of a typed attribute value: a string, a 64-bit integer, a double, a
+boolean, or — since descriptive attributes carry the full AnyValue (ADR 0004) —
+an array or a nested map, each given as a compact JSON encoding in `value`.
+
+An identifying attribute is always a scalar; only a descriptive one can be an
+array or a map.
 """
 enum ValueType {
   STRING
@@ -40,7 +44,15 @@ The classification of a change, per the Toise change taxonomy. Use this to ask
 structural relation changes.
 """
 enum ChangeType {
-  "The entity did not exist before this event."
+  """
+  The entity was first OBSERVED at this event — not "it did not exist before".
+  This graph is exactly as complete as its producers, so absence is never
+  evidence of absence: the thing may have been running, unobserved, for months.
+
+  It is also emitted when an entity comes BACK. Re-asserted within the
+  resurrection grace window it reclaims its original id, and after its tombstone
+  was evicted it appears under a new one; either way the change type is this.
+  """
   ENTITY_CREATED
   "The entity existed and is now soft-deleted; the log retains its history."
   ENTITY_DELETED
@@ -274,7 +286,10 @@ type Relation {
   a correlation — which is the difference a map has to draw, and the reason this
   field exists (#455).
 
-  One producer running several methods reports only the one that spoke **last**,
+  One producer running several methods reports **all** of them, the liveness
+  reference being keyed on the speaker — the producer AND the method — so read
+  this as the set of methods asserting the edge, including several of one agent.
+  Formerly only the last to speak,
   because the reference count is keyed by producer (#455): read this as a set
   across producers, not as the list of one agent's collectors.
 
@@ -590,7 +605,8 @@ type Query {
 
   """
   The timeline of change events for one entity. `since`/`until` (RFC 3339) bound
-  the query in eventTime space (reality). Provide `asKnownAt` (RFC 3339) to
+  the query in eventTime space — when a producer OBSERVED each change, not when
+  it became true. Provide `asKnownAt` (RFC 3339) to
   switch to the audit view: only events Toise had recorded by that instant.
   `entity.unchanged` heartbeats are excluded unless `includeHeartbeats` is set,
   matching the MCP `entity_history` tool — they dominate a raw timeline.
