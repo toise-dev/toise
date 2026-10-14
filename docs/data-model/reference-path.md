@@ -462,6 +462,59 @@ And when two **non-aggregated** interfaces carry one MAC — some chassis reuse 
 base address across routed ports — it is undecidable and **no `resolves_to` is
 emitted**: one identity and a half is not two.
 
+## 6d. A host transit: necessary, not sufficient — and the two walks differ
+
+Measured on the bench by `sa`: `senhub.host.ip_forwarding.ipv4` was **true on
+every container of the bench**, and it is not a bench artefact. **Docker sets
+`net.ipv4.ip_forward=1` on any host it runs on, and every Kubernetes node has it
+from its CNI.** The fact is true — the kernel really does forward — but toward its
+own container bridges. That does not make the machine a router between two
+segments of the estate.
+
+So my first rule, *cross a host when the attribute of the path's family is true*,
+was wrong in its **shape** and not merely in its threshold. The question is not
+"does this host forward?" but **"does this host forward on this path?"** The
+host-level boolean is **necessary and not sufficient** — the same form ADR 0034
+gives to segment membership, and for the same reason: a local fact is a condition
+of a path, never a conclusion about one.
+
+**And the answer differs between the two walks, which is the part neither of us
+saw first.**
+
+**The forwarding walk** — longest prefix, the one the reference path is for —
+does not have the problem. It crosses a host only when it has **selected a route
+toward the destination on that host**, so a Docker host with no route to the far
+segment is never crossed: the walk stops before it. The route is the sufficient
+condition and it is already required. The container-bridge case even resolves
+itself: if the route toward B leaves by `docker0`, then either B really is in a
+container on that host — a true path, which must be drawn — or the route is wrong,
+which is a producer defect and not a traversal one.
+
+**The structural walk** — `find_path` over edges — does have the problem, and
+badly. It holds **no route information at all**. With the boolean alone, every
+Docker host and every Kubernetes node becomes a possible transit between
+deliberately separated segments; on an estate where Docker is everywhere, nearly
+every machine becomes a router.
+
+**So the structural walk does not claim a host transit, even when
+`ip_forwarding` is true.** It marks it unproven and names it at that position,
+because it has nothing to judge with: *this host forwards somewhere* does not
+support *this path goes through it*.
+
+That is more restrictive than the first rule, and it fails in the direction this
+document refuses to leave — under-report, name the gap, never draw a false path.
+A reader now sees a hatched station reading *host transit unproven — no route
+observed along this path* where they would have seen a solid and false one.
+
+**What is deliberately not asked of the producer.** No count of container bridges
+on the host: it would explain a true `ip_forwarding` without locating it, and the
+forwarding walk does not need it since the route decides. If the structural walk
+is ever to decide, what it would need is a fact on the **interface** — a
+container-bridge flag — because the interface is what is in question, not the
+machine; and `interface.type = virtual` will not do, since a VLAN subinterface is
+virtual and is a legitimate transit. Not today: that would add an attribute for a
+walk which, correctly bounded, does not need to decide.
+
 ## 6c. Do not emit a new relation before a Toise that registers it is deployed
 
 This applies to **every** relation this document introduces, and it is not a
