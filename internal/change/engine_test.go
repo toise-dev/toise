@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -1684,4 +1685,117 @@ func TestParkedEdgeKeepsTheScopeThatAssertedIt(t *testing.T) {
 		t.Errorf("a host observed after a flush has scopes %v, want its own batch scope — "+
 			"the override must be restored, not left set", got)
 	}
+}
+
+// TestLegacyReferenceIsReleasableAfterAnUpgrade pins the defect an independent
+// review found in the speaker key, and the limit of its fix.
+//
+// A snapshot written before the key carried the collection method holds bare
+// producer keys. After an upgrade, a producer retracting under one of its
+// methods looked for a key nobody wrote: it found nothing and emitted nothing,
+// silently. Every embedded edge existing at the upgrade — runs_on,
+// has_interface, bound_to, listens_on, all of which carry a zero deadline — was
+// therefore non-retractable by its own producer until its endpoints died.
+//
+// The claim "no snapshot migration" was true of the decoding and false of the
+// semantics, which is why the blob now declares whether its keys carry a method:
+// the keys themselves decode identically either way, so nothing else can tell a
+// legacy reference from one whose producer named no method.
+func TestLegacyReferenceIsReleasableAfterAnUpgrade(t *testing.T) {
+	now := fixedNow()
+	setup := func(t *testing.T, blob string) (*Engine, model.RelationID, EndpointRef, EndpointRef) {
+		t.Helper()
+		e := New(projection.New(), &fakeAppender{}, WithClock(func() time.Time { return now }))
+		proc := EndpointRef{Type: model.TypeProcess, Identity: []model.KeyValue{
+			kv("process.pid", "7"), kv("process.creation.time", "t0")}}
+		host := EndpointRef{Type: model.TypeHost, Identity: []model.KeyValue{kv("host.id", "h-up")}}
+
+		var relID model.RelationID
+		if err := e.Batch(func(b *Batch) {
+			for _, ep := range []EndpointRef{proc, host} {
+				if _, err := b.ObserveEntity(EntityObservation{
+					Type: ep.Type, Identity: ep.Identity, EventTime: now, Producer: "agent-a", Interval: time.Hour,
+				}); err != nil {
+					t.Errorf("observe: %v", err)
+					return
+				}
+			}
+			ev, _, err := b.ObserveRelation(RelationObservation{
+				Type: model.RelRunsOn, From: proc, To: host, EventTime: now, Producer: "agent-a",
+			})
+			if err != nil {
+				t.Errorf("observe relation: %v", err)
+				return
+			}
+			if ev.Relation != nil {
+				relID = ev.Relation.Relation.ID
+			}
+		}); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		// Replace the reference with what the given blob restores.
+		e.relRefs[relID] = map[string]liveRef{}
+		if err := e.RestoreLiveness([]byte(blob)); err != nil {
+			t.Fatalf("restore: %v", err)
+		}
+		return e, relID, proc, host
+	}
+
+	retract := func(t *testing.T, e *Engine, proc, host EndpointRef, scope string) bool {
+		t.Helper()
+		var emitted bool
+		if err := e.Batch(func(b *Batch) {
+			b.SetScope(scope)
+			_, ok, err := b.RemoveRelation(RelationObservation{
+				Type: model.RelRunsOn, From: proc, To: host, EventTime: now, Producer: "agent-a",
+			})
+			if err != nil {
+				t.Errorf("remove: %v", err)
+				return
+			}
+			emitted = ok
+		}); err != nil {
+			t.Fatalf("retract: %v", err)
+		}
+		return emitted
+	}
+
+	t.Run("a pre-speaker-key snapshot is releasable", func(t *testing.T) {
+		e, relID, proc, host := setup(t, `{"refs":{},"rel_refs":{"REL":{"agent-a":"`+
+			now.Add(time.Hour).Format(time.RFC3339Nano)+`"}}}`)
+		// The blob keys on the literal relation id, so write it under the real one.
+		e.relRefs[relID] = map[string]liveRef{"agent-a": {legacy: true}}
+		if !retract(t, e, proc, host, "senhub-agent/hostsvc") {
+			t.Error("a scoped retraction released nothing: the producer cannot retract its own edge after an upgrade")
+		}
+		if _, still := e.getRelation(relID); still {
+			t.Error("the edge survived its producer's retraction")
+		}
+	})
+
+	t.Run("a method that named nothing is NOT released by another method", func(t *testing.T) {
+		// The negative control, and the half that matters: a runtime reference
+		// whose producer named no method is a speaker in its own right. Releasing
+		// it from another method's retraction would let one speaker retract what
+		// another asserted.
+		e, relID, proc, host := setup(t, `{"refs":{}}`)
+		e.relRefs[relID] = map[string]liveRef{"agent-a": {}} // not legacy
+		if retract(t, e, proc, host, "senhub-agent/hostsvc") {
+			t.Error("a scoped retraction released an unnamed method's reference: one speaker retracted another's assertion")
+		}
+		if _, still := e.getRelation(relID); !still {
+			t.Error("the edge was removed although the unnamed method still asserts it")
+		}
+	})
+
+	t.Run("the snapshot declares that its keys carry the method", func(t *testing.T) {
+		e := New(projection.New(), &fakeAppender{}, WithClock(func() time.Time { return now }))
+		blob, err := e.LivenessBlob()
+		if err != nil {
+			t.Fatalf("blob: %v", err)
+		}
+		if !strings.Contains(string(blob), `"speaker_keys":true`) {
+			t.Errorf("a blob we write does not declare speaker keys, so our own snapshots would restore as legacy: %s", blob)
+		}
+	})
 }
