@@ -91,6 +91,17 @@ func TestEveryRegisteredTypeHasADocumentedIdentity(t *testing.T) {
 // differently — so the test cannot infer agreement; what it can do is make
 // every form a declaration.
 //
+// What it still cannot catch, stated here rather than left to be rediscovered: a
+// type with SEVERAL identity forms passes once ONE of them is documented. The
+// host-side network.interface identity was absent from every document for
+// months while the device-side form satisfied both this test and
+// TestEveryRegisteredTypeHasADocumentedIdentity — a producer emitting a host's
+// interfaces had nothing telling it which attributes identify them. Found by a
+// reviewer asking why the form was missing from a list, not by a test. Adding a
+// form here is the only thing that makes a document obliged to state it, so a
+// new identity shape belongs in this map at the moment it is decided, not when
+// someone notices.
+//
 // It exists because presence was not enough. The identity row for a route said
 // one thing in the producer contract and another in the mapping document for
 // four versions: the contract keys a route on its next hop, with the reason
@@ -101,15 +112,16 @@ func TestEveryRegisteredTypeHasADocumentedIdentity(t *testing.T) {
 // was wrong, and a producer following the wrong one builds a graph that reports
 // a topology change every poll.
 var identityForms = map[string]string{
-	"host.id":                           "host",
-	"service.instance.id":               "service.instance",
-	"db.instance.id":                    "db",
-	"container.id":                      "container",
-	"network.device.id":                 "network.device",
-	"network.segment.id":                "network.segment",
-	"host.id,mac":                       "network.neighbor, scoped to the observing host",
-	"host.id,vmid":                      "compute.vm, a VM seen from its hypervisor",
-	"process.creation.time,process.pid": "process",
+	"host.id":                                         "host",
+	"service.instance.id":                             "service.instance",
+	"db.instance.id":                                  "db",
+	"container.id":                                    "container",
+	"network.device.id":                               "network.device",
+	"network.segment.id":                              "network.segment",
+	"host.id,mac":                                     "network.neighbor, scoped to the observing host",
+	"host.id,vmid":                                    "compute.vm, a VM seen from its hypervisor",
+	"process.creation.time,process.pid":               "process",
+	"host.id,network.interface.name":                  "network.interface, on a host",
 	"network.device.id,network.interface.name":        "network.interface, a port on a polled device",
 	"host.id,next_hop.ip,route.destination":           "network.route, on a host",
 	"network.device.id,next_hop.ip,route.destination": "network.route, on a polled device",

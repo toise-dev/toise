@@ -339,3 +339,80 @@ func TestCheckFlagsMACRendering(t *testing.T) {
 		}
 	}
 }
+
+// TestCheckFlagsRetiredIdentitySpelling pins the split that makes this check
+// meaningful, and the negative control is the half that matters.
+//
+// `interface.name` is deliberately still accepted — as a display name and as a
+// telemetry join key — because a graph holds interfaces observed before the
+// semconv spelling existed. Tolerance there reads as tolerance everywhere, and
+// it must not be: an identity is hashed over the keys AS SENT, with no
+// normalization, so one port named two ways is two entities joined by nothing.
+//
+// So the check must fire on the identity and stay silent on the description. A
+// version that flagged both would be refused by every producer that correctly
+// carries the old spelling as an attribute, and the check would be turned off.
+func TestCheckFlagsRetiredIdentitySpelling(t *testing.T) {
+	const marker = "no longer an identity key"
+	cases := []struct {
+		name    string
+		inIdent map[string]string
+		inDesc  map[string]string
+		flagged bool
+	}{
+		{
+			name:    "the semconv spelling identifies",
+			inIdent: map[string]string{"host.id": "h-1", "network.interface.name": "eth0"},
+			flagged: false,
+		},
+		{
+			name:    "the retired spelling must not identify",
+			inIdent: map[string]string{"host.id": "h-1", "interface.name": "eth0"},
+			flagged: true,
+		},
+		{
+			name:    "a port on a device, retired spelling",
+			inIdent: map[string]string{"network.device.id": "serial:9:FOC1", "interface.name": "Gi1/0/1"},
+			flagged: true,
+		},
+		{
+			// The negative control: the same key as a DESCRIPTIVE attribute is
+			// correct and must pass. This is why the check is on identity only.
+			name:    "the retired spelling is fine as an attribute",
+			inIdent: map[string]string{"host.id": "h-1", "network.interface.name": "eth0"},
+			inDesc:  map[string]string{"interface.name": "eth0", "mtu": "1500"},
+			flagged: false,
+		},
+	}
+	for _, c := range cases {
+		logs := plog.NewLogs()
+		lr := logs.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
+		lr.SetEventName("entity.state")
+		a := lr.Attributes()
+		a.PutStr("entity.type", "network.interface")
+		id := a.PutEmptyMap("entity.id")
+		for k, v := range c.inIdent {
+			id.PutStr(k, v)
+		}
+		if len(c.inDesc) > 0 {
+			d := a.PutEmptyMap("entity.description")
+			for k, v := range c.inDesc {
+				d.PutStr(k, v)
+			}
+		}
+
+		var hit bool
+		for _, p := range Check(logs) {
+			if strings.Contains(p.Issue, marker) {
+				hit = true
+				if p.Advisory {
+					t.Errorf("%s: a retired identity spelling must be a rejection, not an advisory — "+
+						"the damage is a silent duplicate, which is exactly what an advisory does not prevent", c.name)
+				}
+			}
+		}
+		if hit != c.flagged {
+			t.Errorf("%s: flagged=%v, want %v (identity %v, description %v)", c.name, hit, c.flagged, c.inIdent, c.inDesc)
+		}
+	}
+}

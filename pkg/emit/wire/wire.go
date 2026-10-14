@@ -301,6 +301,19 @@ const IdentityMAC = "mac"
 // IdentityMAC.
 const IdentityNetworkDeviceID = "network.device.id"
 
+// IdentityNetworkInterfaceName names an interface within its owner — a host by
+// host.id, or a polled device by network.device.id. It is the semconv spelling
+// (release candidate since 1.44) and it is the ONLY one that may identify.
+//
+// The earlier spelling `interface.name` remains valid as a descriptive attribute
+// and as a telemetry join key, because a graph still holds interfaces observed
+// before the migration and dropping it would blind the pivot on them. It must
+// never appear in an identity: identities are hashed over the keys as sent, with
+// no normalization, so one port named two ways is two entities that nothing
+// joins. The conformance kit refuses it in an identity and accepts it
+// everywhere else.
+const IdentityNetworkInterfaceName = "network.interface.name"
+
 // OTLP Resource attribute keys on a ResourceLogs carrying entity events.
 const (
 	// ResServiceName names the producing service (informational).
