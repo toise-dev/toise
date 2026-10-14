@@ -1842,3 +1842,53 @@ func TestNotFoundAtAnInstantNamesTheRightReason(t *testing.T) {
 		t.Errorf("a present-tense miss lost its explanation: %q", msg3)
 	}
 }
+
+// TestPartialInlineIdentitySaysWhy pins an absence that did not say which kind
+// it was, reported by a consumer session building a path view.
+//
+// An inline identity handle must carry EVERY key of the identity: resolution
+// compares the whole set, so a subset matches nothing. That is the safe
+// behavior — it can never resolve to one of several siblings at random — but
+// the caller read "no entity found", which is indistinguishable from "that
+// entity does not exist". For a host's interface the first key is the owner's
+// host.id, shared by every sibling interface on that host, so a one-key handle
+// looks entirely reasonable to write.
+func TestPartialInlineIdentitySaysWhy(t *testing.T) {
+	g := &fakeGraph{
+		entities: map[model.EntityID]model.Entity{
+			"if1": {ID: "if1", Type: model.TypeNetworkInterface, Identity: []model.KeyValue{
+				{Key: "host.id", Value: sv("h1")},
+				{Key: "network.interface.name", Value: sv("eth0")},
+			}},
+		},
+		deleted: map[model.EntityID]bool{},
+	}
+	s := New(g, &fakeStore{})
+
+	// A one-key handle for a two-key identity.
+	_, _, err := s.getEntity(context.Background(), nil, GetEntityInput{EntityID: "network.interface:host.id=h1"})
+	if err == nil {
+		t.Fatal("a partial inline identity resolved; it must not, since it cannot tell sibling interfaces apart")
+	}
+	for _, want := range []string{"EVERY key", "identity_fingerprint", "find_entities"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error does not mention %q, so a caller cannot tell an incomplete handle from a missing entity: %v", want, err)
+		}
+	}
+
+	// The negative control: a COMPLETE handle resolves, so the hint must not fire
+	// on a working call, and a genuinely unknown entity of the same type must not
+	// be told its handle was incomplete.
+	if _, _, cerr := s.getEntity(context.Background(), nil,
+		GetEntityInput{EntityID: "network.interface:host.id=h1,network.interface.name=eth0"}); cerr != nil {
+		t.Errorf("a complete inline identity failed to resolve: %v", cerr)
+	}
+	_, _, err = s.getEntity(context.Background(), nil,
+		GetEntityInput{EntityID: "network.interface:host.id=h9,network.interface.name=eth9"})
+	if err == nil {
+		t.Fatal("an unknown entity resolved")
+	}
+	if strings.Contains(err.Error(), "EVERY key") {
+		t.Errorf("a COMPLETE handle for a missing entity was told its handle was incomplete: %v", err)
+	}
+}
