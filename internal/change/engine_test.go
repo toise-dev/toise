@@ -1568,3 +1568,120 @@ func TestEdgeProvenanceIsReadable(t *testing.T) {
 		t.Errorf("unknown edge = %v, want empty", got)
 	}
 }
+
+// TestParkedEdgeKeepsTheScopeThatAssertedIt pins a regression the speaker key
+// introduced, found by an independent review of the day it was merged.
+//
+// An edge whose endpoints have not arrived yet parks in the reconciliation
+// buffer, and is committed later by whichever entity observation delivers the
+// missing endpoint — a different ScopeLogs block, under a different collection
+// method. The scope is batch state by design, so the commit used to pick up the
+// FLUSHING scope.
+//
+// That was harmless while the liveness reference was keyed on the producer
+// alone. Since the key became the speaker, the method that asserted the edge can
+// no longer retract it: its removal looks for a key nobody wrote, finds nothing,
+// and emits nothing — silently. And an embedded edge carries a zero deadline, so
+// no sweep reclaims it; it lives as long as its endpoints do.
+//
+// The buffer is on by default in production with a 30 s TTL, and the producer
+// emits one scope per collection method, so a route asserted by the route
+// collector and completed by the interface collector is the ordinary case.
+func TestParkedEdgeKeepsTheScopeThatAssertedIt(t *testing.T) {
+	now := fixedNow()
+	e := New(projection.New(), &fakeAppender{}, WithClock(func() time.Time { return now }),
+		WithRelationBuffer(30*time.Second))
+
+	host := EndpointRef{Type: model.TypeHost, Identity: []model.KeyValue{kv("host.id", "h-park")}}
+	addr := EndpointRef{Type: model.TypeNetworkAddress, Identity: []model.KeyValue{kv("network.address", "10.0.0.254")}}
+
+	// The route collector asserts the edge before the address exists: it parks.
+	if err := e.Batch(func(b *Batch) {
+		b.SetScope("senhub-agent/host-route")
+		if _, err := b.ObserveEntity(EntityObservation{
+			Type: host.Type, Identity: host.Identity, EventTime: now, Producer: "agent-a", Interval: time.Hour,
+		}); err != nil {
+			t.Errorf("observe host: %v", err)
+			return
+		}
+		if _, emitted, err := b.ObserveRelation(RelationObservation{
+			Type: model.RelHasInterface, From: host, To: addr, EventTime: now, Producer: "agent-a",
+		}); err != nil {
+			t.Errorf("observe relation: %v", err)
+		} else if emitted {
+			t.Error("the edge committed immediately; this test needs it to park")
+		}
+	}); err != nil {
+		t.Fatalf("assert batch: %v", err)
+	}
+
+	// The interface collector delivers the address, which flushes the buffer.
+	if err := e.Batch(func(b *Batch) {
+		b.SetScope("senhub-agent/host-iface")
+		if _, err := b.ObserveEntity(EntityObservation{
+			Type: addr.Type, Identity: addr.Identity, EventTime: now, Producer: "agent-a", Interval: time.Hour,
+		}); err != nil {
+			t.Errorf("observe address: %v", err)
+		}
+	}); err != nil {
+		t.Fatalf("flush batch: %v", err)
+	}
+
+	var relID model.RelationID
+	for id := range e.relRefs {
+		relID = id
+	}
+	if relID == "" {
+		t.Fatal("the parked edge never landed")
+	}
+
+	if got := e.RelationAssertingScopes(relID); len(got) != 1 || got[0] != "senhub-agent/host-route" {
+		t.Errorf("edge collected_by = %v, want the method that ASSERTED it; the flushing method "+
+			"only completed its endpoints", got)
+	}
+
+	// And the consequence that makes it a defect rather than a wrong label: the
+	// asserting method must be able to retract what it asserted.
+	var emitted bool
+	if err := e.Batch(func(b *Batch) {
+		b.SetScope("senhub-agent/host-route")
+		_, ok, err := b.RemoveRelation(RelationObservation{
+			Type: model.RelHasInterface, From: host, To: addr, EventTime: now, Producer: "agent-a",
+		})
+		if err != nil {
+			t.Errorf("remove: %v", err)
+			return
+		}
+		emitted = ok
+	}); err != nil {
+		t.Fatalf("retract batch: %v", err)
+	}
+	if !emitted {
+		t.Error("the asserting method's retraction emitted nothing: it cannot retract its own edge")
+	}
+	if _, still := e.getRelation(relID); still {
+		t.Error("the edge survived its only speaker's retraction, and carries a zero deadline, so no sweep reclaims it")
+	}
+
+	// The negative control: the flushing scope must not be left set on the batch
+	// afterwards, or every entity observed after a flush is mis-attributed.
+	if err := e.Batch(func(b *Batch) {
+		b.SetScope("senhub-agent/host-iface")
+		if _, err := b.ObserveEntity(EntityObservation{
+			Type: model.TypeHost, Identity: []model.KeyValue{kv("host.id", "h-after")},
+			EventTime: now, Producer: "agent-a", Interval: time.Hour,
+		}); err != nil {
+			t.Errorf("observe after flush: %v", err)
+		}
+	}); err != nil {
+		t.Fatalf("after batch: %v", err)
+	}
+	id, ok := e.matchIdentity(model.TypeHost, []model.KeyValue{kv("host.id", "h-after")})
+	if !ok {
+		t.Fatal("the host observed after the flush is missing")
+	}
+	if got := e.AssertingScopes(id); len(got) != 1 || got[0] != "senhub-agent/host-iface" {
+		t.Errorf("a host observed after a flush has scopes %v, want its own batch scope — "+
+			"the override must be restored, not left set", got)
+	}
+}
