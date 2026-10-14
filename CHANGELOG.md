@@ -22,9 +22,14 @@ Nothing yet.
 >   blob. A blob written *between* the two fixes carries composite keys **without**
 >   that declaration, so its bare keys were mis-marked legacy — which would let
 >   one speaker release another's reference. Found by reading an upgrade plan,
->   not the code. `beta.1` was qualified on an **empty data directory**, so this
->   path was never exercised: an upgrade from a `beta.1` data dir is now part of
->   what must be qualified.
+>   not the code. **No published build was ever at risk**, and the claim that an
+>   upgrade from a `beta.1` data dir would qualify this was wrong: `beta.1`
+>   already writes the declaration, and `v0.20.0` writes neither declaration nor
+>   composite keys, so both are read correctly. The defect was reachable only
+>   from a source build between the two merges, which is why the check belongs
+>   in a unit test — it needs a state no release produces. An upgrade phase is
+>   still owed for journal continuity, which `beta.1`'s empty-directory
+>   qualification skipped, but a clean upgrade says nothing about this fix.
 > - **a deletion's reason now reaches the sentence beside it.** A producer that
 >   reports a disappearance because it stopped watching is making the opposite
 >   claim from one that watched the thing end, and the plain-language gloss
