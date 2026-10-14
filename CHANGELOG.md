@@ -9,7 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
-## [0.21.0] - 2026-10-12
+## [0.21.0] - 2026-10-14
+
+> **`v0.21.0-beta.1` is cut for qualification, not for deployment.** Three of the
+> changes below cannot be verified by reading a diff, which is why this release
+> goes through a prerelease rather than straight to stable:
+>
+> - the liveness reference key became the **speaker** — a producer and its
+>   collection method — and an independent review found two grave defects in it
+>   on the day it merged, both fixed here. A wrong key leaves an edge
+>   irretractable by its own producer, silently.
+> - **the snapshot format gained a declaration** (`speaker_keys`), and what it
+>   changes fires on the UPGRADE itself: a reference restored from a blob written
+>   before it is marked legacy so its producer can release it.
+> - the **traversal** refuses to cross a `network.neighbor` or an aggregated
+>   `network.interface` by the same relation type twice, so `find_path` answers
+>   differently than it did.
+>
+> The criterion that matters most is already the bench's: `graph_diff` reporting
+> **nothing** over a window where nothing changed. That is exactly what a liveness
+> key defect breaks, and exactly what a reviewer cannot see.
 
 **The release where a warning became a control, and a convergence stopped being
 read as a route.** Three of the four fixes here were found by someone comparing
