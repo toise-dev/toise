@@ -194,6 +194,14 @@ the documentation gives the three alert rules a control needs to stop lying.
   listener that requires no authentication is not the same event as one serving
   plaintext behind a proxy, and merging them is how the sharper gets acknowledged
   with the duller (#464)
+  The guide also states what a configuration-management role must derive the
+  declaration from, because the first consumer of the setting was encoding it into
+  an Ansible role the day it landed and would have derived it from the presence of
+  TLS material alone. "The proxy holds certificates" and "these listeners are
+  unreachable without the proxy" are different statements, and a host can satisfy
+  the first while publishing its ports to `0.0.0.0`. A declaration that is wrong
+  **and automatic** is worse than a wrong one typed by hand: nobody asserted it,
+  so nobody re-reads it.
 - **`/readyz` says whether, not why.** It is deliberately unauthenticated — a load
   balancer and an orchestrator must reach it without credentials, which is the
   whole point of it existing — so everything it writes, it writes to strangers.
