@@ -44,7 +44,17 @@ type EntityEvent struct {
 	ChangeType ChangeType
 	// Entity is the entity state carried by the event.
 	Entity Entity
-	// EventTime is when the fact became true in the real world (producer).
+	// EventTime is the VALID-TIME axis: when the fact holds in the world, as the
+	// producer reports it. The value a producer can actually supply on that axis
+	// is its OBSERVATION instant — it polls, it does not witness the transition —
+	// so the fact became true somewhere in the interval before this, and that
+	// interval is what the read surfaces publish as a resolution.
+	//
+	// The two statements are not interchangeable and the difference has already
+	// cost a wrong conclusion: a review read two observations 47 s apart under a
+	// 30 s cadence as an ordering. Documents across this repository still say
+	// only the first half (see the issue opened on 2026-10-14); the consumer-facing
+	// surfaces say the second, which is the one a reader acts on.
 	EventTime time.Time
 	// RecordedAt is when Toise recorded the event (ingestion).
 	RecordedAt time.Time

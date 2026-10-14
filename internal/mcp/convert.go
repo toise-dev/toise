@@ -53,8 +53,22 @@ type Relation struct {
 }
 
 // Change is one classified event rendered for an LLM. It is bi-temporal:
-// EventTime is when the fact became true in the world, RecordedAt is when Toise
+// EventTime is when a producer OBSERVED the fact, RecordedAt is when Toise
 // learned it (ADR 0005). Exactly one of Entity or Relation is set.
+//
+// Not "when the fact became true", which is what this comment and the schema
+// below both said until 2026-10-14. Nothing observes the instant a fact becomes
+// true: a producer polls, so the change happened somewhere in the interval
+// BEFORE its event_time. That is the whole reason get_entity and entity_history
+// carry a resolution block, and the reason two changes closer together than the
+// producer's cadence carry no ordering at all — a real review once concluded
+// "the service returned before the address moved" from two observations 47 s
+// apart under a 30 s cadence.
+//
+// Which makes the wrong wording worse here than anywhere else: this string is
+// the schema an LLM is handed for the one field every causal conclusion rests
+// on, and it induced exactly the misreading the resolution block was built to
+// prevent.
 type Change struct {
 	EventID string `json:"event_id"`
 	// CommitSeq groups the events of ONE producer observation. Two changes with
@@ -69,7 +83,7 @@ type Change struct {
 	// author of the deletion.
 	Scope       string   `json:"scope,omitempty" jsonschema:"the instrumentation scope that observed this change — one per collection method, e.g. senhub-agent/snmp-route. On a liveness_expiry it names the collector that STOPPED speaking, not the author of the deletion (Toise expired it). Use it to answer which of several producers is losing entities. Absent when the producer sent no scope name or on older events"`
 	ChangeType  string   `json:"change_type" jsonschema:"the taxonomy name, e.g. entity.created, relation.added"`
-	EventTime   string   `json:"event_time" jsonschema:"RFC 3339; when the change became true in the real world"`
+	EventTime   string   `json:"event_time" jsonschema:"RFC 3339; when a producer OBSERVED this change — NOT when it became true. A producer polls, so the change happened somewhere in the interval before this instant: get_entity and entity_history carry a resolution block giving that producer's cadence. Two changes closer together than the cadence carry no guaranteed ordering, and no causal conclusion may be drawn from a gap that small, including against an external clock"`
 	RecordedAt  string   `json:"recorded_at" jsonschema:"RFC 3339; when Toise recorded the change"`
 	ChangedKeys []string `json:"changed_keys" jsonschema:"the attribute keys that changed, for update/state-change events"`
 	// DeleteReason is the producer's open-enum motive on an entity.delete (e.g.

@@ -286,17 +286,24 @@ type Relation {
 
 """
 A qualified, bi-temporal change event from the log. Exactly one of `entity` or
-`relation` is set. `eventTime` is when the fact became true in the real world
-(from the producer); `recordedAt` is when Toise recorded it. They differ for
-late or retroactive events — query history in eventTime space, audit with
-recordedAt.
+`relation` is set.
+
+`eventTime` is when a producer OBSERVED the fact, **never** when the fact became
+true: a producer polls, so the change happened somewhere in the interval before
+this instant. See `Resolution`, which carries that producer's cadence — two
+changes closer together than it carry no guaranteed ordering, and no causal
+conclusion may be drawn from a gap that small, including against an external
+clock.
+
+`recordedAt` is when Toise recorded it. They differ for late or retroactive
+events — query history in eventTime space, audit with recordedAt.
 """
 type ChangeEvent {
   "Event identifier (a ULID, time-sortable)."
   id: ID!
   "The classification of this change."
   changeType: ChangeType!
-  "When the fact became true in the real world (RFC 3339)."
+  "When a producer OBSERVED the fact, not when it became true (RFC 3339) — see Resolution."
   eventTime: String!
   "When Toise recorded the event (RFC 3339)."
   recordedAt: String!
