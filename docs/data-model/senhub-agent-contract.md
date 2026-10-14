@@ -691,6 +691,29 @@ attributes**. So anything a producer would have hung on an edge becomes an
   linked by `has_interface` (device→port); physical adjacency is a **bare
   `connected_to`** (port↔port) — never `adjacent_to` carrying `{local_port,
   remote_port}`.
+- **A link asserted on one-sided evidence says so, on the local interface.** Each
+  device knows only its own ports, so a `connected_to` is emitted in the direction
+  that *leaves* the port whose table was read — `A→B` and `B→A` are two separate
+  facts with their own speakers, and Toise never synthesises the reverse. When the
+  remote end could not be read, the link is still emitted (a local port that is up
+  is a real observation), and the local `network.interface` carries
+  **`senhub.link.peer_state`**: `unread` (not polled in this pass), `stale` (read,
+  but too old to decide) or `unreachable` (the remote device did not answer).
+  **Absence means both ends were read**, which is the healthy case and therefore
+  costs nothing. Three words rather than a flag, because an operator does not act
+  the same way on a device never polled, one polled too long ago, and one that has
+  stopped answering.
+
+  Staleness is counted in the **remote device's own poll cadence**, not in a fixed
+  window: a device polled every ten minutes would otherwise cross into `stale`
+  between two good polls and the attribute would oscillate every cycle, which is
+  entity noise rather than information.
+
+  **The word is on the interface, which is one hop before the edge.** An edge
+  cannot carry it: ADR 0022 refuses attributes on relations except the belief
+  allowlist (`same_as`, `resolves_to`), so an attribute set on a `connected_to` is
+  accepted on the wire and dropped on arrival, silently. A consumer judging the
+  evidence behind a link therefore reads the **From** interface, not the edge.
 > **Interface identity is migrating.** The identifying key is
 > `network.interface.name` — the semantic-convention spelling, release candidate
 > since semconv v1.44.0. Producers before senhub-agent 0.6.0 emit `interface.name`,
