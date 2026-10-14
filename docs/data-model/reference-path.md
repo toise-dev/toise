@@ -151,6 +151,20 @@ identity (`{host.id, mac}`), a 24 h cadence and no retraction by absence, and th
 dissolve *who saw it and when*, which is the entire value of the ARP layer. The
 neighbour must survive its own resolution.
 
+`otel` then gave the rule a sharper form than mine, which is the one to reuse
+because it is testable rather than argued:
+
+> **`same_as` when the collapse would lose no identifying attribute** — two sets
+> of identifiers for one thing. **`resolves_to` when it would lose one** — here
+> the observer, `host.id`, which is *inside* the neighbour's identity.
+
+That is the distinction between *several viable identities of one thing* and
+*contextual identity*, and it decides the question by looking at the identity keys
+instead of debating what sameness means. A VM and its in-guest host each carry a
+full identity of the same machine, so collapsing them loses nothing. A neighbour's
+identity contains the observer; collapsing it into the port drops the observer,
+and with it the only thing that made the observation attributable.
+
 So the link is not sameness. It is resolution:
 
 ```
@@ -225,6 +239,26 @@ than a special case:
 
 So `network.neighbor` does not need to be terminal. It needs this rule, which
 costs one comparison and states the semantics instead of forbidding the type.
+
+**One alternative was proposed and does not work, and the reason is worth keeping
+because it is counter-intuitive.** `otel` suggested that if the path primitive
+traversed only *structural* edges, a non-structural `resolves_to` would be
+excluded by construction and no rule would be needed. Measured: the traversal
+does **not** filter on `Structural` — `edgesOf` in `internal/mcp/traverse.go`
+takes every incident edge, and `Structural` appears nowhere in the traversal or
+the impact walk. It drives the high-priority flag on the committed event, nothing
+else.
+
+And making the traversal structural-only would break the feature it was meant to
+protect: `resolves_to` is non-structural *precisely so that SNMP discovering ports
+does not flood the change feed*, so excluding non-structural edges would exclude
+the entire L2 descent. The two properties are independent on purpose — one is
+about what deserves an alert, the other about what a path may cross — and
+collapsing them would make every future relation choose between being quiet and
+being reachable.
+
+What protects the reader from a path crossing a belief is not exclusion. It is
+that the answer says the hop is a belief, with its basis.
 
 ### Which MAC belongs to whom — the part that is easy to get backwards
 
