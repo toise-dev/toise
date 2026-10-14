@@ -199,7 +199,7 @@ func TestRegistry(t *testing.T) {
 	if def, ok := RelationDef(RelListensOn); !ok || def.From != TypeServiceListener || def.To != TypeNetworkInterface {
 		t.Error("relation def wrong")
 	}
-	if len(EntityTypes()) != 15 || len(RelationTypes()) != 16 {
+	if len(EntityTypes()) != 15 || len(RelationTypes()) != 18 {
 		t.Errorf("registry counts: %d entity, %d relation", len(EntityTypes()), len(RelationTypes()))
 	}
 	// compute.vm (hypervisor-discovered VM), container and pod are registered
@@ -391,5 +391,62 @@ func TestSameAsRegistration(t *testing.T) {
 	}
 	if ImpactFlowOf(RelSameAs) != ImpactNone {
 		t.Error("ImpactFlowOf(same_as) must be ImpactNone")
+	}
+}
+
+// TestNewRelationsCarryNoImpact pins the two impact decisions of 0.21.0, and the
+// registration check is what keeps it from passing for the wrong reason.
+//
+// ImpactFlowOf returns ImpactBoth for an UNREGISTERED type — over-reporting
+// being the safer default when nothing is known. So a test asserting only
+// "impact is None" would fail loudly if the registration were dropped, which
+// sounds fine, but the reverse matters more: it would pass on nothing at all if
+// the constant were renamed, because an unknown type never reaches the
+// assertion. Checking registration first makes the test about the DECISION
+// rather than about the default.
+func TestNewRelationsCarryNoImpact(t *testing.T) {
+	for _, tc := range []struct {
+		relType string
+		why     string
+	}{
+		{
+			relType: RelResolvesTo,
+			why: "the dependent side is a third party's record; measured, an impact there made impact_of " +
+				"on a host report every ARP cache entry — a few hundred devices on one failure",
+		},
+		{
+			relType: RelAggregatedInto,
+			why: "a member failing does not take the aggregate down, that being the entire point of a LAG; " +
+				"the real impact is conditional on being the LAST active member, and the impact walk does not count",
+		},
+	} {
+		def, ok := RelationDef(tc.relType)
+		if !ok {
+			t.Errorf("%s is not registered, so ImpactFlowOf would answer the unknown-type default "+
+				"and this test would say nothing about the decision", tc.relType)
+			continue
+		}
+		if got := ImpactFlowOf(tc.relType); got != ImpactNone {
+			t.Errorf("%s impact = %v, want ImpactNone. Not an oversight: %s", tc.relType, got, tc.why)
+		}
+		if def.Impact != ImpactNone {
+			t.Errorf("%s is registered with impact %v; the table and ImpactFlowOf disagree", tc.relType, def.Impact)
+		}
+	}
+	// And the structural flags, which differ on purpose: a port leaving a
+	// port-channel is a degradation operators alert on, while SNMP discovering
+	// that a neighbor resolves to a port is coverage improving and would flood
+	// the change feed.
+	for relType, wantStructural := range map[string]bool{
+		RelResolvesTo:     false,
+		RelAggregatedInto: true,
+	} {
+		def, ok := RelationDef(relType)
+		if !ok {
+			continue // already reported above
+		}
+		if def.Structural != wantStructural {
+			t.Errorf("%s structural = %v, want %v", relType, def.Structural, wantStructural)
+		}
 	}
 }

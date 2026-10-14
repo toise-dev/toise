@@ -68,6 +68,33 @@ the documentation gives the three alert rules a control needs to stop lying.
 
 ### Changed
 
+- **`resolves_to` and `aggregated_into` are registered, and a crossing rule keeps
+  them from inventing paths.** Both enter the engine from `pkg/emit` v0.13.0:
+  `resolves_to` ties an unresolved `network.neighbor` to the interface that OWNS
+  its MAC — a belief with a basis and a confidence, and deliberately not a
+  `same_as`, since a neighbour's identity contains its observer and the canonical
+  collapse would drop it; `aggregated_into` ties a physical interface to the
+  logical one that aggregates it, without which a path stops at every bond and
+  port-channel, which means at every network core and every hypervisor. Neither
+  carries impact, and for the aggregate the reason is measured rather than
+  cautious: a member failing does not take the aggregate down, that being the
+  point of a LAG.
+
+  **The belief-attribute allowlist widens to the second belief edge**, so
+  `basis` and `confidence` are no longer dropped at the boundary — it stays a
+  list of two rather than a general mechanism, because an edge carrying arbitrary
+  attributes is what ADR 0022 refuses.
+
+  **And a per-type crossing rule**: a `network.neighbor`, and a
+  `network.interface` entered by `aggregated_into`, may be crossed only by
+  entering and leaving through DIFFERENT relation types. Without it the first
+  emission of either relation creates a traversable convergence — one MAC heard
+  on two interfaces of a host, or traffic appearing to cross from one bond member
+  to another — which is #442's error in a new costume. It is per type because the
+  general version was refuted within the hour it was proposed: a switch traversed
+  enters and leaves by `has_interface`, both times, and that IS forwarding.
+  Structurally identical to the two refusals, so only the type separates them.
+  The test carries the switch case as its control.
 - **A liveness reference now names the SPEAKER — a producer and the collection
   method it spoke through — instead of the producer alone (ADR 0019 amended).**
   Two measured consequences of the old key, and the second is a defect rather

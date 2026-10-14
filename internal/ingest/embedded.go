@@ -218,11 +218,18 @@ func embeddedRelations(attrs pcommon.Map, source change.EndpointRef, producer st
 			SourceInterval: srcInterval,
 			Producer:       producer,
 		}
-		// Belief attributes (confidence, basis) are carried only on same_as edges
-		// (ADR 0020): they are the input the read-time canonical overlay collapses
-		// on. On any other edge type they are meaningless and left off, keeping
-		// embedded edges attribute-free.
-		if relType == model.RelSameAs {
+		// Belief attributes (confidence, basis) are carried only on the two BELIEF
+		// edges, same_as and resolves_to (ADR 0020). On same_as they are the input
+		// the read-time canonical overlay collapses on; on resolves_to they say how
+		// strongly a neighbor was tied to the interface owning its MAC, and a path
+		// crossing an fdb-based resolution is weaker than one crossing an
+		// lldp-based one. On any other edge type they are meaningless and left off,
+		// keeping embedded edges attribute-free.
+		//
+		// This list is the exception ADR 0022 allows, and it is a list rather than
+		// a general mechanism on purpose: an edge carrying arbitrary attributes is
+		// what that ADR refuses.
+		if relType == model.RelSameAs || relType == model.RelResolvesTo {
 			obs.Attributes = beliefAttributes(m)
 		}
 		rels = append(rels, obs)

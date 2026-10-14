@@ -117,15 +117,34 @@ func (s *Server) walkPaths(g Graph, start, goal model.EntityID, relType string, 
 		var next []model.EntityID
 		for _, cur := range frontier {
 			terminal := false
+			// arrivedBy is the relation type this BFS reached cur through, empty at
+			// the start. Some types may be crossed only by CHANGING relation type,
+			// which is what separates a real crossing from a convergence wearing the
+			// same shape — see model.CrossingNeedsADifferentRelation.
+			arrivedBy := ""
 			if cur != start {
-				if ent, ok, _ := g.GetEntity(cur); ok && model.IsTerminalEntityType(ent.Type) {
-					terminal = true
+				if ent, ok, _ := g.GetEntity(cur); ok {
+					if model.IsTerminalEntityType(ent.Type) {
+						terminal = true
+					}
+					if model.CrossingNeedsADifferentRelation(ent.Type) {
+						arrivedBy = w.parents[cur].via.rel.Type
+					}
 				}
 			}
 			edges := edgesOf(g, cur, relType)
 			for i := range edges {
 				e := &edges[i]
 				if terminal && e.direction != "outgoing" {
+					w.terminals[cur] = struct{}{}
+					continue
+				}
+				// Leaving by the type we arrived by is a convergence, not a path: one
+				// MAC heard on two interfaces of a host does not link them, and
+				// traffic does not cross from one bond member to another. Recorded as
+				// a terminal so the caller is given the convergence rather than a bare
+				// "not reachable", exactly as for an endpoint.
+				if arrivedBy != "" && e.rel.Type == arrivedBy {
 					w.terminals[cur] = struct{}{}
 					continue
 				}
