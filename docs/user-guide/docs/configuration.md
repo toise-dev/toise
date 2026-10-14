@@ -65,6 +65,7 @@ for the rationale.
 | `tls_key_file` | `TOISE_TLS_KEY_FILE` | `--tls-key-file` | (empty) | PEM private key (pairs with the cert) |
 | `tls_client_ca_file` | `TOISE_TLS_CLIENT_CA_FILE` | `--tls-client-ca-file` | (empty) | PEM CA bundle; when set, requires + verifies a client certificate on **OTLP ingest** (mTLS, ADR 0028) — needs TLS; the HTTP surfaces are unaffected |
 | `ingest_mtls_only` | `TOISE_INGEST_MTLS_ONLY` | `--ingest-mtls-only` | `false` | authenticate OTLP ingest by **mutual TLS alone** (no bearer required or consulted on ingest) while the read surfaces keep requiring their scoped tokens / OIDC; decouples ingest auth from read auth (ADR 0028). Requires `tls_client_ca_file` |
+| `tls_terminated_upstream` | `TOISE_TLS_TERMINATED_UPSTREAM` | `--tls-terminated-upstream` | `false` | a **declaration**, not a behavior: states that a reverse proxy terminates TLS and these listeners are not reachable without it. Suppresses the `no_tls` exposure condition, **never** `no_auth`, and is published as `toise_config_declaration` so the claim is auditable. [Why it exists](#if-tls-is-terminated-in-front-of-this-instance-say-so) |
 | `audit_log` | `TOISE_AUDIT_LOG` | `--audit-log` | (empty) | path to an append-only JSON-line audit file for operator writes (`annotate_entity`), per tenant; empty = off (ADR 0028) |
 | `oidc_issuer` | `TOISE_OIDC_ISSUER` | `--oidc-issuer` | (empty) | OIDC issuer URL; when set, JWT bearers are verified on the read surfaces (discovery + JWKS). Empty = OIDC off (ADR 0028) |
 | `oidc_audience` | `TOISE_OIDC_AUDIENCE` | `--oidc-audience` | (empty) | expected JWT `aud` |
@@ -191,21 +192,63 @@ So they are also published, and can be alerted on:
 | `toise_insecure_config_conditions` | how many conditions this instance has; **published even when zero**, so an alert on `> 0` does not depend on a series existing |
 | `toise_insecure_config{surface,addr,reason}` | one series per condition. `surface` is `listener` or `log_shipping`; `reason` is `no_auth`, `no_tls`, `no_auth_no_tls`, `cleartext` or `cleartext_public` |
 | `toise_insecure_config_last_check_timestamp_seconds` | when the conditions were last evaluated |
+| `toise_config_declaration{declaration}` | one series per operator declaration about the perimeter, **published as 0 or 1 always** (see below) |
 
-**Alert on three rules, because a control can lie in three ways.** The condition
-is true; or the series is gone, and a rule on `> 0` does not fire — it goes
-quiet; or the series is there and no longer evaluated, which `absent()` cannot
-see. One rule each:
+#### If TLS is terminated in front of this instance, say so
+
+**Set `tls_terminated_upstream` (`TOISE_TLS_TERMINATED_UPSTREAM`,
+`--tls-terminated-upstream`) when a reverse proxy terminates TLS and these
+listeners are not reachable without passing through it.**
+
+Read this before you copy the alert rules, because without it the first rule
+fires on a correct deployment and never stops. The exposed-listener check reads
+the address the process **binds**, and that address is the whole of what the
+process can see: not the port publication, not the network namespace, not where
+TLS ends. The container image's own default command binds `0.0.0.0`, so a
+containerised instance behind a terminating proxy — the deployment this guide
+recommends — reports `no_tls` on both listeners while nothing is exposed at all.
+
+The declaration suppresses `no_tls` on a non-loopback listener. It **never**
+suppresses `no_auth`: whether a bearer token is required is a fact this process
+holds, and no claim about the perimeter makes an unauthenticated read surface
+acceptable. It says nothing about log shipping either, which is an outbound
+connection no inbound proxy touches.
+
+**It is a claim, and it is published as one.** `toise_config_declaration` carries
+every declaration whether it is on or off, so a reader can tell an instance that
+reports no conditions because nothing is exposed from one that reports none
+because someone said so. A setting whose only effect is to quiet a control has to
+leave a trace, otherwise it is indistinguishable from the control passing — and
+you are accountable for the claim, not us: if the ports are later published to
+`0.0.0.0`, the declaration still says the proxy is there.
+
+#### Alert on four rules, because a control can lie in four ways
+
+The condition is true; or the series is gone, and a rule on `> 0` does not fire —
+it goes quiet; or the series is there and no longer evaluated, which `absent()`
+cannot see; or it is quiet because a declaration quieted it. One rule each:
 
 ```
 ToiseConfigInsecure      toise_insecure_config_conditions > 0                              for: 5m
 ToiseInsecureGaugeAbsent absent(toise_insecure_config_conditions)                          for: 15m
 ToiseInsecureCheckStale  time() - toise_insecure_config_last_check_timestamp_seconds > 600  for: 10m
+ToiseDeclarationChanged  changes(toise_config_declaration[1h]) > 0                          for: 0m
 ```
 
 The second and third are the ones that get forgotten, and they are why the
 timestamp is published at all: a fresh value proves the list was walked, while a
-zero total alone only proves that something once wrote a zero.
+zero total alone only proves that something once wrote a zero. The fourth is the
+one this release added: a declaration is how a real condition gets hidden, so its
+appearing or flipping is worth a line even though it is not itself a problem.
+
+**And alert on `no_auth` separately, whatever else you do.** A listener that
+requires no authentication is not the same event as one that serves plaintext
+behind a proxy, and merging them into `conditions > 0` is how the sharper of the
+two gets acknowledged along with the duller one:
+
+```
+ToiseListenerUnauthenticated  toise_insecure_config{surface="listener",reason=~"no_auth.*"} > 0  for: 5m
+```
 
 `cleartext_public` means the shipping endpoint is an IP that is neither loopback
 nor private: the segments do not merely travel unencrypted inside a perimeter,

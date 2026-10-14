@@ -176,6 +176,27 @@ type Config struct {
 	// (ADR 0028), on top of bearer auth. Requires TLS to be enabled. Not a secret.
 	// The HTTP read surfaces are unaffected (they use bearer/OIDC).
 	TLSClientCAFile string `yaml:"tls_client_ca_file"`
+	// TLSTerminatedUpstream is a DECLARATION, not a behavior: it changes nothing
+	// about how this process serves, only what it is entitled to claim about its
+	// own exposure. Set it when a reverse proxy terminates TLS in front of this
+	// instance and the listeners are not reachable without passing through it.
+	//
+	// It exists because the exposed-listener check (ADR 0024) reads the address
+	// the process binds, and that address is the whole of what the process can
+	// see: not the port publication, not the network namespace, not where TLS
+	// ends. Our own container image binds 0.0.0.0 by default, so the check is
+	// permanently true on every containerised deployment behind a terminating
+	// proxy — which is the deployment we recommend. A control that is always on
+	// is a control nobody reads.
+	//
+	// It suppresses the no_tls reason on a non-loopback listener and NEVER
+	// suppresses no_auth: whether a bearer token is required is a fact this
+	// process holds, and no claim about the perimeter makes an unauthenticated
+	// read surface acceptable. The declaration is itself exported as
+	// toise_config_declaration, so quieting the control leaves a trace instead of
+	// being indistinguishable from the control passing. Not a secret:
+	// TOISE_TLS_TERMINATED_UPSTREAM (env) or yaml.
+	TLSTerminatedUpstream bool `yaml:"tls_terminated_upstream"`
 	// IngestMTLSOnly decouples ingest auth from read auth (#262): when true, the
 	// OTLP ingest surface relies on mutual TLS alone and requires no bearer token,
 	// while the read surfaces (GraphQL, MCP) keep requiring their scoped tokens /
@@ -586,6 +607,7 @@ func (c *Config) applyEnv(getenv func(string) string) error {
 		{"TOISE_PLAYGROUND", &c.Playground},
 		{"TOISE_DEBUG_UI", &c.DebugUI},
 		{"TOISE_INGEST_MTLS_ONLY", &c.IngestMTLSOnly},
+		{"TOISE_TLS_TERMINATED_UPSTREAM", &c.TLSTerminatedUpstream},
 	} {
 		if v := getenv(e.key); v != "" {
 			b, err := strconv.ParseBool(v)
@@ -781,6 +803,7 @@ func resolve(args []string, getenv func(string) string) (Config, error) {
 	tlsKeyFile := fs.String("tls-key-file", cfg.TLSKeyFile, "PEM private key file (pairs with --tls-cert-file)")
 	tlsClientCAFile := fs.String("tls-client-ca-file", cfg.TLSClientCAFile, "PEM CA bundle; when set, requires+verifies a client certificate on OTLP ingest (mTLS, needs TLS)")
 	ingestMTLSOnly := fs.Bool("ingest-mtls-only", cfg.IngestMTLSOnly, "authenticate OTLP ingest by mTLS alone (no bearer); reads still need their scoped tokens (needs --tls-client-ca-file)")
+	tlsTerminatedUpstream := fs.Bool("tls-terminated-upstream", cfg.TLSTerminatedUpstream, "declare that a reverse proxy terminates TLS in front of these listeners; suppresses the no_tls exposure condition, never no_auth, and is itself published as toise_config_declaration")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -822,6 +845,7 @@ func resolve(args []string, getenv func(string) string) (Config, error) {
 	cfg.TLSKeyFile = *tlsKeyFile
 	cfg.TLSClientCAFile = *tlsClientCAFile
 	cfg.IngestMTLSOnly = *ingestMTLSOnly
+	cfg.TLSTerminatedUpstream = *tlsTerminatedUpstream
 	cfg.LogFormat = *logFormat
 	cfg.LogLevel = *logLevel
 

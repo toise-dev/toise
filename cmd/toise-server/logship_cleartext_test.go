@@ -85,6 +85,10 @@ func TestInsecureConditions(t *testing.T) {
 		c.LogShipS3Endpoint, c.LogShipS3Bucket, c.LogShipS3UseSSL = endpoint, "toise-segments", ssl
 		return c
 	}
+	upstreamTLS := func(c config.Config) config.Config {
+		c.TLSTerminatedUpstream = true
+		return c
+	}
 
 	cases := []struct {
 		name string
@@ -105,6 +109,27 @@ func TestInsecureConditions(t *testing.T) {
 		{"loopback listeners are not exposed", config.Config{Listen: "127.0.0.1:8080", OTLPListen: "127.0.0.1:4317"}, false, ""},
 		{"cleartext shipping on a private link is still reported", shipping(withTLS(exposed), "10.90.0.5:9000", false), true, "log_shipping/10.90.0.5:9000/cleartext"},
 		{"shipping with tls is clean", shipping(withTLS(exposed), "10.90.0.5:9000", true), true, ""},
+
+		// The container shape, measured on a customer install on 2026-10-13: the
+		// image's own default Cmd binds 0.0.0.0, the ports are published on
+		// loopback, TLS ends at nginx and auth is on. The check reads the bound
+		// address and nothing else, so before the declaration existed it reported
+		// no_tls on both listeners of every containerised deployment behind a
+		// terminating proxy — the deployment we recommend — and the documented
+		// alert would have fired permanently.
+		{"tls declared terminated upstream, auth on, is clean", upstreamTLS(exposed), true, ""},
+
+		// The control that stops the declaration from being a blanket silencer, and
+		// the one that would be missing if the case above were the only test: a
+		// claim about the perimeter cannot make an unauthenticated read surface
+		// acceptable, because whether a bearer is required is a fact this process
+		// holds rather than something the proxy decides.
+		{"tls declared terminated upstream does not excuse no auth", upstreamTLS(exposed), false, "listener/0.0.0.0:18080/no_auth listener/0.0.0.0:24317/no_auth"},
+
+		// And it is a declaration about TLS alone: unencrypted shipping is a fact
+		// about an outbound connection this process makes, which no inbound proxy
+		// touches.
+		{"tls declared terminated upstream does not excuse cleartext shipping", shipping(upstreamTLS(exposed), "217.182.253.243:9000", false), true, "log_shipping/217.182.253.243:9000/cleartext_public"},
 	}
 	for _, c := range cases {
 		if got := label(insecureConditions(c.cfg, c.auth)); got != c.want {
@@ -118,9 +143,49 @@ func TestInsecureConditions(t *testing.T) {
 // scrape that failed.
 func TestExposureReportsZero(t *testing.T) {
 	e := metrics.NewExposure()
-	e.Report(nil)
-	if n := len(e.Collectors()); n != 3 {
-		t.Fatalf("collectors = %d, want 3 (the labeled family, the total, the last-check timestamp)", n)
+	e.Report(nil, nil)
+	if n := len(e.Collectors()); n != 4 {
+		t.Fatalf("collectors = %d, want 4 (the labeled family, the declarations, the total, the last-check timestamp)", n)
+	}
+}
+
+// TestDeclarationsArePublishedEitherWay guards what makes a suppressing setting
+// auditable. A declaration quiets a control, so a reader has to be able to tell
+// an instance that reports nothing because nothing is exposed from one that
+// reports nothing because someone said so. If the series existed only when the
+// declaration were on, its absence would mean both "not declared" and "not
+// scraped" — the very ambiguity the unlabeled total exists to remove.
+func TestDeclarationsArePublishedEitherWay(t *testing.T) {
+	for _, on := range []bool{true, false} {
+		cfg := config.Config{Listen: "0.0.0.0:8080", TLSTerminatedUpstream: on}
+		ds := configDeclarations(cfg)
+		if len(ds) != 1 || ds[0].Name != "tls_terminated_upstream" || ds[0].On != on {
+			t.Fatalf("declarations with tls_terminated_upstream=%v = %+v", on, ds)
+		}
+	}
+}
+
+// TestListenerRemedyAdvisesOnlyWhatIsMissing pins the wording, because the
+// previous line is how a warning teaches its reader to skip it: it said "auth
+// and/or TLS are off" and recommended setting both, while reporting auth:true
+// in its own fields. An operator who had done half the work was told to do it
+// again, by a line that was never wrong and never useful.
+func TestListenerRemedyAdvisesOnlyWhatIsMissing(t *testing.T) {
+	if got := listenerRemedy("no_tls"); strings.Contains(got, "TOISE_AUTH_TOKENS") {
+		t.Errorf("the no_tls remedy asks for auth tokens: %q", got)
+	}
+	if got := listenerRemedy("no_tls"); !strings.Contains(got, "TOISE_TLS_TERMINATED_UPSTREAM") {
+		t.Errorf("the no_tls remedy does not mention the declaration, which is the way out behind a proxy: %q", got)
+	}
+	if got := listenerRemedy("no_auth"); !strings.Contains(got, "TOISE_AUTH_TOKENS") {
+		t.Errorf("the no_auth remedy does not name what is missing: %q", got)
+	}
+	// And the declaration is never offered as a way out of missing auth.
+	if got := listenerRemedy("no_auth"); strings.Contains(got, "TOISE_TLS_TERMINATED_UPSTREAM") {
+		t.Errorf("the no_auth remedy offers the TLS declaration as a remedy: %q", got)
+	}
+	if got := listenerRemedy("no_auth_no_tls"); strings.Contains(got, "TOISE_TLS_TERMINATED_UPSTREAM") {
+		t.Errorf("the no_auth_no_tls remedy offers the TLS declaration as a remedy: %q", got)
 	}
 }
 

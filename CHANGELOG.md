@@ -173,6 +173,31 @@ the documentation gives the three alert rules a control needs to stop lying.
 
 ### Security
 
+- **An operator can declare that TLS is terminated upstream, and the declaration
+  is published as one.** `tls_terminated_upstream` suppresses the `no_tls`
+  exposure condition on a non-loopback listener, **never** `no_auth`, and never
+  touches log shipping. It exists because the exposed-listener check reads the
+  address the process binds and that is the whole of what it can see — not the
+  port publication, not the network namespace, not where TLS ends. **Our own
+  container image binds `0.0.0.0` by default**, so the condition was permanently
+  true on every containerised deployment behind a terminating proxy, which is the
+  deployment we recommend, and the alert rule documented in this same release
+  would have fired forever. Found on a customer install the day before the cut,
+  by the session upgrading it, from two startup lines it reported verbatim
+  instead of interpreting. A control that is always on is a control nobody reads
+  — the same failure the gauge was added to fix, wearing a louder coat. The claim
+  is exported as `toise_config_declaration{declaration}`, published as 0 **or** 1
+  always: a setting whose only effect is to quiet a control has to leave a trace,
+  otherwise an instance reporting nothing because nothing is exposed and one
+  reporting nothing because someone said so are the same scrape. The documented
+  rules gain one on the declaration changing, and one on `no_auth` alone — a
+  listener that requires no authentication is not the same event as one serving
+  plaintext behind a proxy, and merging them is how the sharper gets acknowledged
+  with the duller (#464)
+- The exposed-listener warning now names **what is actually missing** and advises
+  only that. It read "auth and/or TLS are off" and recommended setting both while
+  reporting `auth:true` in its own fields, so an operator who had done half the
+  work was told to do it again by a line that was never wrong and never useful.
 - Insecure configuration is now a metric, not only a startup line:
   `toise_insecure_config{surface,addr,reason}` names each condition and
   `toise_insecure_config_conditions` counts them, published even when zero so an
