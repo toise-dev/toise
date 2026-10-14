@@ -1848,7 +1848,7 @@ func TestNotFoundAtAnInstantNamesTheRightReason(t *testing.T) {
 //
 // An inline identity handle must carry EVERY key of the identity: resolution
 // compares the whole set, so a subset matches nothing. That is the safe
-// behaviour — it can never resolve to one of several siblings at random — but
+// behavior — it can never resolve to one of several siblings at random — but
 // the caller read "no entity found", which is indistinguishable from "that
 // entity does not exist". For a host's interface the first key is the owner's
 // host.id, shared by every sibling interface on that host, so a one-key handle
@@ -1879,9 +1879,9 @@ func TestPartialInlineIdentitySaysWhy(t *testing.T) {
 	// The negative control: a COMPLETE handle resolves, so the hint must not fire
 	// on a working call, and a genuinely unknown entity of the same type must not
 	// be told its handle was incomplete.
-	if _, _, err := s.getEntity(context.Background(), nil,
-		GetEntityInput{EntityID: "network.interface:host.id=h1,network.interface.name=eth0"}); err != nil {
-		t.Errorf("a complete inline identity failed to resolve: %v", err)
+	if _, _, cerr := s.getEntity(context.Background(), nil,
+		GetEntityInput{EntityID: "network.interface:host.id=h1,network.interface.name=eth0"}); cerr != nil {
+		t.Errorf("a complete inline identity failed to resolve: %v", cerr)
 	}
 	_, _, err = s.getEntity(context.Background(), nil,
 		GetEntityInput{EntityID: "network.interface:host.id=h9,network.interface.name=eth9"})
