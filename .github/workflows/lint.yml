@@ -10,7 +10,13 @@ permissions:
 
 concurrency:
   group: lint-${{ github.ref }}
-  cancel-in-progress: true
+  # Never cancel on main. Every merge shares the ref, so in a burst of merges each
+  # one cancelled the previous one's run and only the last merged tree was ever
+  # tested — which is how main went red on 2026-10-14 with six green branches
+  # behind it: the branch checks passed, the merged tree did not, and nothing
+  # looked at the difference. On a pull request superseding is still right: a
+  # force-push means the previous tree no longer exists.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   golangci:
