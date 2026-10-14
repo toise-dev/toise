@@ -91,6 +91,19 @@ type Engine struct {
 type pendingRelation struct {
 	obs      RelationObservation
 	deadline time.Time
+	// scope is the collection method that ASSERTED this edge, captured when it
+	// parked. It must be restored when the edge is finally committed, because the
+	// flush runs from whichever entity observation delivered the missing
+	// endpoint — a different ScopeLogs block, under a different scope.
+	//
+	// Without it the edge is keyed, and its relation.added event attributed, to
+	// the method that merely completed its endpoints. Harmless while the liveness
+	// reference was keyed on the producer alone; a defect since the key became
+	// the speaker (#455), because the method that asserted the edge can then no
+	// longer retract it: its removal looks for a key nobody wrote, finds nothing,
+	// and emits nothing. An embedded edge carries a zero deadline, so no sweep
+	// reclaims it either — it lives as long as its endpoints do.
+	scope string
 }
 
 // liveRef is one armed liveness backstop: the absolute expiry deadline and the
@@ -967,7 +980,7 @@ func (e *Engine) observeRelationBuffered(obs RelationObservation) (model.Event, 
 		if obs.SourceInterval > hold {
 			hold = obs.SourceInterval
 		}
-		e.pending = append(e.pending, pendingRelation{obs: obs, deadline: e.now().Add(hold)})
+		e.pending = append(e.pending, pendingRelation{obs: obs, deadline: e.now().Add(hold), scope: e.currentScope()})
 		e.rebuildPendingHashes()
 		return model.Event{}, false, nil
 	}
@@ -1038,7 +1051,13 @@ func (e *Engine) flushPending() {
 				"relation_type", obs.Type, "from_type", obs.From.Type, "to_type", obs.To.Type)
 			continue
 		}
+		// Commit under the scope that asserted the edge, not the one that happens to
+		// be flushing. Restored immediately: the rest of this batch belongs to the
+		// flushing scope.
+		flushing := e.currentScope()
+		e.setCurrentScope(e.pending[i].scope)
 		_, _, err := e.observeRelationLocked(obs)
+		e.setCurrentScope(flushing)
 		switch {
 		case err == nil:
 			// resolved and committed; drop from the buffer
@@ -1240,6 +1259,17 @@ func (b *Batch) SetScope(scope string) { b.e.staged.scope = scope }
 // batch. The staged state exists only for the duration of a batch, so a direct
 // read of it is a nil dereference on the single-observation path — which is how
 // most of the engine's own tests drive it.
+// setCurrentScope overrides the staged scope for one commit. It exists only for
+// flushPending, which must attribute a parked edge to the method that asserted
+// it rather than to the one that completed its endpoints. Outside a batch there
+// is nothing to set and nothing to restore.
+func (e *Engine) setCurrentScope(scope string) {
+	if e.staged == nil {
+		return
+	}
+	e.staged.scope = scope
+}
+
 func (e *Engine) currentScope() string {
 	if e.staged == nil {
 		return ""
