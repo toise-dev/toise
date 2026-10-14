@@ -118,6 +118,20 @@ type pendingRelation struct {
 type liveRef struct {
 	deadline time.Time
 	interval time.Duration
+	// legacy marks a reference restored from a snapshot written BEFORE the key
+	// carried the collection method. Its producer is known and its method is
+	// unknowable — the format did not record one — which is a different thing
+	// from a producer that named no method, and the two are indistinguishable by
+	// the key alone: both are the bare producer.
+	//
+	// It exists because without it a scoped retraction cannot release such a
+	// reference: it looks for a key nobody wrote and emits nothing, silently, so
+	// every embedded edge existing at an upgrade became non-retractable by its
+	// own producer until its endpoints died. Marking them lets a retraction from
+	// the same producer release what it is entitled to release, while a
+	// runtime-unnamed method keeps its own reference — which ADR 0019 requires,
+	// since nothing may retract what it did not assert.
+	legacy bool
 }
 
 // silencedSpeaker is a lapsed reference's collection method, kept just long
@@ -166,6 +180,33 @@ func refKey(producer, scope string) string {
 		return producer
 	}
 	return "\x00" + strconv.Itoa(len(producer)) + "\x00" + producer + scope
+}
+
+// releaseSpeaker drops the reference of one speaker, and with it any LEGACY
+// reference of the same producer — one restored from a snapshot that recorded no
+// collection method, whose speaker is therefore this producer under a method
+// nobody can name. It reports whether anything was released.
+//
+// A reference whose producer named no method is NOT legacy and is not touched: it
+// is a speaker in its own right, and releasing it from another method's
+// retraction would let one speaker retract what another asserted, which is the
+// single thing ADR 0019's reference counting exists to prevent.
+func releaseSpeaker(refs map[string]liveRef, producer, scope string) bool {
+	released := false
+	if _, ok := refs[refKey(producer, scope)]; ok {
+		delete(refs, refKey(producer, scope))
+		released = true
+	}
+	for key, ref := range refs {
+		if !ref.legacy {
+			continue
+		}
+		if p, _ := splitRefKey(key); p == producer {
+			delete(refs, key)
+			released = true
+		}
+	}
+	return released
 }
 
 // splitRefKey reads a speaker back out of its key. A key that does not carry the
@@ -734,7 +775,7 @@ func (e *Engine) deleteEntityLocked(obs EntityObservation) (ev model.Event, emit
 	// A removal speaks for the method that sends it and for no other: one
 	// collector losing sight of something is not the producer retracting it.
 	if speakers, ok := e.refs[id]; ok {
-		delete(speakers, refKey(obs.Producer, e.currentScope()))
+		releaseSpeaker(speakers, obs.Producer, e.currentScope())
 		if len(speakers) > 0 {
 			return model.Event{}, false, nil
 		}
@@ -1118,7 +1159,7 @@ func (e *Engine) removeRelationLocked(obs RelationObservation) (ev model.Event, 
 	// losing a link deleted the edge a forwarding table still asserted, which
 	// re-created it on its next cycle (#455).
 	if refs, ok := e.relRefs[id]; ok {
-		delete(refs, refKey(obs.Producer, e.currentScope()))
+		releaseSpeaker(refs, obs.Producer, e.currentScope())
 		if len(refs) > 0 {
 			return model.Event{}, false, nil
 		}
@@ -1354,6 +1395,12 @@ type livenessSnapshot struct {
 	// instead of being rebuilt only when each producer next speaks.
 	Refs         map[string]map[string]time.Time     `json:"refs"`
 	RefIntervals map[string]map[string]time.Duration `json:"ref_intervals,omitempty"`
+	// SpeakerKeys declares that the keys above carry the collection method where a
+	// producer named one (refKey). Absent means a blob written before that, where
+	// every key is a bare producer and no method was recorded — the keys decode
+	// identically, so only this flag tells a legacy reference from one whose
+	// producer named no method.
+	SpeakerKeys bool `json:"speaker_keys,omitempty"`
 	// RelRefs/RelRefIntervals are per-producer edge references, written since
 	// edges became reference-counted like entities. RelDeadlines/RelIntervals are
 	// the single-reference form that preceded them: still read, so a snapshot
@@ -1370,6 +1417,7 @@ type livenessSnapshot struct {
 func (e *Engine) LivenessBlob() ([]byte, error) {
 	e.obsMu.Lock()
 	snap := livenessSnapshot{
+		SpeakerKeys:     true,
 		Refs:            make(map[string]map[string]time.Time, len(e.refs)),
 		RefIntervals:    make(map[string]map[string]time.Duration, len(e.refs)),
 		RelRefs:         make(map[string]map[string]time.Time, len(e.relRefs)),
@@ -1418,11 +1466,17 @@ func (e *Engine) RestoreLiveness(blob []byte) error {
 	now := e.now()
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()
+	// A blob that does not declare speaker keys recorded no collection method, so
+	// each of its bare keys is a reference whose method is unknowable rather than
+	// unnamed. Marked, so a retraction from the same producer can release it.
+	legacy := !snap.SpeakerKeys
 	for id, producers := range snap.Refs {
 		ps := make(map[string]liveRef, len(producers))
 		for p, deadline := range producers {
 			interval := snap.RefIntervals[id][p]
-			ps[p] = liveRef{deadline: floorDeadline(deadline, interval, now), interval: interval}
+			_, scope := splitRefKey(p)
+			ps[p] = liveRef{deadline: floorDeadline(deadline, interval, now), interval: interval,
+				legacy: legacy && scope == ""}
 		}
 		e.refs[model.EntityID(id)] = ps
 	}
@@ -1430,7 +1484,9 @@ func (e *Engine) RestoreLiveness(blob []byte) error {
 		ps := make(map[string]liveRef, len(producers))
 		for p, deadline := range producers {
 			interval := snap.RelRefIntervals[id][p]
-			ps[p] = liveRef{deadline: floorDeadline(deadline, interval, now), interval: interval}
+			_, scope := splitRefKey(p)
+			ps[p] = liveRef{deadline: floorDeadline(deadline, interval, now), interval: interval,
+				legacy: legacy && scope == ""}
 		}
 		e.relRefs[model.RelationID(id)] = ps
 	}

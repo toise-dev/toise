@@ -92,9 +92,29 @@ itself asserted (the reconciler's diff state is keyed the same way).
 **Producers are unaffected.** No wire change: a producer naming no instrumentation
 scope keys on its id alone and behaves exactly as before. The key encoding is
 chosen so that a scopeless speaker's key is byte-identical to what the
-per-producer form wrote, which is why there is no snapshot migration — and, as a
-side effect, the collection method now survives a restart instead of being
-rebuilt only when each producer next speaks.
+per-producer form wrote, so a blob written by an earlier build **decodes**
+unchanged — and, as a side effect, the collection method now survives a restart
+instead of being rebuilt only when each producer next speaks.
+
+**That is not the same as no migration, and the first statement of this amendment
+said it was.** The keys decode identically; their *meaning* does not. A bare key
+restored from a pre-amendment blob is a reference whose producer is known and
+whose method is unknowable, which is a different thing from a producer that named
+no method — and the key alone cannot tell them apart. So a retraction under a
+named method looked for a key nobody had written, released nothing, and emitted
+nothing: every embedded edge existing at the upgrade became non-retractable by
+its own producer until its endpoints died.
+
+The blob therefore **declares** whether its keys carry the method
+(`speaker_keys`), a reference restored without that declaration is marked
+**legacy**, and a producer's retraction releases its own legacy reference along
+with the method it names. A reference whose producer merely named no method is
+*not* legacy and is never released by another method's retraction — that would
+let one speaker retract what another asserted, which is the single thing this
+ADR exists to prevent.
+
+Found by an independent review on the day of the merge, not by a test. The
+encoding was pinned; the behaviour across an upgrade was not.
 
 **One property had to be built rather than assumed.** Both halves of the key are
 strings the producer chooses, so joining them on a separator is injective only as

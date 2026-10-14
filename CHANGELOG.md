@@ -85,13 +85,35 @@ the documentation gives the three alert rules a control needs to stop lying.
   grain of "its own" is now the method. **No producer change and no snapshot
   migration**: a producer naming no instrumentation scope keys on its id alone,
   byte for byte as before, and the collection method now survives a restart
-  instead of being rebuilt only when each producer next speaks. The key encodes
+  instead of being rebuilt only when each producer next speaks. **The decoding
+  needs no migration; the semantics did** — see the entry below, found by an
+  independent review on the day this merged. The key encodes
   the producer's length rather than joining the two halves on a separator,
   because both are strings the producer chooses: a crafted `service.instance.id`
   could otherwise key identically to another speaker and release a reference it
   never declared, which is the one thing ADR 0019 exists to prevent. Two such
   holes were found by the test that pins the property, in two rounds, neither
   reasoned out first (#455)
+- **A reference restored from a pre-speaker-key snapshot is releasable, and a
+  parked edge keeps the method that asserted it.** Both found by an independent
+  adversarial review on the day the speaker key merged, and both reproduced
+  before being believed. A snapshot written before the key carried the collection
+  method holds bare producer keys, so after an upgrade a producer retracting
+  under one of its methods looked for a key nobody had written: it released
+  nothing and **emitted nothing, silently**, leaving every embedded edge that
+  existed at the upgrade — `runs_on`, `has_interface`, `bound_to`, `listens_on`,
+  all of which carry a zero deadline — non-retractable by its own producer until
+  its endpoints died. The blob now declares whether its keys carry the method, a
+  reference restored without that declaration is marked legacy, and a producer
+  releases its own legacy reference along with the method it names; one that
+  merely named no method is never released by another's retraction, which would
+  be the ADR 0019 violation in the other direction. Separately, an edge whose
+  endpoints have not arrived parks and is committed by whichever observation
+  delivers the missing endpoint, under a different scope — so `collected_by`
+  named the method that merely completed its endpoints, and the asserting method
+  could not retract. Measured: `collected_by = [host-iface]` on an edge asserted
+  by `host-route`, whose retraction then emitted nothing. The reconciliation
+  buffer is on by default, so both are the ordinary case rather than the corner
 - `identity`, `attributes`, `asserted_by` and `collected_by` are now **always
   rendered** on an entity, and the value says which kind of empty it is: an
   **empty list** means asked and none — the documented case for a
