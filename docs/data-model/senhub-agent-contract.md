@@ -221,6 +221,7 @@ below are what Toise recommends. Converge on them; do not be policed by them.
 | `expired` | the producer's own retention/TTL ended it | resource lifecycle |
 | `parent_removed` | the producer removed it because its parent went away | resource lifecycle |
 | `unmonitored` | **the observation ended; the resource may well still exist** | observation |
+| `aged_out` | **a cache forgot the entry; nobody saw the thing leave** | observation |
 
 **The rule that matters: never use a lifecycle value when you merely stopped
 looking.** A probe removed from the configuration, or a target that left the
@@ -230,6 +231,20 @@ as "the database is gone" — that is the reading that causes an incident, and
 `unmonitored` is what prevents it. It is the producer-side mirror of
 `liveness_expiry`: there Toise says *I stopped hearing*, here the producer says
 *I stopped looking*.
+
+`aged_out` and `unmonitored` are both observation values and are **not**
+interchangeable: `unmonitored` means *we stopped looking*, `aged_out` means *we
+are still looking and the table forgot*. An ARP, NDP or FDB entry that ages out
+is the second — and ADR 0006's own note says it: a cache evicts, and **an
+eviction is not a departure**.
+
+Do **not** spell that case `evicted`. The word is taken, one row above, for a
+scheduler displacing a resource — the opposite family, where the thing really
+did end. A producer reporting an aged-out neighbour as `evicted` produces the
+worst of the three readings available: `terminated` at least looks wrong on a
+cache entry, while `evicted` looks plausible *and* this table would confirm the
+wrong conclusion. That mistake was made, from this document's own author
+recommending the word without re-reading the table.
 
 `parent_removed` is deliberately **not** spelled `cascade`, even though the
 producer-side situation resembles Toise's: `cascade` is a `delete_source` value
@@ -242,6 +257,7 @@ Read together, the pairs are unambiguous:
 | --- | --- | --- |
 | `producer` | `terminated` | the thing ended, and the producer saw it |
 | `producer` | `unmonitored` | the thing may still exist; we stopped watching |
+| `producer` | `aged_out` | the thing may still exist; a cache forgot it |
 | `producer` | `parent_removed` | producer-side cascade: the parent went first |
 | `producer` | *(absent)* | the producer decided and gave no motive |
 | `liveness_expiry` | *(absent)* | the producer went silent past its interval |
