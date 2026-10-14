@@ -178,14 +178,53 @@ network.neighbor --resolves_to--> network.interface   (the interface that OWNS t
    (`internal/ingest/embedded.go`). `resolves_to` needs that allowlist widened,
    or its basis and confidence are dropped at the boundary and the relation is a
    bare assertion — which is worse than `same_as` would have been.
-2. `network.neighbor` is not in `terminalEntityTypes`. Once it carries an
-   outgoing edge it becomes a transit, and a MAC seen on two interfaces of one
-   host makes `interface A → neighbour → interface B` traversable: a convergence
-   rendered as a route, #442 one layer down. Either the neighbour becomes
-   terminal-except-outgoing, or a path crossing one must enter and leave by
-   different relation types.
+2. `network.neighbor` is not in `terminalEntityTypes`, and once it carries an
+   outgoing edge it becomes a transit: a MAC seen on two interfaces of one host
+   would make `interface A → neighbour → interface B` traversable — a convergence
+   rendered as a route, #442 one layer down. **Resolved below**, and not by making
+   the type terminal: a path may cross a neighbour only by entering and leaving
+   through different relation types, which admits the real descent and refuses the
+   convergence.
 
 Both are release gates on Toise before the producer enables emission.
+
+### A producer emits `resolves_to` only when it holds BOTH identities
+
+**Confirmed, and it is the same rule as the forbidden endpoint synthesis.** A
+producer may assert the resolution only when it observed both ends itself: the
+neighbour it recorded, and the interface that owns the MAC, as an entity it
+already holds under its own key. **Never by matching a MAC string against
+something another agent reported.** That is the #443 prohibition in another
+costume — a value two producers happen to agree on is not an observation, and the
+false positive is silent and permanent.
+
+`sa` worked out the consequence before I did, and it is worth stating because it
+bounds the feature: the descent closes for **the host's own port** and generally
+nowhere else. An agent on host H that polls the switch sees its *own* MAC learned
+on a port, and can resolve `{device.id, MAC_H}` to H's own `eth0` because it holds
+both. For another host's MAC on another port it holds one end only, and must stay
+silent.
+
+That is enough for this path. The path needs H to reach the port H is plugged
+into, and that is exactly the edge H can legitimately assert.
+
+### The rule that makes the descent work is the same one that blocks the fake
+
+The gate above — that a path may cross a `network.neighbor` only by **entering and
+leaving through different relation types** — is not merely a safety rail. It is
+the exact discriminator between the two cases, which is why it is the rule rather
+than a special case:
+
+- **the legitimate descent** enters the neighbour by `neighbor_of` (from the port
+  where the MAC was heard) and leaves by `resolves_to` (to the interface that owns
+  it). Different types: allowed.
+- **the fake** is a MAC seen on two interfaces of one host: the traversal enters by
+  `neighbor_of` and leaves by `neighbor_of`. Same type: refused, and it is refused
+  for the reason #442 established — two things that converge on one observation
+  are not connected to each other.
+
+So `network.neighbor` does not need to be terminal. It needs this rule, which
+costs one comparison and states the semantics instead of forbidding the type.
 
 ### Which MAC belongs to whom — the part that is easy to get backwards
 
