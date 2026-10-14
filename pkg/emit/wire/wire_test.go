@@ -27,7 +27,7 @@ func TestVocabularyLists(t *testing.T) {
 			want: []string{RelTypeRunsOn, RelTypeHasInterface, RelTypeBoundTo, RelTypeNextHopVia,
 				RelTypeListensOn, RelTypeMonitors, RelTypeHasRoute, RelTypeConnectedTo,
 				RelTypeDependsOn, RelTypeSameAs, RelTypeAttachedTo, RelTypeHasSegment,
-				RelTypeNeighborOf,
+				RelTypeNeighborOf, RelTypeResolvesTo, RelTypeAggregatedInto,
 				RelTypeRoutesVia, RelTypeForwardsTo, RelTypeAdjacentTo},
 		},
 	} {
