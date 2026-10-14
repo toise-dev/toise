@@ -285,11 +285,15 @@ being reachable.
 What protects the reader from a path crossing a belief is not exclusion. It is
 that the answer says the hop is a belief, with its basis.
 
-### A conjecture, offered to be disproved: same relation in, same relation out
+### A conjecture, offered to be disproved — and disproved within the hour
 
-The neighbour rule above may be general rather than a patch for one type. Every
-case constructed so far says that **entering and leaving a node by the same
-relation type is a convergence, not a path**:
+**Refuted by `sa`, 14/10. Kept here with its refutation**, because the next
+person to have the same idea should see why it falls rather than meet a rule that
+looks as if it had always been obvious.
+
+The conjecture was that the neighbour rule generalises: that **entering and
+leaving a node by the same relation type is always a convergence, not a path**.
+These cases supported it:
 
 | node | same type in and out | what it would claim |
 |---|---|---|
@@ -303,12 +307,56 @@ And the legitimate crossings all change relation type: `neighbor_of` in and
 `resolves_to` out is the real L2 descent; `aggregated_into` in and `connected_to`
 out is the real path through a bond.
 
-It is written here as a **conjecture with the cases checked**, not as a law,
-because a counterexample would be worth more than the generalisation. `same_as`
-is the candidate: a transitive identity chain legitimately walks same-type — but
-that is the canonical collapse's job, and a path should collapse those entities
-rather than traverse them. If someone finds a real one, the rule goes back to
-being per-type, which costs a comparison and no semantics.
+**The counterexample is the core of the path itself.** A switch or router being
+traversed: enter `network.device` from `Ethernet1` and leave toward `Ethernet2`,
+both by `has_interface`. That is real forwarding — the frame enters one port and
+leaves another — and the rule as written would have cut the path at **every**
+transit device.
+
+**And no structural rule can repair it.** The obvious repair is edge direction:
+allow one traversal "up" and one "down", refuse two of the same. It cannot work,
+because the two cases have the same shape. At a node, an incident edge is either
+outgoing (the node is `From`) or incoming (it is `To`), and:
+
+- a `network.device` with two `has_interface` edges is the `From` of both — two
+  **outgoing**;
+- a `network.neighbor` with two `neighbor_of` edges is the `From` of both — two
+  **outgoing**.
+
+Structurally identical. One is legitimate forwarding, the other the convergence
+measured and refused.
+
+**So the distinction is semantic, and that is the lesson worth more than the
+rule.** What separates them is that a switch *forwards* while a neighbour is only
+*observed*; and **the graph contains that fact nowhere.** It is approximated by
+the entity type.
+
+Which makes this and #472 the same problem seen from two sides: #472 says nothing
+distinguishes a router from a dual-attached machine, because no producer emits
+whether a machine forwards. The traversal rule needs exactly that fact, for every
+type and not only for hosts.
+
+### The rule, per node type, with its approximation declared
+
+1. **Never transited**: `network.endpoint` (#442).
+2. **Transited only by changing relation type**: `network.neighbor` — in by
+   `neighbor_of`, out by `resolves_to`, never two `neighbor_of`; and
+   `network.interface` when entered by `aggregated_into` — out by `connected_to`,
+   never two `aggregated_into`.
+3. **Transited freely**: everything else, including `network.device`.
+
+Category 3 carries an **approximation, declared rather than hidden**: a
+`network.device` is assumed to forward. True today, because a `network.device` is
+only ever minted by SNMP-polling network gear. It would stop being true for a
+polled box that forwards nothing — a UPS, an environmental probe, a controller —
+and the first one inventoried will be transited wrongly.
+
+For a `host` the opposite assumption would be wrong **today**, since most do not
+forward, which is why #472 targets hosts and why a `host` stays out of category 3
+until a producer emits the fact. `senhub.host.ip_forwarding` has been asked for:
+a sysctl read once per cycle, unambiguous and free, which turns a guess by type
+into an observation and lets Linux gateways and VyOS into category 3 for the
+right reason instead of by exception.
 
 ### Which MAC belongs to whom — the part that is easy to get backwards
 
