@@ -178,11 +178,18 @@ const (
 	// RelTypeHasRoute attaches a routing-table entry to the device that holds it.
 	RelTypeHasRoute = "has_route"
 	// RelTypeNeighborOf attaches an unresolved link-layer neighbor to the
-	// interface that observed it. Read actively: "this neighbor was seen on that
-	// interface". It is an observation and not a dependency, so a neighbor
-	// failing says nothing about the interface — but losing the interface loses
-	// the observation, which is why impact flows from the interface to the
-	// neighbor and never the other way (the same argument as monitors).
+	// interface that OBSERVED it. Read actively: "this neighbor was seen on that
+	// interface".
+	//
+	// It carries NO impact in either direction, which this comment got wrong
+	// until it was measured. The first reading argued by analogy with monitors —
+	// losing the interface loses the observation — but monitors points at a
+	// target from OUR monitor, so coverage loss lands on something we own, while
+	// here the dependent side is a third party's record. With impact flowing
+	// interface to neighbor, impact_of on a host walked has_interface and then
+	// every neighbor_of, reporting each ARP neighbor as impacted: on a host with
+	// a few hundred cache entries, one host failure claimed a few hundred
+	// third-party devices.
 	RelTypeNeighborOf = "neighbor_of"
 	// RelTypeConnectedTo is bare port-to-port link-layer adjacency (ADR 0022).
 	// The edge carries no attributes; the ports do.
@@ -197,6 +204,45 @@ const (
 	// RelConfidence/RelBasis. It does NOT merge the entities: the canonical
 	// collapse is a read-time overlay (ADR 0020).
 	RelTypeSameAs = "same_as"
+	// RelTypeResolvesTo links an unresolved link-layer neighbor to the interface
+	// that OWNS its MAC — not to the place the address was heard, which is what
+	// RelTypeNeighborOf already says. A host's ARP neighbor resolves to the
+	// router's interface; a MAC learned on a switch port resolves to the host's
+	// interface, never to the port.
+	//
+	// It is a BELIEF, with RelConfidence and RelBasis, and deliberately not a
+	// same_as: same_as feeds the read-time canonical collapse, and whatever it
+	// links we are saying we eventually want collapsed into one entity. A
+	// neighbor's identity CONTAINS its observer, so collapsing it into a port
+	// would drop the observer and with it the only thing that made the
+	// observation attributable. The test is whether the collapse would lose an
+	// identifying attribute: same_as when it would not, this when it would.
+	//
+	// The basis is a closed vocabulary because the sources are not equally
+	// strong: lldp (the neighbor states its own identity), arp / ndp (an L3 cache
+	// maps the MAC to an address), fdb (a forwarding table heard the MAC on a
+	// port — the weakest, and the one that moves).
+	//
+	// A producer asserts it only when it holds BOTH identities itself, never by
+	// matching a MAC against what another agent reported: a value two producers
+	// happen to agree on is not an observation.
+	RelTypeResolvesTo = "resolves_to"
+	// RelTypeAggregatedInto links a physical interface to the logical interface
+	// that aggregates it — a bond or team member to its master, a switch port to
+	// its port-channel.
+	//
+	// It exists because the addresses, the routes and therefore the egress
+	// interface sit on the LOGICAL interface while LLDP and the forwarding table
+	// see the PHYSICAL members, with no edge between them: a path arrives at the
+	// bond by its route and must leave by a member, so without this it stops at
+	// every aggregate — which means at every network core and every hypervisor.
+	//
+	// It carries NO impact, and for a measured reason rather than caution: a
+	// member failing does not take the aggregate down, that being the entire
+	// point of a LAG, so propagating would assert the false alarm the aggregate
+	// exists to prevent. The real impact is conditional on being the LAST active
+	// member, and the impact walk works on edges without counting them.
+	RelTypeAggregatedInto = "aggregated_into"
 	// RelTypeAttachedTo attaches a workload to the network segment it joined,
 	// FROM the entity holding the network namespace the attachment belongs to: a
 	// container on Docker and Swarm, a pod on Kubernetes (the namespace is shared
@@ -255,7 +301,8 @@ func RelationTypes() []string {
 	return []string{
 		RelTypeRunsOn, RelTypeHasInterface, RelTypeBoundTo, RelTypeNextHopVia,
 		RelTypeListensOn, RelTypeMonitors, RelTypeHasRoute, RelTypeConnectedTo,
-		RelTypeDependsOn, RelTypeSameAs, RelTypeAttachedTo, RelTypeHasSegment,
+		RelTypeDependsOn, RelTypeSameAs, RelTypeResolvesTo, RelTypeAggregatedInto,
+		RelTypeAttachedTo, RelTypeHasSegment,
 		RelTypeNeighborOf,
 		RelTypeRoutesVia, RelTypeForwardsTo, RelTypeAdjacentTo,
 	}
