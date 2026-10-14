@@ -19,7 +19,7 @@ func TestVocabularyLists(t *testing.T) {
 			want: []string{TypeHost, TypeProcess, TypeNetworkInterface, TypeNetworkAddress,
 				TypeNetworkRoute, TypeServiceListener, TypeServiceInstance, TypeDatabase,
 				TypeNetworkDevice, TypeNetworkEndpoint, TypeComputeVM, TypeContainer,
-				TypePod, TypeNetworkSegment, TypeNetworkNeighbor},
+				TypePod, TypeK8sNode, TypeNetworkSegment, TypeNetworkNeighbor},
 		},
 		{
 			what: "relation type",
