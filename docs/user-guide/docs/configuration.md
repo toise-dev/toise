@@ -222,6 +222,27 @@ leave a trace, otherwise it is indistinguishable from the control passing — an
 you are accountable for the claim, not us: if the ports are later published to
 `0.0.0.0`, the declaration still says the proxy is there.
 
+**If a configuration-management role sets it, derive it from both facts.** Having
+the role assert this rather than a person is the better arrangement — the claim
+becomes reviewable in version control as well as in the metric, and the versioned
+one is the better witness. But derive it from the **conjunction**: a terminating
+proxy in front, **and** a publication the role itself restricts.
+
+Deriving it from the presence of TLS material alone is the mistake to avoid. "The
+proxy holds certificates" and "these listeners are unreachable without the proxy"
+are different statements, and only the second is what you are declaring. A host
+can have both a terminating proxy and its ports published on `0.0.0.0`: the proxy
+serves TLS to whoever goes through it, and this instance answers in plaintext
+beside it. A declaration that is **wrong and automatic** is worse than a wrong one
+typed by hand — nobody asserted it, so nobody re-reads it, and the control is off
+on an instance that really is exposed.
+
+Derive the publication and the declaration from the **same variable, in the same
+run**. If something other than that role controls the port publication, do not
+derive it at all: leave it false. A derivation whose input the role does not apply
+goes stale the moment someone changes the publication by another route, and
+nothing objects.
+
 #### Alert on four rules, because a control can lie in four ways
 
 The condition is true; or the series is gone, and a rule on `> 0` does not fire —
