@@ -19,7 +19,7 @@ func TestDisappearanceGlossStatesTheNegative(t *testing.T) {
 		model.DeleteSourceLivenessExpiry,
 		model.DeleteSourceCascade,
 	} {
-		gloss := disappearanceGloss(src)
+		gloss := disappearanceGloss(src, "")
 		if gloss == "" {
 			t.Fatalf("%q has no gloss", src)
 		}
@@ -28,7 +28,7 @@ func TestDisappearanceGlossStatesTheNegative(t *testing.T) {
 			t.Errorf("%q gloss never says what it is NOT: %q", src, gloss)
 		}
 	}
-	if got := disappearanceGloss(model.DeleteSourceUnknown); got != "" {
+	if got := disappearanceGloss(model.DeleteSourceUnknown, ""); got != "" {
 		t.Errorf("unknown source glossed as %q; an event predating provenance must stay silent, never read as producer", got)
 	}
 }
@@ -171,5 +171,30 @@ func TestRecentChangesRejectsContradictoryBounds(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("window and from accepted together; the answer would silently be about one of them")
+	}
+}
+
+// TestDisappearanceGlossCarriesTheProducersReason guards the combination that
+// made the sentence false: a producer deletion whose reason says the producer
+// merely stopped observing. The gloss must quote the word and widen the
+// reading, and it must not keep asserting the entity was reported gone as
+// though no reason had been given.
+func TestDisappearanceGlossCarriesTheProducersReason(t *testing.T) {
+	// "unmonitored" is one producer's word for "we stopped looking, the thing
+	// may still exist". Toise does not define it, which is the point: the gloss
+	// has to carry a term it cannot interpret.
+	gloss := disappearanceGloss(model.DeleteSourceProducer, "unmonitored")
+	if !strings.Contains(gloss, "unmonitored") {
+		t.Errorf("the producer's own reason is absent from the sentence a consumer reads: %q", gloss)
+	}
+	lower := strings.ToLower(gloss)
+	if !strings.Contains(lower, "stopped observing") {
+		t.Errorf("gloss does not warn that a reported disappearance may mean the producer stopped observing: %q", gloss)
+	}
+	if strings.Contains(gloss, "stopped listing the entity it had been reporting") {
+		t.Errorf("gloss still asserts the no-reason reading, which contradicts the reason: %q", gloss)
+	}
+	if bare := disappearanceGloss(model.DeleteSourceProducer, ""); !strings.Contains(bare, "stopped listing") {
+		t.Errorf("a producer deletion with no reason lost its original gloss: %q", bare)
 	}
 }
