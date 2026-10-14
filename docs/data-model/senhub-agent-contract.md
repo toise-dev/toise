@@ -820,20 +820,34 @@ present** — three distinct states, and the middle one is the useful one:
 meaning "other". Conflating the two would make the distinction unrecoverable in
 six months.
 
-#### The egress interface, and the one place not to emit it
+#### The egress interface — an attribute, and no relation
 
 `network.interface.name`, the same key the interface entity is identified by, so
-with the owner it is a **complete identity** a consumer resolves exactly.
-**`egress_via`** (route→interface) carries the same fact as a traversable edge:
-the attribute is the telemetry join key, the edge is for the path, and the
-conformance kit checks the two **agree**. Two representations of one fact without
-an arbiter is the defect this release spent itself removing.
+with the route's owner it is a **complete identity** a consumer resolves exactly.
+It is **not** a relation, and the reasoning is recorded because it was decided the
+other way first.
 
-The edge matters most where the attribute is least: a **connected** route has no
-next hop and no `next_hop_via`, so `egress_via` is the only edge it has.
+A relation `egress_via` (route→interface) was specified for half a day and
+withdrawn after review. Two arguments were given for it and neither survives:
 
-**Do not emit either on a `reject` or `blackhole` route, even when the source
-gives one.** Linux often shows `dev lo` on a prohibit route; that is not "packets
+- *"a traversal needs a hop, not a resolution."* It confused two different walks.
+  A shortest-path search would never cross it: the egress interface belongs to the
+  route's **own owner** and is already one hop away by `has_interface`, so
+  `owner → route → interface` is two hops and loses. And the walk that genuinely
+  asks the question — replaying a forwarding decision, which asks *from the
+  route* — is engine code that can resolve a complete identity directly.
+- *"a dangling attribute is silent, a dangling edge is visible."* It is not
+  silent. A path resolving the attribute and finding no such interface **reports a
+  gap at that position**, which is the rule everywhere else in this model. The
+  edge would have made the dangling case expire quietly instead.
+
+What stands against it: the vocabulary grows for a fact already carried exactly,
+and two representations of one fact without an arbiter is the defect this release
+spent itself removing. Three relations were proposed in one day; this is the one
+that was not needed.
+
+**Do not emit the attribute on a `reject` or `blackhole` route, even when the
+source gives one.** Linux often shows `dev lo` on a prohibit route; that is not "packets
 leave by `lo`", it is how the kernel represents a drop. Emitting it draws a hop to
 the loopback — a false claim built from a true observation. This is the one place
 the contract asks a producer **not** to emit what its source says.
