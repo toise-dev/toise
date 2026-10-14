@@ -18,7 +18,7 @@ not interchangeable. The whole value of this document is that they stay apart:
 | kind | what it is | how it must be rendered |
 |---|---|---|
 | **observed** | an edge a producer emitted, from something it saw | solid |
-| **belief** | a `same_as`, with a basis and a confidence (ADR 0020) | dashed, and the basis must be reachable |
+| **belief** | a `same_as` or a `resolves_to`, with a basis and a confidence (ADR 0020) | dashed, and the basis must be reachable |
 | **classification** | an answer Toise computes about an entity, not an edge | a badge on the station, never a segment |
 | **deduction** | a consumer joining two entities on a matching value | dotted, and labelled as the consumer's own |
 
@@ -131,56 +131,91 @@ Segment A9 works between two devices that both speak LLDP. It does **not** reach
 a host whose access port has no L3 address and whose switch runs no LLDP toward
 it. That is the missing rung, and `sa` is right that it is *the* one.
 
-**Ruling: `same_as`, not `bound_to`, and never a merge.**
+**Ruling, revised after `otel`'s objection: a dedicated relation,
+`resolves_to`. Not `bound_to`, and not `same_as`.**
 
-- `bound_to` is `network.address → network.interface` and means *this address is
-  configured on this interface*. A MAC is not an address and the relation would
-  be a lie about what was observed.
-- `same_as` is a producer-asserted **identity belief**, endpoints unconstrained,
-  non-structural, `ImpactNone`, with a basis and a confidence (ADR 0020). It says
-  exactly the true thing: *the thing I saw as a MAC on my wire is, I believe,
-  this switch port.* The two entities stay distinct, which keeps the
-  observer-scoped `network.neighbor` separate from the device's port and respects
-  exact identity (ADR 0018). A wrong merge is permanent; a wrong belief is
-  revisable.
+My first ruling was `same_as`, on the precedent that our model already links two
+*different types* with it — a `compute.vm` seen from the hypervisor and the
+in-guest `host` are the same machine, reconciled and never merged. `otel`
+objected that two types are never the same entity. That objection as stated does
+not hold against our own precedent, but it is right, and the reason is one step
+further on:
 
-So the descent is:
+**`same_as` is the input to the read-time canonical collapse (ADR 0020, Lot B).**
+Whatever we link with it, we are saying we eventually want collapsed into one
+canonical entity. For a VM and its in-guest host that is exactly right — one
+machine, two facets, one canonical answer. For a neighbour and a switch port it
+is wrong: the `network.neighbor` is an **observation**, with an observer in its
+identity (`{host.id, mac}`), a 24 h cadence and no retraction by absence, and the
+`network.interface` is a port with its own lifecycle. Collapsing them would
+dissolve *who saw it and when*, which is the entire value of the ARP layer. The
+neighbour must survive its own resolution.
+
+So the link is not sameness. It is resolution:
 
 ```
-host --has_interface--> network.interface
-     <--neighbor_of--   network.neighbor {host.id, mac}
-                            --same_as--> network.interface (of the device)
-                                    <--has_interface-- network.device
+network.neighbor --resolves_to--> network.interface   (the interface that OWNS the MAC)
 ```
 
-with the mirror form when the evidence comes from the switch instead: a MAC
-learned on a port is a `network.neighbor` **scoped on the device** — identity
-`{network.device.id, mac}` by the same rule that scopes a host's neighbour on
-`{host.id, mac}` — and it asserts `same_as` toward the host's `network.interface`
-carrying that MAC.
+- `From` network.neighbor, `To` network.interface. **Structural: false** — a new
+  resolution is coverage improving, not an alertable event, and SNMP discovering
+  ports would otherwise flood the change feed. **Impact: `ImpactNone`**, for the
+  same reason `neighbor_of` carries none: the dependent side is a third party's
+  record, and measured, impact there made one host failure claim a few hundred
+  devices.
+- It carries **`basis`** from a fixed vocabulary and **`confidence`** from the
+  producer, exactly as `same_as` does. The three bases are not equally strong:
+  `lldp` (the neighbour states its own identity), `arp` / `ndp` (an L3 cache maps
+  the MAC to an address), `fdb` (a forwarding table heard the MAC on a port — the
+  weakest, and the one that moves). Toise never raises a confidence.
+- **A path crossing a `resolves_to` is a believed path**, rendered dashed, and the
+  basis must be reachable on the answer. An `fdb`-based crossing is weaker than
+  an `lldp`-based one and the reader must see which.
 
-**Three constraints on the belief, and they are not optional:**
+**Two things this costs us, both mine:**
 
-1. **The basis names the evidence**, from a fixed vocabulary, because the three
-   are not equally strong: `lldp` (the neighbour states its own identity),
-   `arp` / `ndp` (an L3 cache maps the MAC to an address), `fdb` (a forwarding
-   table saw the MAC on a port — the weakest, and the one that moves).
-2. **The confidence is the producer's**, and Toise never raises it. A path
-   crossing a `fdb`-based belief is weaker than one crossing an `lldp`-based
-   belief, and the reader must be able to see which.
-3. **A MAC is rendered one way**: IEEE RA hexadecimal, uppercase,
-   hyphen-separated (`AA-BB-CC-DD-EE-FF`). Two renderings of six bytes are two
-   entities under exact identity, and the join silently finds nothing. The
-   conformance kit rejects anything else.
+1. Belief attributes are carried **only on `same_as`** edges today
+   (`internal/ingest/embedded.go`). `resolves_to` needs that allowlist widened,
+   or its basis and confidence are dropped at the boundary and the relation is a
+   bare assertion — which is worse than `same_as` would have been.
+2. `network.neighbor` is not in `terminalEntityTypes`. Once it carries an
+   outgoing edge it becomes a transit, and a MAC seen on two interfaces of one
+   host makes `interface A → neighbour → interface B` traversable: a convergence
+   rendered as a route, #442 one layer down. Either the neighbour becomes
+   terminal-except-outgoing, or a path crossing one must enter and leave by
+   different relation types.
 
-**And one caution that is mine to raise rather than `sa`'s to discover.** Once a
-neighbour carries `same_as`, it stops being a leaf and becomes a transit. A MAC
-seen on two interfaces of one host then makes `interface A → neighbour →
-interface B` traversable, which is a convergence rendered as a route — #442 one
-layer down. `network.neighbor` is **not** in `terminalEntityTypes` today. Before
-this ships I will either make the neighbour terminal-except-through-`same_as`, or
-require that a path crossing a neighbour enter and leave by different relation
-types. That is my work, not the producer's, and it is a release gate.
+Both are release gates on Toise before the producer enables emission.
+
+### Which MAC belongs to whom — the part that is easy to get backwards
+
+The direction of `resolves_to` follows the MAC's **owner**, never the place it was
+heard. The two edges are different and both already exist:
+
+- a host resolving its gateway holds `network.neighbor {host.id, MAC_router}`.
+  `neighbor_of` points at **the host's own interface**, where it was seen.
+  `resolves_to` points at **the router's interface**, which owns that MAC.
+- a switch learning a MAC on a port holds
+  `network.neighbor {network.device.id, MAC_host}` — scoped on the device by the
+  same rule that scopes a host's neighbour on itself. `neighbor_of` points at
+  **the port**, where it was heard. `resolves_to` points at **the host's
+  interface**, which owns that MAC.
+
+So an FDB entry does not resolve to the port it was learned on. Saying it did
+would claim the port's identity is the host NIC's MAC, and that is the phantom
+port the mapping document forbids. My first draft of this document got that
+backwards; `otel` caught the same thing from the other direction.
+
+### `next_hop_via`, not `routes_via`
+
+`otel` reports that our upstream one-pager says `routes_via` while the agent
+emits `next_hop_via`, and asks which one stands. **`next_hop_via`**, with no
+hesitation: `routes_via` is in our own registry as a **legacy device-level edge,
+superseded and not emitted**, alongside `forwards_to` and `adjacent_to`. They are
+still accepted at the boundary so old data reads, and nothing should be built on
+them. The modern form is `network.route` as an entity plus `has_route` and
+`next_hop_via`, which is what shipped and what the route's third identity key was
+corrected for.
 
 ## 7. VLANs (`sa`'s gap 2)
 
