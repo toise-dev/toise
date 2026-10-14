@@ -201,7 +201,15 @@ const (
 // RelationTypeDef describes a known relation type and its constraints.
 type RelationTypeDef struct {
 	Type string
-	// From and To are the entity types the relation connects.
+	// From and To are the entity types the relation connects, and they are
+	// ADVISORY: nothing validates an observed relation against them. Only
+	// Structural and Impact are read by the engine. An empty string means
+	// unconstrained — several types are legitimate, so none is named.
+	//
+	// Keep them honest anyway. They are what a reader consults to learn the
+	// model, and a constraint nothing enforces is a claim: monitors declared
+	// To: host for three releases while probes were meant to watch listeners,
+	// endpoints and addresses too, and no test could notice. See #494.
 	From string
 	To   string
 	// Structural marks whether the relation's appearance/disappearance is
@@ -248,7 +256,18 @@ var relationTypes = map[string]RelationTypeDef{
 	// monitoring is observation, not dependency: a monitor failing does not
 	// take the host down, nor the reverse — but losing the host DOES lose the
 	// monitoring coverage, so model it as a dependency of the monitor.
-	RelMonitors: {Type: RelMonitors, From: TypeServiceInstance, To: TypeHost, Structural: true, Impact: ImpactToFrom},
+	// A probe's target is whatever it was pointed at: a host, a local listener,
+	// a remote endpoint, or a bare address for an ICMP check. To is left
+	// unconstrained rather than naming one of them, because naming one made
+	// this entry assert something about the graph that was never true.
+	//
+	// ImpactNone: watching a thing is not depending on it. A monitored host
+	// going down does not make the monitoring agent unhealthy — the agent is
+	// fine and its reading is bad, which is a different fact. The previous
+	// ImpactToFrom made every probe target a failure path into its own agent,
+	// so one unreachable target inflated the blast radius by the whole fleet
+	// that agent watches.
+	RelMonitors: {Type: RelMonitors, From: TypeServiceInstance, To: "", Structural: true, Impact: ImpactNone},
 	// "X has_route Y": the device failing drops its routes.
 	RelHasRoute: {Type: RelHasRoute, From: TypeNetworkDevice, To: TypeNetworkRoute, Structural: true, Impact: ImpactFromTo},
 	// "X neighbor_of Y": an observation, and ImpactNone like same_as, because an
