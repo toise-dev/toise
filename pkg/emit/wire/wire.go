@@ -123,6 +123,35 @@ const (
 	// cannot: the network namespace is shared per pod, so pod-scoped network
 	// measurements belong to it and to nothing else.
 	TypePod = "pod"
+
+	// TypeK8sNode is a Kubernetes node: the cluster's view of a machine, keyed on
+	// {k8s.node.uid}. It is NOT a second host — it is the facet carrying the
+	// machine's ROLE IN THE CLUSTER, which are not facts about the machine: its
+	// taints, its labels, its allocatable capacity, its conditions. A node
+	// cordoned while its host is perfectly healthy is the case that makes the two
+	// distinct, and the same shape as compute.vm beside host.
+	//
+	// It is linked to its host by a same_as belief, which the DaemonSet agent can
+	// assert with the cleanest evidence there is: it reads node.UID and
+	// node.Status.NodeInfo.MachineID from the SAME cluster-API object, so it holds
+	// both identities itself. Each is a complete identity of one machine, so the
+	// canonical collapse would lose no identifying attribute — which is the test
+	// that makes this a same_as rather than a dedicated relation.
+	//
+	// The cluster-role attributes (k8s.node.name, k8s.kubelet.version) belong
+	// here; host.uuid stays on the host, being a fact about the machine. So
+	// "which hosts are cluster nodes" stops being a filter on an attribute and
+	// becomes a walk over an observed same_as — a better answer, not just a moved
+	// one.
+	//
+	// NAMING, stated because it is inconsistent on purpose and for one release
+	// only: this is k8s.node while the pod above is still "pod". Renaming the pod
+	// type re-keys every pod entity — the entity type is part of the identity
+	// fingerprint — so it is an identity break, and this project groups identity
+	// breaks into one release with one note rather than spending several. pod
+	// becomes k8s.pod in that release, with the four bare identity keys and the
+	// Kubernetes container key.
+	TypeK8sNode = "k8s.node"
 	// TypeNetworkSegment is a broadcast and reachability domain bearing an
 	// assigned identifier: two workloads on the same segment can address each
 	// other, two on different segments cannot, whatever the firewall says.
@@ -290,7 +319,7 @@ func EntityTypes() []string {
 		TypeHost, TypeProcess, TypeNetworkInterface, TypeNetworkAddress,
 		TypeNetworkRoute, TypeServiceListener, TypeServiceInstance, TypeDatabase,
 		TypeNetworkDevice, TypeNetworkEndpoint, TypeComputeVM, TypeContainer,
-		TypePod, TypeNetworkSegment, TypeNetworkNeighbor,
+		TypePod, TypeK8sNode, TypeNetworkSegment, TypeNetworkNeighbor,
 	}
 }
 
