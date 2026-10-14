@@ -118,9 +118,12 @@ const (
 	// RelSameAs is a producer-asserted identity belief: "these two entities are
 	// the same real thing", with edge attributes confidence (0-1) and basis (e.g.
 	// hyperv-kvp, serial_match). It does NOT merge the entities and carries no
-	// failure impact (ImpactNone); the canonical collapse over high-confidence
-	// same_as edges is a deferred read-time overlay (ADR 0020, Lot B). The
-	// producer states evidence it can justify; it never pre-merges (ADR 0018/0020).
+	// failure impact (ImpactNone): the canonical collapse over high-confidence
+	// same_as edges is a read-time overlay, SHIPPED and read by both surfaces
+	// (internal/canonical, ADR 0020). It is never written back — the exact
+	// entities and any low-confidence or conflicting evidence stay intact, and
+	// only the grouping is derived. The producer states evidence it can justify;
+	// it never pre-merges (ADR 0018/0020).
 	RelSameAs = wire.RelTypeSameAs
 
 	// RelAttachedTo joins a workload to a network segment, FROM the entity that
@@ -253,7 +256,8 @@ var relationTypes = map[string]RelationTypeDef{
 	RelDependsOn: {Type: RelDependsOn, From: TypeServiceInstance, To: TypeNetworkEndpoint, Structural: true, Impact: ImpactToFrom},
 	// "X same_as Y": identity belief, any entity type either side (From/To advisory).
 	// Non-structural (its appearance is not an alert) and ImpactNone (not a failure
-	// path); the canonical collapse is a deferred read-time overlay (ADR 0020, Lot B).
+	// path); the canonical collapse is a read-time overlay, shipped and never
+	// written back (internal/canonical, ADR 0020).
 	RelSameAs: {Type: RelSameAs, From: "", To: "", Structural: false, Impact: ImpactNone},
 	// "X attached_to Y": the segment failing takes what is attached to it. The
 	// direction states a dependency; it does not promise an event will arrive —
