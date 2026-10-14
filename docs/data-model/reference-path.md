@@ -439,9 +439,9 @@ physical member often present the same hardware address. `resolves_to` points at
 *the interface that owns the MAC*, and with an aggregate two interfaces of one
 owner present it — the rule becomes ambiguous.
 
-Not an identity problem: the MAC is descriptive and the identity is
-`{owner, name}`, so no entity is duplicated. A **join** problem, and an ambiguous
-join produces a wrong match months later.
+Not an identity problem: the MAC is descriptive, and an interface is identified by
+its owner plus its name, so no entity is duplicated. A **join** problem, and an
+ambiguous join produces a wrong match months later.
 
 **Rule: resolve to the interface whose MAC is its own permanent hardware address
 — the physical member. The bond's is borrowed.** Decidable on every source
