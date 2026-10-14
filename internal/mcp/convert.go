@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -110,9 +111,27 @@ type Change struct {
 // means an operator deleted anything, and consumers have concluded exactly that
 // from the bare enum — three invented human operations, asserted at high
 // confidence, in one incident (#346).
-func disappearanceGloss(src model.DeleteSource) string {
+// A reason changes what the producer case MEANS, so the gloss takes it. A
+// producer that reports a deletion because it stopped looking is making the
+// opposite claim from one that watched the thing end, and the bare gloss
+// asserted the latter for both: an agent began reporting "I stopped watching
+// this device" and the sentence a consumer reads still said the producer had
+// reported it gone. The reason sat beside it in the payload, which is not where
+// anyone looks.
+//
+// Toise does not interpret the value: the reason is an OPEN enum, producer
+// vocabulary, and guessing at a word we do not define is how a reader ends up
+// trusting our paraphrase over the producer's own term. So a reason is quoted
+// and the reading is widened, never narrowed.
+func disappearanceGloss(src model.DeleteSource, reason string) string {
 	switch src {
 	case model.DeleteSourceProducer:
+		if reason != "" {
+			return "the producer reported this gone and gave the reason " + strconv.Quote(reason) + ". " +
+				"READ THE REASON BEFORE CONCLUDING THE THING ENDED: a producer may report a disappearance because it stopped observing, " +
+				"which says nothing about whether the resource still exists. The word is the producer's own and Toise does not interpret it. " +
+				"Nothing here says a human removed anything."
+		}
 		return "the producer reported this gone — it either sent an explicit delete or stopped listing the entity it had been reporting. " +
 			"This is an observation about the world, NOT an operator action: nothing here says a human removed anything."
 	case model.DeleteSourceLivenessExpiry:
@@ -248,7 +267,7 @@ func changeOut(ev model.Event) Change {
 		}
 		c.DeleteReason = ee.DeleteReason
 		c.DeleteSource = string(ee.DeleteSource)
-		c.Disappearance = disappearanceGloss(ee.DeleteSource)
+		c.Disappearance = disappearanceGloss(ee.DeleteSource, ee.DeleteReason)
 		ent := entityOut(ee.Entity, ee.ChangeType == model.EntityDeleted)
 		c.Entity = &ent
 	case ev.Relation != nil:
@@ -263,7 +282,7 @@ func changeOut(ev model.Event) Change {
 			c.ChangedKeys = re.ChangedKeys
 		}
 		c.DeleteSource = string(re.DeleteSource)
-		c.Disappearance = disappearanceGloss(re.DeleteSource)
+		c.Disappearance = disappearanceGloss(re.DeleteSource, "")
 		rel := relationOut(re.Relation)
 		c.Relation = &rel
 	}
