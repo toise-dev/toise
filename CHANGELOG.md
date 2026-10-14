@@ -11,34 +11,31 @@ Nothing yet.
 
 ## [0.21.0] - 2026-10-14
 
-> **`v0.21.0-beta.2` is cut for a full bench qualification, not for deployment.**
-> It replaces `beta.1`, which qualified green on the two criteria that test this
-> release's own changes — the path end to end with provenance by collection
-> method, and a calm window reporting nothing — and left one check unrun. Four
-> changes landed since, and two of them cannot be verified by reading a diff:
+> **Qualified on the bench and released.** Two prereleases were cut for this,
+> because three of the changes below cannot be verified by reading a diff, and
+> all three were measured on real data rather than in a test of mine:
 >
-> - **the snapshot discriminator was itself wrong.** `beta.1` decided whether a
->   restored reference predated speaker keys by reading a declaration in the
->   blob. A blob written *between* the two fixes carries composite keys **without**
->   that declaration, so its bare keys were mis-marked legacy — which would let
->   one speaker release another's reference. Found by reading an upgrade plan,
->   not the code. **No published build was ever at risk**, and the claim that an
->   upgrade from a `beta.1` data dir would qualify this was wrong: `beta.1`
->   already writes the declaration, and `v0.20.0` writes neither declaration nor
->   composite keys, so both are read correctly. The defect was reachable only
->   from a source build between the two merges, which is why the check belongs
->   in a unit test — it needs a state no release produces. An upgrade phase is
->   still owed for journal continuity, which `beta.1`'s empty-directory
->   qualification skipped, but a clean upgrade says nothing about this fix.
-> - **a deletion's reason now reaches the sentence beside it.** A producer that
->   reports a disappearance because it stopped watching is making the opposite
->   claim from one that watched the thing end, and the plain-language gloss
->   asserted the latter for both. The agent emits that reason today, so this is
->   verifiable end to end on the bench rather than in a unit test.
+> - **journal continuity across an upgrade.** A `beta.1` data directory was
+>   restarted under `beta.2`: the sequence kept advancing, no parasitic
+>   retraction, and provenance unchanged at +2, +5 and +10 minutes.
+> - **a deletion's reason reaches the sentence beside it.** A switch was paused
+>   for six minutes; fifteen entities disappeared carrying the producer's own
+>   word, and the plain-language answer quotes it instead of asserting the
+>   opposite, which is what it did before.
+> - **the traversal rule**, measured where it decides rather than counted as an
+>   opportunity: three queries placed exactly at the tie between two interfaces
+>   that heard the same address, and no answer routed through the cache entry.
+>   Weak proof — three cases — and the bench says so.
 >
-> The other two: `monitors` no longer propagates a monitored target's failure
-> into the agent watching it, and the demonstration fixture no longer
-> contradicts the identity rule it exists to teach.
+> **One reservation stands**: link aggregation is absent from the bench, so the
+> half of that rule which concerns an aggregate was never exercised. It is a gap
+> in the bench, not a property of the model, and it reopens the day the bench
+> gains a bond.
+>
+> The parked-edge provenance turned out not to be producible through an agent at
+> all — the host emits its own next hop, so nothing ever parks — and it is
+> covered where that check belongs, by a unit test with two distinct collection
+> methods. Removed from the bench's list rather than left as an open question.
 
 **The release where a warning became a control, and a convergence stopped being
 read as a route.** Three of the four fixes here were found by someone comparing
