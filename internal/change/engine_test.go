@@ -1799,3 +1799,62 @@ func TestLegacyReferenceIsReleasableAfterAnUpgrade(t *testing.T) {
 		}
 	})
 }
+
+// TestABlobBetweenTheTwoChangesIsNotLegacy pins a defect in the fix for the
+// opposite direction, found by reading the bench session's upgrade plan rather
+// than by a test.
+//
+// The speaker key shipped before the snapshot declared it, so a build between
+// the two wrote COMPOSITE keys without saying so. In such a blob a bare key
+// means "this producer named no collection method" — not "the format recorded
+// none". Marking those legacy would let a scoped retraction release a reference
+// it never asserted: one speaker retracting another's assertion, which is the
+// single thing ADR 0019's reference counting exists to prevent, and the exact
+// violation the legacy fix was careful to avoid in the other direction.
+//
+// The bench was about to restore precisely such a blob — the same agent against
+// 28626fc, then against the beta — so the confusing result would have been read
+// as a beta regression.
+//
+// A single composite key anywhere proves the writer knew about methods.
+func TestABlobBetweenTheTwoChangesIsNotLegacy(t *testing.T) {
+	now := fixedNow()
+	deadline := now.Add(time.Hour).Format(time.RFC3339Nano)
+
+	for _, c := range []struct {
+		name       string
+		blob       string
+		wantLegacy bool
+	}{
+		{
+			name:       "no declaration and no composite key: written before the key change",
+			blob:       `{"refs":{"E1":{"agent-a":"` + deadline + `"}}}`,
+			wantLegacy: true,
+		},
+		{
+			name: "no declaration but a composite key elsewhere: written between the two",
+			blob: `{"refs":{"E1":{"agent-a":"` + deadline + `"},` +
+				`"E2":{"\u00007\u0000agent-bsenhub-agent/snmp-lldp":"` + deadline + `"}}}`,
+			wantLegacy: false,
+		},
+		{
+			name:       "declared: written after both",
+			blob:       `{"speaker_keys":true,"refs":{"E1":{"agent-a":"` + deadline + `"}}}`,
+			wantLegacy: false,
+		},
+	} {
+		e := New(projection.New(), &fakeAppender{}, WithClock(func() time.Time { return now }))
+		if err := e.RestoreLiveness([]byte(c.blob)); err != nil {
+			t.Fatalf("%s: restore: %v", c.name, err)
+		}
+		ref, ok := e.refs["E1"]["agent-a"]
+		if !ok {
+			t.Fatalf("%s: the bare reference was not restored", c.name)
+		}
+		if ref.legacy != c.wantLegacy {
+			t.Errorf("%s: legacy = %v, want %v. A bare key beside a composite one is a producer "+
+				"that named no method, not a format that recorded none — marking it legacy lets one "+
+				"speaker release another's reference", c.name, ref.legacy, c.wantLegacy)
+		}
+	}
+}

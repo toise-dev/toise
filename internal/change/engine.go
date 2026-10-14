@@ -182,6 +182,28 @@ func refKey(producer, scope string) string {
 	return "\x00" + strconv.Itoa(len(producer)) + "\x00" + producer + scope
 }
 
+// carriesAnyCompositeKey reports whether any reference key in the blob names a
+// collection method. One is enough: a writer that keyed a single reference by
+// speaker knew about methods for all of them, so a bare key beside it is a
+// producer that named none rather than a format that recorded none.
+func carriesAnyCompositeKey(snap livenessSnapshot) bool {
+	for _, speakers := range snap.Refs {
+		for key := range speakers {
+			if _, scope := splitRefKey(key); scope != "" {
+				return true
+			}
+		}
+	}
+	for _, speakers := range snap.RelRefs {
+		for key := range speakers {
+			if _, scope := splitRefKey(key); scope != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // releaseSpeaker drops the reference of one speaker, and with it any LEGACY
 // reference of the same producer — one restored from a snapshot that recorded no
 // collection method, whose speaker is therefore this producer under a method
@@ -1469,7 +1491,18 @@ func (e *Engine) RestoreLiveness(blob []byte) error {
 	// A blob that does not declare speaker keys recorded no collection method, so
 	// each of its bare keys is a reference whose method is unknowable rather than
 	// unnamed. Marked, so a retraction from the same producer can release it.
-	legacy := !snap.SpeakerKeys
+	//
+	// The declaration is not the only evidence, and relying on it alone was a
+	// defect. A build between the key change and the declaration wrote COMPOSITE
+	// keys without saying so, and in such a blob a bare key means "this producer
+	// named no method" — not "the format recorded none". Marking those legacy
+	// would let a scoped retraction release a reference it never asserted, which
+	// is the ADR 0019 violation the fix for the other direction exists to avoid.
+	//
+	// So a single composite key anywhere in the blob proves the writer knew about
+	// methods, and nothing in it is legacy. Found by reading the bench session's
+	// upgrade plan: it restores exactly such a blob.
+	legacy := !snap.SpeakerKeys && !carriesAnyCompositeKey(snap)
 	for id, producers := range snap.Refs {
 		ps := make(map[string]liveRef, len(producers))
 		for p, deadline := range producers {
