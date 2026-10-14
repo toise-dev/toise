@@ -120,6 +120,7 @@ func checkRecord(where string, lr plog.LogRecord) []Problem {
 		checkScalarMap(&out, where, "entity.id", id.Map())
 		checkHostID(&out, where, "entity.id", id.Map())
 		checkMAC(&out, where, "entity.id", id.Map())
+		checkIdentityKeySpelling(&out, where, "entity.id", id.Map())
 	}
 
 	if desc, ok := attrs.Get(wire.AttrEntityDescription); ok {
@@ -176,6 +177,7 @@ func checkRecord(where string, lr plog.LogRecord) []Problem {
 					// wrong one — the edge is parked, then dropped.
 					checkHostID(&out, rw, "entity.id", v.Map())
 					checkMAC(&out, rw, "entity.id", v.Map())
+					checkIdentityKeySpelling(&out, rw, "entity.id", v.Map())
 				}
 				if rt, _ := m.Get(wire.RelType); rt.Str() == wire.RelTypeSameAs {
 					out = append(out, checkSameAsBelief(rw, m)...)
@@ -284,6 +286,41 @@ func checkMAC(out *[]Problem, where, field string, m pcommon.Map) {
 			flag(wire.IdentityNetworkDeviceID, v.Str())
 		}
 	}
+}
+
+// checkIdentityKeySpelling refuses a retired spelling in an IDENTITY, while the
+// same key stays perfectly acceptable as a descriptive attribute.
+//
+// That split is the whole point, and it is why tolerance elsewhere is not
+// tolerance here. `interface.name` is still read as a display name and still
+// accepted as a telemetry join key, because the graph holds interfaces observed
+// before the semconv spelling existed and dropping it would blind the pivot on
+// them. But an identity is hashed over the keys AS SENT — no normalization, by
+// design (ADR 0017, ADR 0022: the engine does not decide what a producer meant)
+// — so one port named two ways is two entities, joined by nothing, and the
+// duplicate surfaces months later.
+//
+// Measured before switching it on, like the MAC rendering: no producer emits the
+// retired spelling as identity, and none has since the migration. So this is a
+// lint that catches the first regression, not a migration.
+func checkIdentityKeySpelling(out *[]Problem, where, field string, m pcommon.Map) {
+	for retired, use := range retiredIdentityKeys {
+		if _, ok := m.Get(retired); !ok {
+			continue
+		}
+		*out = append(*out, Problem{Record: where, Issue: fmt.Sprintf(
+			"%s carries %q, which is no longer an identity key; use %q. The spelling is still fine as a "+
+				"descriptive attribute and as a telemetry join key — the graph holds entities observed before the "+
+				"semconv spelling existed. But an identity is hashed over the keys as sent, with no normalization: "+
+				"one object named two ways is two entities, nothing joins them, and the duplicate surfaces months "+
+				"later", field, retired, use)})
+	}
+}
+
+// retiredIdentityKeys maps a spelling that must not identify anything to the one
+// that must. Both stay valid as descriptive attributes; only identity is closed.
+var retiredIdentityKeys = map[string]string{
+	"interface.name": wire.IdentityNetworkInterfaceName,
 }
 
 // isCanonicalMAC reports whether s is six uppercase hex octets separated by
