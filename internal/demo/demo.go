@@ -35,6 +35,7 @@ type Engine interface {
 	ObserveRelation(change.RelationObservation) (model.Event, bool, error)
 	RemoveRelation(change.RelationObservation) (model.Event, bool, error)
 	DeleteEntity(change.EntityObservation) (model.Event, bool, error)
+	Batch(func(*change.Batch)) error
 }
 
 // Summary reports what Run produced.
@@ -64,6 +65,62 @@ type seeder struct {
 	start  time.Time
 	events int
 	err    error
+	// b is set while a step runs inside a batch, and the step helpers route
+	// through it. Events of one batch share a commit_seq, which is what tells a
+	// consumer that a deletion and a creation are one observation rather than
+	// two things that happened near each other.
+	b *change.Batch
+}
+
+// batch runs fn with every step helper writing into one append, so its events
+// carry the same commit_seq.
+func (s *seeder) batch(fn func()) {
+	if s.err != nil {
+		return
+	}
+	if err := s.eng.Batch(func(b *change.Batch) {
+		s.b = b
+		fn()
+	}); err != nil && s.err == nil {
+		s.err = fmt.Errorf("batch: %w", err)
+	}
+	s.b = nil
+}
+
+func (s *seeder) obsEntity(obs change.EntityObservation) error {
+	if s.b != nil {
+		_, err := s.b.ObserveEntity(obs)
+		return err
+	}
+	_, err := s.eng.ObserveEntity(obs)
+	return err
+}
+
+func (s *seeder) delEntity(obs change.EntityObservation) error {
+	if s.b != nil {
+		_, _, err := s.b.DeleteEntity(obs)
+		return err
+	}
+	_, _, err := s.eng.DeleteEntity(obs)
+	return err
+}
+
+func (s *seeder) obsRelation(obs change.RelationObservation) error {
+	if s.b != nil {
+		_, _, err := s.b.ObserveRelation(obs)
+		return err
+	}
+	_, _, err := s.eng.ObserveRelation(obs)
+	return err
+}
+
+func (s *seeder) remRelation(obs change.RelationObservation) error {
+	if s.b != nil {
+		_, _, err := s.b.RemoveRelation(obs)
+		return err
+	}
+	_, _, err := s.eng.RemoveRelation(obs)
+	return err
 }
 
 func (s *seeder) at(d time.Duration) time.Time { return s.start.Add(d) }
@@ -80,7 +137,11 @@ func kvs(items ...model.KeyValue) []model.KeyValue { return items }
 
 // --- identities --------------------------------------------------------------
 
-func hostID() []model.KeyValue { return kvs(str("host.name", host1)) }
+// host1ID is the host's own identifier. host.name is a label a human chose and
+// two machines can carry the same one, so it is an attribute, never the key.
+const host1ID = "host-01"
+
+func hostID() []model.KeyValue { return kvs(str("host.id", host1ID)) }
 
 // process.creation.time values (OTel semconv) — stable for a process's lifetime,
 // so process.pid + process.creation.time is an immutable identity even though a
@@ -101,18 +162,29 @@ const (
 func procID(pid int64, creation string) []model.KeyValue {
 	return kvs(num("process.pid", pid), str("process.creation.time", creation))
 }
+
+// ifaceID is {owner, name}: eth0 exists on every machine, so the name alone
+// identifies nothing. The spelling is the semconv one — interface.name is
+// retired for identity and stays legal only as a descriptive attribute.
 func ifaceID(name string) []model.KeyValue {
-	return kvs(str("host.name", host1), str("interface.name", name))
+	return kvs(str("host.id", host1ID), str("network.interface.name", name))
 }
 func addrID(addr string) []model.KeyValue { return kvs(str("network.address", addr)) }
-func routeID(dst string) []model.KeyValue {
-	return kvs(str("host.name", host1), str("network.route.destination", dst))
+
+// routeID carries the next hop because a route's identity contains it: a host
+// with two uplinks has two 0.0.0.0/0 entries differing only by gateway, and
+// keying on the destination alone collapses them into one entity whose next hop
+// oscillates at poll cadence. That reads downstream as a topology change and is
+// not one. Changing the gateway is therefore a different route, not an updated
+// attribute, which is what step 6 demonstrates.
+func routeID(dst, nextHop string) []model.KeyValue {
+	return kvs(str("host.id", host1ID), str("route.destination", dst), str("next_hop.ip", nextHop))
 }
 func listenerID(port int64) []model.KeyValue {
 	// A single composite identity key: two listeners on the same host differ
 	// only in their port. A single composite key is a clean immutable identity
 	// (ADR 0018); under exact matching distinct ports are distinct entities.
-	return kvs(str("service.endpoint", fmt.Sprintf("%s:%d", host1, port)))
+	return kvs(str("service.endpoint", fmt.Sprintf("%s:%d", host1, port)), str("network.transport", "tcp"))
 }
 
 // --- step helpers ------------------------------------------------------------
@@ -125,7 +197,7 @@ func (s *seeder) observe(event, recorded time.Duration, typ string, identity, at
 		return
 	}
 	s.clk.set(s.at(recorded))
-	if _, err := s.eng.ObserveEntity(change.EntityObservation{
+	if err := s.obsEntity(change.EntityObservation{
 		Type: typ, Identity: identity, Attributes: attrs, EventTime: s.at(event),
 	}); err != nil {
 		s.err = fmt.Errorf("observe %s at %s: %w", typ, event, err)
@@ -139,7 +211,7 @@ func (s *seeder) deleteEntity(event time.Duration, typ string, identity []model.
 		return
 	}
 	s.clk.set(s.at(event))
-	if _, _, err := s.eng.DeleteEntity(change.EntityObservation{
+	if err := s.delEntity(change.EntityObservation{
 		Type: typ, Identity: identity, EventTime: s.at(event),
 	}); err != nil {
 		s.err = fmt.Errorf("delete %s at %s: %w", typ, event, err)
@@ -153,7 +225,7 @@ func (s *seeder) relate(event time.Duration, relType string, from, to change.End
 		return
 	}
 	s.clk.set(s.at(event))
-	if _, _, err := s.eng.ObserveRelation(change.RelationObservation{
+	if err := s.obsRelation(change.RelationObservation{
 		Type: relType, From: from, To: to, Attributes: attrs, EventTime: s.at(event),
 	}); err != nil {
 		s.err = fmt.Errorf("relate %s at %s: %w", relType, event, err)
@@ -167,7 +239,7 @@ func (s *seeder) unrelate(event time.Duration, relType string, from, to change.E
 		return
 	}
 	s.clk.set(s.at(event))
-	if _, _, err := s.eng.RemoveRelation(change.RelationObservation{
+	if err := s.remRelation(change.RelationObservation{
 		Type: relType, From: from, To: to, EventTime: s.at(event),
 	}); err != nil {
 		s.err = fmt.Errorf("unrelate %s at %s: %w", relType, event, err)
@@ -189,7 +261,7 @@ const (
 
 func (s *seeder) play() {
 	// 1. Discovery (t+0): the host and its initial topology come into view.
-	s.observe(0, 0, model.TypeHost, hostID(), kvs(str("os.type", "linux"), str("os.description", "Ubuntu 24.04")))
+	s.observe(0, 0, model.TypeHost, hostID(), kvs(str("host.name", host1), str("os.type", "linux"), str("os.description", "Ubuntu 24.04")))
 	s.observe(0, 0, model.TypeProcess, procID(1001, nginxStarted), kvs(str("process.executable.name", "nginx"), str("status", "running")))
 	s.relate(0, model.RelRunsOn, ep(model.TypeProcess, procID(1001, nginxStarted)), ep(model.TypeHost, hostID()), nil)
 
@@ -200,8 +272,9 @@ func (s *seeder) play() {
 	s.relate(0, model.RelBoundTo, ep(model.TypeNetworkAddress, addrID("10.0.1.5")), ep(model.TypeNetworkInterface, ifaceID("eth0")), kvs(boolean("preferred", true)))
 
 	s.observe(0, 0, model.TypeNetworkAddress, addrID("10.0.1.1"), kvs(str("role", "gateway")))
-	s.observe(0, 0, model.TypeNetworkRoute, routeID("0.0.0.0/0"), kvs(str("next_hop", "10.0.1.1")))
-	s.relate(0, model.RelNextHopVia, ep(model.TypeNetworkRoute, routeID("0.0.0.0/0")), ep(model.TypeNetworkAddress, addrID("10.0.1.1")), nil)
+	s.observe(0, 0, model.TypeNetworkRoute, routeID("0.0.0.0/0", "10.0.1.1"), kvs(num("metric", 100)))
+	s.relate(0, model.RelHasRoute, ep(model.TypeHost, hostID()), ep(model.TypeNetworkRoute, routeID("0.0.0.0/0", "10.0.1.1")), nil)
+	s.relate(0, model.RelNextHopVia, ep(model.TypeNetworkRoute, routeID("0.0.0.0/0", "10.0.1.1")), ep(model.TypeNetworkAddress, addrID("10.0.1.1")), nil)
 
 	s.observe(0, 0, model.TypeServiceListener, listenerID(80), kvs(str("process.executable.name", "nginx"), str("transport", "tcp")))
 	s.relate(0, model.RelListensOn, ep(model.TypeServiceListener, listenerID(80)), ep(model.TypeNetworkInterface, ifaceID("eth0")), nil)
@@ -229,16 +302,28 @@ func (s *seeder) play() {
 	s.observe(9*h, 9*h, model.TypeServiceListener, listenerID(5432), kvs(str("process.executable.name", "postgres"), str("transport", "tcp")))
 	s.relate(9*h, model.RelListensOn, ep(model.TypeServiceListener, listenerID(5432)), ep(model.TypeNetworkInterface, ifaceID("eth0")), nil)
 
-	// 6. Default gateway changes (t+12h): new gateway address, the route's
-	//    next_hop attribute updates and its next_hop_via edge moves, the old
-	//    gateway is removed, and the new address is marked no-longer-preferred
-	//    (a relation.attribute_changed on bound_to).
+	// 6. Default gateway changes (t+12h). The next hop is part of the route's
+	//    identity, so this is the OLD route dying and a NEW one appearing — not
+	//    an attribute update. Both ride one batch, so they share a commit_seq:
+	//    that is what lets a consumer see one observation of a changed route
+	//    rather than two coincidences. Whether that means a gateway change is
+	//    the consumer's conclusion, not Toise's.
 	s.observe(12*h, 12*h, model.TypeNetworkAddress, addrID("10.0.2.1"), kvs(str("role", "gateway")))
-	s.observe(12*h, 12*h, model.TypeNetworkRoute, routeID("0.0.0.0/0"), kvs(str("next_hop", "10.0.2.1")))
-	s.unrelate(12*h, model.RelNextHopVia, ep(model.TypeNetworkRoute, routeID("0.0.0.0/0")), ep(model.TypeNetworkAddress, addrID("10.0.1.1")))
-	s.relate(12*h, model.RelNextHopVia, ep(model.TypeNetworkRoute, routeID("0.0.0.0/0")), ep(model.TypeNetworkAddress, addrID("10.0.2.1")), nil)
+	s.batch(func() {
+		s.deleteEntity(12*h, model.TypeNetworkRoute, routeID("0.0.0.0/0", "10.0.1.1"))
+		s.observe(12*h, 12*h, model.TypeNetworkRoute, routeID("0.0.0.0/0", "10.0.2.1"), kvs(num("metric", 100)))
+		s.relate(12*h, model.RelHasRoute, ep(model.TypeHost, hostID()), ep(model.TypeNetworkRoute, routeID("0.0.0.0/0", "10.0.2.1")), nil)
+		s.relate(12*h, model.RelNextHopVia, ep(model.TypeNetworkRoute, routeID("0.0.0.0/0", "10.0.2.1")), ep(model.TypeNetworkAddress, addrID("10.0.2.1")), nil)
+	})
 	s.deleteEntity(12*h, model.TypeNetworkAddress, addrID("10.0.1.1"))
 	s.relate(12*h, model.RelBoundTo, ep(model.TypeNetworkAddress, addrID("10.0.2.7")), ep(model.TypeNetworkInterface, ifaceID("eth0")), kvs(boolean("preferred", false)))
+
+	// 6b. The same route's metric changes (t+13h). The metric is DESCRIPTIVE, so
+	//     this is one entity whose attribute moved — an entity.attribute_updated.
+	//     Put beside step 6 it is the whole identity rule in two events: change
+	//     what identifies a thing and you get a different thing; change what
+	//     merely describes it and you get the same thing, updated.
+	s.observe(13*h, 13*h, model.TypeNetworkRoute, routeID("0.0.0.0/0", "10.0.2.1"), kvs(num("metric", 200)))
 
 	// 7a. nginx config reload (t+15h): the SAME process (pid + creation time
 	//     unchanged) flips a descriptive attribute, status running -> reloading
@@ -255,9 +340,11 @@ func (s *seeder) play() {
 	s.observe(18*h, 18*h, model.TypeProcess, procID(1010, nginxRestarted), kvs(str("process.executable.name", "nginx"), str("status", "running")))
 	s.relate(18*h, model.RelRunsOn, ep(model.TypeProcess, procID(1010, nginxRestarted)), ep(model.TypeHost, hostID()), nil)
 
-	// 8. The container crashes (t+22h): dockerd disappears and stops running on
-	//    the host. A host heartbeat confirms the host is otherwise unchanged.
-	s.unrelate(22*h, model.RelRunsOn, ep(model.TypeProcess, procID(2002, dockerdStarted)), ep(model.TypeHost, hostID()))
+	// 8. The container crashes (t+22h): dockerd disappears. Its runs_on edge is
+	//    NOT retracted here — deleting the entity cascades it, and the removal
+	//    carries delete_source=cascade. A producer behaves the same way: it stops
+	//    listing the process, it does not separately retract the edge. A host
+	//    heartbeat confirms the host is otherwise unchanged.
 	s.deleteEntity(22*h, model.TypeProcess, procID(2002, dockerdStarted))
-	s.observe(22*h, 22*h, model.TypeHost, hostID(), kvs(str("os.type", "linux"), str("os.description", "Ubuntu 24.04")))
+	s.observe(22*h, 22*h, model.TypeHost, hostID(), kvs(str("host.name", host1), str("os.type", "linux"), str("os.description", "Ubuntu 24.04")))
 }
