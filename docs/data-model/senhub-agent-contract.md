@@ -548,14 +548,28 @@ endpoints stay live (e.g. the agent stops monitoring a still-running db), the ag
 it by absence. A *missed* such removal is covered by the **source entity's own
 `entity.report.interval`** — no separate per-edge delete or interval exists.
 
-**Multi-producer liveness — per-producer reference counting (Q1, done):** liveness
-is reference-counted **per producer**, keyed by the Resource `service.instance.id`
-(ADR 0019). Several agents on the same entity converge; an explicit `entity.delete`
-(or an interval lapse) by one is a **silent release** — the entity stays live while
-any other producer references it, and is deleted only when the **last** reference
-goes. No flap, and no producer change beyond keeping `service.instance.id` on the
-Resource (the agent already does). An observation with no producer counts as one
-anonymous producer.
+**Multi-producer liveness — reference counting per SPEAKER (Q1, done):** liveness
+is reference-counted per **speaker**: the Resource `service.instance.id` *and* the
+instrumentation scope it spoke through (ADR 0019 and its 0.21.0 amendment).
+Several agents on the same entity converge; an explicit `entity.delete` (or an
+interval lapse) by one is a **silent release** — the entity stays live while any
+other reference survives, and is deleted only when the **last** one goes. No flap,
+and no producer change beyond keeping `service.instance.id` on the Resource (the
+agent already does). An observation with no producer counts as one anonymous
+producer, and one with no scope keys on the producer alone, exactly as before.
+
+**What that guarantees you, now that the method is part of the key.** A collection
+method's silence expires **only its own** references, and a method's retraction
+retracts only what that same method asserted. So you may run six collectors at six
+cadences over overlapping ground without them deleting each other's facts — which
+is the reason the union across methods is no longer asked of you, and the reason
+caching one would be wrong: re-asserting after a restart what a method said last
+refreshes a liveness deadline on an observation that never happened.
+
+The read surface answers at the same grain: `collected_by` on an entity, and
+`via_collected_by` on an edge, name **the set** of methods asserting it — so a link
+an adjacency protocol states and a link inferred from a forwarding table are told
+apart by a consumer, instead of both arriving as a bare `connected_to`.
 
 **Shared-entity attribute rule (design note, agreed):** a shared entity carries only
 **observer-independent** attributes (system name, version…). Anything per-observer

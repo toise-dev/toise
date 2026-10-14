@@ -1179,21 +1179,19 @@ func TestAssertingScopesAnswersHowNotWho(t *testing.T) {
 	// shape a real multi-method agent has.
 }
 
-// TestOneProducerKeepsOnlyItsLatestScope records a limitation, not a wish.
+// TestOneProducerNamesEveryMethodAsserting is the test that replaced the one
+// pinning the opposite, and the old one's failure message asked for exactly this.
 //
-// The reference map is keyed by producer (ADR 0019), so a producer asserting the
-// same entity through two collection methods overwrites its own reference, scope
-// included: AssertingScopes then reports whichever method spoke last, and it
-// flips at the cadence of the two. An agent running six collectors — the shape
-// senhub-agent 0.6.4 has — therefore gets a single rotating value where the
-// consumer needs the set.
+// The reference key was the producer, so a producer asserting one entity through
+// two collection methods overwrote its own reference: AssertingScopes reported
+// whichever method spoke last and flipped at the cadence of the two. An agent
+// running six collectors — the shape senhub-agent 0.6.4 has — got a single
+// rotating value where the consumer needs the set.
 //
-// That is the measurement behind #455: making the reference key (producer,
-// scope) would make this answer truthful for entities and edges alike, and would
-// at the same time remove the union rule the contract currently imposes on
-// producers. Until that is decided, this test pins what the answer actually is,
-// so nobody reads the field as a set.
-func TestOneProducerKeepsOnlyItsLatestScope(t *testing.T) {
+// The key is now the speaker, so each method holds its own reference. Both
+// halves are asserted here, because reporting the set of methods while
+// reporting the producer twice would trade one wrong answer for another.
+func TestOneProducerNamesEveryMethodAsserting(t *testing.T) {
 	now := fixedNow()
 	e := New(projection.New(), &fakeAppender{}, WithClock(func() time.Time { return now }))
 	ident := []model.KeyValue{kv("host.id", "h-multi")}
@@ -1221,11 +1219,285 @@ func TestOneProducerKeepsOnlyItsLatestScope(t *testing.T) {
 	observe("senhub-agent/snmp-lldp")
 
 	if got := e.AssertingProducers(id); len(got) != 1 || got[0] != "agent-a" {
-		t.Errorf("producers = %v, want the one agent", got)
+		t.Errorf("producers = %v, want the one agent named once — several methods of "+
+			"one producer are several references but one producer", got)
+	}
+	got := e.AssertingScopes(id)
+	if len(got) != 2 || got[0] != "senhub-agent/host-arp" || got[1] != "senhub-agent/snmp-lldp" {
+		t.Errorf("scopes = %v, want both methods sorted; one value here means the "+
+			"methods are overwriting each other's reference again", got)
+	}
+}
+
+// TestOneMethodRetractionLeavesAnotherMethodsEdge is the measurement that decided
+// the key, reproduced as a control.
+//
+// Scoping the reconciler's diff state per collection method (#457) fixed the case
+// where two methods see DIFFERENT things: each now diffs against its own last
+// assertion, so one method's complete set no longer retracts another's edges. It
+// left the case where they see the SAME thing. The engine's reference key was
+// still the producer, so one method losing sight of an edge released the whole
+// producer's reference and deleted an edge another method was still asserting —
+// which re-created it on its next cycle. The flap moved rather than went away.
+//
+// With six collectors whose coverage overlaps by construction (host ARP and SNMP
+// ARP see the same neighbors, LLDP and CDP the same links), an edge asserted by
+// two methods of one agent is the normal case and not the corner.
+func TestOneMethodRetractionLeavesAnotherMethodsEdge(t *testing.T) {
+	now := fixedNow()
+	e := New(projection.New(), &fakeAppender{}, WithClock(func() time.Time { return now }))
+
+	left := EndpointRef{Type: model.TypeNetworkInterface, Identity: []model.KeyValue{kv("network.interface.name", "eth0")}}
+	right := EndpointRef{Type: model.TypeNetworkInterface, Identity: []model.KeyValue{kv("network.interface.name", "Gi1/0/1")}}
+
+	var relID model.RelationID
+	assertEdge := func(scope string) {
+		t.Helper()
+		if err := e.Batch(func(b *Batch) {
+			b.SetScope(scope)
+			for _, ep := range []EndpointRef{left, right} {
+				if _, err := b.ObserveEntity(EntityObservation{
+					Type: ep.Type, Identity: ep.Identity, EventTime: now,
+					Producer: "agent-a", Interval: time.Hour,
+				}); err != nil {
+					t.Errorf("observe %s: %v", ep.Type, err)
+					return
+				}
+			}
+			ev, _, err := b.ObserveRelation(RelationObservation{
+				Type: model.RelConnectedTo, From: left, To: right, EventTime: now,
+				Producer: "agent-a", Interval: time.Hour,
+			})
+			if err != nil {
+				t.Errorf("observe relation: %v", err)
+				return
+			}
+			if ev.Relation != nil {
+				relID = ev.Relation.Relation.ID
+			}
+		}); err != nil {
+			t.Fatalf("batch: %v", err)
+		}
+	}
+
+	// The same link, stated by an adjacency protocol and inferred from a
+	// forwarding table, on one agent.
+	assertEdge("senhub-agent/snmp-lldp")
+	assertEdge("senhub-agent/snmp-fdb")
+	if relID == "" {
+		t.Fatal("no relation id captured")
+	}
+	if got := e.RelationAssertingScopes(relID); len(got) != 2 {
+		t.Fatalf("edge scopes = %v, want both methods — the rest of this test means "+
+			"nothing if they are not both holding a reference", got)
+	}
+
+	// LLDP stops seeing the link. The reconciler, scoped per method, emits a
+	// removal for LLDP alone.
+	retract := func(scope string) (emitted bool) {
+		t.Helper()
+		if err := e.Batch(func(b *Batch) {
+			b.SetScope(scope)
+			_, ok, err := b.RemoveRelation(RelationObservation{
+				Type: model.RelConnectedTo, From: left, To: right,
+				EventTime: now, Producer: "agent-a",
+			})
+			if err != nil {
+				t.Errorf("remove: %v", err)
+				return
+			}
+			emitted = ok
+		}); err != nil {
+			t.Fatalf("batch: %v", err)
+		}
+		return emitted
+	}
+
+	if retract("senhub-agent/snmp-lldp") {
+		t.Error("one method's retraction emitted relation.removed while another method still asserts the edge")
+	}
+	if _, ok := e.getRelation(relID); !ok {
+		t.Fatal("the edge is gone although snmp-fdb still asserts it: the reference key is not the speaker")
+	}
+	if got := e.RelationAssertingScopes(relID); len(got) != 1 || got[0] != "senhub-agent/snmp-fdb" {
+		t.Errorf("edge scopes after the retraction = %v, want only the method that still asserts it", got)
+	}
+
+	// The negative control, without which the above would pass on an engine that
+	// simply never retracts: the last speaker's retraction does remove the edge.
+	if !retract("senhub-agent/snmp-fdb") {
+		t.Error("the last method's retraction emitted nothing: absence within a method must still retract")
+	}
+	if _, ok := e.getRelation(relID); ok {
+		t.Error("the edge survived its last speaker's retraction")
+	}
+}
+
+// TestOneMethodRetractionLeavesTheEntity is the entity-side half of the same
+// rule, and it is not implied by the edge one: the two release paths are
+// different code.
+func TestOneMethodRetractionLeavesTheEntity(t *testing.T) {
+	now := fixedNow()
+	e := New(projection.New(), &fakeAppender{}, WithClock(func() time.Time { return now }))
+	ident := []model.KeyValue{kv("host.id", "h-two-methods")}
+
+	var id model.EntityID
+	observe := func(scope string) {
+		t.Helper()
+		if err := e.Batch(func(b *Batch) {
+			b.SetScope(scope)
+			ev, err := b.ObserveEntity(EntityObservation{
+				Type: model.TypeHost, Identity: ident, EventTime: now,
+				Producer: "agent-a", Interval: time.Hour,
+			})
+			if err != nil {
+				t.Errorf("observe: %v", err)
+				return
+			}
+			id = ev.Entity.Entity.ID
+		}); err != nil {
+			t.Fatalf("batch: %v", err)
+		}
+	}
+	remove := func(scope string) (emitted bool) {
+		t.Helper()
+		if err := e.Batch(func(b *Batch) {
+			b.SetScope(scope)
+			_, ok, err := b.DeleteEntity(EntityObservation{
+				Type: model.TypeHost, Identity: ident, EventTime: now, Producer: "agent-a",
+			})
+			if err != nil {
+				t.Errorf("delete: %v", err)
+				return
+			}
+			emitted = ok
+		}); err != nil {
+			t.Fatalf("batch: %v", err)
+		}
+		return emitted
+	}
+
+	observe("senhub-agent/host-arp")
+	observe("senhub-agent/snmp-arp")
+
+	if remove("senhub-agent/host-arp") {
+		t.Error("one method's delete emitted entity.deleted while another method still asserts the entity")
+	}
+	if _, ok, deleted := e.getEntity(id); !ok || deleted {
+		t.Fatal("the entity is gone although snmp-arp still asserts it")
+	}
+	if got := e.AssertingScopes(id); len(got) != 1 || got[0] != "senhub-agent/snmp-arp" {
+		t.Errorf("scopes after the delete = %v, want only the method that still asserts it", got)
+	}
+	if !remove("senhub-agent/snmp-arp") {
+		t.Error("the last method's delete emitted nothing: a producer must still be able to retract")
+	}
+}
+
+// TestScopelessSpeakerKeysOnTheProducerAlone pins the encoding that makes this
+// change migration-free, and it is the reason there is no migration code to
+// review.
+//
+// A speaker that names no collection method keys on the producer alone, so the
+// key is byte-identical to what the per-producer form wrote. A liveness blob from
+// an earlier build therefore restores with no special case, and a producer that
+// sends no instrumentation scope behaves exactly as it did before. If that ever
+// stops holding, every stored deadline silently moves to a key nothing refreshes
+// and a fleet's entities expire one interval after an upgrade.
+func TestScopelessSpeakerKeysOnTheProducerAlone(t *testing.T) {
+	if got := refKey("agent-a", ""); got != "agent-a" {
+		t.Errorf("refKey with no method = %q, want the bare producer", got)
+	}
+	if got := refKey("", ""); got != "" {
+		t.Errorf("refKey of the anonymous producer = %q, want empty", got)
+	}
+	p, s := splitRefKey("agent-a")
+	if p != "agent-a" || s != "" {
+		t.Errorf("splitting a pre-existing key = (%q, %q), want the producer and no method", p, s)
+	}
+	p, s = splitRefKey(refKey("agent-a", "senhub-agent/snmp-lldp"))
+	if p != "agent-a" || s != "senhub-agent/snmp-lldp" {
+		t.Errorf("round trip = (%q, %q)", p, s)
+	}
+	// A producer id may not forge another speaker's key. Both halves are strings a
+	// producer chooses, so this is the property that has to hold by construction
+	// rather than by assuming neither contains the separator.
+	for _, forged := range []string{"agent-a\x00x", "\x007\x00agent-ax", "\x00", "\x00abc\x00agent-a", "\x001\x00a"} {
+		if refKey(forged, "") == refKey("agent-a", "x") {
+			t.Errorf("producer id %q keys identically to (agent-a, x)", forged)
+		}
+		if p, sc := splitRefKey(refKey(forged, "")); p != forged || sc != "" {
+			t.Errorf("round trip of producer id %q = (%q, %q)", forged, p, sc)
+		}
+	}
+	// And the method side of the same question: two different speakers never
+	// share a key, whatever the split between the two halves.
+	seen := map[string]string{}
+	for _, sp := range [][2]string{
+		{"agent-a", "x"}, {"agent-ax", ""}, {"agent", "ax"}, {"agent-a", ""},
+		{"", "x"}, {"", ""}, {"\x00a", ""}, {"\x00a", "x"}, {"a", "\x00x"},
+	} {
+		k := refKey(sp[0], sp[1])
+		if prev, dup := seen[k]; dup {
+			t.Errorf("speakers %v and %s share the key %q", sp, prev, k)
+		}
+		seen[k] = fmt.Sprintf("%v", sp)
+		if p, sc := splitRefKey(k); p != sp[0] || sc != sp[1] {
+			t.Errorf("round trip of %v = (%q, %q)", sp, p, sc)
+		}
+	}
+}
+
+// TestAForgedProducerIDCannotReleaseAnotherSpeakersReference states the
+// consequence the key encoding exists to prevent, end to end, because the key
+// comparison above would pass on any encoding that merely differs.
+//
+// A producer must not be able to release a reference it never declared (ADR
+// 0019). The producer id and the collection method are both producer-chosen
+// strings, so a key built by joining them on a separator is injective only as
+// long as no producer sends that separator — and then a crafted id releases a
+// chosen speaker's reference, deleting an entity that speaker still asserts.
+func TestAForgedProducerIDCannotReleaseAnotherSpeakersReference(t *testing.T) {
+	now := fixedNow()
+	e := New(projection.New(), &fakeAppender{}, WithClock(func() time.Time { return now }))
+	ident := []model.KeyValue{kv("host.id", "h-forge")}
+
+	var id model.EntityID
+	if err := e.Batch(func(b *Batch) {
+		b.SetScope("senhub-agent/snmp-lldp")
+		ev, err := b.ObserveEntity(EntityObservation{
+			Type: model.TypeHost, Identity: ident, EventTime: now,
+			Producer: "agent-a", Interval: time.Hour,
+		})
+		if err != nil {
+			t.Errorf("observe: %v", err)
+			return
+		}
+		id = ev.Entity.Entity.ID
+	}); err != nil {
+		t.Fatalf("batch: %v", err)
+	}
+
+	// A second producer whose id is the first producer's id with the separator and
+	// the method name appended, retracting under no method of its own.
+	if err := e.Batch(func(b *Batch) {
+		if _, emitted, err := b.DeleteEntity(EntityObservation{
+			Type: model.TypeHost, Identity: ident, EventTime: now,
+			Producer: "agent-a\x00senhub-agent/snmp-lldp",
+		}); err != nil {
+			t.Errorf("delete: %v", err)
+		} else if emitted {
+			t.Error("a crafted producer id retracted an entity it never declared")
+		}
+	}); err != nil {
+		t.Fatalf("batch: %v", err)
+	}
+
+	if _, ok, deleted := e.getEntity(id); !ok || deleted {
+		t.Fatal("the entity was deleted by a producer that never asserted it")
 	}
 	if got := e.AssertingScopes(id); len(got) != 1 || got[0] != "senhub-agent/snmp-lldp" {
-		t.Errorf("scopes = %v, want only the method that spoke last — if this now returns both, "+
-			"the reference key gained the scope and this test should assert the set instead", got)
+		t.Errorf("scopes = %v, want the real speaker's method still holding its reference", got)
 	}
 }
 
