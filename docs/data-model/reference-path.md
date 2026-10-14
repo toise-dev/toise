@@ -73,7 +73,32 @@ direction of *consequence*, not for a permitted-endpoints list.
 | A6 | `network.route` → `network.address` (the gateway) | `next_hop_via`, From route | **observed** |
 | A7 | gateway `network.address` → the router's `network.interface` | `bound_to`, From address | **observed** — see below |
 | A8 | router `network.device` → that `network.interface` | `has_interface`, From device | **observed** |
-| A9 | `network.interface` → `network.interface` | `connected_to`, symmetric | **observed** (LLDP) |
+| A8b | router `network.device` → its **uplink** `network.interface` | `has_interface`, From device | **observed** |
+| A9 | uplink `network.interface` → switch `network.interface` | `connected_to`, symmetric | **observed** (LLDP) |
+
+**A8b is a hop, not a detail, and `quart` found it by drawing the thing.** The
+interface carrying the gateway address is an SVI — a logical interface — and it is
+*not* the port cabled to the next switch. So the path transits the **device**
+between the two: address → SVI → `network.device` → uplink port → `connected_to`.
+Two interfaces of one router are genuinely connected through the router, so this
+transit is real.
+
+### But transiting a HOST is not the same thing, and nothing distinguishes them today
+
+Two interfaces of one **router** are connected through it. Two interfaces of one
+**host** are not, unless that host forwards — and a Linux host with two NICs does
+not forward by default. Nothing in the graph says which is which: a traversal
+reaching a multi-homed host on one interface and leaving on the other claims
+traffic can flow through it, and on a machine that is merely dual-attached that
+claim is false.
+
+**This is #442's family, one layer down** — a convergence rendered as a route —
+and `lab`'s bench will produce it on purpose, since it holds a VyOS firewall that
+*does* forward and Linux hosts that do not. It is filed separately; it is not a
+producer problem and `sa` should not be asked to work around it. Until it is
+fixed, a path that transits a `host` between two interfaces must be read as
+unproven, and the bench's criterion 1 — the station count and order match the
+cabling — is what will catch it.
 
 **A7 is the join that already works and nobody should re-derive.** The gateway
 address the host reports in `next_hop_via` and the address SNMP reports bound to
