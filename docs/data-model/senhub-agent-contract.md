@@ -100,7 +100,7 @@ leased IP) in the identity — those are descriptive attributes. Agreed identiti
 | `network.interface` | `{host.id, network.interface.name}` on a host, `{network.device.id, network.interface.name}` on a polled device — the owner, plus the interface's name **in the semconv spelling** | an interface is named only **within its owner**: `eth0` exists on every machine, so the name alone identifies nothing. **The spelling is closed for identity**: `interface.name`, the pre-semconv key, stays valid as a descriptive attribute and as a telemetry join key — a graph still holds interfaces observed before the migration — and must **never** appear in an identity. Identities are hashed over the keys as sent, with no normalization, so one port named two ways is two entities joined by nothing, and the duplicate surfaces months later. The conformance kit refuses the retired spelling in an identity and accepts it everywhere else. |
 | `container` | `{container.id}` | an OCI/Docker container — a compute resource, not a `service.instance`. `image`/`name` descriptive; `status` is a **state key** (see below); `runs_on` its `host`. |
 | `network.segment` | `{network.segment.id}` — a single subtype-prefixed value by **precedence**, of which only `swarm:<network-id>` is **frozen** | a broadcast/reachability domain with an **assigned** identifier (ADR 0034). `k8s:` and `vlan:` are deliberately **open**: Kubernetes has no object to identify in the default flat-network case, and a VLAN id is not globally unique while a VLAN trunked across five switches is **one** segment, not five. Emitted **with its `has_segment` edge from the declaring cluster or not at all** — a segment nobody can say whose it is has no business in the graph. Workloads join it with `attached_to` **from the entity holding the network namespace**: a `container` on Docker/Swarm, a `pod` on Kubernetes. Subnet / internal / ingress are descriptive. Membership is **necessary and not sufficient** for reachability. |
-| `network.neighbor` | `{host.id, mac}` — the **observing** host's id, plus the neighbour's MAC | a link-layer neighbour an observer saw on one of its own interfaces and could **not** resolve to an entity it already holds (ARP/NDP, an FDB line, an LLDP remote known only by its chassis MAC). **`host.id` here is a SCOPE, not an owner** — the same role it plays as the fourth key of a host-local `network.endpoint`. Scoped on the observer because a MAC is not globally unique (it repeats under virtualization, rotates under randomization) and a broadcast domain carries no assigned identifier (ADR 0034). Two observers on one segment therefore hold two neighbours for one device, on purpose: a wrong merge is permanent, a split is reconciled by a `same_as` belief. **Not** a `network.interface` — see the phantom-port rule. Our own extension: the upstream convention has no neighbour entity. |
+| `network.neighbor` | `{host.id, mac}` when a host observed it, `{network.device.id, mac}` when a polled device did — the **observer's** id, plus the neighbour's MAC | a link-layer neighbour an observer saw on one of its own interfaces and could **not** resolve to an entity it already holds (ARP/NDP, an FDB line, an LLDP remote known only by its chassis MAC). **`host.id` here is a SCOPE, not an owner** — the same role it plays as the fourth key of a host-local `network.endpoint`. Scoped on the observer because a MAC is not globally unique (it repeats under virtualization, rotates under randomization) and a broadcast domain carries no assigned identifier (ADR 0034). Two observers on one segment therefore hold two neighbours for one device, on purpose: a wrong merge is permanent, a split is reconciled by a `same_as` belief. **Not** a `network.interface` — see the phantom-port rule. Our own extension: the upstream convention has no neighbour entity. |
 
 #### A MAC is rendered one way, everywhere
 
@@ -462,9 +462,11 @@ entity keyed on a MAC; `host.mac` exists as an attribute and `network.interface.
 is a release candidate, and that is the whole of the upstream surface here. Read this
 section as a Toise vocabulary decision, not as a convention to expect elsewhere.
 
-**Identity: `{host.id, mac}`, where `host.id` is the OBSERVER.** The same role that
-key plays as the fourth key of a host-local `network.endpoint`: a scope, never an
-owner.
+**Identity: the OBSERVER's id plus the MAC** — `{host.id, mac}` when a host saw
+it, `{network.device.id, mac}` when a polled device did (a MAC learned on a port,
+read from the bridge forwarding table). Two shapes, one rule: the observer is in
+the identity. That is the same role the key plays as the fourth key of a
+host-local `network.endpoint` — a scope, never an owner.
 
 **The MAC rendering is normative, and it is upstream's: IEEE RA hexadecimal —
 uppercase, hyphen-separated octets, most significant first (`AA-BB-CC-DD-EE-FF`).**
@@ -942,20 +944,52 @@ emitted**. One identity and a half is not two.
   a reader does not mistake it for a loss.
 
   **What a route inventory does not contain.** So that "no route to X" can be read
-  correctly, here is the complete list of what is absent by design. A producer emits
-  indirect routes only, and within those it omits a route whose next hop is
-  unspecified (`0.0.0.0`, `::` — the same rows the indirect-only rule already
-  excludes, stated again because the two filters are implemented separately),
-  loopback, or **the polled device's own management address** — that last row
-  describes the device reaching itself, not a path through another device. Exact
+  correctly, here is the complete list of what is absent by design.
+
+  Connected routes are **in** the inventory, since 0.6.4 — the paragraph that used to
+  stand here said "indirect routes only" and it no longer holds. What is omitted is
+  loopback, **the polled device's own management address** (that row describes the
+  device reaching itself, not a path through another device), and **a connected route
+  whose destination no path could target**.
+
+  That last exclusion is a rule and not a list, because a list drifts. A connected
+  route is inventoried only when its destination is a prefix a path could be aimed
+  at. Link-local (`fe80::/64`, `169.254.0.0/16`), multicast (`224.0.0.0/4`,
+  `ff00::/8`) and limited broadcast (`255.255.255.255/32`) are therefore out: none of
+  them can be the far end of a path from A to B, and each appears **once per
+  interface**, so inventorying them would collide several routes of one owner into a
+  single entity whose egress interface oscillates at poll cadence — exactly the
+  flapping that putting the next hop in the identity was introduced to remove.
+
+  Everything omitted here counts in `senhub.routes.omitted`. Exact
   `(destination, next hop)` repeats are collapsed, which on a device is normally the
   same route appearing in both `ipCidrRouteTable` and `inetCidrRouteTable`. Nothing
   else is dropped: two distinct next hops are two distinct routes and both are
   emitted, so an equal-cost pair is visible rather than arbitrated.
 
+  > **A residual collision, named rather than fixed.** Two *connected* routes to the
+  > same **routable** prefix on two interfaces of one owner still collapse: the
+  > identity is `{owner, destination, 0.0.0.0}` for both, and the egress interface is
+  > an attribute, so it oscillates. A host with two NICs on one subnet is the case.
+  >
+  > It is not fixed because every fix costs more than the defect. The egress
+  > interface cannot become a fourth key for all routes — the MIB states that an
+  > interface index of 0 is valid and means none specified, and a key that may be
+  > absent is not a key. Making it a fourth key for connected routes only would give
+  > one type two identity *arities*, which every consumer would then have to handle.
+  > And putting the interface in the third key when there is no next hop would make
+  > that key polymorphic: a reader could not tell whether `eth0` is a next hop or an
+  > interface.
+  >
+  > So it stays, it is written here, and the bench's quiet-window criterion is what
+  > would tell us the case is real: `graph_diff` over a window where nothing changes
+  > must report nothing. If it reports this, we revisit with a measurement instead of
+  > a guess.
+
   Read together with the TOS/policy collapse above, that means the absence of a route
-  says: no indirect route to that destination through another device was observed. It
-  does not say the destination is unreachable, and it never says a route was removed.
+  says: no route to that destination was observed, among those this inventory
+  contains. It does not say the destination is unreachable, and it never says a route
+  was removed.
 - **A bare IP is not a globally unique identity — do not link the ones that
   repeat.** `network.address` is identified by the address alone, so two producers
   emitting the same text land on the same entity. That is correct when the value

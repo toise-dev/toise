@@ -363,14 +363,23 @@ right reason instead of by exception.
 The direction of `resolves_to` follows the MAC's **owner**, never the place it was
 heard. The two edges are different and both already exist:
 
-- a host resolving its gateway holds `network.neighbor {host.id, MAC_router}`.
-  `neighbor_of` points at **the host's own interface**, where it was seen.
-  `resolves_to` points at **the router's interface**, which owns that MAC.
-- a switch learning a MAC on a port holds
-  `network.neighbor {network.device.id, MAC_host}` — scoped on the device by the
-  same rule that scopes a host's neighbour on itself. `neighbor_of` points at
-  **the port**, where it was heard. `resolves_to` points at **the host's
-  interface**, which owns that MAC.
+- a host resolving its gateway holds a `network.neighbor` keyed
+  `{host.id, mac}` — its own id, and the router's address. `neighbor_of` points
+  at **the host's own interface**, where it was seen. `resolves_to` points at
+  **the router's interface**, which owns that address.
+- a switch learning an address on a port holds a `network.neighbor` keyed
+  `{network.device.id, mac}` — the device's id, and the host's address — scoped on
+  the device by the same rule that scopes a host's neighbour on itself.
+  `neighbor_of` points at **the port**, where it was heard. `resolves_to` points
+  at **the host's interface**, which owns that address.
+
+The second form is a **second identity shape for `network.neighbor`**, declared
+in the producer contract and in the identity table the contract test reads.
+Writing it here first with made-up placeholders was how it stayed undeclared:
+the test extracts a key set only when every key is a real lowercase attribute
+name, so `{network.device.id, MAC_host}` was invisible to it. The same sloppiness
+in the same paragraph, caught twice in one day — once by the test, once by a
+reviewer reading what the test could not see.
 
 So an FDB entry does not resolve to the port it was learned on. Saying it did
 would claim the port's identity is the host NIC's MAC, and that is the phantom
