@@ -194,6 +194,21 @@ the documentation gives the three alert rules a control needs to stop lying.
   listener that requires no authentication is not the same event as one serving
   plaintext behind a proxy, and merging them is how the sharper gets acknowledged
   with the duller (#464)
+- **`/readyz` says whether, not why.** It is deliberately unauthenticated — a load
+  balancer and an orchestrator must reach it without credentials, which is the
+  whole point of it existing — so everything it writes, it writes to strangers.
+  It returned the reason, and in this server the reason is the failing **tenant's
+  identifier** plus the storage engine's error text: an anonymous caller learned a
+  customer name and an internal failure mode, exactly when nobody was watching
+  the instance. The status code is the probe's contract; the body now points at
+  where the reason is, and the reason goes to the log on every **transition** —
+  with a line when it recovers, which is the one an operator waits for — so a
+  probe polled every few seconds does not flood it. Found because a deployment
+  session asked whether `/healthz` and `/readyz` should be closed off like
+  `/metrics`; the answer for `/healthz` is no, and for `/readyz` it was no only
+  once it stopped saying this. A test pins each leaked substring against the real
+  shape of the error rather than a placeholder, which a generic "store down"
+  would have let pass.
 - The exposed-listener warning now names **what is actually missing** and advises
   only that. It read "auth and/or TLS are off" and recommended setting both while
   reporting `auth:true` in its own fields, so an operator who had done half the
