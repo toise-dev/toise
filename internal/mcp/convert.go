@@ -372,7 +372,55 @@ func (s *Server) notFoundMsg(handle, asOf string) error {
 		}
 		return fmt.Errorf("no entity found for handle %q at %s, and none now either; use find_entities to discover entities. If the instant is older than the retention horizon the answer cannot be built at all — graph.oldest_answerable on any answer gives that horizon", handle, asOf)
 	}
+	if hint := partialIdentityHint(handle); hint != "" {
+		return fmt.Errorf("no entity found for handle %q. %s", handle, hint)
+	}
 	return fmt.Errorf("no entity found for handle %q; use find_entities to discover entities — if it was deleted a while ago its tombstone may have been evicted, but entity_history still has its past", handle)
+}
+
+// partialIdentityHint returns why an inline identity handle could not resolve
+// when the reason is that it carries FEWER keys than the type's identity, or ""
+// when the handle is not of that shape.
+//
+// An inline identity must carry EVERY key of the identity: resolution compares
+// the whole set, so a subset matches nothing — safely, since it can never
+// resolve to one of several siblings at random. But the caller then reads "no
+// entity found", which is an absence that does not say which kind it is: the
+// entity may exist and the handle be incomplete. A consumer reported exactly
+// that confusion for a host interface, whose first key is the owner's host.id
+// and is therefore shared by every sibling interface on that host.
+//
+// The hint is derived from the handle alone, without consulting the graph: the
+// types whose identity has more than one key are known, and naming the missing
+// count is enough to redirect the caller. It never claims the entity exists.
+func partialIdentityHint(handle string) string {
+	typ, rest, ok := strings.Cut(handle, ":")
+	if !ok || !strings.Contains(rest, "=") {
+		return "" // an id or a fingerprint, not an inline identity
+	}
+	want, known := multiKeyIdentitySizes[typ]
+	if !known {
+		return ""
+	}
+	given := strings.Count(rest, ",") + 1
+	if given >= want {
+		return ""
+	}
+	return fmt.Sprintf("an inline identity must carry EVERY key of the identity, and %s is keyed on %d; "+
+		"this handle gives %d, and a subset resolves to nothing rather than to one of several siblings. "+
+		"Prefer identity_fingerprint, which every replica computes identically and which survives a failover; "+
+		"or use find_entities with a match filter to discover the full identity", typ, want, given)
+}
+
+// multiKeyIdentitySizes is how many keys each multi-key identity carries, for
+// the hint above. A type absent here is single-keyed, so a one-key handle for it
+// is complete and its failure to resolve means something else.
+var multiKeyIdentitySizes = map[string]int{
+	model.TypeNetworkInterface: 2, // {owner, network.interface.name}
+	model.TypeNetworkNeighbor:  2, // {observer, mac}
+	model.TypeComputeVM:        2, // {host.id, vmid}
+	model.TypeProcess:          2, // {process.pid, process.creation.time}
+	model.TypeNetworkRoute:     3, // {owner, route.destination, next_hop.ip}
 }
 
 // horizonWarning compares a requested window against the retention horizon and
