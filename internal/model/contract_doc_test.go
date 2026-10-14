@@ -119,6 +119,7 @@ var identityForms = map[string]string{
 	"network.device.id":                               "network.device",
 	"network.segment.id":                              "network.segment",
 	"host.id,mac":                                     "network.neighbor, scoped to the observing host",
+	"mac,network.device.id":                           "network.neighbor, scoped to the observing device — a MAC learned on a port",
 	"host.id,vmid":                                    "compute.vm, a VM seen from its hypervisor",
 	"process.creation.time,process.pid":               "process",
 	"host.id,network.interface.name":                  "network.interface, on a host",

@@ -100,7 +100,7 @@ leased IP) in the identity — those are descriptive attributes. Agreed identiti
 | `network.interface` | `{host.id, network.interface.name}` on a host, `{network.device.id, network.interface.name}` on a polled device — the owner, plus the interface's name **in the semconv spelling** | an interface is named only **within its owner**: `eth0` exists on every machine, so the name alone identifies nothing. **The spelling is closed for identity**: `interface.name`, the pre-semconv key, stays valid as a descriptive attribute and as a telemetry join key — a graph still holds interfaces observed before the migration — and must **never** appear in an identity. Identities are hashed over the keys as sent, with no normalization, so one port named two ways is two entities joined by nothing, and the duplicate surfaces months later. The conformance kit refuses the retired spelling in an identity and accepts it everywhere else. |
 | `container` | `{container.id}` | an OCI/Docker container — a compute resource, not a `service.instance`. `image`/`name` descriptive; `status` is a **state key** (see below); `runs_on` its `host`. |
 | `network.segment` | `{network.segment.id}` — a single subtype-prefixed value by **precedence**, of which only `swarm:<network-id>` is **frozen** | a broadcast/reachability domain with an **assigned** identifier (ADR 0034). `k8s:` and `vlan:` are deliberately **open**: Kubernetes has no object to identify in the default flat-network case, and a VLAN id is not globally unique while a VLAN trunked across five switches is **one** segment, not five. Emitted **with its `has_segment` edge from the declaring cluster or not at all** — a segment nobody can say whose it is has no business in the graph. Workloads join it with `attached_to` **from the entity holding the network namespace**: a `container` on Docker/Swarm, a `pod` on Kubernetes. Subnet / internal / ingress are descriptive. Membership is **necessary and not sufficient** for reachability. |
-| `network.neighbor` | `{host.id, mac}` — the **observing** host's id, plus the neighbour's MAC | a link-layer neighbour an observer saw on one of its own interfaces and could **not** resolve to an entity it already holds (ARP/NDP, an FDB line, an LLDP remote known only by its chassis MAC). **`host.id` here is a SCOPE, not an owner** — the same role it plays as the fourth key of a host-local `network.endpoint`. Scoped on the observer because a MAC is not globally unique (it repeats under virtualization, rotates under randomization) and a broadcast domain carries no assigned identifier (ADR 0034). Two observers on one segment therefore hold two neighbours for one device, on purpose: a wrong merge is permanent, a split is reconciled by a `same_as` belief. **Not** a `network.interface` — see the phantom-port rule. Our own extension: the upstream convention has no neighbour entity. |
+| `network.neighbor` | `{host.id, mac}` when a host observed it, `{network.device.id, mac}` when a polled device did — the **observer's** id, plus the neighbour's MAC | a link-layer neighbour an observer saw on one of its own interfaces and could **not** resolve to an entity it already holds (ARP/NDP, an FDB line, an LLDP remote known only by its chassis MAC). **`host.id` here is a SCOPE, not an owner** — the same role it plays as the fourth key of a host-local `network.endpoint`. Scoped on the observer because a MAC is not globally unique (it repeats under virtualization, rotates under randomization) and a broadcast domain carries no assigned identifier (ADR 0034). Two observers on one segment therefore hold two neighbours for one device, on purpose: a wrong merge is permanent, a split is reconciled by a `same_as` belief. **Not** a `network.interface` — see the phantom-port rule. Our own extension: the upstream convention has no neighbour entity. |
 
 #### A MAC is rendered one way, everywhere
 
@@ -462,9 +462,11 @@ entity keyed on a MAC; `host.mac` exists as an attribute and `network.interface.
 is a release candidate, and that is the whole of the upstream surface here. Read this
 section as a Toise vocabulary decision, not as a convention to expect elsewhere.
 
-**Identity: `{host.id, mac}`, where `host.id` is the OBSERVER.** The same role that
-key plays as the fourth key of a host-local `network.endpoint`: a scope, never an
-owner.
+**Identity: the OBSERVER's id plus the MAC** — `{host.id, mac}` when a host saw
+it, `{network.device.id, mac}` when a polled device did (a MAC learned on a port,
+read from the bridge forwarding table). Two shapes, one rule: the observer is in
+the identity. That is the same role the key plays as the fourth key of a
+host-local `network.endpoint` — a scope, never an owner.
 
 **The MAC rendering is normative, and it is upstream's: IEEE RA hexadecimal —
 uppercase, hyphen-separated octets, most significant first (`AA-BB-CC-DD-EE-FF`).**
@@ -723,11 +725,227 @@ attributes**. So anything a producer would have hung on an edge becomes an
   collapse into a single entity whose next hop oscillates at poll cadence. That reads
   downstream as a real topology change, and it is not one.
 
-  > **This identity and the inventory rule are now load-bearing for each other.** A
-  > direct, on-link route has no next hop at all, so the key would be absent. It is
-  > always present only because a producer emits **indirect routes only**. Anyone
-  > extending the inventory to direct routes breaks the identity, and must revisit
-  > both rules together rather than either one alone.
+  > **This identity and the inventory rule were load-bearing for each other, and
+  > the inventory rule has now changed.** It used to read: a direct, on-link route
+  > has no next hop at all, so the key would be absent, and it is always present
+  > only because a producer emits **indirect routes only** — whoever extends the
+  > inventory to direct routes breaks the identity and must revisit both rules
+  > together. That warning was written for exactly the decision taken on
+  > 2026-10-14, and it did its job: the extension is specified below, with the
+  > third key resolved rather than dropped.
+
+#### Connected, rejected and discarded routes — one encoding, three meanings
+
+**A route with no next hop carries `0.0.0.0`, or `::` for IPv6**, so the identity
+stays three keys and a type never has two identity shapes. The value is not
+invented: `ipCidrRouteNextHop` is defined as the address of the next system on a
+remote route **and `0.0.0.0` otherwise**, which is the same reason the next hop is
+an identity key at all — we take the encoding the MIB describing this object
+already uses.
+
+**And `route.type` is then mandatory, because three different things share that
+encoding.** A connected route, a `reject` route and a `blackhole` route all lack a
+next hop. Without the type, a blackhole to `10.0.0.0/8` is drawn as *directly
+connected* while the traffic is **discarded** — a drop rendered as a connection,
+which is the error class this model spends its effort removing.
+
+| `route.type` | code | means | traversable |
+|---|---|---|---|
+| `local` | 3 | directly connected, on-link | **yes** |
+| `remote` | 4 | reached through the next hop | **yes** |
+| `reject` | 2 | administratively refused (`unreachable`, `prohibit`) | **no — a deliberate end** |
+| `blackhole` | 5 | silently discarded | **no — a deliberate end** |
+| `other` | 1 | the source says other | no |
+
+`reject` and `blackhole` are **ends of a path, not gaps**. A gap means *we do not
+know*; a blackhole means *we know, and it stops here*. Two absences a drawing must
+not confuse.
+
+Projections: SNMP `inetCidrRouteType` directly, and `ipCidrRouteType` (RFC 2096)
+which has no `blackhole`; Windows `dwForwardType` 3 → `local`, 4 → `remote`,
+1 → `other`, and 2 (`invalid`) is **not a route** and counts as omitted;
+Linux `rtm_type` in the main table, `RTN_UNICAST` with a gateway → `remote`,
+without → `local`, `RTN_BLACKHOLE` → `blackhole`, `RTN_UNREACHABLE` and
+`RTN_PROHIBIT` → `reject`.
+
+**That last projection loses a real distinction** — administratively prohibited is
+not the same as unreachable — and the loss is accepted because `inetCidrRouteType`
+cannot express it and inventing a sixth value would put us outside the convention
+for a nuance nobody consumes. **No raw code is carried for the type**, and the
+asymmetry with the protocol below is deliberate: a projection that can *fail*
+keeps the raw value, a projection that *coarsens into a declared vocabulary* does
+not. Adding one for symmetry would be the wrong reason to add a field.
+
+#### `route.protocol` — a closed vocabulary, and a raw code when it fails
+
+`IANAipRouteProtocol` (IANA-RTPROTO-MIB), lowercase, underscore between words,
+conventional spelling for acronyms:
+
+| code | value | | code | value |
+|---|---|---|---|---|
+| 1 | `other` | | 11 | `cisco_igrp` |
+| 2 | `local` | | 12 | `bbn_spf_igp` |
+| 3 | `netmgmt` | | 13 | `ospf` |
+| 4 | `icmp` | | 14 | `bgp` |
+| 5 | `egp` | | 15 | `idpr` |
+| 6 | `ggp` | | 16 | `cisco_eigrp` |
+| 7 | `hello` | | 17 | `dvmrp` |
+| 8 | `rip` | | 18 | `rpl` |
+| 9 | `isis` | | 19 | `dhcp` |
+| 10 | `esis` | | 20 | `ttdp` |
+
+The list is **enumerated rather than derived**. "The IANA names, lowercased"
+sounds like a rule that saves writing them out; it is not, because the MIB spells
+`isIs` and `ciscoIgrp` in camel case and the transposition needs a judgement per
+value.
+
+Projections: SNMP and Windows (`dwForwardProto`) carry the IANA code directly.
+Linux `rtm_protocol`: `kernel` → `local` (**the most common route on any host** —
+the kernel adds it from an interface's own address, which is literally IANA's
+"local interface"), `static` → `netmgmt`, `dhcp` → `dhcp`, `ra` → `icmp`, and
+`bgp`, `ospf`, `isis`, `rip`, `eigrp` → their own values. `boot`, `babel`,
+`zebra`, `bird` and the rest have **no IANA value**.
+
+**`network.route.protocol.code`** carries the source's raw integer, always. When
+the projection has no name for it, **`route.protocol` is absent and the code is
+present** — three distinct states, and the middle one is the useful one:
+
+| state | means |
+|---|---|
+| attribute absent, no code | the producer did not look |
+| name present | it looked and can name it |
+| name absent, code present | it looked, saw something, and cannot name it |
+
+`other` is **never** the bucket for a failed projection: it is the MIB's own value
+meaning "other". Conflating the two would make the distinction unrecoverable in
+six months.
+
+#### The egress interface — an attribute, and no relation
+
+`network.interface.name`, the same key the interface entity is identified by, so
+with the route's owner it is a **complete identity** a consumer resolves exactly.
+It is **not** a relation, and the reasoning is recorded because it was decided the
+other way first.
+
+A relation `egress_via` (route→interface) was specified for half a day and
+withdrawn after review. Two arguments were given for it and neither survives:
+
+- *"a traversal needs a hop, not a resolution."* It confused two different walks.
+  A shortest-path search would never cross it: the egress interface belongs to the
+  route's **own owner** and is already one hop away by `has_interface`, so
+  `owner → route → interface` is two hops and loses. And the walk that genuinely
+  asks the question — replaying a forwarding decision, which asks *from the
+  route* — is engine code that can resolve a complete identity directly.
+- *"a dangling attribute is silent, a dangling edge is visible."* It is not
+  silent. A path resolving the attribute and finding no such interface **reports a
+  gap at that position**, which is the rule everywhere else in this model. The
+  edge would have made the dangling case expire quietly instead.
+
+What stands against it: the vocabulary grows for a fact already carried exactly,
+and two representations of one fact without an arbiter is the defect this release
+spent itself removing. Three relations were proposed in one day; this is the one
+that was not needed.
+
+**Do not emit the attribute on a `reject` or `blackhole` route, even when the
+source gives one.** Linux often shows `dev lo` on a prohibit route; that is not "packets
+leave by `lo`", it is how the kernel represents a drop. Emitting it draws a hop to
+the loopback — a false claim built from a true observation. This is the one place
+the contract asks a producer **not** to emit what its source says.
+
+#### Bounding the inventory, and declaring the bound
+
+A full BGP table must **not** be inventoried route by route. The bound is not a
+performance knob: it is the admission that this model does not fit that device.
+
+- **`senhub.routes.omitted`** (int) and **`senhub.routes.limit`** (int) on the
+  **owner**, `host` or `network.device`, **always present**, zero when nothing was
+  left out. Absent would mean *the producer did not say*, which is a third thing.
+- Connected routes and the default route are **always kept**; the remainder is
+  ordered deterministically.
+- `omitted` counts every route observed and not emitted — the bound *and* lines
+  skipped for any other reason, such as a Windows `invalid` entry. A counter that
+  excludes one kind of omission lies.
+
+They are `senhub.*` and not `network.*` because the completeness of our inventory
+is **our** notion, carried by an entity whose namespace is upstream's: a semconv
+namespace must not prefix application-specific keys, which is the rule the
+`entity.*` → `senhub.*` migration paid for in 0.20.0.
+
+#### Does this machine forward? — `senhub.host.ip_forwarding.*`
+
+**`senhub.host.ip_forwarding.ipv4`** and **`senhub.host.ip_forwarding.ipv6`**,
+booleans on the `host`, each **absent when its switch could not be read** — a fact
+not read is never false.
+
+**Two booleans and no aggregate**, because the question is asked per family: a
+path's family is known from its destination, and a host forwarding IPv4 but not
+IPv6 would otherwise be crossed on an IPv6 path using IPv4 evidence. A consumer
+wanting "does it route at all" takes the disjunction itself, knowing it took it.
+
+It exists because the graph says nowhere whether a node forwards, and a traversal
+needs exactly that: two interfaces of a **router** are connected through it, two
+interfaces of a **host** are not unless it forwards, and `has_interface` is the
+same relation for both. Without the fact, a dual-attached machine — a backup VLAN,
+an out-of-band NIC, a storage network — is rendered as a transit between segments
+that were deliberately separated.
+
+Sources: `/proc/sys/net/ipv4/ip_forward` and
+`/proc/sys/net/ipv6/conf/all/forwarding` on Linux, `MIB_IPSTATS.dwForwarding` per
+family on Windows.
+
+**A known limitation, with the reason it is tolerated**, so it does not get
+re-examined every six months: Linux IPv6 forwarding is per interface and `all` is
+the global switch, so a host forwarding on one interface only reads `all` as 0 and
+is taken for a non-router. **The error goes in the safe direction** — the
+traversal then refuses the transit and *names* it at that position, which is wrong
+and honest. The opposite error would draw a false path between separated segments
+and show nothing.
+
+#### Link aggregation — `aggregated_into`
+
+The addresses, the routes and therefore the egress interface sit on the **logical**
+interface (`bond0`, `Port-Channel1`), while LLDP and the forwarding table see the
+**physical** members. Without an edge between them a path stops at every
+aggregate, which means at every network core and every hypervisor.
+
+**`aggregated_into`**, physical `network.interface` → logical `network.interface`.
+Part to whole, like `bound_to` and `attached_to`. **Structural** — a port leaving
+a port-channel is a degradation operators alert on, and membership does not churn.
+**`ImpactNone`**, and for a measured reason rather than caution: a member failing
+does **not** take the aggregate down, that being the entire point, so propagating
+would assert the false alarm the aggregate exists to prevent. The real impact is
+conditional on being the *last* active member, and the impact walk works on edges
+without counting them.
+
+- **`senhub.interface.aggregation.state`** on the member, **only where the concept
+  exists**: LACP (from the actor state — collecting and distributing) and
+  `active-backup`. On a static port-channel there is no standby notion and the
+  attribute is **absent**. It is not filled with `active`, which would then mean
+  both "LACP says it forwards" and "there is no standby here".
+- **`senhub.interface.aggregation.mode`** on the aggregate, always: `lacp`,
+  `static`, `active-backup`. It is what tells a reader how to read an absent
+  state — `static` plus absent means no standby notion, `lacp` plus absent means
+  the producer could not read it and that is a gap.
+- Traversal: **cross a member unless its state says `standby`.** Not "cross active
+  members", which would cross nothing on a static aggregate — most of them.
+- Crossing an aggregate does **not** multiply the path by its member count. Two
+  members to one switch are one path and two links; two to two switches (MLAG) are
+  genuinely two paths. `connected_to` downstream says which.
+
+**The borrowed MAC.** A bond takes the address of one of its members, so the
+logical interface and a physical member present the same MAC and `resolves_to` —
+which points at *the interface that owns the MAC* — becomes ambiguous. Not an
+identity problem — the MAC is descriptive, and an interface is identified by its
+owner plus its name — but a **join** problem, and an ambiguous join produces a wrong match months later.
+
+**Resolve to the interface whose MAC is its own permanent hardware address — the
+physical member.** `IFLA_PERM_ADDRESS` on Linux, `PermanentAddress` on Windows,
+distinct per-vmnic addresses on ESXi. SNMP has no permanent-address notion, so the
+**structure** decides: when `ifStackTable` places an `ieee8023adLag` interface
+above a member and both carry the same `ifPhysAddress`, the owner is the member.
+When two **non-aggregated** interfaces carry one MAC — some chassis reuse a base
+address across routed ports — it is undecidable and **no `resolves_to` is
+emitted**. One identity and a half is not two.
 
   **A gateway change is a disappearance followed by an appearance**, not an attribute
   change — which is what actually happened: the route through A is gone, a route
@@ -740,20 +958,52 @@ attributes**. So anything a producer would have hung on an edge becomes an
   a reader does not mistake it for a loss.
 
   **What a route inventory does not contain.** So that "no route to X" can be read
-  correctly, here is the complete list of what is absent by design. A producer emits
-  indirect routes only, and within those it omits a route whose next hop is
-  unspecified (`0.0.0.0`, `::` — the same rows the indirect-only rule already
-  excludes, stated again because the two filters are implemented separately),
-  loopback, or **the polled device's own management address** — that last row
-  describes the device reaching itself, not a path through another device. Exact
+  correctly, here is the complete list of what is absent by design.
+
+  Connected routes are **in** the inventory, since 0.6.4 — the paragraph that used to
+  stand here said "indirect routes only" and it no longer holds. What is omitted is
+  loopback, **the polled device's own management address** (that row describes the
+  device reaching itself, not a path through another device), and **a connected route
+  whose destination no path could target**.
+
+  That last exclusion is a rule and not a list, because a list drifts. A connected
+  route is inventoried only when its destination is a prefix a path could be aimed
+  at. Link-local (`fe80::/64`, `169.254.0.0/16`), multicast (`224.0.0.0/4`,
+  `ff00::/8`) and limited broadcast (`255.255.255.255/32`) are therefore out: none of
+  them can be the far end of a path from A to B, and each appears **once per
+  interface**, so inventorying them would collide several routes of one owner into a
+  single entity whose egress interface oscillates at poll cadence — exactly the
+  flapping that putting the next hop in the identity was introduced to remove.
+
+  Everything omitted here counts in `senhub.routes.omitted`. Exact
   `(destination, next hop)` repeats are collapsed, which on a device is normally the
   same route appearing in both `ipCidrRouteTable` and `inetCidrRouteTable`. Nothing
   else is dropped: two distinct next hops are two distinct routes and both are
   emitted, so an equal-cost pair is visible rather than arbitrated.
 
+  > **A residual collision, named rather than fixed.** Two *connected* routes to the
+  > same **routable** prefix on two interfaces of one owner still collapse: the
+  > identity is `{owner, destination, 0.0.0.0}` for both, and the egress interface is
+  > an attribute, so it oscillates. A host with two NICs on one subnet is the case.
+  >
+  > It is not fixed because every fix costs more than the defect. The egress
+  > interface cannot become a fourth key for all routes — the MIB states that an
+  > interface index of 0 is valid and means none specified, and a key that may be
+  > absent is not a key. Making it a fourth key for connected routes only would give
+  > one type two identity *arities*, which every consumer would then have to handle.
+  > And putting the interface in the third key when there is no next hop would make
+  > that key polymorphic: a reader could not tell whether `eth0` is a next hop or an
+  > interface.
+  >
+  > So it stays, it is written here, and the bench's quiet-window criterion is what
+  > would tell us the case is real: `graph_diff` over a window where nothing changes
+  > must report nothing. If it reports this, we revisit with a measurement instead of
+  > a guess.
+
   Read together with the TOS/policy collapse above, that means the absence of a route
-  says: no indirect route to that destination through another device was observed. It
-  does not say the destination is unreachable, and it never says a route was removed.
+  says: no route to that destination was observed, among those this inventory
+  contains. It does not say the destination is unreachable, and it never says a route
+  was removed.
 - **A bare IP is not a globally unique identity — do not link the ones that
   repeat.** `network.address` is identified by the address alone, so two producers
   emitting the same text land on the same entity. That is correct when the value

@@ -363,14 +363,23 @@ right reason instead of by exception.
 The direction of `resolves_to` follows the MAC's **owner**, never the place it was
 heard. The two edges are different and both already exist:
 
-- a host resolving its gateway holds `network.neighbor {host.id, MAC_router}`.
-  `neighbor_of` points at **the host's own interface**, where it was seen.
-  `resolves_to` points at **the router's interface**, which owns that MAC.
-- a switch learning a MAC on a port holds
-  `network.neighbor {network.device.id, MAC_host}` — scoped on the device by the
-  same rule that scopes a host's neighbour on itself. `neighbor_of` points at
-  **the port**, where it was heard. `resolves_to` points at **the host's
-  interface**, which owns that MAC.
+- a host resolving its gateway holds a `network.neighbor` keyed
+  `{host.id, mac}` — its own id, and the router's address. `neighbor_of` points
+  at **the host's own interface**, where it was seen. `resolves_to` points at
+  **the router's interface**, which owns that address.
+- a switch learning an address on a port holds a `network.neighbor` keyed
+  `{network.device.id, mac}` — the device's id, and the host's address — scoped on
+  the device by the same rule that scopes a host's neighbour on itself.
+  `neighbor_of` points at **the port**, where it was heard. `resolves_to` points
+  at **the host's interface**, which owns that address.
+
+The second form is a **second identity shape for `network.neighbor`**, declared
+in the producer contract and in the identity table the contract test reads.
+Writing it here first with made-up placeholders was how it stayed undeclared:
+the test extracts a key set only when every key is a real lowercase attribute
+name, so `{network.device.id, MAC_host}` was invisible to it. The same sloppiness
+in the same paragraph, caught twice in one day — once by the test, once by a
+reviewer reading what the test could not see.
 
 So an FDB entry does not resolve to the port it was learned on. Saying it did
 would claim the port's identity is the host NIC's MAC, and that is the phantom
@@ -452,6 +461,85 @@ above a member and both carry the same `ifPhysAddress`, the owner is the member.
 And when two **non-aggregated** interfaces carry one MAC — some chassis reuse a
 base address across routed ports — it is undecidable and **no `resolves_to` is
 emitted**: one identity and a half is not two.
+
+## 6d. A host transit: necessary, not sufficient — and the two walks differ
+
+Measured on the bench by `sa`: `senhub.host.ip_forwarding.ipv4` was **true on
+every container of the bench**, and it is not a bench artefact. **Docker sets
+`net.ipv4.ip_forward=1` on any host it runs on, and every Kubernetes node has it
+from its CNI.** The fact is true — the kernel really does forward — but toward its
+own container bridges. That does not make the machine a router between two
+segments of the estate.
+
+So my first rule, *cross a host when the attribute of the path's family is true*,
+was wrong in its **shape** and not merely in its threshold. The question is not
+"does this host forward?" but **"does this host forward on this path?"** The
+host-level boolean is **necessary and not sufficient** — the same form ADR 0034
+gives to segment membership, and for the same reason: a local fact is a condition
+of a path, never a conclusion about one.
+
+**And the answer differs between the two walks, which is the part neither of us
+saw first.**
+
+**The forwarding walk** — longest prefix, the one the reference path is for —
+does not have the problem. It crosses a host only when it has **selected a route
+toward the destination on that host**, so a Docker host with no route to the far
+segment is never crossed: the walk stops before it. The route is the sufficient
+condition and it is already required. The container-bridge case even resolves
+itself: if the route toward B leaves by `docker0`, then either B really is in a
+container on that host — a true path, which must be drawn — or the route is wrong,
+which is a producer defect and not a traversal one.
+
+**The structural walk** — `find_path` over edges — does have the problem, and
+badly. It holds **no route information at all**. With the boolean alone, every
+Docker host and every Kubernetes node becomes a possible transit between
+deliberately separated segments; on an estate where Docker is everywhere, nearly
+every machine becomes a router.
+
+**So the structural walk does not claim a host transit, even when
+`ip_forwarding` is true.** It marks it unproven and names it at that position,
+because it has nothing to judge with: *this host forwards somewhere* does not
+support *this path goes through it*.
+
+That is more restrictive than the first rule, and it fails in the direction this
+document refuses to leave — under-report, name the gap, never draw a false path.
+A reader now sees a hatched station reading *host transit unproven — no route
+observed along this path* where they would have seen a solid and false one.
+
+**What is deliberately not asked of the producer.** No count of container bridges
+on the host: it would explain a true `ip_forwarding` without locating it, and the
+forwarding walk does not need it since the route decides. If the structural walk
+is ever to decide, what it would need is a fact on the **interface** — a
+container-bridge flag — because the interface is what is in question, not the
+machine; and `interface.type = virtual` will not do, since a VLAN subinterface is
+virtual and is a legitimate transit. Not today: that would add an attribute for a
+walk which, correctly bounded, does not need to decide.
+
+## 6c. Do not emit a new relation before a Toise that registers it is deployed
+
+This applies to **every** relation this document introduces, and it is not a
+deployment nicety — emitting early produces the exact false alarm the relation
+was designed to avoid.
+
+Two separate mechanisms, in the two possible configurations:
+
+- **Under the default strict vocabulary**, a record carrying a relation type this
+  Toise does not know is **rejected, per record**, silently from the producer's
+  point of view. The conformance kit cannot catch it either: the kit validates
+  *shape*, not registry membership. The only observable is
+  `toise_ingest_records_total{result="rejected"}`.
+- **With `accept_unknown_types` on**, the record is accepted and the edge is
+  created — and `ImpactFlowOf` returns `ImpactBoth` for an unregistered type,
+  because over-reporting impact is the safer default when nothing is known. So an
+  `aggregated_into` emitted early would propagate failure **in both directions**,
+  which is precisely the false alarm the measured `ImpactNone` decision exists to
+  prevent: a member port failing would be reported as taking the aggregate down.
+  The safe default for an unknown type is the wrong answer for this known one.
+
+So each of these ships behind a producer option that is **off by default**, and
+is enabled only once a Toise carrying the relation is deployed to that tenant.
+The same warning was written for `network.neighbor` in the 0.21.0 notes; it was
+not written for the relations introduced here until a review asked why.
 
 ## 7. VLANs (`sa`'s gap 2)
 
