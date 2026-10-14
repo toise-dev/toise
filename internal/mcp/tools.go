@@ -287,7 +287,7 @@ type Neighbor struct {
 	// Provenance of the EDGE, not of the entity: the entity's own asserted_by /
 	// collected_by live on the embedded Entity.
 	ViaAssertedBy  []string `json:"via_asserted_by" jsonschema:"the producers asserting that EDGE right now (the entity's own producers are in asserted_by)"`
-	ViaCollectedBy []string `json:"via_collected_by" jsonschema:"the collection methods (instrumentation scopes) asserting that EDGE right now. Two edges of one type are not the same claim: an adjacency protocol STATES a link, a forwarding table lets one be INFERRED. Draw a measurement differently from a correlation. One producer running several methods reports only the one that spoke LAST (#455), so this is a set across producers rather than a single agent list of collectors. An EMPTY list means no asserting producer recorded a scope; NULL means not rendered here (an as-of read has no live references)"`
+	ViaCollectedBy []string `json:"via_collected_by" jsonschema:"the collection methods (instrumentation scopes) asserting that EDGE right now. Two edges of one type are not the same claim: an adjacency protocol STATES a link, a forwarding table lets one be INFERRED. Draw a measurement differently from a correlation. A producer running several methods reports ALL of them, the reference count being keyed by the speaker - the producer and the method (#455). An EMPTY list means no asserting producer recorded a scope; NULL means not rendered here (an as-of read has no live references)"`
 	// ResolvedEntity is the read-time binding of an observed network.endpoint to
 	// the canonical host/service.listener it denotes (#184). The stored edge
 	// still targets the endpoint; this is a derived overlay, never persisted.

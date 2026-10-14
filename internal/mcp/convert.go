@@ -39,7 +39,7 @@ type Entity struct {
 	// CollectedBy names the collection methods currently asserting this entity.
 	// AssertedBy is who sends it; this is how it was gathered — the grain the
 	// producer contract makes normative, and the one a producer debugs in.
-	CollectedBy []string `json:"collected_by" jsonschema:"the collection methods (instrumentation scopes) asserting this entity right now, e.g. senhub-agent/snmp-route. asserted_by is WHO sends it; this is HOW it was gathered. Two scopes mean two methods see the same thing, which is a different situation from one method reported by two agents. One producer running several methods reports only the one that spoke LAST, because the reference count is keyed by producer (#455) - so read this as a set across producers, not as the list of a single agent collectors. An EMPTY list means no asserting producer recorded a scope; NULL means not rendered here (compact verbosity, or an as-of read)"`
+	CollectedBy []string `json:"collected_by" jsonschema:"the collection methods (instrumentation scopes) asserting this entity right now, e.g. senhub-agent/snmp-route. asserted_by is WHO sends it; this is HOW it was gathered. Two scopes mean two methods see the same thing, which is a different situation from one method reported by two agents. A producer running several methods reports ALL of them, since the reference count is keyed by the speaker - the producer and the method - so this is the set of methods asserting the entity, including several of one agent (#455). An EMPTY list means no asserting producer recorded a scope; NULL means not rendered here (compact verbosity, or an as-of read)"`
 }
 
 // Relation is a typed directed edge rendered for an LLM.
