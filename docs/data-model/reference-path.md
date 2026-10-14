@@ -462,6 +462,32 @@ And when two **non-aggregated** interfaces carry one MAC — some chassis reuse 
 base address across routed ports — it is undecidable and **no `resolves_to` is
 emitted**: one identity and a half is not two.
 
+## 6c. Do not emit a new relation before a Toise that registers it is deployed
+
+This applies to **every** relation this document introduces, and it is not a
+deployment nicety — emitting early produces the exact false alarm the relation
+was designed to avoid.
+
+Two separate mechanisms, in the two possible configurations:
+
+- **Under the default strict vocabulary**, a record carrying a relation type this
+  Toise does not know is **rejected, per record**, silently from the producer's
+  point of view. The conformance kit cannot catch it either: the kit validates
+  *shape*, not registry membership. The only observable is
+  `toise_ingest_records_total{result="rejected"}`.
+- **With `accept_unknown_types` on**, the record is accepted and the edge is
+  created — and `ImpactFlowOf` returns `ImpactBoth` for an unregistered type,
+  because over-reporting impact is the safer default when nothing is known. So an
+  `aggregated_into` emitted early would propagate failure **in both directions**,
+  which is precisely the false alarm the measured `ImpactNone` decision exists to
+  prevent: a member port failing would be reported as taking the aggregate down.
+  The safe default for an unknown type is the wrong answer for this known one.
+
+So each of these ships behind a producer option that is **off by default**, and
+is enabled only once a Toise carrying the relation is deployed to that tenant.
+The same warning was written for `network.neighbor` in the 0.21.0 notes; it was
+not written for the relations introduced here until a review asked why.
+
 ## 7. VLANs (`sa`'s gap 2)
 
 **A VLAN becomes a `network.segment` only with an assigned identifier, and only
