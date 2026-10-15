@@ -48,6 +48,7 @@ type Engine struct {
 	logger   *slog.Logger
 
 	promiseReporter func(producer, entityType string, declared time.Duration)
+	discardReporter func(relationType, fromType, toType string)
 
 	obsMu sync.Mutex // serializes observation processing
 
@@ -221,6 +222,16 @@ func carriesAnyCompositeKey(snap livenessSnapshot) bool {
 // is a speaker in its own right, and releasing it from another method's
 // retraction would let one speaker retract what another asserted, which is the
 // single thing ADR 0019's reference counting exists to prevent.
+// reportDiscard hands a given-up edge to the discard reporter. The endpoint
+// types travel with it because they are the diagnosis: the relation type alone
+// says an edge was lost, the pair of types says which half nothing emits.
+func (e *Engine) reportDiscard(obs RelationObservation) {
+	if e.discardReporter == nil {
+		return
+	}
+	e.discardReporter(obs.Type, obs.From.Type, obs.To.Type)
+}
+
 func releaseSpeaker(refs map[string]liveRef, producer, scope string) bool {
 	released := false
 	if _, ok := refs[refKey(producer, scope)]; ok {
@@ -363,6 +374,15 @@ type Option func(*Engine)
 // eight thousand times the bound; what matters is that it is finite and that
 // crossing it is reported rather than absorbed.
 const maxPlausibleLivenessPromise = 7 * 24 * time.Hour
+
+// WithDiscardReporter is called whenever an edge is given up on because an
+// endpoint never arrived. Same reasoning as WithPromiseReporter: the drop is
+// already logged, and a production tenant discarded 47327 edges in ten days
+// without anyone noticing, because a WARN line wakes nobody and the graph shows
+// nothing of a relation it never stored.
+func WithDiscardReporter(fn func(relationType, fromType, toType string)) Option {
+	return func(e *Engine) { e.discardReporter = fn }
+}
 
 // WithPromiseReporter is called whenever a producer declares an implausible
 // liveness interval. The engine takes a callback rather than a metrics
@@ -1032,6 +1052,7 @@ func (e *Engine) Sweep() (SweepResult, error) {
 		for i := range e.pending {
 			if now.After(e.pending[i].deadline) {
 				obs := e.pending[i].obs
+				e.reportDiscard(obs)
 				e.logger.Warn("dropping relation: endpoints did not arrive within the reconciliation TTL",
 					"relation_type", obs.Type, "from_type", obs.From.Type, "to_type", obs.To.Type)
 				continue
@@ -1191,6 +1212,7 @@ func (e *Engine) flushPending() {
 		// no longer depends on whether the triggering observation happens to be
 		// the one that completes the endpoints.
 		if now.After(e.pending[i].deadline) {
+			e.reportDiscard(e.pending[i].obs)
 			e.logger.Warn("dropping relation: endpoints did not arrive within the reconciliation TTL",
 				"relation_type", obs.Type, "from_type", obs.From.Type, "to_type", obs.To.Type)
 			continue
