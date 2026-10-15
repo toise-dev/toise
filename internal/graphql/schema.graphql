@@ -336,7 +336,7 @@ type ChangeEvent {
   changes. The discriminator is the **spread of `recordedAt` inside the group**: a
   real commit was written at one instant, so its events differ by microseconds,
   while a restored batch keeps each event's original `recordedAt`, spread over
-  hours. More than a second of spread means a restore artefact — do not pair, and
+  hours. More than a second of spread means a restore artifact — do not pair, and
   say that is why. Neither the size of the group nor the number of producers in it
   discriminates: a mass liveness expiry is one real commit holding hundreds of
   events from several producers.
