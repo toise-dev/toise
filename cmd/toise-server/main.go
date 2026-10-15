@@ -420,6 +420,12 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	metricsExtra := append(ingestMetrics.Collectors(), authFailures, quarantined, openTenants)
 	metricsExtra = append(metricsExtra, maint.Collectors()...)
 	metricsExtra = append(metricsExtra, exposure.Collectors()...)
+	// A refused liveness promise is a PRODUCER defect its operator cannot see
+	// from inside the graph: the entity simply ends up with no cadence, which
+	// reads like an honest absence. The series is the only way anyone learns.
+	promises := metrics.NewPromises()
+	reg.SetPromiseReporter(promises.Refused)
+	metricsExtra = append(metricsExtra, promises.Collectors()...)
 	metricsExtra = append(metricsExtra, queryMetrics.Collectors()...)
 	// Annotation counts per tenant, so a replica-local overlay is at least
 	// measurable (#365): log shipping replicates the log, not the sidecar, so a

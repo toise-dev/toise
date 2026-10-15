@@ -84,8 +84,13 @@ type Registry struct {
 	// Set once via SetResurrectionGrace before serving; it applies to stacks
 	// already open and to every stack opened after.
 	resGrace time.Duration
-	limits   Limits
-	logger   *slog.Logger
+	// promiseReporter is called when a tenant engine refuses an implausible
+	// liveness interval. Set once via SetPromiseReporter before serving; it
+	// applies to every stack opened after. A refusal is already logged, and a
+	// WARN line wakes nobody — this is what makes it alertable.
+	promiseReporter func(producer, entityType string, declared time.Duration)
+	limits          Limits
+	logger          *slog.Logger
 	// now is the clock each tenant engine uses (liveness floor at boot, Sweep).
 	// time.Now in production; injectable so tests drive deadlines deterministically
 	// instead of racing the wall clock.
@@ -125,6 +130,16 @@ func Open(dataDir string, storeCfg store.Config, relBuf time.Duration, logger *s
 // stack opened later. Call it before serving; a mid-flight change only affects
 // deadlines armed from then on, which is fine for a startup knob and not a
 // correctness issue for anything else.
+// SetPromiseReporter installs the callback a tenant engine calls when it
+// refuses an implausible liveness interval. Call it before serving: it applies
+// to every stack opened afterwards, which in practice is all of them, since
+// tenants open lazily on first use.
+func (r *Registry) SetPromiseReporter(fn func(producer, entityType string, declared time.Duration)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.promiseReporter = fn
+}
+
 func (r *Registry) SetResurrectionGrace(d time.Duration) {
 	if d == 0 {
 		return
@@ -432,7 +447,8 @@ func (r *Registry) openStack(id string) (*Stack, error) {
 	engine := change.New(graph, st,
 		change.WithClock(clock),
 		change.WithLogger(r.logger.With("tenant", id)),
-		change.WithRelationBuffer(r.relBuf))
+		change.WithRelationBuffer(r.relBuf),
+		change.WithPromiseReporter(r.promiseReporter))
 	// Restore the liveness Memento (#139): absolute deadlines, so a producer
 	// that died during the downtime is swept on the first tick after boot.
 	if err := engine.RestoreLiveness(liveness); err != nil {

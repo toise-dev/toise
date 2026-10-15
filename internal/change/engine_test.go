@@ -1858,3 +1858,84 @@ func TestABlobBetweenTheTwoChangesIsNotLegacy(t *testing.T) {
 		}
 	}
 }
+
+// TestImplausibleLivenessPromiseIsRefusedAndReported guards the production case
+// that motivated the bound: a host declared 1347804h (153 years), asserted by a
+// producer that sent nothing else and never spoke again. Believing it made the
+// entity immortal — no deadline ever arrives — and made the read surface quote
+// 153 years back as an upper bound on uncertainty, which is the most
+// authoritative sentence this tool emits.
+//
+// The assertion is on all three consequences, because fixing one and not the
+// others would still leave the defect usable: no deadline is armed, the entity
+// has NO cadence rather than a false one, and the refusal is reported.
+func TestImplausibleLivenessPromiseIsRefusedAndReported(t *testing.T) {
+	var gotProducer, gotType string
+	var gotDeclared time.Duration
+	calls := 0
+
+	g := projection.New()
+	e := New(g, &fakeAppender{}, WithPromiseReporter(func(producer, entityType string, declared time.Duration) {
+		calls++
+		gotProducer, gotType, gotDeclared = producer, entityType, declared
+	}))
+
+	const declared = 1347804 * time.Hour // the value measured in production
+	obs := EntityObservation{
+		Type:      model.TypeHost,
+		Identity:  []model.KeyValue{kv("host.id", "epreuve-0001")},
+		EventTime: time.Now(),
+		Producer:  "",
+		Interval:  declared,
+	}
+	if _, err := e.ObserveEntity(obs); err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+
+	id, found := e.matchIdentity(obs.Type, obs.Identity)
+	if !found {
+		t.Fatal("the entity was dropped; a refused PROMISE must never cost the FACT (ADR 0022)")
+	}
+
+	if _, ok := e.ObservationInterval(id); ok {
+		t.Error("the engine still reports a usable cadence, so the figure reaches the resolution block and reads as a bound")
+	}
+	for _, ref := range e.refs[id] {
+		if !ref.deadline.IsZero() {
+			t.Errorf("a deadline was armed at %v: the entity is immortal in practice, which is what the bound exists to stop", ref.deadline)
+		}
+	}
+
+	declaredBack, producerBack, bad := e.ImplausiblePromise(id)
+	if !bad {
+		t.Fatal("the refusal is not recorded, so a read surface cannot tell this from an honest absence of promise")
+	}
+	if declaredBack != declared {
+		t.Errorf("recorded %v, want the value as declared %v — the magnitude is the diagnosis", declaredBack, declared)
+	}
+	if producerBack != "" {
+		t.Errorf("recorded producer %q, want it kept verbatim including empty", producerBack)
+	}
+	if calls != 1 {
+		t.Errorf("reporter called %d times, want exactly 1: a log line wakes nobody, the report is the control", calls)
+	}
+	if gotDeclared != declared || gotType != model.TypeHost || gotProducer != "" {
+		t.Errorf("reported (%q, %q, %v), want (%q, %q, %v)", gotProducer, gotType, gotDeclared, "", model.TypeHost, declared)
+	}
+
+	// Negative control: a plausible promise is untouched, and it clears a prior
+	// refusal for the same entity rather than leaving it marked for ever.
+	obs.Interval = time.Minute
+	if _, err := e.ObserveEntity(obs); err != nil {
+		t.Fatalf("re-observe: %v", err)
+	}
+	if iv, ok := e.ObservationInterval(id); !ok || iv != time.Minute {
+		t.Errorf("plausible interval = (%v, %v), want (1m, true)", iv, ok)
+	}
+	if _, _, bad := e.ImplausiblePromise(id); bad {
+		t.Error("the refusal survived a good observation, so a producer that fixes itself stays accused")
+	}
+	if calls != 1 {
+		t.Errorf("reporter called %d times after a good observation, want still 1", calls)
+	}
+}
