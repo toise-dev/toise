@@ -116,6 +116,8 @@ var identityForms = map[string]string{
 	"service.instance.id":                             "service.instance",
 	"db.instance.id":                                  "db",
 	"container.id":                                    "container",
+	"k8s.node.uid":                                    "k8s.node — the cluster's view of a machine, joined to its host by a same_as belief",
+	"host.id,host.service.name":                       "host.service, scoped to its machine — a service name is unique only within one host, and the name carries its full supervisor suffix",
 	"network.device.id":                               "network.device",
 	"network.segment.id":                              "network.segment",
 	"host.id,mac":                                     "network.neighbor, scoped to the observing host",
