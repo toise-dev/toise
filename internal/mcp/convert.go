@@ -514,12 +514,38 @@ type Resolution struct {
 // apart from one asserted a minute ago unless the answer admits it. Saying
 // nothing was the earlier behavior and it was the defect, not the honesty — the
 // honesty is refusing to invent a bound, which this still does.
+// implausiblePromiseReader is satisfied by the change engine. It is an optional
+// interface rather than a Cadence method so a reader without it still compiles
+// and simply loses the distinction.
+type implausiblePromiseReader interface {
+	ImplausiblePromise(id model.EntityID) (time.Duration, string, bool)
+}
+
 func (s *Server) resolutionFor(id model.EntityID) *Resolution {
 	if s.cadence == nil {
 		return nil
 	}
 	interval, ok := s.cadence.ObservationInterval(id)
 	if !ok {
+		// Two different situations end up here, and they must not read alike:
+		// nobody promised a cadence, or somebody promised an impossible one and
+		// it was refused. The second is a producer defect, and reporting it as
+		// the first hides it behind a legitimate-looking answer — which is how
+		// a host sat in production for 56 days quoting a 153-year bound.
+		if pr, ok := s.cadence.(implausiblePromiseReader); ok {
+			if declared, producer, bad := pr.ImplausiblePromise(id); bad {
+				who := producer
+				if who == "" {
+					who = "an unidentified producer"
+				}
+				return &Resolution{
+					ObservationInterval: "none",
+					Meaning: "no usable cadence, and NOT because none was promised: " + who + " declared " + declared.String() +
+						", which cannot be a promise to speak again and was refused. So this entity has no cadence at all — " +
+						"treat every event_time on it as unbounded in uncertainty, draw no ordering from any gap, and read the figure above as a PRODUCER DEFECT to report, not as a property of the thing described.",
+				}
+			}
+		}
 		return &Resolution{ObservationInterval: "none", Meaning: noLivenessPromise}
 	}
 	return &Resolution{

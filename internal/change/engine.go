@@ -47,7 +47,15 @@ type Engine struct {
 	now      func() time.Time
 	logger   *slog.Logger
 
+	promiseReporter func(producer, entityType string, declared time.Duration)
+
 	obsMu sync.Mutex // serializes observation processing
+
+	// badPromises records entities whose producer declared an implausible
+	// interval, so a read surface can say WHICH KIND of "no interval" this is.
+	// Without it, a refused promise and an honest absence of promise look the
+	// same, and a producer defect hides behind a legitimate-looking answer.
+	badPromises map[model.EntityID]badPromise
 
 	// relation reconciliation buffer (opt-in via WithRelationBuffer): edges whose
 	// endpoints are not yet present are parked here and retried when later entities
@@ -335,6 +343,35 @@ const maxPendingRelations = 4096
 type Option func(*Engine)
 
 // WithClock overrides the clock used to stamp recorded_at (for tests).
+// maxPlausibleLivenessPromise bounds the interval a producer may declare.
+//
+// An interval is not an observed fact, it is a PROMISE: "I will speak again
+// within this long". The engine stores facts without arbitrating them (ADR
+// 0022), but an impossible promise is not a fact, and believing one is how an
+// entity becomes immortal — its deadline never arrives, nothing sweeps it, and
+// the resolution block quotes the figure back to a consumer as an upper bound
+// on uncertainty.
+//
+// Production held a host declaring 1347804h (153 years), asserted by a producer
+// that sent nothing else and never spoke again. For 56 days the read surface
+// answered that two changes less than 153 years apart could not be ordered,
+// which is the most authoritative sentence this tool emits and it was nonsense.
+//
+// A week is far above any real cadence — the agent heartbeats in minutes and
+// discovers in hours — and far below every value that has turned out to be a
+// unit error. The exact threshold matters little when the observed violation is
+// eight thousand times the bound; what matters is that it is finite and that
+// crossing it is reported rather than absorbed.
+const maxPlausibleLivenessPromise = 7 * 24 * time.Hour
+
+// WithPromiseReporter is called whenever a producer declares an implausible
+// liveness interval. The engine takes a callback rather than a metrics
+// dependency: a WARN line wakes nobody, which is why the exposure conditions
+// are published as a gauge, and the same reasoning applies here.
+func WithPromiseReporter(fn func(producer, entityType string, declared time.Duration)) Option {
+	return func(e *Engine) { e.promiseReporter = fn }
+}
+
 func WithClock(now func() time.Time) Option {
 	return func(e *Engine) { e.now = now }
 }
@@ -620,8 +657,8 @@ func (e *Engine) observeEntityLocked(obs EntityObservation) (model.Event, error)
 		e.refs[entityID] = speakers
 	}
 	key := refKey(obs.Producer, e.currentScope())
-	if obs.Interval > 0 {
-		speakers[key] = liveRef{deadline: e.now().Add(obs.Interval), interval: obs.Interval}
+	if iv := e.promise(entityID, obs.Type, obs.Producer, obs.Interval); iv > 0 {
+		speakers[key] = liveRef{deadline: e.now().Add(iv), interval: iv}
 	} else {
 		speakers[key] = liveRef{}
 	}
@@ -761,6 +798,50 @@ func (e *Engine) AssertingScopes(id model.EntityID) []string {
 	defer e.obsMu.Unlock()
 
 	return scopesOf(e.refs[id])
+}
+
+// badPromise is an interval a producer declared that cannot be a promise.
+type badPromise struct {
+	declared time.Duration
+	producer string
+}
+
+// promise returns the deadline interval to honor for a declared one. An
+// implausible value yields zero — the entity then has NO liveness promise,
+// which is the truth — and is reported, never absorbed. The caller must hold
+// obsMu.
+func (e *Engine) promise(id model.EntityID, typ, producer string, declared time.Duration) time.Duration {
+	if declared <= maxPlausibleLivenessPromise {
+		if id != "" && e.badPromises != nil {
+			delete(e.badPromises, id)
+		}
+		return declared
+	}
+	// A relation passes no id: there is no per-edge read surface to tell the two
+	// kinds of absence apart, so the log and the report carry it alone.
+	if id != "" {
+		if e.badPromises == nil {
+			e.badPromises = map[model.EntityID]badPromise{}
+		}
+		e.badPromises[id] = badPromise{declared: declared, producer: producer}
+	}
+	e.logger.Warn("refusing an implausible liveness promise: the entity has NO cadence rather than a false one",
+		"entity_type", typ, "producer", producer, "declared", declared.String(), "max", maxPlausibleLivenessPromise.String())
+	if e.promiseReporter != nil {
+		e.promiseReporter(producer, typ, declared)
+	}
+	return 0
+}
+
+// ImplausiblePromise reports an interval this entity's producer declared and
+// the engine refused. A read surface needs it to distinguish "nobody promised a
+// cadence" from "somebody promised an impossible one": the second is a producer
+// defect and must not read as the first.
+func (e *Engine) ImplausiblePromise(id model.EntityID) (time.Duration, string, bool) {
+	e.obsMu.Lock()
+	defer e.obsMu.Unlock()
+	bp, ok := e.badPromises[id]
+	return bp.declared, bp.producer, ok
 }
 
 func (e *Engine) ObservationInterval(id model.EntityID) (time.Duration, bool) {
@@ -1068,8 +1149,8 @@ func (e *Engine) observeRelationLocked(obs RelationObservation) (model.Event, bo
 		refs = make(map[string]liveRef)
 		e.relRefs[rel.ID] = refs
 	}
-	if obs.Interval > 0 {
-		refs[refKey(obs.Producer, e.currentScope())] = liveRef{deadline: e.now().Add(obs.Interval), interval: obs.Interval}
+	if iv := e.promise("", obs.Type, obs.Producer, obs.Interval); iv > 0 {
+		refs[refKey(obs.Producer, e.currentScope())] = liveRef{deadline: e.now().Add(iv), interval: iv}
 	} else {
 		refs[refKey(obs.Producer, e.currentScope())] = liveRef{}
 	}

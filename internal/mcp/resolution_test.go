@@ -121,3 +121,62 @@ func TestEntityHistoryDeclaresItsScope(t *testing.T) {
 		}
 	}
 }
+
+// badPromiseCadence knows nothing about cadence and everything about one
+// refused promise, which is the production shape: the figure was refused, so no
+// interval is reportable, and the refusal is what a reader must be told.
+type badPromiseCadence struct {
+	fakeCadence
+	declared time.Duration
+	producer string
+}
+
+func (b badPromiseCadence) ImplausiblePromise(model.EntityID) (time.Duration, string, bool) {
+	return b.declared, b.producer, true
+}
+
+// TestResolutionSeparatesRefusedFromAbsentPromise guards the distinction that
+// let a production host sit for 56 days reporting a 153-year bound: "no
+// cadence" has two causes and they must not read alike. Nobody promised one is
+// an ordinary fact about an entity; somebody promised an impossible one is a
+// PRODUCER DEFECT, and reporting it as the first hides it behind an answer that
+// looks legitimate.
+func TestResolutionSeparatesRefusedFromAbsentPromise(t *testing.T) {
+	const declared = 1347804 * time.Hour
+
+	refused := newTestServer().SetCadence(badPromiseCadence{
+		fakeCadence: fakeCadence{}, declared: declared, producer: "",
+	})
+	_, out, err := refused.getEntity(context.Background(), nil, GetEntityInput{EntityID: "01HOST_WEB"})
+	if err != nil {
+		t.Fatalf("getEntity: %v", err)
+	}
+	if out.Resolution == nil {
+		t.Fatal("no resolution block at all; a reader then assumes nothing is wrong")
+	}
+	if out.Resolution.ObservationInterval != "none" {
+		t.Errorf("interval = %q, want \"none\": the refused figure must never be quoted as a bound", out.Resolution.ObservationInterval)
+	}
+	if !strings.Contains(out.Resolution.Meaning, declared.String()) {
+		t.Errorf("the refused figure is absent from the sentence, so nobody can report the defect: %q", out.Resolution.Meaning)
+	}
+	if !strings.Contains(out.Resolution.Meaning, "PRODUCER DEFECT") {
+		t.Errorf("the sentence does not name this as a producer defect: %q", out.Resolution.Meaning)
+	}
+	if !strings.Contains(out.Resolution.Meaning, "unidentified producer") {
+		t.Errorf("an empty producer must be named as unidentified rather than left blank: %q", out.Resolution.Meaning)
+	}
+
+	// The honest absence keeps its own wording, and must NOT read as a defect.
+	absent := newTestServer().SetCadence(fakeCadence{})
+	_, out2, err := absent.getEntity(context.Background(), nil, GetEntityInput{EntityID: "01HOST_WEB"})
+	if err != nil {
+		t.Fatalf("getEntity: %v", err)
+	}
+	if out2.Resolution == nil || out2.Resolution.ObservationInterval != "none" {
+		t.Fatalf("absent-promise resolution = %+v, want interval \"none\"", out2.Resolution)
+	}
+	if strings.Contains(out2.Resolution.Meaning, "PRODUCER DEFECT") {
+		t.Errorf("an entity nobody promised a cadence for is accused of a producer defect: %q", out2.Resolution.Meaning)
+	}
+}
