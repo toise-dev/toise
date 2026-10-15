@@ -1939,3 +1939,61 @@ func TestImplausibleLivenessPromiseIsRefusedAndReported(t *testing.T) {
 		t.Errorf("reporter called %d times after a good observation, want still 1", calls)
 	}
 }
+
+// TestAnonymousEntityIsReleasableOnlyAnonymously is the recipe for removing an
+// entity nobody claims, verified rather than reasoned about, because an
+// operator is going to run it against production.
+//
+// A production host sits in a customer graph asserted under an EMPTY producer
+// id, with no liveness promise, created once in August and never spoken of
+// again. Toise has no operator gesture to remove an entity — writes on the read
+// surface are limited to annotations, and the only destructive server
+// subcommand drops a whole tenant — so the only path is an explicit delete over
+// the ingest rail.
+//
+// The trap this pins: a delete releases the reference of the producer that
+// SENDS it. A named producer therefore leaves an anonymous reference untouched,
+// the reference set stays non-empty, and the delete returns as a silent no-op —
+// no event, no error, nothing in the change feed. Someone would try it three
+// times and conclude the product was broken.
+func TestAnonymousEntityIsReleasableOnlyAnonymously(t *testing.T) {
+	g := projection.New()
+	e := New(g, &fakeAppender{}, WithLogger(slog.New(slog.DiscardHandler)))
+
+	ident := []model.KeyValue{kv("host.id", "epreuve-0001")}
+	obs := EntityObservation{Type: model.TypeHost, Identity: ident, EventTime: t0, Producer: ""}
+	if _, err := e.ObserveEntity(obs); err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	if _, found := e.matchIdentity(model.TypeHost, ident); !found {
+		t.Fatal("the entity was not created, so the rest of this test proves nothing")
+	}
+
+	// A NAMED producer cannot release it: the key it targets does not exist.
+	named := EntityObservation{Type: model.TypeHost, Identity: ident, EventTime: t0, Producer: "opspilot"}
+	if _, emitted, err := e.DeleteEntity(named); err != nil || emitted {
+		t.Errorf("delete from a named producer: emitted=%v err=%v; want a silent no-op", emitted, err)
+	}
+	if _, found := e.matchIdentity(model.TypeHost, ident); !found {
+		t.Fatal("a named producer released an anonymous reference; the recipe below would be unnecessary")
+	}
+
+	// Only a delete carrying NO producer id matches the anonymous key.
+	anon := EntityObservation{Type: model.TypeHost, Identity: ident, EventTime: t0, Producer: ""}
+	ev, emitted, err := e.DeleteEntity(anon)
+	if err != nil {
+		t.Fatalf("anonymous delete: %v", err)
+	}
+	if !emitted {
+		t.Fatal("the anonymous delete emitted nothing: an entity nobody claims would be removable by nobody at all")
+	}
+	if ev.Entity == nil || ev.Entity.ChangeType != model.EntityDeleted {
+		t.Errorf("event = %+v, want entity.deleted", ev.Entity)
+	}
+	if ev.Entity != nil && ev.Entity.DeleteSource != model.DeleteSourceProducer {
+		t.Errorf("delete_source = %q, want producer: a deliberate removal must not read as a producer going silent", ev.Entity.DeleteSource)
+	}
+	if _, found := e.matchIdentity(model.TypeHost, ident); found {
+		t.Error("the entity survived its own anonymous delete")
+	}
+}
