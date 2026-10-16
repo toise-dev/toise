@@ -1645,8 +1645,22 @@ func (e *Engine) RestoreLiveness(blob []byte) error {
 		ps := make(map[string]liveRef, len(producers))
 		for p, deadline := range producers {
 			interval := snap.RefIntervals[id][p]
-			_, scope := splitRefKey(p)
-			ps[p] = liveRef{deadline: floorDeadline(deadline, interval, now), interval: interval,
+			producer, scope := splitRefKey(p)
+			// A refused promise must stay refused across a restart. The bound
+			// guarded the live path only, so a blob holding an impossible
+			// interval restored it intact: the entity stayed immortal and the
+			// resolution block quoted the figure back as a legitimate cadence,
+			// with nothing marking it as a defect. The production host that
+			// motivated the bound had survived restarts for 56 days.
+			// The stored DEADLINE has to fall with the promise, not just the
+			// interval: floorDeadline keeps a stored deadline as-is when the
+			// interval is zero, so refusing the interval alone left an absolute
+			// deadline in the year 2177 — armed, and unreachable.
+			kept := e.promise(model.EntityID(id), "", producer, interval)
+			if kept == 0 && interval > 0 {
+				deadline = time.Time{}
+			}
+			ps[p] = liveRef{deadline: floorDeadline(deadline, kept, now), interval: kept,
 				legacy: legacy && scope == ""}
 		}
 		e.refs[model.EntityID(id)] = ps
