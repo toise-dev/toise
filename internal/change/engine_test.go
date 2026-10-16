@@ -1,6 +1,7 @@
 package change
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -2047,5 +2048,58 @@ func TestDiscardedEdgeIsReportedWithBothEndpointTypes(t *testing.T) {
 	want := [3]string{model.RelAttachedTo, model.TypeContainer, model.TypeNetworkSegment}
 	if got[0] != want {
 		t.Errorf("reported %v, want %v — without both endpoint types the figure says an edge was lost and not which half is missing", got[0], want)
+	}
+}
+
+// TestRestoreRefusesAnImplausiblePromiseToo closes the half the bound missed:
+// it guarded live observations, and a snapshot holding an impossible interval
+// restored it intact. The entity stayed immortal and the resolution block
+// quoted the figure back as a legitimate cadence, with nothing marking it as a
+// defect — which is how the production host that motivated the bound survived
+// restarts for 56 days.
+//
+// Found by thinking about the upgrade path the bench has to qualify, not by
+// reading the diff.
+func TestRestoreRefusesAnImplausiblePromiseToo(t *testing.T) {
+	const declared = 1347804 * time.Hour
+
+	// A blob as an earlier build would have written it: a real deadline and an
+	// impossible interval beside it.
+	blob, err := json.Marshal(livenessSnapshot{
+		Refs:         map[string]map[string]time.Time{"01HOST": {"agent-a": t0.Add(declared)}},
+		RefIntervals: map[string]map[string]time.Duration{"01HOST": {"agent-a": declared}},
+		SpeakerKeys:  true,
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	calls := 0
+	e := New(projection.New(), &fakeAppender{},
+		WithClock(func() time.Time { return t0 }),
+		WithPromiseReporter(func(string, string, time.Duration) { calls++ }),
+		WithLogger(slog.New(slog.DiscardHandler)))
+	if err := e.RestoreLiveness(blob); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+
+	if _, ok := e.ObservationInterval("01HOST"); ok {
+		t.Error("the restored figure is reported as a usable cadence, so it reaches the resolution block as a bound")
+	}
+	for _, ref := range e.refs["01HOST"] {
+		if !ref.deadline.IsZero() {
+			t.Errorf("a deadline was armed at %v from a refused promise: the entity is immortal across the restart", ref.deadline)
+		}
+	}
+	if _, producer, bad := e.ImplausiblePromise("01HOST"); !bad || producer != "agent-a" {
+		t.Errorf("the refusal is not recorded on restore (bad=%v producer=%q), so a reader cannot tell this from an honest absence of promise", bad, producer)
+	}
+	if calls != 1 {
+		t.Errorf("reporter called %d times on restore, want 1: a restart must not silently clear the count", calls)
+	}
+
+	// The reference itself must survive — only the promise falls (ADR 0022).
+	if len(e.refs["01HOST"]) != 1 {
+		t.Errorf("the reference set holds %d speakers, want 1: refusing a promise must not drop the producer's claim", len(e.refs["01HOST"]))
 	}
 }
