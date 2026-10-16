@@ -35,7 +35,7 @@ type Entity struct {
 	// means one source said it; several mean they agree on its existence, not
 	// on its attribute values, which the last writer sets. Absent in compact
 	// verbosity and when no cadence source is wired.
-	AssertedBy []string `json:"asserted_by" jsonschema:"the producers asserting this entity right now, so a suspect value has someone to go and ask; several names mean they agree it EXISTS, not that they agree on its attributes - the last writer sets those. An EMPTY list means no NAMED producer asserts it right now — which is NOT the same as nobody asserting it: a producer that sent no identity of its own is deliberately not named here, because naming it would invent one. When that is the case, the provenance field says so in words; read it before concluding the entity is unclaimed. NULL means not rendered here (compact verbosity, or no live-reference source wired, which is the case on an as-of read)"`
+	AssertedBy []string `json:"asserted_by" jsonschema:"the producers asserting this entity right now, so a suspect value has someone to go and ask; several names mean they agree it EXISTS, not that they agree on its attributes - the last writer sets those. An EMPTY list means no NAMED producer asserts it right now — which is NOT the same as nobody asserting it: a producer that sent no identity of its own is deliberately not named here, because naming it would invent one. When that is the case, the provenance field says so in words; read it before concluding the entity is unclaimed. NULL means not rendered here and is NOT an answer about the entity: compact verbosity, no live-reference source wired, or an as-of read - a past instant does not rebuild the live reference table, so this is deliberately WITHHELD rather than filled with today's answer. The provenance field then says so in words"`
 
 	// CollectedBy names the collection methods currently asserting this entity.
 	// AssertedBy is who sends it; this is how it was gathered — the grain the
@@ -44,9 +44,9 @@ type Entity struct {
 	// mislead: something asserts this entity and sent no identity. A flag would
 	// not be read, and a reader should not have to cross two empty fields with
 	// a live interval to work it out.
-	Provenance string `json:"provenance,omitempty" jsonschema:"present only when asserted_by would mislead: it names, in words, the case where something asserts this entity anonymously. Absent means the lists above can be read as they are"`
+	Provenance string `json:"provenance,omitempty" jsonschema:"present only when the lists above would mislead, and it names which case in words: something asserts this entity ANONYMOUSLY (a live read), or the lists are WITHHELD because this is an as-of read of a past instant. Absent means the lists can be read as they are"`
 
-	CollectedBy []string `json:"collected_by" jsonschema:"the collection methods (instrumentation scopes) asserting this entity right now, e.g. senhub-agent/snmp-route. asserted_by is WHO sends it; this is HOW it was gathered. Two scopes mean two methods see the same thing, which is a different situation from one method reported by two agents. A producer running several methods reports ALL of them, since the reference count is keyed by the speaker - the producer and the method - so this is the set of methods asserting the entity, including several of one agent (#455). An EMPTY list means no asserting producer recorded a scope; NULL means not rendered here (compact verbosity, or an as-of read)"`
+	CollectedBy []string `json:"collected_by" jsonschema:"the collection methods (instrumentation scopes) asserting this entity right now, e.g. senhub-agent/snmp-route. asserted_by is WHO sends it; this is HOW it was gathered. Two scopes mean two methods see the same thing, which is a different situation from one method reported by two agents. A producer running several methods reports ALL of them, since the reference count is keyed by the speaker - the producer and the method - so this is the set of methods asserting the entity, including several of one agent (#455). An EMPTY list means no asserting producer recorded a scope; NULL means not rendered here, which is NOT an answer about the entity: compact verbosity, or an as-of read, where it is deliberately withheld rather than answered from the live table - the provenance field then says so in words"`
 }
 
 // Relation is a typed directed edge rendered for an LLM.
@@ -351,12 +351,36 @@ func (s *Server) graphMeta(g Graph, asOf string) GraphMeta {
 	return m
 }
 
+// asOfWithheldProducers is the sentence an as-of read carries in place of the
+// producer lists. It names the consequence rather than flagging a state,
+// because a reader crossing two null fields works out "not available" and not
+// "the question has no answer on this surface".
+const asOfWithheldProducers = "this answer reads a PAST instant, so the producer fields are WITHHELD (null), not empty: " +
+	"who asserts a thing is live state, and replaying the log does not rebuild it. The only value Toise could put here is " +
+	"TODAY's answer to a question you asked about then — a false attribution, not an approximation — so it puts none. " +
+	"Nothing in this answer says who asserted this at that instant, and that is not recoverable on this surface. " +
+	"The attributes and relations ARE the past state: only provenance and cadence are withheld. Omit as_of to ask who asserts it now."
+
+// asOfWithheldEdge is the same statement for the edge that reached a neighbor.
+const asOfWithheldEdge = "this answer reads a PAST instant, so the edge's producer fields are WITHHELD (null), not empty: " +
+	"who asserts an EDGE is live state that replaying the log does not rebuild, and the only available value would be " +
+	"today's. The edge itself IS the past state; its provenance is not. Omit as_of to ask who asserts it now."
+
 // attachEdgeProvenance fills a neighbor's edge provenance from the engine's
-// per-producer reference counts. Nil cadence (an as-of fold, or no engine) fills
-// nothing: a fold has no live references to read, and an empty list there would
-// read as "nobody asserts this edge" rather than "not available in this view".
-func (s *Server) attachEdgeProvenance(nb *Neighbor, id model.RelationID) {
+// per-producer reference counts. An as-of read fills nothing: a fold has no
+// live references to read, and an empty list there would read as "nobody
+// asserts this edge" rather than "not available in this view".
+//
+// That intent is as old as the fields and it was never wired: the guard tested
+// s.cadence == nil, which is never true on an as-of read, because the cadence
+// is wired once per server and not per request. So the schema promised the
+// withholding in four places while the code answered from the live table (#528).
+func (s *Server) attachEdgeProvenance(nb *Neighbor, id model.RelationID, asOf string) {
 	if s.cadence == nil {
+		return
+	}
+	if asOf != "" {
+		nb.ViaProvenance = asOfWithheldEdge
 		return
 	}
 	nb.ViaAssertedBy = emptyIfNil(s.cadence.RelationAssertingProducers(id))
@@ -376,8 +400,12 @@ func emptyIfNil(v []string) []string {
 // references: who sends this entity, and how it was collected. Compact verbosity
 // omits both, like identity and attributes — that mode exists to scan many
 // entities cheaply, and provenance is a question asked about one.
-func (s *Server) attachProducers(out *Entity, id model.EntityID, compact bool) {
+func (s *Server) attachProducers(out *Entity, id model.EntityID, compact bool, asOf string) {
 	if s.cadence == nil || compact {
+		return
+	}
+	if asOf != "" {
+		out.Provenance = asOfWithheldProducers
 		return
 	}
 	out.AssertedBy = emptyIfNil(s.cadence.AssertingProducers(id))
@@ -409,9 +437,9 @@ type anonymousReferenceReader interface {
 }
 
 // entityWithProducers renders an entity and names who is asserting it.
-func (s *Server) entityWithProducers(e model.Entity, deleted, compact bool) Entity {
+func (s *Server) entityWithProducers(e model.Entity, deleted, compact bool, asOf string) Entity {
 	out := entityOutV(e, deleted, compact)
-	s.attachProducers(&out, e.ID, compact)
+	s.attachProducers(&out, e.ID, compact, asOf)
 	return out
 }
 
@@ -534,7 +562,7 @@ func (s *Server) horizonWarning(from, to time.Time) string {
 const noLivenessPromise = "no producer declared a refresh interval for this entity, so Toise has no liveness promise to hold it to: its presence here means it was observed at least once and never explicitly deleted, and it will NOT expire on its own however long its producers stay silent. Read it as \"something asserted this and nothing has contradicted it\", not as \"a producer vouched for this recently\". The timestamps carry no resolution bound either, so no ordering or causal conclusion may be drawn from how close two of them are. Toise does not invent a default interval: that would be a promise no producer made."
 
 type Resolution struct {
-	ObservationInterval string `json:"observation_interval" jsonschema:"the liveness interval this entity's producers declared, e.g. 30s — an UPPER BOUND on the uncertainty, deliberately padded above the real reporting cadence, never below it; the literal \"none\" means NO producer promised a refresh, so the entity never expires on its own and its presence is not evidence of recency"`
+	ObservationInterval string `json:"observation_interval" jsonschema:"the liveness interval this entity's producers declared, e.g. 30s — an UPPER BOUND on the uncertainty, deliberately padded above the real reporting cadence, never below it; the literal \"none\" means NO producer promised a refresh, so the entity never expires on its own and its presence is not evidence of recency; the literal \"unknown\" means this is an as-of read of a past instant and the bound that applied THEN is not recoverable, so none is quoted - read meaning, the two are different answers"`
 	Meaning             string `json:"meaning" jsonschema:"what that implies for reading the timestamps in this answer, including what they cannot tell you"`
 }
 
@@ -551,9 +579,24 @@ type implausiblePromiseReader interface {
 	ImplausiblePromise(id model.EntityID) (time.Duration, string, bool)
 }
 
-func (s *Server) resolutionFor(id model.EntityID) *Resolution {
+func (s *Server) resolutionFor(id model.EntityID, asOf string) *Resolution {
 	if s.cadence == nil {
 		return nil
+	}
+	// A cadence is live state too. The interval its producers declare today was
+	// not necessarily the bound that applied at the instant asked for, and the
+	// healthy branch below already admits it "is not recoverable for past
+	// observations" — so quoting it beside a past state states a bound that was
+	// never measured. Withholding it is the honest answer, and it must still
+	// say what that costs the reader (#528).
+	if asOf != "" {
+		return &Resolution{
+			ObservationInterval: "unknown",
+			Meaning: "this answer reads a PAST instant and a cadence is live state: the interval its producers declare TODAY " +
+				"is not the bound that applied then, and the bound that did apply is not recoverable. So none is given, rather " +
+				"than one that would look authoritative. Read every event_time here as UNBOUNDED in uncertainty: draw no " +
+				"ordering from how close two of them are, and no causal conclusion at all. Omit as_of for the real interval now.",
+		}
 	}
 	interval, ok := s.cadence.ObservationInterval(id)
 	if !ok {
