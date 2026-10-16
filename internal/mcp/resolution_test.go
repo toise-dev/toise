@@ -180,3 +180,73 @@ func TestResolutionSeparatesRefusedFromAbsentPromise(t *testing.T) {
 		t.Errorf("an entity nobody promised a cadence for is accused of a producer defect: %q", out2.Resolution.Meaning)
 	}
 }
+
+// anonCadence reports a given number of anonymous references and no named
+// producer — the production shape: something asserts the entity and sent no
+// identity, so AssertingProducers is rightly empty.
+type anonCadence struct {
+	fakeCadence
+	anon int
+}
+
+func (a anonCadence) AnonymousReferences(model.EntityID) int { return a.anon }
+
+// TestProvenanceSeparatesUnclaimedFromAnonymous guards the distinction that let
+// a production host sit in a customer graph for eight weeks: an empty
+// asserted_by covers two situations and the worse one renders as the better.
+//
+// Nothing asserts the entity — it survives on a zero deadline (#363), which is
+// an ordinary fact about an entity. Or something asserts it and sent no
+// identity: a live claim nobody can be asked about, which no named producer can
+// ever release, and which is a PRODUCER DEFECT (#507).
+//
+// The named case must stay silent, because a sentence that appears on healthy
+// entities is one nobody reads on the unhealthy one.
+func TestProvenanceSeparatesUnclaimedFromAnonymous(t *testing.T) {
+	anon := newTestServer().SetCadence(anonCadence{anon: 2})
+	_, out, err := anon.getEntity(context.Background(), nil, GetEntityInput{EntityID: "01HOST_WEB"})
+	if err != nil {
+		t.Fatalf("getEntity: %v", err)
+	}
+	if len(out.Entity.AssertedBy) != 0 {
+		t.Fatalf("asserted_by = %v, want empty: the fake names no producer", out.Entity.AssertedBy)
+	}
+	if out.Entity.Provenance == "" {
+		t.Fatal("no provenance sentence: an anonymous claim renders exactly like an unclaimed entity, which is the defect")
+	}
+	if !strings.Contains(out.Entity.Provenance, "2 references") {
+		t.Errorf("the count is absent, so a reader cannot tell one stray claim from many: %q", out.Entity.Provenance)
+	}
+	if !strings.Contains(out.Entity.Provenance, "PRODUCER DEFECT") {
+		t.Errorf("the sentence does not name this as a producer defect: %q", out.Entity.Provenance)
+	}
+	if !strings.Contains(out.Entity.Provenance, "release") {
+		t.Errorf("the sentence omits the consequence that matters — nobody can release it: %q", out.Entity.Provenance)
+	}
+
+	// Nothing asserting it at all: honest, ordinary, and NOT a defect.
+	unclaimed := newTestServer().SetCadence(anonCadence{anon: 0})
+	_, out2, err := unclaimed.getEntity(context.Background(), nil, GetEntityInput{EntityID: "01HOST_WEB"})
+	if err != nil {
+		t.Fatalf("getEntity: %v", err)
+	}
+	if out2.Entity.Provenance != "" {
+		t.Errorf("an entity nobody asserts is accused of a producer defect: %q", out2.Entity.Provenance)
+	}
+
+	// A named producer: the lists speak for themselves, no sentence.
+	named := newTestServer().SetCadence(namedCadence{})
+	_, out3, err := named.getEntity(context.Background(), nil, GetEntityInput{EntityID: "01HOST_WEB"})
+	if err != nil {
+		t.Fatalf("getEntity: %v", err)
+	}
+	if out3.Entity.Provenance != "" {
+		t.Errorf("a healthy entity carries the sentence, so nobody will read it on an unhealthy one: %q", out3.Entity.Provenance)
+	}
+}
+
+// namedCadence names a producer, so the provenance lists need no commentary.
+type namedCadence struct{ fakeCadence }
+
+func (namedCadence) AssertingProducers(model.EntityID) []string { return []string{"agent-a"} }
+func (namedCadence) AnonymousReferences(model.EntityID) int     { return 0 }

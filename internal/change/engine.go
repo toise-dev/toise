@@ -831,6 +831,25 @@ func (e *Engine) RelationAssertingScopes(id model.RelationID) []string {
 // A producer that asserted the entity before scopes were recorded contributes
 // nothing rather than an empty string: an unnamed scope in the list would read
 // as a collector with no name, where its absence reads as not recorded.
+// AnonymousReferences counts this entity's references whose producer sent no
+// identity. They are deliberately absent from AssertingProducers — naming one
+// would invent an identity the data does not carry — which leaves an empty
+// asserted_by covering two situations: nothing asserts the entity, or something
+// asserts it anonymously. The second is the worse of the two and it renders as
+// the first, so a read surface needs the count to tell them apart (#507).
+func (e *Engine) AnonymousReferences(id model.EntityID) int {
+	e.obsMu.Lock()
+	defer e.obsMu.Unlock()
+
+	n := 0
+	for key := range e.refs[id] {
+		if producer, _ := splitRefKey(key); producer == "" {
+			n++
+		}
+	}
+	return n
+}
+
 func (e *Engine) AssertingScopes(id model.EntityID) []string {
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()

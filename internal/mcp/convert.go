@@ -35,11 +35,17 @@ type Entity struct {
 	// means one source said it; several mean they agree on its existence, not
 	// on its attribute values, which the last writer sets. Absent in compact
 	// verbosity and when no cadence source is wired.
-	AssertedBy []string `json:"asserted_by" jsonschema:"the producers asserting this entity right now, so a suspect value has someone to go and ask; several names mean they agree it EXISTS, not that they agree on its attributes - the last writer sets those. An EMPTY list means nobody asserts it right now; NULL means not rendered here (compact verbosity, or no live-reference source wired, which is the case on an as-of read)"`
+	AssertedBy []string `json:"asserted_by" jsonschema:"the producers asserting this entity right now, so a suspect value has someone to go and ask; several names mean they agree it EXISTS, not that they agree on its attributes - the last writer sets those. An EMPTY list means no NAMED producer asserts it right now — which is NOT the same as nobody asserting it: a producer that sent no identity of its own is deliberately not named here, because naming it would invent one. When that is the case, the provenance field says so in words; read it before concluding the entity is unclaimed. NULL means not rendered here (compact verbosity, or no live-reference source wired, which is the case on an as-of read)"`
 
 	// CollectedBy names the collection methods currently asserting this entity.
 	// AssertedBy is who sends it; this is how it was gathered — the grain the
 	// producer contract makes normative, and the one a producer debugs in.
+	// Provenance carries a sentence only when the empty lists above would
+	// mislead: something asserts this entity and sent no identity. A flag would
+	// not be read, and a reader should not have to cross two empty fields with
+	// a live interval to work it out.
+	Provenance string `json:"provenance,omitempty" jsonschema:"present only when asserted_by would mislead: it names, in words, the case where something asserts this entity anonymously. Absent means the lists above can be read as they are"`
+
 	CollectedBy []string `json:"collected_by" jsonschema:"the collection methods (instrumentation scopes) asserting this entity right now, e.g. senhub-agent/snmp-route. asserted_by is WHO sends it; this is HOW it was gathered. Two scopes mean two methods see the same thing, which is a different situation from one method reported by two agents. A producer running several methods reports ALL of them, since the reference count is keyed by the speaker - the producer and the method - so this is the set of methods asserting the entity, including several of one agent (#455). An EMPTY list means no asserting producer recorded a scope; NULL means not rendered here (compact verbosity, or an as-of read)"`
 }
 
@@ -376,6 +382,30 @@ func (s *Server) attachProducers(out *Entity, id model.EntityID, compact bool) {
 	}
 	out.AssertedBy = emptyIfNil(s.cadence.AssertingProducers(id))
 	out.CollectedBy = emptyIfNil(s.cadence.AssertingScopes(id))
+
+	// An empty asserted_by covers two situations and the worse one renders as
+	// the better. Nothing asserts the entity — it survives on a zero deadline
+	// (#363) — or something asserts it and sent no identity, which is a live
+	// claim nobody can be asked about and no named speaker can ever release.
+	// A production host sat in a customer graph in the second state for eight
+	// weeks, reading as the first (#507).
+	if len(out.AssertedBy) == 0 {
+		if ar, ok := s.cadence.(anonymousReferenceReader); ok {
+			if n := ar.AnonymousReferences(id); n > 0 {
+				out.Provenance = "asserted_by is empty and that does NOT mean unclaimed: " +
+					fmt.Sprintf("%d %s", n, plural("reference", "references", n)) + " on this entity carry no producer identity. " +
+					"Something is asserting it and sent no name, so there is nobody to ask about a suspect value, " +
+					"and no named producer can ever release it — only a delete that also carries no identity reaches it. " +
+					"Treat this as a PRODUCER DEFECT to report, not as an entity nobody wants."
+			}
+		}
+	}
+}
+
+// anonymousReferenceReader is satisfied by the change engine. Optional, so a
+// reader without it still compiles and simply loses the distinction.
+type anonymousReferenceReader interface {
+	AnonymousReferences(id model.EntityID) int
 }
 
 // entityWithProducers renders an entity and names who is asserting it.
