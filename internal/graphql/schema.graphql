@@ -331,6 +331,16 @@ type ChangeEvent {
   differ inside one commit, so a time-based pairing needs a guess about clock
   granularity and this does not.
 
+  **Check the group before pairing.** A restored log re-stamps this field in
+  batches of a thousand, so after a disaster recovery a group holds unrelated
+  changes. The discriminator is the **spread of `recordedAt` inside the group**: a
+  real commit was written at one instant, so its events differ by microseconds,
+  while a restored batch keeps each event's original `recordedAt`, spread over
+  hours. More than a second of spread means a restore artifact — do not pair, and
+  say that is why. Neither the size of the group nor the number of producers in it
+  discriminates: a mass liveness expiry is one real commit holding hundreds of
+  events from several producers.
+
   A route deleted and a route created sharing a `commitSeq` is one observation of
   a route that changed. **Whether that means a gateway change is your conclusion,
   not Toise's**: the engine stores facts, and two such events can also be
