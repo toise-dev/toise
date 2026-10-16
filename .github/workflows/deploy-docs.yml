@@ -1,14 +1,17 @@
 name: Deploy Documentation
 
-# Versioned by tag (not rolling): each release tag publishes a frozen version of
-# the docs as they were at that tag, and stable tags move the `latest` alias.
+# Versioned by tag (not rolling): each STABLE release tag publishes a frozen
+# version of the docs as they were at that tag, and moves the `latest` alias.
 # Server tags are v-prefixed from v0.6.0 (ADR 0027); the docs version label
 # strips the v so URLs stay /docs/0.6.0 style, consistent with 0.2.0-0.5.0.
+#
+# Pre-releases are NOT published: toise.dev is the documentation of what people
+# can run, and a beta's docs there describe behaviour nobody is meant to have
+# yet. Four 0.22.0 betas in one day made that plain.
 on:
   push:
     tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'      # stable    -> publish + move `latest`
-      - 'v[0-9]+.[0-9]+.[0-9]+-*'    # pre-release -> publish version only
+      - 'v[0-9]+.[0-9]+.[0-9]+'      # stable only -> publish + move `latest`
   workflow_dispatch:
     inputs:
       version:
@@ -78,8 +81,10 @@ jobs:
           elif [ "$REF_TYPE" = "tag" ]; then
             VERSION="${REF_NAME#v}"  # tag v0.6.0 -> docs version 0.6.0
             case "$VERSION" in
-              *-*) SET_LATEST="false" ;;   # pre-release: publish, don't move latest
-              *)   SET_LATEST="true"  ;;    # stable: move latest
+              # Kept although the trigger no longer matches a pre-release tag: if
+              # one is ever let through again, it must not move `latest`.
+              *-*) SET_LATEST="false" ;;
+              *)   SET_LATEST="true"  ;;
             esac
           else
             echo "Unsupported trigger ref: $REF_TYPE/$REF_NAME" >&2
