@@ -92,7 +92,7 @@ func (s *Server) findEntities(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 		out.Entities = make([]Entity, len(page))
 		for i, e := range page {
 			out.Entities[i] = entityOutV(e, false, compact)
-			s.attachProducers(&out.Entities[i], e.ID, compact)
+			s.attachProducers(&out.Entities[i], e.ID, compact, in.AsOf)
 		}
 		if len(page) == 0 {
 			out.NoMatch = noMatchReason(g, in.Type, in.Match)
@@ -121,7 +121,7 @@ func (s *Server) findEntities(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 	out.Entities = make([]Entity, len(matched))
 	for i, e := range matched {
 		out.Entities[i] = entityOutV(e, false, compact)
-		s.attachProducers(&out.Entities[i], e.ID, compact)
+		s.attachProducers(&out.Entities[i], e.ID, compact, in.AsOf)
 	}
 	if len(matched) == 0 {
 		out.NoMatch = noMatchReason(g, in.Type, in.Match)
@@ -257,8 +257,8 @@ func (s *Server) getEntity(ctx context.Context, _ *mcpsdk.CallToolRequest, in Ge
 	}
 	return nil, GetEntityOutput{
 		Graph:       s.graphMeta(g, in.AsOf),
-		Resolution:  s.resolutionFor(id),
-		Entity:      s.entityWithProducers(e, deleted, compact),
+		Resolution:  s.resolutionFor(id, in.AsOf),
+		Entity:      s.entityWithProducers(e, deleted, compact, in.AsOf),
 		Annotations: s.annotationFor(string(id)),
 		Canonical:   s.canonicalGroup(g, id),
 	}, nil
@@ -287,7 +287,11 @@ type Neighbor struct {
 	// Provenance of the EDGE, not of the entity: the entity's own asserted_by /
 	// collected_by live on the embedded Entity.
 	ViaAssertedBy  []string `json:"via_asserted_by" jsonschema:"the producers asserting that EDGE right now (the entity's own producers are in asserted_by)"`
-	ViaCollectedBy []string `json:"via_collected_by" jsonschema:"the collection methods (instrumentation scopes) asserting that EDGE right now. Two edges of one type are not the same claim: an adjacency protocol STATES a link, a forwarding table lets one be INFERRED. Draw a measurement differently from a correlation. A producer running several methods reports ALL of them, the reference count being keyed by the speaker - the producer and the method (#455). An EMPTY list means no asserting producer recorded a scope; NULL means not rendered here (an as-of read has no live references)"`
+	ViaCollectedBy []string `json:"via_collected_by" jsonschema:"the collection methods (instrumentation scopes) asserting that EDGE right now. Two edges of one type are not the same claim: an adjacency protocol STATES a link, a forwarding table lets one be INFERRED. Draw a measurement differently from a correlation. A producer running several methods reports ALL of them, the reference count being keyed by the speaker - the producer and the method (#455). An EMPTY list means no asserting producer recorded a scope; NULL means not rendered here, which is the case on an as-of read - via_provenance then says so in words"`
+	// ViaProvenance is the sentence form of the two nulls above. A reader that
+	// crosses two null fields concludes "not available in this view" only if
+	// something says so; the fields themselves cannot.
+	ViaProvenance string `json:"via_provenance,omitempty" jsonschema:"present only when the edge's producer lists are withheld rather than empty: it says in words why, and what it costs you. Absent means the lists above can be read as they are"`
 	// ResolvedEntity is the read-time binding of an observed network.endpoint to
 	// the canonical host/service.listener it denotes (#184). The stored edge
 	// still targets the endpoint; this is a derived overlay, never persisted.
@@ -360,7 +364,7 @@ func (s *Server) getNeighbors(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 					Direction:   e.direction,
 					Depth:       d,
 				}
-				s.attachEdgeProvenance(&nb, e.rel.ID)
+				s.attachEdgeProvenance(&nb, e.rel.ID, in.AsOf)
 				if ent.Type == model.TypeNetworkEndpoint {
 					if resolved, ok := resolveEndpoint(g, ent); ok {
 						ro := entityOutV(resolved, false, compact)
@@ -466,7 +470,9 @@ func (s *Server) entityHistory(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 	if err != nil {
 		return nil, EntityHistoryOutput{}, fmt.Errorf("reading history: %w", err)
 	}
-	out := EntityHistoryOutput{Resolution: s.resolutionFor(histID)}
+	// entity_history takes no as_of: it is a linear range read of the log, and
+	// the cadence it reports is the live one, which the block already says.
+	out := EntityHistoryOutput{Resolution: s.resolutionFor(histID, "")}
 	filtered := evs[:0:0]
 	for _, ev := range evs {
 		et, rt := ev.Times()

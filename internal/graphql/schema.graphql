@@ -141,6 +141,13 @@ type Entity {
 
   Several names mean they agree it EXISTS, not that they agree on its attributes:
   the last writer sets those. A suspect value therefore has someone to go and ask.
+
+  **An `asOf` query answers this from the LIVE table, not from the instant you
+  asked for.** Who asserts a thing is live state and the fold does not rebuild
+  it, so on a past-instant read this field states who asserts the entity TODAY —
+  a false attribution, not an approximation. The MCP surface withholds it on an
+  `asOf` read; this surface does not yet (toise#528). Do not conclude anything
+  about who asserted an entity at a past instant from a GraphQL `asOf` query.
   """
   assertedBy: [String!]! @goField(forceResolver: true)
 
@@ -155,6 +162,9 @@ type Entity {
 
   Empty when no asserting producer recorded a scope, which reads as not recorded
   rather than as a collector with no name.
+
+  **Live state, like `assertedBy`: an `asOf` query answers it from today's table
+  and not from the instant asked for (toise#528).**
   """
   collectedBy: [String!]! @goField(forceResolver: true)
   """
@@ -275,6 +285,10 @@ type Relation {
   """
   The producers asserting this EDGE right now. An edge survives while any of them
   asserts it, so one producer's silence never retracts another's edge.
+
+  **Live state: an `asOf` query answers this from today's table, not from the
+  instant asked for (toise#528).** The edge itself is the past state; who asserts
+  it is not. Draw no conclusion about a past instant's provenance from here.
   """
   assertedBy: [String!]! @goField(forceResolver: true)
   """
@@ -295,6 +309,9 @@ type Relation {
 
   Empty when no asserting producer recorded a scope, which reads as not recorded
   rather than as no collector.
+
+  **Live state, like the field above: an `asOf` query answers it from today's
+  table (toise#528).**
   """
   collectedBy: [String!]! @goField(forceResolver: true)
 }

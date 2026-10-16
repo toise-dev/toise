@@ -250,3 +250,124 @@ type namedCadence struct{ fakeCadence }
 
 func (namedCadence) AssertingProducers(model.EntityID) []string { return []string{"agent-a"} }
 func (namedCadence) AnonymousReferences(model.EntityID) int     { return 0 }
+
+// TestAsOfWithholdsLiveProvenance guards the defect that made a past-instant
+// read answer from the present: asserted_by, collected_by and the cadence are
+// live state, the fold does not rebuild them, and filling them from the live
+// table states who asserts the entity TODAY beside its state THEN. That is a
+// false attribution, not an approximation — and a false value stops a reader
+// where an absent one would have made him look (#528).
+//
+// The schema promised this withholding in four places from the day the fields
+// existed. The guard tested s.cadence == nil, which is never true on an as-of
+// read, because the cadence is wired once per server and not per request.
+func TestAsOfWithholdsLiveProvenance(t *testing.T) {
+	s := newTestServer().SetCadence(namedCadence{})
+	ctx := context.Background()
+	const past = "2026-05-29T12:45:00Z"
+
+	_, out, err := s.getEntity(ctx, nil, GetEntityInput{EntityID: "01HOST_WEB", AsOf: past})
+	if err != nil {
+		t.Fatalf("getEntity as_of: %v", err)
+	}
+	if out.Entity.AssertedBy != nil {
+		t.Errorf("asserted_by = %v on an as-of read: that is the LIVE table answering a question about a past instant", out.Entity.AssertedBy)
+	}
+	if out.Entity.CollectedBy != nil {
+		t.Errorf("collected_by = %v on an as-of read, same defect", out.Entity.CollectedBy)
+	}
+	if out.Entity.Provenance == "" {
+		t.Fatal("two null fields and nothing saying why: a reader cannot tell withheld from unanswerable")
+	}
+	for _, want := range []string{"PAST instant", "WITHHELD", "Omit as_of"} {
+		if !strings.Contains(out.Entity.Provenance, want) {
+			t.Errorf("the sentence omits %q, so it does not name the consequence or the way out: %q", want, out.Entity.Provenance)
+		}
+	}
+	if out.Resolution == nil || out.Resolution.ObservationInterval != "unknown" {
+		t.Errorf("resolution = %+v, want the interval withheld as \"unknown\": a cadence declared today was not the bound that applied then", out.Resolution)
+	}
+
+	// find_entities carries the same fields and had the same hole.
+	_, found, err := s.findEntities(ctx, nil, FindEntitiesInput{Type: "host", AsOf: past})
+	if err != nil {
+		t.Fatalf("findEntities as_of: %v", err)
+	}
+	if len(found.Entities) == 0 {
+		t.Fatal("no entity at that instant, so the assertion below would pass vacuously")
+	}
+	for _, e := range found.Entities {
+		if e.AssertedBy != nil || e.Provenance == "" {
+			t.Errorf("find_entities as_of leaks live provenance: asserted_by=%v provenance=%q", e.AssertedBy, e.Provenance)
+		}
+	}
+
+	// A LIVE read must be unchanged: this fix withholds on one path and must
+	// not cost the answer that the eight-week production case needed.
+	_, live, err := s.getEntity(ctx, nil, GetEntityInput{EntityID: "01HOST_WEB"})
+	if err != nil {
+		t.Fatalf("getEntity live: %v", err)
+	}
+	if len(live.Entity.AssertedBy) != 1 || live.Entity.AssertedBy[0] != "agent-a" {
+		t.Errorf("a live read lost its provenance: asserted_by = %v, want [agent-a]", live.Entity.AssertedBy)
+	}
+	if live.Entity.Provenance != "" {
+		t.Errorf("a healthy live entity now carries a sentence, so nobody will read it on an unhealthy one: %q", live.Entity.Provenance)
+	}
+	if live.Resolution == nil || live.Resolution.ObservationInterval == "unknown" {
+		t.Errorf("a live read lost its cadence: %+v", live.Resolution)
+	}
+
+	// The anonymous case, which #524 exists for, must still speak on a live read.
+	anon := newTestServer().SetCadence(anonCadence{anon: 2})
+	_, out2, err := anon.getEntity(ctx, nil, GetEntityInput{EntityID: "01HOST_WEB"})
+	if err != nil {
+		t.Fatalf("getEntity anonymous live: %v", err)
+	}
+	if !strings.Contains(out2.Entity.Provenance, "PRODUCER DEFECT") {
+		t.Errorf("the as-of guard swallowed the anonymous-producer sentence on a live read: %q", out2.Entity.Provenance)
+	}
+}
+
+// TestAsOfWithholdsEdgeProvenance covers the edge of a neighbor, which carries
+// its own producer lists and had the same hole — and whose guard comment has
+// claimed since the fields existed that a fold fills nothing.
+//
+// The guard is exercised directly rather than through getNeighbors, because the
+// fixture's relation endpoints have no creation event and so no past instant
+// can traverse the edge: a test built on that would assert nothing while
+// looking like it asserted something.
+func TestAsOfWithholdsEdgeProvenance(t *testing.T) {
+	s := newTestServer().SetCadence(namedRelationCadence{})
+
+	var past Neighbor
+	s.attachEdgeProvenance(&past, "rel-runs", "2026-05-29T12:45:00Z")
+	if past.ViaAssertedBy != nil || past.ViaCollectedBy != nil {
+		t.Errorf("via_asserted_by=%v via_collected_by=%v on an as-of read: the live table answering about a past instant", past.ViaAssertedBy, past.ViaCollectedBy)
+	}
+	if past.ViaProvenance == "" {
+		t.Fatal("the edge's lists are null and nothing says why")
+	}
+	if !strings.Contains(past.ViaProvenance, "PAST instant") || !strings.Contains(past.ViaProvenance, "WITHHELD") {
+		t.Errorf("the sentence does not name what was withheld or why: %q", past.ViaProvenance)
+	}
+
+	var live Neighbor
+	s.attachEdgeProvenance(&live, "rel-runs", "")
+	if len(live.ViaAssertedBy) != 1 || live.ViaAssertedBy[0] != "agent-a" {
+		t.Errorf("a live read lost the edge's provenance: via_asserted_by = %v, want [agent-a]", live.ViaAssertedBy)
+	}
+	if live.ViaProvenance != "" {
+		t.Errorf("a live edge carries the withheld sentence, so nobody will read it where it matters: %q", live.ViaProvenance)
+	}
+}
+
+// namedRelationCadence names a producer on the EDGE, which fakeCadence does not.
+type namedRelationCadence struct{ fakeCadence }
+
+func (namedRelationCadence) RelationAssertingProducers(model.RelationID) []string {
+	return []string{"agent-a"}
+}
+func (namedRelationCadence) RelationAssertingScopes(model.RelationID) []string {
+	return []string{"senhub-agent/systemd"}
+}
