@@ -11,6 +11,65 @@ Nothing yet.
 
 ## [0.22.0] - 2026-10-16
 
+> **`v0.22.0-beta.4` carries the whole of 0.22.0 and supersedes `beta.3`, for the
+> same reason `beta.3` superseded a qualified `beta.2`: preparing the
+> qualification found the gap.** This time it surfaced while proving a reader's
+> compatibility rather than while reading our own code — the third time running
+> that the defect came from someone else's question.
+>
+> - **an `as_of` read no longer borrows the present.** Who asserts an entity, and
+>   how often it is observed, are live state: replaying the log does not rebuild
+>   them. The read surface filled those fields from the live table anyway, so a
+>   past-instant answer named the producers asserting the entity **today** beside
+>   its state **then**. That is a false attribution, not an approximation — and it
+>   is the worst shape of the defect this release exists to correct: every other
+>   one was an absence that failed to declare itself, and an absence at least
+>   leaves a reader looking. A false value stops him.
+>
+>   **The withholding was designed, documented in four schema texts, and never
+>   wired.** Both guards tested for a missing cadence source, a condition that is
+>   never true on an `as_of` read because the cadence is wired once per server and
+>   not per request. The contract stated the intent; the code answered from the
+>   present. A consumer reading the contract to decide whether to trust the field
+>   was given the opposite of the truth.
+>
+>   Two consequences beyond the wrong names. **The fix shipped in `beta.3` could
+>   never fire on this path**: it keys on a live reference count, zero for an
+>   entity since gone, so the production host that sat anonymously asserted for
+>   eight weeks reads as unclaimed when relived at the instant it was true. And a
+>   cadence quoted beside a past state **states a bound that was never measured**;
+>   the answer already admitted that bound "is not recoverable for past
+>   observations".
+>
+>   A withheld field now carries a sentence naming what it costs the reader and
+>   how to get the answer, because two null fields and no explanation cannot tell
+>   *withheld* from *unanswerable*. `observation_interval` gains `unknown`,
+>   distinct from `none`, which means nobody promised a refresh.
+>
+> - **the GraphQL schema consumers actually read was stale.** The served copy is
+>   the one embedded in generated code, and documentation fixes already merged had
+>   reached nobody. Creation was still served as "the entity did not exist before
+>   this event" — the inverse of the contract, and precisely the conclusion this
+>   product exists to prevent: the graph is exactly as complete as its producers,
+>   so absence is never evidence of absence. Descriptions only; no field, no
+>   behaviour.
+>
+> **GraphQL keeps the defect, by decision, and now says so.** A field resolver
+> receives only its object and cannot know the query named an instant; threading
+> that is a separate change. No consumer selects those fields on an `asOf` query
+> today — the one that reads this surface asks for six fields, none of them these
+> — so the schema warns rather than misleads, and the real guard is a decision of
+> its own.
+>
+> **What the bench qualified on `beta.3` stays acquired.** The change withholds on
+> one read path and adds no decision to the ingestion, liveness or restore paths.
+> The tool contract gains one optional field and loses none, so it is additive for
+> every consumer. The narrow qualification is therefore: an `as_of` read carries
+> neither live provenance nor live cadence and says why, on every tool that takes
+> an `as_of`; a live read is unchanged, including the anonymous-producer sentence;
+> a calm window still reports nothing; and the reader of this surface parses the
+> output without breaking.
+
 > **`v0.22.0-beta.3` carries the whole of 0.22.0 and is the candidate for the
 > stable cut.** `beta.2` was qualified on the bench and given a GO; this
 > supersedes it rather than shipping it, because `beta.2` left two gaps that were
