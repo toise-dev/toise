@@ -1169,6 +1169,11 @@ func (e *Engine) observeRelationBuffered(obs RelationObservation) (model.Event, 
 		if len(e.pending) >= maxPendingRelations {
 			oldest := e.pending[0].obs
 			e.pending = e.pending[1:]
+			// Counted like a TTL expiry, and for a stronger reason: this loss is
+			// load-induced, so it arrives in bursts precisely when an operator is
+			// least able to spot it in a log. Leaving it out made the counter read
+			// zero under the one condition that drops edges fastest.
+			e.reportDiscard(oldest)
 			e.logger.Warn("pending-relation buffer full: dropping the oldest parked edge",
 				"relation_type", oldest.Type, "from_type", oldest.From.Type, "to_type", oldest.To.Type,
 				"cap", maxPendingRelations)
