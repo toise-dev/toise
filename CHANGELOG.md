@@ -11,10 +11,38 @@ Nothing yet.
 
 ## [0.22.0] - 2026-10-16
 
-> **`v0.22.0-beta.2` is cut for a full bench qualification, not for deployment.**
-> It replaces `beta.1`, which was already installed on the bench and carried two
-> half-fixes found after it was cut. Both are closed here, and both were found by
-> thinking about the upgrade path rather than by reading a diff:
+> **`v0.22.0-beta.3` carries the whole of 0.22.0 and is the candidate for the
+> stable cut.** `beta.2` was qualified on the bench and given a GO; this
+> supersedes it rather than shipping it, because `beta.2` left two gaps that were
+> found *by the qualification itself* and it would have been dishonest to publish
+> a version whose holes we already knew.
+>
+> - **an empty `asserted_by` now says whether it means unclaimed.** The schema
+>   claimed an empty list meant nobody asserts the entity. False, and the false
+>   half was the dangerous one: a producer that sent no identity is deliberately
+>   not named there — naming it would invent one — so the list reads empty while
+>   something actively asserts the entity, refreshed, with nobody to ask and no
+>   named producer able to release it. A production host sat in a customer graph
+>   in that state for eight weeks, reading as an entity nobody wanted.
+> - **the parked edge dropped because the buffer was full is now counted.** The
+>   discarded-edge counter covered the two TTL expiries and missed the third drop
+>   path, which needs no clock movement at all: at the 4096 cap the oldest parked
+>   edge is evicted on the spot. So the counter read **zero under the one
+>   condition that loses edges fastest** — a burst, which is also when an operator
+>   is least able to pick a WARN line out of a flood. Found because the bench
+>   asked what input makes an edge drop and could not make the counter move.
+>
+> What the bench qualified on `beta.2` stays acquired: the twelve lines of
+> production code added since touch no decision on the ingestion, liveness or
+> restore paths — one read-only accessor, one reporting call on a path that
+> already dropped the edge, and one optional output field. The qualification of
+> `beta.3` is therefore narrow: that the provenance sentence appears only in the
+> anonymous case and stays silent on healthy entities, that the counter moves on
+> both drop paths, and that no consumer breaks on a new optional field.
+>
+> **What `beta.2` established, and what the stable still has to show.** It
+> replaced `beta.1` and closed two half-fixes, both found by thinking about the
+> upgrade path rather than by reading a diff:
 >
 > - **a refused cadence now stays refused across a restart.** The bound guarded
 >   live observations only, so a snapshot holding an impossible interval restored
