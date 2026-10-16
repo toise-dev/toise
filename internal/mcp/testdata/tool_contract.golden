@@ -23,6 +23,7 @@ tool find_entities
       value string
     identity_fingerprint string
     label string
+    provenance string
     type string
   graph object
     as_of string
@@ -73,6 +74,7 @@ tool get_entity
       value string
     identity_fingerprint string
     label string
+    provenance string
     type string
   graph object
     as_of string
@@ -120,6 +122,7 @@ tool get_neighbors
       value string
     identity_fingerprint string
     label string
+    provenance string
     type string
     depth int
     direction string
@@ -139,6 +142,7 @@ tool get_neighbors
         value string
       identity_fingerprint string
       label string
+      provenance string
       type string
     via_asserted_by []string
     via_collected_by []string
@@ -173,6 +177,7 @@ tool find_path
       value string
     identity_fingerprint string
     label string
+    provenance string
     type string
   graph object
     as_of string
@@ -202,6 +207,7 @@ tool find_path
         value string
       identity_fingerprint string
       label string
+      provenance string
       type string
     via_relation string
   reachable bool
@@ -241,6 +247,7 @@ tool impact_of
       value string
     identity_fingerprint string
     label string
+    provenance string
     type string
     depth int
     via string
@@ -260,6 +267,7 @@ tool impact_of
       value string
     identity_fingerprint string
     label string
+    provenance string
     type string
   summary string
   total int
@@ -304,6 +312,7 @@ tool entity_history
         value string
       identity_fingerprint string
       label string
+      provenance string
       type string
     event_id string
     event_time string
@@ -374,6 +383,7 @@ tool recent_changes
         value string
       identity_fingerprint string
       label string
+      provenance string
       type string
     event_id string
     event_time string
@@ -425,6 +435,7 @@ tool graph_diff
       value string
     identity_fingerprint string
     label string
+    provenance string
     type string
     changed_keys []string
     state_changed bool
@@ -444,6 +455,7 @@ tool graph_diff
       value string
     identity_fingerprint string
     label string
+    provenance string
     type string
   entities_deleted []object
     asserted_by []string
@@ -461,6 +473,7 @@ tool graph_diff
       value string
     identity_fingerprint string
     label string
+    provenance string
     type string
     delete_reason string
     delete_source string
@@ -480,6 +493,7 @@ tool graph_diff
       value string
     identity_fingerprint string
     label string
+    provenance string
     type string
     delete_reason string
     delete_source string
@@ -607,6 +621,7 @@ tool telemetry_keys
       value string
     identity_fingerprint string
     label string
+    provenance string
     type string
   graph object
     as_of string
