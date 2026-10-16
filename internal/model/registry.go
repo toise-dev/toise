@@ -71,6 +71,21 @@ const (
 	// one device on purpose — a wrong merge is permanent, a split is reconciled by
 	// a same_as belief once something identifies the far end (ADR 0020).
 	TypeNetworkNeighbor = wire.TypeNetworkNeighbor
+
+	// TypeK8sNode is the cluster's view of a machine, keyed {k8s.node.uid}. NOT a
+	// second host: it carries the machine's ROLE IN THE CLUSTER — taints, labels,
+	// allocatable capacity, conditions — which are not facts about the machine. A
+	// node cordoned while its host is perfectly healthy is what makes the two
+	// distinct. Joined to its host by a same_as belief, because each identity is
+	// complete on its own and the collapse would lose no identifying attribute.
+	TypeK8sNode = wire.TypeK8sNode
+
+	// TypeHostService is a unit the system's supervisor manages — a systemd unit,
+	// a Windows service — keyed {host.id, host.service.name} with the FULL name
+	// the supervisor gives, since nginx.service and nginx.socket are two units.
+	// Our extension of the upstream host.* namespace, on the entity.host.cpu
+	// precedent; see wire for the gap it proposes to fill.
+	TypeHostService = wire.TypeHostService
 )
 
 // Phase-1 relation types. See ADR 0004.
@@ -226,6 +241,8 @@ var entityTypes = map[string]struct{}{
 	TypeNetworkAddress:   {},
 	TypeNetworkRoute:     {},
 	TypeServiceListener:  {},
+	TypeK8sNode:          {},
+	TypeHostService:      {},
 	// producer vocabulary
 	TypeServiceInstance: {},
 	TypeDatabase:        {},
