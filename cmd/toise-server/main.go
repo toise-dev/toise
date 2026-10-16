@@ -426,6 +426,12 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	promises := metrics.NewPromises()
 	reg.SetPromiseReporter(promises.Refused)
 	metricsExtra = append(metricsExtra, promises.Collectors()...)
+	// An edge discarded for a missing endpoint leaves NO trace in the graph —
+	// no relation, no target, nothing attempted. A tenant lost 47327 of them in
+	// ten days before anyone looked at the right log.
+	discards := metrics.NewDiscards()
+	reg.SetDiscardReporter(discards.Dropped)
+	metricsExtra = append(metricsExtra, discards.Collectors()...)
 	metricsExtra = append(metricsExtra, queryMetrics.Collectors()...)
 	// Annotation counts per tenant, so a replica-local overlay is at least
 	// measurable (#365): log shipping replicates the log, not the sidecar, so a

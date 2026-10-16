@@ -89,6 +89,9 @@ type Registry struct {
 	// applies to every stack opened after. A refusal is already logged, and a
 	// WARN line wakes nobody — this is what makes it alertable.
 	promiseReporter func(producer, entityType string, declared time.Duration)
+	// discardReporter is called when a tenant engine gives up on an edge whose
+	// endpoint never arrived. Set once via SetDiscardReporter before serving.
+	discardReporter func(relationType, fromType, toType string)
 	limits          Limits
 	logger          *slog.Logger
 	// now is the clock each tenant engine uses (liveness floor at boot, Sweep).
@@ -134,6 +137,14 @@ func Open(dataDir string, storeCfg store.Config, relBuf time.Duration, logger *s
 // refuses an implausible liveness interval. Call it before serving: it applies
 // to every stack opened afterwards, which in practice is all of them, since
 // tenants open lazily on first use.
+// SetDiscardReporter installs the callback a tenant engine calls when it gives
+// up on an edge whose endpoint never arrived. Call it before serving.
+func (r *Registry) SetDiscardReporter(fn func(relationType, fromType, toType string)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.discardReporter = fn
+}
+
 func (r *Registry) SetPromiseReporter(fn func(producer, entityType string, declared time.Duration)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -448,7 +459,8 @@ func (r *Registry) openStack(id string) (*Stack, error) {
 		change.WithClock(clock),
 		change.WithLogger(r.logger.With("tenant", id)),
 		change.WithRelationBuffer(r.relBuf),
-		change.WithPromiseReporter(r.promiseReporter))
+		change.WithPromiseReporter(r.promiseReporter),
+		change.WithDiscardReporter(r.discardReporter))
 	// Restore the liveness Memento (#139): absolute deadlines, so a producer
 	// that died during the downtime is swept on the first tick after boot.
 	if err := engine.RestoreLiveness(liveness); err != nil {
