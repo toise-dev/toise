@@ -2049,3 +2049,80 @@ func TestDiscardedEdgeIsReportedWithBothEndpointTypes(t *testing.T) {
 		t.Errorf("reported %v, want %v — without both endpoint types the figure says an edge was lost and not which half is missing", got[0], want)
 	}
 }
+
+// TestEmbeddedEdgeInheritsItsSpeakersDeadline closes the unbounded half of #504,
+// measured in production: an SNMP poller declared a shared interface gone from
+// its view, the interface survived on its two other speakers, and the edge that
+// poller had declared INSIDE that interface kept naming it as an asserter for as
+// long as the endpoints lived. Not eight minutes — for ever, because an embedded
+// edge carried a zero deadline and nothing sweeps one.
+//
+// The rule asserted here is the speaker's, not the entity's: an edge describes
+// its source as THAT speaker observes it, so it lives exactly as long as that
+// speaker's claim on the source.
+func TestEmbeddedEdgeInheritsItsSpeakersDeadline(t *testing.T) {
+	g := projection.New()
+	now := t0
+	e := New(g, &fakeAppender{},
+		WithClock(func() time.Time { return now }),
+		WithLogger(slog.New(slog.DiscardHandler)))
+
+	hostRef := EndpointRef{Type: model.TypeHost, Identity: []model.KeyValue{kv("host.id", "h1")}}
+	procRef := EndpointRef{Type: model.TypeProcess, Identity: []model.KeyValue{kv("process.pid", "7")}}
+
+	// Two speakers assert the source process; only one declares the edge.
+	for _, p := range []string{"agent-a", "agent-b"} {
+		if _, err := e.ObserveEntity(EntityObservation{
+			Type: procRef.Type, Identity: procRef.Identity, EventTime: t0, Producer: p, Interval: time.Minute,
+		}); err != nil {
+			t.Fatalf("observe source as %s: %v", p, err)
+		}
+	}
+	if _, err := e.ObserveEntity(EntityObservation{
+		Type: hostRef.Type, Identity: hostRef.Identity, EventTime: t0, Producer: "agent-a", Interval: time.Minute,
+	}); err != nil {
+		t.Fatalf("observe host: %v", err)
+	}
+	// An EMBEDDED edge: no interval of its own.
+	if _, _, err := e.ObserveRelation(RelationObservation{
+		Type: model.RelRunsOn, From: procRef, To: hostRef, EventTime: t0, Producer: "agent-a",
+	}); err != nil {
+		t.Fatalf("observe edge: %v", err)
+	}
+
+	var relID model.RelationID
+	for id := range e.relRefs {
+		relID = id
+	}
+	if relID == "" {
+		t.Fatal("the edge never landed")
+	}
+	ref, ok := e.relRefs[relID][refKey("agent-a", "")]
+	if !ok {
+		t.Fatal("no reference for the speaker that declared the edge")
+	}
+	if ref.deadline.IsZero() {
+		t.Fatal("the edge reference has a zero deadline: nothing will ever expire it, which is the unbounded half of #504")
+	}
+	if want := t0.Add(time.Minute); !ref.deadline.Equal(want) {
+		t.Errorf("edge deadline = %v, want the speaker's own deadline on the source %v", ref.deadline, want)
+	}
+
+	// The speaker goes quiet while the OTHER keeps the source alive. The edge
+	// must lapse with its speaker's claim, not outlive it.
+	now = t0.Add(2 * time.Minute)
+	if _, err := e.ObserveEntity(EntityObservation{
+		Type: procRef.Type, Identity: procRef.Identity, EventTime: now, Producer: "agent-b", Interval: time.Minute,
+	}); err != nil {
+		t.Fatalf("re-observe source as agent-b: %v", err)
+	}
+	if _, err := e.Sweep(); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if _, still := e.relRefs[relID][refKey("agent-a", "")]; still {
+		t.Error("the quiet speaker still asserts the edge, so via_asserted_by names a producer that stopped talking")
+	}
+	if _, alive := e.matchIdentity(procRef.Type, procRef.Identity); !alive {
+		t.Error("the source died: the other speaker's claim must keep it alive")
+	}
+}

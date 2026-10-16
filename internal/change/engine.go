@@ -232,6 +232,24 @@ func (e *Engine) reportDiscard(obs RelationObservation) {
 	e.discardReporter(obs.Type, obs.From.Type, obs.To.Type)
 }
 
+// inheritedRef gives an edge with no refresh promise of its own the deadline its
+// speaker holds on the edge's SOURCE entity. A speaker that holds no reference on
+// the source yields the zero deadline the edge would have had anyway: nothing to
+// inherit, and refusing the edge is not this function's business.
+func (e *Engine) inheritedRef(from model.EntityID, key string) liveRef {
+	src, ok := e.refs[from]
+	if !ok {
+		return liveRef{}
+	}
+	ref, ok := src[key]
+	if !ok {
+		// The speaker asserts the edge but not its source — a standalone edge
+		// toward someone else's entity. Nothing of this speaker's to inherit.
+		return liveRef{}
+	}
+	return liveRef{deadline: ref.deadline, interval: ref.interval}
+}
+
 func releaseSpeaker(refs map[string]liveRef, producer, scope string) bool {
 	released := false
 	if _, ok := refs[refKey(producer, scope)]; ok {
@@ -1170,10 +1188,27 @@ func (e *Engine) observeRelationLocked(obs RelationObservation) (model.Event, bo
 		refs = make(map[string]liveRef)
 		e.relRefs[rel.ID] = refs
 	}
+	key := refKey(obs.Producer, e.currentScope())
 	if iv := e.promise("", obs.Type, obs.Producer, obs.Interval); iv > 0 {
-		refs[refKey(obs.Producer, e.currentScope())] = liveRef{deadline: e.now().Add(iv), interval: iv}
+		refs[key] = liveRef{deadline: e.now().Add(iv), interval: iv}
 	} else {
-		refs[refKey(obs.Producer, e.currentScope())] = liveRef{}
+		// An EMBEDDED edge carries no interval of its own: it exists only as a
+		// descriptor inside its source entity's payload, so its liveness is
+		// DERIVED. That used to mean a zero deadline, which never lapses — sound
+		// while entity death was the only way its last asserter could vanish, and
+		// broken by the speaker key: a SHARED entity does not die when one
+		// speaker withdraws, so that speaker's edge reference became unreachable.
+		// Measured in production: an edge asserted by a producer that had
+		// explicitly declared its source gone, held for as long as the endpoints
+		// lived (#504).
+		//
+		// It inherits THIS SPEAKER's deadline on the source — not the entity's
+		// overall liveness, which is the maximum across speakers. The edge
+		// describes the source as this speaker observes it, so it lives exactly
+		// as long as that speaker's claim on it: refresh the source and both
+		// refresh, go quiet and both lapse together, delete the source and the
+		// edge follows within one interval instead of never.
+		refs[key] = e.inheritedRef(from, key)
 	}
 
 	var ct model.ChangeType
