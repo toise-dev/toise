@@ -198,6 +198,22 @@ func TestAdvisoryServiceInstanceID(t *testing.T) {
 	if got := advisories(mk("producer-01", true)); len(got) != 0 {
 		t.Errorf("present service.instance.id: advisories = %v, want none", got)
 	}
+
+	// The wording IS the fix. A producer runs this, reads "advisory", and ships;
+	// so the sentence has to name what it costs, not the rule it breaks. Toise's
+	// read surface calls this entity a producer defect, and until this message
+	// said so the two surfaces of the same product disagreed about it.
+	msg := advisories(mk("", false))[0].Issue
+	for _, must := range []string{
+		"ANONYMOUSLY", // what the entity becomes
+		"release",     // that nobody can ever remove it
+		"ADR 0019",    // where the rule lives
+		"defect",      // that a reader will be sent back to this producer
+	} {
+		if !strings.Contains(msg, must) {
+			t.Errorf("the advisory omits %q, so a producer cannot see the cost: %q", must, msg)
+		}
+	}
 	if probs := Check(mk("producer-01", true)); len(probs) != 0 {
 		t.Errorf("conformant record with instance id: problems = %v, want none", probs)
 	}
