@@ -9,6 +9,126 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.22.0] - 2026-10-16
+
+> **`v0.22.0-beta.1` is cut for qualification, not for deployment.** Three of the
+> changes below cannot be verified by reading a diff:
+>
+> - the engine now **refuses an impossible liveness promise** instead of
+>   believing it. A production host declared 1347804h — 153 years — and the read
+>   surface quoted it back as an upper bound on uncertainty for 56 days. The
+>   refusal arms no deadline, names itself in the answer as a producer defect,
+>   and is counted. What an upgrade must show is that no legitimate cadence is
+>   caught by the bound: anything above a week is refused, and a producer
+>   declaring its real cadence rather than its tick may now sit closer to it.
+> - **two entity types enter the vocabulary**, `host.service` and `k8s.node`.
+>   `k8s.node` had been in the SDK since `pkg/emit/v0.14.0` with the engine still
+>   refusing it at the boundary, so a producer emitting it was rejected. What an
+>   upgrade must show is that the boundary now accepts both under the strict
+>   vocabulary, without `--accept-unknown-types`.
+> - **a discarded edge is counted**, by relation type and by the type at each
+>   end. A tenant lost 47,327 of them in ten days with no trace in the graph.
+>   The figure is only useful if the labels are right, which no unit test can
+>   establish on real producer traffic.
+>
+> The criterion that matters most is unchanged and remains the bench's:
+> `graph_diff` reporting **nothing** over a window where nothing changed.
+
+**The release where the product stopped holding answers it would not give.** Every
+fix here is one shape: Toise knew something and the surface did not carry it. An
+impossible cadence recited as a bound. A provenance field that meant two
+different things. Forty-seven thousand losses with no trace. A join key that
+would have worked for half the cases it was offered for.
+
+None of them was found by reading the code. Each came from someone measuring —
+an operator searching logs, a consumer running a fixture, a producer reading its
+own emitter — and in four cases the measurement refuted something this
+maintainer had asserted.
+
+### Added
+
+- **`host.service`** — a unit the system's supervisor manages: a systemd unit on
+  Linux, a Windows service on Windows. One type for both, because it is one
+  concept. Identity `{host.id, host.service.name}` with the **full** name the
+  supervisor gives: `nginx.service` and `nginx.socket` are two different units,
+  and a bare `nginx` fuses them into one entity whose attributes oscillate. Our
+  extension of the upstream `host.*` namespace on the `entity.host.cpu`
+  precedent — nothing upstream covers this ground, and the two collector-contrib
+  receivers on it use divergent local vocabularies. The spelling is **proposed**
+  until an upstream experience report settles it; choosing an upstream-owned
+  namespace over a private one is deliberate, since a private prefix has no
+  collision risk and *guarantees* a re-key the day we converge.
+- **`k8s.node`** — the cluster's view of a machine, `{k8s.node.uid}`, carrying
+  the role in the cluster rather than facts about the machine. A node cordoned
+  while its host is perfectly healthy is what makes the two distinct.
+- **A counter for discarded edges**, labelled by relation type and by the type at
+  each end. Those three labels are what makes the figure diagnose itself:
+  `attached_to / container / network.segment` named a producer's shape and a
+  missing emitter at once, where the relation type alone would only have said an
+  edge was lost.
+- **A counter for refused liveness promises**, by producer and entity type, with
+  the largest refused value kept as a gauge. The magnitude is the diagnosis: a
+  few times the bound is a misconfiguration, a thousand times over is a unit
+  error. An empty producer is reported as `unknown` rather than dropped — the
+  instance that motivated this had no producer id either.
+- **`host.service.name` and `service.endpoint` as telemetry join keys**, the
+  second one **conditionally**: only a listener an active check targets has a
+  series carrying it, and offering it to all 483 of them would be a *partial*
+  false promise — one that works often enough to be trusted and then returns an
+  empty filter. The graph holds the fact that decides, so the key is withheld
+  where it cannot work instead of offered everywhere with a caveat to read.
+
+### Fixed
+
+- **An impossible liveness promise is refused, and the refusal says so.** An
+  interval is not an observed fact, it is a promise to speak again; ADR 0022
+  stands and the entity is kept, only the promise falls. "No cadence" now has
+  two causes that must not read alike — nobody promised one, or somebody
+  promised an impossible one — and reporting the second as the first is what hid
+  a 153-year bound in production for eight weeks.
+
+### Documentation
+
+- **A fact whose two halves have different emitters.** A relation may point at an
+  entity its emitter does not produce: the container probe emits `attached_to`,
+  the *cluster* probe emits the segment, and they can sit on different hosts
+  behind a probe that is off by default. "Emitted with its edge or not at all"
+  was written for a producer owning both halves and is not actionable for one
+  owning one — it cannot know whether the other emitter runs. So: emit the edge,
+  spell the target in the frozen form byte for byte, and the obligation to run
+  the other emitter belongs to the **deployment**. That last sentence was the
+  missing one. The three relations in this situation are named in a table so
+  nobody has to discover it.
+- **`rekeyed`**, a delete reason in its own family. A migration had a prescribed
+  delete and no prescribed reason, which is why a producer had to ask. Every
+  other value claims something happened; here nothing did — the service still
+  runs and only its spelling changed. It shares its word with the `basis="rekey"`
+  of the bridging edge in the same procedure.
+- **How to tell a real commit from a restore artifact.** A restored log
+  re-stamps `commit_seq` in batches of a thousand, so after a disaster recovery a
+  group holds unrelated changes — exactly when someone is pairing them to find a
+  cause. The discriminator is the spread of `recorded_at` inside the group.
+  Neither the group's size nor the number of producers in it discriminates, and
+  both are stated as **not** discriminating: a mass liveness expiry is one real
+  commit holding hundreds of events from several producers, and a guard on either
+  would have refused the most interesting signal a graph can carry.
+
+### Known, open, and stated rather than omitted
+
+- An entity nobody asserts **cannot be removed by anyone** (#511): the read
+  surface only annotates, the only destructive subcommand drops a whole tenant,
+  and a delete from a named producer leaves an anonymous reference untouched. The
+  production instance was removed by reproducing the malformation that created
+  it, which is a strange thing to require.
+- An empty `asserted_by` means two different things (#507), and the worse one —
+  something asserts it anonymously — looks like the better one.
+- `From` and `To` in the relation registry are read by nothing (#494), so they
+  describe rather than constrain; `monitors` declared the wrong target for three
+  releases and no test could notice.
+- `commit_seq` does not survive a restore (#496), and a replica that receives
+  only a shipped log has a complete projection, empty provenance and no liveness,
+  with no answer saying so (#493).
+
 ## [0.21.0] - 2026-10-14
 
 > **Qualified on the bench and released.** Two prereleases were cut for this,
