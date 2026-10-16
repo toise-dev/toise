@@ -11,25 +11,28 @@ Nothing yet.
 
 ## [0.22.0] - 2026-10-16
 
-> **`v0.22.0-beta.1` is cut for qualification, not for deployment.** Three of the
-> changes below cannot be verified by reading a diff:
+> **`v0.22.0-beta.2` is cut for a full bench qualification, not for deployment.**
+> It replaces `beta.1`, which was already installed on the bench and carried two
+> half-fixes found after it was cut. Both are closed here, and both were found by
+> thinking about the upgrade path rather than by reading a diff:
 >
-> - the engine now **refuses an impossible liveness promise** instead of
->   believing it. A production host declared 1347804h — 153 years — and the read
->   surface quoted it back as an upper bound on uncertainty for 56 days. The
->   refusal arms no deadline, names itself in the answer as a producer defect,
->   and is counted. What an upgrade must show is that no legitimate cadence is
->   caught by the bound: anything above a week is refused, and a producer
->   declaring its real cadence rather than its tick may now sit closer to it.
-> - **two entity types enter the vocabulary**, `host.service` and `k8s.node`.
->   `k8s.node` had been in the SDK since `pkg/emit/v0.14.0` with the engine still
->   refusing it at the boundary, so a producer emitting it was rejected. What an
->   upgrade must show is that the boundary now accepts both under the strict
->   vocabulary, without `--accept-unknown-types`.
-> - **a discarded edge is counted**, by relation type and by the type at each
->   end. A tenant lost 47,327 of them in ten days with no trace in the graph.
->   The figure is only useful if the labels are right, which no unit test can
->   establish on real producer traffic.
+> - **a refused cadence now stays refused across a restart.** The bound guarded
+>   live observations only, so a snapshot holding an impossible interval restored
+>   it intact — the entity stayed immortal and the read surface quoted the figure
+>   back as a legitimate cadence. That is exactly how the production host survived
+>   restarts for 56 days. The test then caught a second level: the stored
+>   **absolute deadline** has to fall with the promise, or it stays armed in the
+>   year 2177.
+> - **an embedded edge inherits its speaker's deadline on the source.** It used to
+>   carry a zero deadline, which never lapses — sound while entity death was the
+>   only way an edge's last asserter could vanish, and broken by the speaker key:
+>   a SHARED entity does not die when one speaker withdraws. Measured on the
+>   bench, an edge was held by a producer that had explicitly declared its source
+>   gone, for as long as the endpoints lived. Not minutes — for ever.
+>
+> What an upgrade must SHOW, beyond `beta.1`'s three checks: that no legitimate
+> cadence is lost after a restore, and that a speaker going quiet takes the edges
+> it declared with it while the other speakers keep the shared entity alive.
 >
 > The criterion that matters most is unchanged and remains the bench's:
 > `graph_diff` reporting **nothing** over a window where nothing changed.
@@ -80,6 +83,23 @@ maintainer had asserted.
 
 ### Fixed
 
+- **A refused cadence stays refused across a restart.** The bound below guarded
+  live observations only, and `RestoreLiveness` never went through it, so a
+  snapshot holding an impossible interval restored it intact: the entity stayed
+  immortal and the resolution block reported the figure as a legitimate cadence
+  with nothing marking it as a defect. The stored **absolute deadline** falls with
+  the promise too — otherwise refusing the interval alone leaves a deadline armed
+  in the year 2177, since a zero interval makes the restore keep what it found.
+- **An embedded edge inherits its speaker's deadline on the source.** An embedded
+  edge has no interval of its own, so its liveness is derived — and that used to
+  mean a zero deadline, which never lapses. Sound while entity death was the only
+  way an edge's last asserter could vanish; broken by the speaker key, because a
+  **shared** entity does not die when one speaker withdraws, leaving that
+  speaker's edge reference with no deadline and no cascade. It now lives exactly
+  as long as that speaker's claim on the source: refresh together, lapse
+  together, and a delete takes the edge within one interval instead of never. A
+  speaker holding no reference on the source inherits nothing and is unchanged.
+  Instant release on an explicit delete remains open (#504); this bounds it.
 - **An impossible liveness promise is refused, and the refusal says so.** An
   interval is not an observed fact, it is a promise to speak again; ADR 0022
   stands and the entity is kept, only the promise falls. "No cadence" now has
