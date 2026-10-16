@@ -2051,6 +2051,56 @@ func TestDiscardedEdgeIsReportedWithBothEndpointTypes(t *testing.T) {
 	}
 }
 
+// TestBufferFullEvictionIsCounted covers the drop path that needs no TTL: with
+// the parking buffer at its cap, the oldest parked edge is evicted immediately.
+// It went uncounted, so the counter read zero under the one condition that
+// loses edges FASTEST — a burst of out-of-order edges, which is also when an
+// operator is least able to spot a WARN line in a flood.
+//
+// The bench asked what input makes an edge drop and could not make the counter
+// move, which is how this was found.
+func TestBufferFullEvictionIsCounted(t *testing.T) {
+	var got [][3]string
+	g := projection.New()
+	now := t0
+	e := New(g, &fakeAppender{},
+		WithClock(func() time.Time { return now }),
+		WithRelationBuffer(time.Hour), // long, so nothing expires by TTL here
+		WithDiscardReporter(func(relType, fromType, toType string) {
+			got = append(got, [3]string{relType, fromType, toType})
+		}),
+		WithLogger(slog.New(slog.DiscardHandler)))
+
+	park := func(n int) RelationObservation {
+		return RelationObservation{
+			Type:      model.RelAttachedTo,
+			From:      EndpointRef{Type: model.TypeContainer, Identity: []model.KeyValue{kv("container.id", fmt.Sprintf("c%d", n))}},
+			To:        EndpointRef{Type: model.TypeNetworkSegment, Identity: []model.KeyValue{kv("network.segment.id", "swarm:never-emitted")}},
+			EventTime: t0,
+		}
+	}
+	for i := 0; i < maxPendingRelations; i++ {
+		if _, _, err := e.ObserveRelation(park(i)); err != nil {
+			t.Fatalf("parking edge %d: %v", i, err)
+		}
+	}
+	if len(got) != 0 {
+		t.Fatalf("reported %d discards while only filling the buffer: %v", len(got), got)
+	}
+
+	// One more than the cap evicts the oldest, with no clock movement at all.
+	if _, _, err := e.ObserveRelation(park(maxPendingRelations)); err != nil {
+		t.Fatalf("parking the overflowing edge: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("reported %d discards after overflowing the cap, want 1: a load-induced loss is still a loss", len(got))
+	}
+	want := [3]string{model.RelAttachedTo, model.TypeContainer, model.TypeNetworkSegment}
+	if got[0] != want {
+		t.Errorf("reported %v, want %v", got[0], want)
+	}
+}
+
 // TestEmbeddedEdgeInheritsItsSpeakersDeadline closes the unbounded half of #504,
 // measured in production: an SNMP poller declared a shared interface gone from
 // its view, the interface survived on its two other speakers, and the edge that
