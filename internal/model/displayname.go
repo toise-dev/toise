@@ -16,6 +16,14 @@ var displayNameKeys = map[string][]string{
 	TypeHost:            {"host.name"},
 	TypeContainer:       {"container.name", "compose.service"},
 	TypeServiceInstance: {"service.name"},
+	// The full supervisor name is already what a human calls the unit —
+	// nginx.service, Spooler — so it is the display name as well as the
+	// identifying half. Nothing else would read better.
+	TypeHostService: {"host.service.name"},
+	// A node's identity is its UID, which reads like nothing. k8s.node.name is
+	// the cluster-role attribute carrying the readable name, and it is the only
+	// thing an operator would ever type.
+	TypeK8sNode: {"k8s.node.name"},
 	// sys.name first: it is what an SNMP poll actually returns (sysName from the
 	// MIB), measured present on 12 of 14 devices on the bench. The other two keys
 	// are guesses that no producer has ever emitted — kept only because an

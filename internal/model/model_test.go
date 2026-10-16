@@ -199,7 +199,7 @@ func TestRegistry(t *testing.T) {
 	if def, ok := RelationDef(RelListensOn); !ok || def.From != TypeServiceListener || def.To != TypeNetworkInterface {
 		t.Error("relation def wrong")
 	}
-	if len(EntityTypes()) != 15 || len(RelationTypes()) != 18 {
+	if len(EntityTypes()) != 17 || len(RelationTypes()) != 18 {
 		t.Errorf("registry counts: %d entity, %d relation", len(EntityTypes()), len(RelationTypes()))
 	}
 	// compute.vm (hypervisor-discovered VM), container and pod are registered

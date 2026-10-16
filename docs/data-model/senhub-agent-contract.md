@@ -98,6 +98,8 @@ leased IP) in the identity — those are descriptive attributes. Agreed identiti
 | `network.device` | `{network.device.id}` — a single subtype-prefixed value by **precedence**: `serial:` (ENTITY-MIB `entPhysicalSerialNum`) > `engine:` (`snmpEngineID`) > `mac:` (LLDP chassis-id, rendered per the MAC rule below) > `name:` (`sysName`) > `mgmt:` (mgmt IP) | **anchored on SNMP-immutable facts, not LLDP** (often disabled); `mgmt:` is mutable last-resort. Producer canonicalizes (Toise is byte-exact); raw parts descriptive. Endpoints resolved to the canonical id via `ifPhysAddress` before emitting edges. Frozen for Lot 5 — see [`otel-mapping.md`](./otel-mapping.md#networkdevice-identity--snmp-topology-lot-5-frozen). |
 | `compute.vm` | `{host.id, vmid}` — the **hypervisor node's** `host.id` plus the hypervisor's vm id | a VM seen **from the hypervisor**, where the guest machine-id is unavailable. **Not** a `host` (a vmid is not a machine-id). `runs_on` the hypervisor `host`. The in-guest `host` (machine-id) is a separate facet, reconciled later by a `same_as` overlay (ADR 0020), never merged. **If the hypervisor *does* surface the guest machine-id (e.g. Hyper-V KVP), carry it as the descriptive attribute `guest.host.id` — evidence, never identity (the id stays `{host.id, vmid}`) — and still do not emit a `host` facet or merge.** That attribute is the `same_as` join key the overlay will consume; per ADR 0020 the producer asserts `same_as` (basis/confidence) once the read-time collapse lands; `same_as` has been a registered relation type since v0.16.0, with endpoints unconstrained, so a producer holding a justified link may assert it today, and the evidence rides as `guest.host.id` only until then. Same pattern as AT8 (redfish/ibmi carry `hw.serial_number` on both facets). |
 | `network.interface` | `{host.id, network.interface.name}` on a host, `{network.device.id, network.interface.name}` on a polled device — the owner, plus the interface's name **in the semconv spelling** | an interface is named only **within its owner**: `eth0` exists on every machine, so the name alone identifies nothing. **The spelling is closed for identity**: `interface.name`, the pre-semconv key, stays valid as a descriptive attribute and as a telemetry join key — a graph still holds interfaces observed before the migration — and must **never** appear in an identity. Identities are hashed over the keys as sent, with no normalization, so one port named two ways is two entities joined by nothing, and the duplicate surfaces months later. The conformance kit refuses the retired spelling in an identity and accepts it everywhere else. |
+| `host.service` | `{host.id, host.service.name}` — the owner, plus the **full name the supervisor gives**: `nginx.service`, `nginx.socket`, `Spooler` | a unit the system's supervisor manages: a systemd unit on Linux, a Windows service on Windows. **One type for both**, because it is one concept — something the operating system is meant to start by itself. The name is **not** the bare one: `nginx.service` and `nginx.socket` are two different units, and a bare `nginx` fuses them into one entity whose attributes oscillate. Scoped by the host because a service name is unique only **within** its machine, like `eth0`. Emit only what the system is meant to start by itself — **automatic start** on Windows (delayed included), **enabled** units on systemd — plus any the operator names: all ~200 services of a Windows machine would multiply a graph fivefold for a question nobody asked, while an automatic-start service that is **not running** is an incident and a manual one that is not running is normal. Start mode and state are descriptive. `runs_on` to the host. **Our extension** of the upstream `host.*` namespace, on the `entity.host.cpu` precedent — nothing upstream covers this ground, and the two collector-contrib receivers on it use divergent local vocabularies; the spelling is **proposed** until an upstream experience report settles it. |
+| `k8s.node` | `{k8s.node.uid}` | the **cluster's view of a machine** — not a second host. It carries the machine's **role in the cluster**: taints, labels, allocatable capacity, conditions, which are not facts about the machine. A node **cordoned while its host is perfectly healthy** is the case that makes the two distinct, the same shape as `compute.vm` beside `host`. Joined to its host by a **`same_as` belief**, which a DaemonSet agent asserts with the cleanest evidence there is: it reads `node.UID` and `node.Status.NodeInfo.MachineID` from the **same** cluster-API object, so it holds both identities itself, and each is a complete identity of one machine — the collapse would lose no identifying attribute, which is the test that makes it a `same_as` rather than a dedicated relation. Cluster-role attributes (`k8s.node.name`, `k8s.kubelet.version`) belong here; `host.uuid` stays on the host. So "which hosts are cluster nodes" becomes a walk over an observed belief instead of a filter on an attribute. |
 | `container` | `{container.id}` | an OCI/Docker container — a compute resource, not a `service.instance`. `image`/`name` descriptive; `status` is a **state key** (see below); `runs_on` its `host`. |
 | `network.segment` | `{network.segment.id}` — a single subtype-prefixed value by **precedence**, of which only `swarm:<network-id>` is **frozen** | a broadcast/reachability domain with an **assigned** identifier (ADR 0034). `k8s:` and `vlan:` are deliberately **open**: Kubernetes has no object to identify in the default flat-network case, and a VLAN id is not globally unique while a VLAN trunked across five switches is **one** segment, not five. Emitted **with its `has_segment` edge from the declaring cluster or not at all** — a segment nobody can say whose it is has no business in the graph. Workloads join it with `attached_to` **from the entity holding the network namespace**: a `container` on Docker/Swarm, a `pod` on Kubernetes. Subnet / internal / ingress are descriptive. Membership is **necessary and not sufficient** for reachability. |
 | `network.neighbor` | `{host.id, mac}` when a host observed it, `{network.device.id, mac}` when a polled device did — the **observer's** id, plus the neighbour's MAC | a link-layer neighbour an observer saw on one of its own interfaces and could **not** resolve to an entity it already holds (ARP/NDP, an FDB line, an LLDP remote known only by its chassis MAC). **`host.id` here is a SCOPE, not an owner** — the same role it plays as the fourth key of a host-local `network.endpoint`. Scoped on the observer because a MAC is not globally unique (it repeats under virtualization, rotates under randomization) and a broadcast domain carries no assigned identifier (ADR 0034). Two observers on one segment therefore hold two neighbours for one device, on purpose: a wrong merge is permanent, a split is reconciled by a `same_as` belief. **Not** a `network.interface` — see the phantom-port rule. Our own extension: the upstream convention has no neighbour entity. |
@@ -172,7 +174,14 @@ nicety.
 changing how it spells an existing identity should emit two things alongside the
 new entity, both **unconditionally**, with no persisted state to decide:
 
-1. An **explicit `entity.delete` of the old identity**. Without it the old entity
+1. An **explicit `entity.delete` of the old identity**, carrying
+   **`entity.delete.reason=rekeyed`**. The reason matters as much as the delete:
+   every other value in the table claims something happened — the resource ended,
+   the observation ended, a cache forgot — and here **nothing happened at all**.
+   The service is still running; only its spelling in this system changed. That is
+   why `rekeyed` is its own family, and why it shares its word with the
+   `basis="rekey"` of the bridging edge below: a reader who meets one finds the
+   other. Without it the old entity
    dies by liveness expiry and the change feed reads `delete_source=liveness_expiry`
    — "the producer went silent" — when the truth is "someone decided". A delete
    naming an identity that never existed is a complete no-op: no event, no error,
@@ -222,6 +231,7 @@ below are what Toise recommends. Converge on them; do not be policed by them.
 | `parent_removed` | the producer removed it because its parent went away | resource lifecycle |
 | `unmonitored` | **the observation ended; the resource may well still exist** | observation |
 | `aged_out` | **a cache forgot the entry; nobody saw the thing leave** | observation |
+| `rekeyed` | **nothing happened in the world: the producer changed how it spells this identity** | producer bookkeeping |
 
 **The rule that matters: never use a lifecycle value when you merely stopped
 looking.** A probe removed from the configuration, or a target that left the
@@ -258,6 +268,7 @@ Read together, the pairs are unambiguous:
 | `producer` | `terminated` | the thing ended, and the producer saw it |
 | `producer` | `unmonitored` | the thing may still exist; we stopped watching |
 | `producer` | `aged_out` | the thing may still exist; a cache forgot it |
+| `producer` | `rekeyed` | the thing is untouched; this spelling of it was retired |
 | `producer` | `parent_removed` | producer-side cascade: the parent went first |
 | `producer` | *(absent)* | the producer decided and gave no motive |
 | `liveness_expiry` | *(absent)* | the producer went silent past its interval |
@@ -694,6 +705,53 @@ learned port, respectively. Rollout:
   The serial tier is vendor-namespaced `serial:<PEN>:<n>` (PEN from `sysObjectID`) and
   fires only with a single chassis + PEN; cross-vendor collisions and stacks (>1
   `entPhysicalClass=3`) both fall back to the globally-unique `engine:<engineID>`.
+
+### A fact whose two halves have different emitters
+
+Some relations point at an entity the emitting producer does **not** itself
+produce. The edge comes from one probe and its target from another — sometimes on
+another host, sometimes behind a probe that is off by default. Three in this
+contract are like that today, and a reader should not have to discover it:
+
+| relation | emitted by | its target comes from |
+| --- | --- | --- |
+| `attached_to` (container→segment) | the container probe, on the workload's host | the cluster probe, on a manager |
+| `connected_to` (port↔port) | the poll of the device whose table was read | the poll of the device at the far end |
+| `resolves_to` (neighbor→interface) | the observer that heard the address | whoever polls the device owning that interface |
+
+**The rule that binds a single emitter does not apply to these.** "Emitted with
+its edge or not at all" is honourable when one producer owns both halves; it is
+not actionable when it owns one, because **it cannot know whether the other
+emitter is running**. Telling it to stay silent loses a real observation — the
+container genuinely is attached to that network. Telling it to emit regardless is
+what this contract means.
+
+So, for a cross-emitter relation:
+
+- **Emit the edge.** A half-observed fact is still an observation, and the
+  reconciliation buffer exists for exactly this: an edge waits for an endpoint
+  that has not arrived yet.
+- **Spell the target in the frozen identity form, byte for byte.** This is the
+  load-bearing requirement. The two halves are joined by nothing except the
+  identity matching exactly, and an invented or near-miss spelling produces two
+  things joined by nothing — discovered months later, if at all.
+- **The obligation to run the other emitter belongs to the DEPLOYMENT, not to the
+  producer.** If a cluster has overlay networks, some agent in that cluster must
+  emit the segments. No per-producer rule can substitute for that, and this is
+  the sentence that was missing.
+
+!!! warning "An unmet obligation is discarded, not stored"
+    An edge whose endpoint never arrives is dropped when the reconciliation
+    window closes. A deployment that emits one half forever therefore produces a
+    permanent shortfall, re-made and re-discarded on every cycle. Measured in
+    production: **47,327** `attached_to` edges discarded in ten days, every one
+    of them, because the probe that emits the segment was enabled nowhere — the
+    identifier existed the whole time and nothing was unidentifiable.
+
+    The graph shows nothing of this, which is Toise's own defect and tracked as
+    toise#508. Until that is answered, the only trace is a `Warn` line on the
+    Toise side, so **a deployment enabling one half of a pair should verify that
+    the other half arrives** rather than assume it.
 
 ### Topology as entities — edges stay bare (ADR 0022)
 

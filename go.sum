@@ -155,6 +155,8 @@ github.com/toise-dev/toise/pkg/emit v0.12.0 h1:3BAI5Sdl8XvfBC9rb/N5ovtgLpHnSeMOx
 github.com/toise-dev/toise/pkg/emit v0.12.0/go.mod h1:g00LFj+5RSFfjsOOuxjWW7WN8g77wHxfIQBDVGWCftY=
 github.com/toise-dev/toise/pkg/emit v0.13.0 h1:VvKcKYIT5j0TCNzqnFwrumkU59OlQ7bDjDzXRmlQ9+A=
 github.com/toise-dev/toise/pkg/emit v0.13.0/go.mod h1:g00LFj+5RSFfjsOOuxjWW7WN8g77wHxfIQBDVGWCftY=
+github.com/toise-dev/toise/pkg/emit v0.15.0 h1:xVvJvSW65IZ6J+yT94gIo/H1HnpNfHIPsvF43ONfHtY=
+github.com/toise-dev/toise/pkg/emit v0.15.0/go.mod h1:g00LFj+5RSFfjsOOuxjWW7WN8g77wHxfIQBDVGWCftY=
 github.com/vektah/gqlparser/v2 v2.5.33 h1:lRp8aIeNUNbimf/axZd7ETg24q06hBtPaas+TcvI/7E=
 github.com/vektah/gqlparser/v2 v2.5.33/go.mod h1:c1I28gSOVNzlfc4WuDlqU7voQnsqI6OG2amkBAFmgts=
 github.com/yosida95/uritemplate/v3 v3.0.2 h1:Ed3Oyj9yrmi9087+NczuL5BwkIc4wvTb5zIM+UJPGz4=

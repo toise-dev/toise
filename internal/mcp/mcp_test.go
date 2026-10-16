@@ -1892,3 +1892,60 @@ func TestPartialInlineIdentitySaysWhy(t *testing.T) {
 		t.Errorf("a COMPLETE handle for a missing entity was told its handle was incomplete: %v", err)
 	}
 }
+
+// TestServiceEndpointIsOfferedOnlyToACheckedListener guards the design choice
+// behind conditionalJoinKeys: service.endpoint is the identity of EVERY
+// listener, but only a listener an active check targets has a series carrying
+// it — the probe builds its series tags from the id of the entity it monitors.
+//
+// Offering it to all of them would be a PARTIAL false promise: it works often
+// enough to be trusted, then returns an empty filter. The graph holds the fact
+// that decides, so the key is withheld where it cannot work rather than offered
+// everywhere with a caveat to read.
+func TestServiceEndpointIsOfferedOnlyToACheckedListener(t *testing.T) {
+	checked := model.Entity{
+		ID: "01LISTEN_CHECKED", Type: "service.listener",
+		Identity: []model.KeyValue{{Key: "service.endpoint", Value: model.StringValue("h1:443/tcp")}},
+	}
+	bare := model.Entity{
+		ID: "01LISTEN_BARE", Type: "service.listener",
+		Identity: []model.KeyValue{{Key: "service.endpoint", Value: model.StringValue("h1:8080/tcp")}},
+	}
+	probe := model.Entity{
+		ID: "01PROBE", Type: "service.instance",
+		Identity: []model.KeyValue{{Key: "service.instance.id", Value: model.StringValue("probe-1")}},
+	}
+	g := &fakeGraph{
+		entities: map[model.EntityID]model.Entity{checked.ID: checked, bare.ID: bare, probe.ID: probe},
+		deleted:  map[model.EntityID]bool{},
+		relations: []model.Relation{
+			// the probe monitors ONE of the two listeners
+			{ID: "rel-mon", Type: "monitors", From: probe.ID, To: checked.ID, Structural: true},
+		},
+	}
+	s := New(g, &fakeStore{})
+	ctx := context.Background()
+
+	has := func(id string) bool {
+		_, out, err := s.telemetryKeys(ctx, nil, TelemetryKeysInput{EntityID: id})
+		if err != nil {
+			t.Fatalf("telemetryKeys(%s): %v", id, err)
+		}
+		for _, k := range out.Keys {
+			if k.Key == "service.endpoint" {
+				if k.Note == "" {
+					t.Errorf("%s: the key is offered with no note; a conditional key must say what carries it", id)
+				}
+				return true
+			}
+		}
+		return false
+	}
+
+	if !has("01LISTEN_CHECKED") {
+		t.Error("a listener an active check targets is not offered service.endpoint, so its own series cannot be found")
+	}
+	if has("01LISTEN_BARE") {
+		t.Error("a listener no check targets is offered service.endpoint: that filter returns nothing, which is the partial false promise this design exists to avoid")
+	}
+}

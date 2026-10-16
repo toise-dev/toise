@@ -1997,3 +1997,55 @@ func TestAnonymousEntityIsReleasableOnlyAnonymously(t *testing.T) {
 		t.Error("the entity survived its own anonymous delete")
 	}
 }
+
+// TestDiscardedEdgeIsReportedWithBothEndpointTypes guards the figure that made
+// this reporting necessary: a production tenant discarded 47,327 attached_to
+// edges in ten days, every one of them, because the probe emitting their target
+// was enabled nowhere. The graph showed nothing — no relation, no target, no
+// sign a thing had been attempted — and the only trace was a WARN line found
+// because someone was told which log to search.
+//
+// The endpoint TYPES are asserted, not just the relation type, because they are
+// the diagnosis: the relation alone says an edge was lost, the pair says which
+// half nothing emits.
+func TestDiscardedEdgeIsReportedWithBothEndpointTypes(t *testing.T) {
+	var got [][3]string
+	g := projection.New()
+	now := t0
+	e := New(g, &fakeAppender{},
+		WithClock(func() time.Time { return now }),
+		WithRelationBuffer(30*time.Second),
+		WithDiscardReporter(func(relType, fromType, toType string) {
+			got = append(got, [3]string{relType, fromType, toType})
+		}),
+		WithLogger(slog.New(slog.DiscardHandler)))
+
+	// The shape measured in production: a container declares an attachment to a
+	// segment nothing emits.
+	edge := RelationObservation{
+		Type:      model.RelAttachedTo,
+		From:      EndpointRef{Type: model.TypeContainer, Identity: []model.KeyValue{kv("container.id", "c1")}},
+		To:        EndpointRef{Type: model.TypeNetworkSegment, Identity: []model.KeyValue{kv("network.segment.id", "swarm:never-emitted")}},
+		EventTime: t0,
+	}
+	if _, emitted, err := e.ObserveRelation(edge); err != nil || emitted {
+		t.Fatalf("observe parked edge: emitted=%v err=%v; want parked silently", emitted, err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("reported %v while merely parked; a parked edge is not a lost one", got)
+	}
+
+	// Past the reconciliation window the edge is given up on.
+	now = t0.Add(time.Minute)
+	if _, err := e.Sweep(); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	if len(got) != 1 {
+		t.Fatalf("reported %d discards, want 1: %v", len(got), got)
+	}
+	want := [3]string{model.RelAttachedTo, model.TypeContainer, model.TypeNetworkSegment}
+	if got[0] != want {
+		t.Errorf("reported %v, want %v — without both endpoint types the figure says an edge was lost and not which half is missing", got[0], want)
+	}
+}

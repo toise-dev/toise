@@ -91,6 +91,24 @@ const (
 	TypeNetworkAddress = "network.address"
 	// TypeNetworkRoute is one routing-table entry (topology-as-entities, ADR 0022).
 	TypeNetworkRoute = "network.route"
+	// TypeHostService is a unit the SYSTEM'S SUPERVISOR manages: a systemd unit
+	// on Linux, a Windows service on Windows. One type for both, because it is
+	// one concept — something the operating system is meant to start by itself.
+	//
+	// Identity is {host.id, host.service.name}, where the name is the FULL name
+	// the supervisor gives: nginx.service and nginx.socket are two different
+	// units, and keying on the bare name fuses them into one entity whose
+	// attributes oscillate.
+	//
+	// OUR EXTENSION of the upstream host.* namespace, which describes the host
+	// itself. The precedent is entity.host.cpu: a property the host owns,
+	// nested in its namespace. Upstream defines nothing here — no entity, no
+	// attribute, no issue — and the two collector-contrib receivers that touch
+	// this ground use two divergent local vocabularies, which is the gap. An
+	// experience report proposing the entity upstream is the companion to this
+	// name; until it lands, treat the spelling as proposed rather than settled.
+	TypeHostService = "host.service"
+
 	// TypeServiceListener is a listening socket, keyed by service.endpoint.
 	TypeServiceListener = "service.listener"
 	// TypeServiceInstance is an OTel service instance: the producer itself, or a
@@ -320,6 +338,7 @@ func EntityTypes() []string {
 		TypeNetworkRoute, TypeServiceListener, TypeServiceInstance, TypeDatabase,
 		TypeNetworkDevice, TypeNetworkEndpoint, TypeComputeVM, TypeContainer,
 		TypePod, TypeK8sNode, TypeNetworkSegment, TypeNetworkNeighbor,
+		TypeHostService,
 	}
 }
 
