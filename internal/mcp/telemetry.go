@@ -34,9 +34,14 @@ var joinKeys = map[string]struct{}{
 	"process.pid":             {},
 	"process.executable.name": {},
 	"container.id":            {},
-	"k8s.pod.uid":             {},
-	"k8s.pod.name":            {},
-	"k8s.namespace.name":      {},
+	// Unconditional, unlike service.endpoint: the probe builds the entity list
+	// and the series from the SAME selected set within a cycle, and the two
+	// coincide down to their failure mode — no host.id means no series AND no
+	// entity. So a host.service entity always has a series carrying this.
+	"host.service.name":  {},
+	"k8s.pod.uid":        {},
+	"k8s.pod.name":       {},
+	"k8s.namespace.name": {},
 }
 
 // joinKeyNotes carries the caveat an LLM needs to use a key correctly.
@@ -45,6 +50,8 @@ var joinKeyNotes = map[string]string{
 	"host.name":    "a name, not an identity: prefer host.id when both are present",
 	"service.name": "shared by every instance of the service: combine with service.instance.id to isolate one",
 	"k8s.pod.name": "recreated pods change name: prefer k8s.pod.uid when both are present",
+	// nginx.service exists on every Linux machine, Spooler on every Windows one.
+	"host.service.name": "unique only WITHIN its host: combine with host.id, which this answer also carries, or a fleet-wide filter returns every machine's copy of the same unit",
 	// A remote target has no resource of its own — the producer's resource
 	// describes the machine it polled from — so its identity rides each
 	// datapoint instead. It is therefore absent from any label set derived by
