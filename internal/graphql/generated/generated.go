@@ -950,8 +950,12 @@ var sources = []*ast.Source{
 ) on INPUT_FIELD_DEFINITION | FIELD_DEFINITION
 
 """
-The kind of a typed attribute value. Toise attribute values are scalars: a
-string, a 64-bit integer, a double, or a boolean.
+The kind of a typed attribute value: a string, a 64-bit integer, a double, a
+boolean, or — since descriptive attributes carry the full AnyValue (ADR 0004) —
+an array or a nested map, each given as a compact JSON encoding in ` + "`" + `value` + "`" + `.
+
+An identifying attribute is always a scalar; only a descriptive one can be an
+array or a map.
 """
 enum ValueType {
   STRING
@@ -985,7 +989,15 @@ The classification of a change, per the Toise change taxonomy. Use this to ask
 structural relation changes.
 """
 enum ChangeType {
-  "The entity did not exist before this event."
+  """
+  The entity was first OBSERVED at this event — not "it did not exist before".
+  This graph is exactly as complete as its producers, so absence is never
+  evidence of absence: the thing may have been running, unobserved, for months.
+
+  It is also emitted when an entity comes BACK. Re-asserted within the
+  resurrection grace window it reclaims its original id, and after its tombstone
+  was evicted it appears under a new one; either way the change type is this.
+  """
   ENTITY_CREATED
   "The entity existed and is now soft-deleted; the log retains its history."
   ENTITY_DELETED
@@ -1074,6 +1086,13 @@ type Entity {
 
   Several names mean they agree it EXISTS, not that they agree on its attributes:
   the last writer sets those. A suspect value therefore has someone to go and ask.
+
+  **An ` + "`" + `asOf` + "`" + ` query answers this from the LIVE table, not from the instant you
+  asked for.** Who asserts a thing is live state and the fold does not rebuild
+  it, so on a past-instant read this field states who asserts the entity TODAY —
+  a false attribution, not an approximation. The MCP surface withholds it on an
+  ` + "`" + `asOf` + "`" + ` read; this surface does not yet (toise#528). Do not conclude anything
+  about who asserted an entity at a past instant from a GraphQL ` + "`" + `asOf` + "`" + ` query.
   """
   assertedBy: [String!]! @goField(forceResolver: true)
 
@@ -1088,6 +1107,9 @@ type Entity {
 
   Empty when no asserting producer recorded a scope, which reads as not recorded
   rather than as a collector with no name.
+
+  **Live state, like ` + "`" + `assertedBy` + "`" + `: an ` + "`" + `asOf` + "`" + ` query answers it from today's table
+  and not from the instant asked for (toise#528).**
   """
   collectedBy: [String!]! @goField(forceResolver: true)
   """
@@ -1208,6 +1230,10 @@ type Relation {
   """
   The producers asserting this EDGE right now. An edge survives while any of them
   asserts it, so one producer's silence never retracts another's edge.
+
+  **Live state: an ` + "`" + `asOf` + "`" + ` query answers this from today's table, not from the
+  instant asked for (toise#528).** The edge itself is the past state; who asserts
+  it is not. Draw no conclusion about a past instant's provenance from here.
   """
   assertedBy: [String!]! @goField(forceResolver: true)
   """
@@ -1219,29 +1245,42 @@ type Relation {
   a correlation — which is the difference a map has to draw, and the reason this
   field exists (#455).
 
-  One producer running several methods reports only the one that spoke **last**,
+  One producer running several methods reports **all** of them, the liveness
+  reference being keyed on the speaker — the producer AND the method — so read
+  this as the set of methods asserting the edge, including several of one agent.
+  Formerly only the last to speak,
   because the reference count is keyed by producer (#455): read this as a set
   across producers, not as the list of one agent's collectors.
 
   Empty when no asserting producer recorded a scope, which reads as not recorded
   rather than as no collector.
+
+  **Live state, like the field above: an ` + "`" + `asOf` + "`" + ` query answers it from today's
+  table (toise#528).**
   """
   collectedBy: [String!]! @goField(forceResolver: true)
 }
 
 """
 A qualified, bi-temporal change event from the log. Exactly one of ` + "`" + `entity` + "`" + ` or
-` + "`" + `relation` + "`" + ` is set. ` + "`" + `eventTime` + "`" + ` is when the fact became true in the real world
-(from the producer); ` + "`" + `recordedAt` + "`" + ` is when Toise recorded it. They differ for
-late or retroactive events — query history in eventTime space, audit with
-recordedAt.
+` + "`" + `relation` + "`" + ` is set.
+
+` + "`" + `eventTime` + "`" + ` is when a producer OBSERVED the fact, **never** when the fact became
+true: a producer polls, so the change happened somewhere in the interval before
+this instant. See ` + "`" + `Resolution` + "`" + `, which carries that producer's cadence — two
+changes closer together than it carry no guaranteed ordering, and no causal
+conclusion may be drawn from a gap that small, including against an external
+clock.
+
+` + "`" + `recordedAt` + "`" + ` is when Toise recorded it. They differ for late or retroactive
+events — query history in eventTime space, audit with recordedAt.
 """
 type ChangeEvent {
   "Event identifier (a ULID, time-sortable)."
   id: ID!
   "The classification of this change."
   changeType: ChangeType!
-  "When the fact became true in the real world (RFC 3339)."
+  "When a producer OBSERVED the fact, not when it became true (RFC 3339) — see Resolution."
   eventTime: String!
   "When Toise recorded the event (RFC 3339)."
   recordedAt: String!
@@ -1253,6 +1292,16 @@ type ChangeEvent {
   **equality, with no tolerance window** — ` + "`" + `recordedAt` + "`" + ` is set per event and may
   differ inside one commit, so a time-based pairing needs a guess about clock
   granularity and this does not.
+
+  **Check the group before pairing.** A restored log re-stamps this field in
+  batches of a thousand, so after a disaster recovery a group holds unrelated
+  changes. The discriminator is the **spread of ` + "`" + `recordedAt` + "`" + ` inside the group**: a
+  real commit was written at one instant, so its events differ by microseconds,
+  while a restored batch keeps each event's original ` + "`" + `recordedAt` + "`" + `, spread over
+  hours. More than a second of spread means a restore artifact — do not pair, and
+  say that is why. Neither the size of the group nor the number of producers in it
+  discriminates: a mass liveness expiry is one real commit holding hundreds of
+  events from several producers.
 
   A route deleted and a route created sharing a ` + "`" + `commitSeq` + "`" + ` is one observation of
   a route that changed. **Whether that means a gateway change is your conclusion,
@@ -1528,7 +1577,8 @@ type Query {
 
   """
   The timeline of change events for one entity. ` + "`" + `since` + "`" + `/` + "`" + `until` + "`" + ` (RFC 3339) bound
-  the query in eventTime space (reality). Provide ` + "`" + `asKnownAt` + "`" + ` (RFC 3339) to
+  the query in eventTime space — when a producer OBSERVED each change, not when
+  it became true. Provide ` + "`" + `asKnownAt` + "`" + ` (RFC 3339) to
   switch to the audit view: only events Toise had recorded by that instant.
   ` + "`" + `entity.unchanged` + "`" + ` heartbeats are excluded unless ` + "`" + `includeHeartbeats` + "`" + ` is set,
   matching the MCP ` + "`" + `entity_history` + "`" + ` tool — they dominate a raw timeline.
