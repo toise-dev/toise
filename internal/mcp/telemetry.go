@@ -39,6 +39,32 @@ var joinKeys = map[string]struct{}{
 	"k8s.namespace.name":      {},
 }
 
+// conditionalJoinKeys are keys that are join keys only for an entity the graph
+// says is carried by some telemetry. They are not in joinKeys, because offering
+// one unconditionally would be a PARTIAL false promise: it works often enough to
+// be trusted and then returns an empty filter, which is worse than never
+// offering it.
+//
+// service.endpoint is the identity of every service.listener, and a listener has
+// a series of its own only when an active check targets it — the probe builds
+// its series tags from the id of the entity it monitors, so the tag exists for a
+// local check and not otherwise. The graph holds exactly the fact that decides:
+// an incoming monitors edge. So the key is offered when it can work and withheld
+// when it cannot, rather than offered everywhere with a warning to read.
+var conditionalJoinKeys = map[string]func(g Graph, id model.EntityID) bool{
+	"service.endpoint": hasIncomingMonitors,
+}
+
+func hasIncomingMonitors(g Graph, id model.EntityID) bool {
+	edges := edgesOf(g, id, model.RelMonitors)
+	for i := range edges {
+		if edges[i].direction == "incoming" {
+			return true
+		}
+	}
+	return false
+}
+
 // joinKeyNotes carries the caveat an LLM needs to use a key correctly.
 var joinKeyNotes = map[string]string{
 	"process.pid":  "ephemeral: changes on every process restart; correlate within a time window, never as a stable identity",
@@ -51,6 +77,10 @@ var joinKeyNotes = map[string]string{
 	// flattening resource attributes.
 	"network.device.id": "identifies a polled remote device: carried per datapoint, never on the producer's resource",
 	"db.instance.id":    "identifies a polled remote database: carried per datapoint, never on the producer's resource",
+	// Offered only to a listener an active check targets (see
+	// conditionalJoinKeys): that check's series is the only telemetry carrying
+	// this key, built from the id of the entity it monitors.
+	"service.endpoint": "carried per datapoint by the series of the active check targeting this listener, from senhub-agent 0.6.4; a listener no local check targets has no series of its own, and this key is not offered for one",
 }
 
 // ownerDirection names, per relation type, the direction in which the neighbor
@@ -111,11 +141,22 @@ func (s *Server) telemetryKeys(ctx context.Context, _ *mcpsdk.CallToolRequest, i
 	}
 
 	out := TelemetryKeysOutput{Entity: entityOut(ent, deleted)}
+	// Which conditional keys this entity qualifies for, decided once from the
+	// graph rather than per occurrence.
+	allowed := map[string]struct{}{}
+	for key, ok := range conditionalJoinKeys {
+		if ok(g, entID) {
+			allowed[key] = struct{}{}
+		}
+	}
 	seen := make(map[string]struct{})
 	collect := func(kvs []model.KeyValue, source string) {
 		for _, kv := range kvs {
-			if _, isJoin := joinKeys[kv.Key]; !isJoin {
-				continue
+			_, isJoin := joinKeys[kv.Key]
+			if !isJoin {
+				if _, cond := allowed[kv.Key]; !cond {
+					continue
+				}
 			}
 			if _, dup := seen[kv.Key]; dup {
 				continue
