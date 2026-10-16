@@ -69,17 +69,25 @@ func Check(ld plog.Logs) []Problem {
 }
 
 // checkResource flags producer-identity misconfigurations on the Resource of a
-// ResourceLogs that carries entity events. Advisory only: Toise accepts the
-// records, but liveness is reference-counted per producer via
-// service.instance.id (ADR 0019), and without a stable instance id every
-// producer collapses into one anonymous reference.
+// ResourceLogs that carries entity events. Advisory only, because Toise does
+// accept the records — but the cost is larger than a lost distinction between
+// producers, and the message has to name it, or a producer reads exit 0 and
+// ships the one condition the read surface calls a defect.
+//
+// Without a stable instance id the reference is anonymous, and releaseSpeaker
+// matches the producer that sends the delete: no named producer can ever
+// release what was asserted anonymously. A production host sat in a customer
+// graph that way for eight weeks, reading as an entity nobody wanted.
 func checkResource(i int, res pcommon.Resource) []Problem {
 	if v, ok := res.Attributes().Get(wire.ResServiceInstanceID); ok && v.Type() == pcommon.ValueTypeStr && v.Str() != "" {
 		return nil
 	}
 	return []Problem{{
-		Record:   fmt.Sprintf("resourceLogs[%d].resource", i),
-		Issue:    "missing or empty service.instance.id — liveness is reference-counted per producer (ADR 0019); set a stable instance id or all producers share one reference",
+		Record: fmt.Sprintf("resourceLogs[%d].resource", i),
+		Issue: "missing or empty service.instance.id — the entity will be asserted ANONYMOUSLY: " +
+			"no named producer can ever release it (a delete is matched to the producer that sends it), " +
+			"every producer collapses into one shared reference (ADR 0019), and Toise reports the entity " +
+			"to its readers as a producer defect to come back to you about. Set a stable instance id",
 		Advisory: true,
 	}}
 }
