@@ -56,6 +56,7 @@ for the rationale.
 | `tenant_tokens` | `TOISE_TENANT_TOKENS` | *(none — secret)* | (empty) | comma-separated `tenant:token` pairs — full role, authorized only for its tenant (HTTP 403 / gRPC PermissionDenied elsewhere) |
 | `tenant_read_tokens` | `TOISE_TENANT_READ_TOKENS` | *(none — secret)* | (empty) | `tenant:token` pairs — **read-only** role, that tenant's read surfaces only (per-tenant RBAC, ADR 0028) |
 | `tenant_ingest_tokens` | `TOISE_TENANT_INGEST_TOKENS` | *(none — secret)* | (empty) | `tenant:token` pairs — **ingest-only** role, that tenant's OTLP ingest only |
+| `metrics_public` | `TOISE_METRICS_PUBLIC` | — | `false` | keep `/metrics` outside authentication, as before 0.23. **Transitional**: set it only long enough to add a bearer token to an existing scrape, then unset it. See [the scrape surface](#the-scrape-surface) |
 | `accept_unknown_types` | `TOISE_ACCEPT_UNKNOWN_TYPES` | `--accept-unknown-types` | `false` | accept entity/relation types outside the built-in registry (shape still validated; counted on /metrics) |
 | `tenant_auto_create` | `TOISE_TENANT_AUTO_CREATE` | `--tenant-auto-create` | `true` | allow a first write to a new tenant id to create its stack; off = only pre-existing tenants (and `default`) are served |
 | `tenant_allowlist` | `TOISE_TENANT_ALLOWLIST` | `--tenant-allowlist` | (empty) | comma-separated tenant ids allowed to be created; empty = any (subject to auto-create and the cap) |
@@ -78,6 +79,36 @@ keys are rejected** — a typo fails at startup rather than being silently ignor
 `--mcp-stdio` (serve only the MCP server over stdio, for Claude Desktop) is a run
 mode rather than steady-state config; pass it as a flag when needed — see
 [MCP for AI assistants](querying/mcp.md).
+
+
+## The scrape surface
+
+`/metrics` requires a bearer token and answers **only what that token may see**.
+
+- A **global** token (`auth_tokens` or `read_tokens`) gets the whole exposition,
+  every tenant's series included. This is what a central scrape wants: the
+  per-tenant labels are the only per-client volume signal an operator has, and
+  removing them would cost more than the exposure did.
+- A **tenant-scoped** token (`tenant_tokens`, `tenant_read_tokens`) gets only the
+  families whose series carry its own tenant label. The server-wide families go
+  with the others — open tenants, store size, Go runtime — because their mere
+  presence tells a scoped reader that other tenants exist.
+- Every scoped answer carries `toise_metrics_scope_info{tenant="..."} 1`, so a
+  tenant with no series yet is distinguishable from a broken exporter. Two empty
+  bodies otherwise mean the same thing and only one of them is fine.
+
+Before 0.23 this route was public, and its series are labeled by tenant: one
+unauthenticated answer named every client on the instance and its ingest volume.
+
+!!! warning "Upgrading an existing scrape"
+    A Prometheus job with no `authorization` gets **401** the moment the server
+    restarts on 0.23. Add the token to the scrape first; or set `metrics_public`
+    for the length of the upgrade, add the token, then unset it. The server logs
+    which mode it is in at startup, so nobody has to read the config to find out
+    whether this is open.
+
+    The liveness probes `/healthz` and `/readyz` stay public. A probe must be able
+    to answer before anything is configured.
 
 ## Examples
 

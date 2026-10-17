@@ -135,6 +135,19 @@ type Config struct {
 	TenantAllowlist  []string `yaml:"tenant_allowlist"`
 	MaxTenants       int      `yaml:"max_tenants"`
 
+	// MetricsPublic keeps /metrics outside authentication, as it was before
+	// 0.23. The scrape surface is labeled by tenant, so one unauthenticated
+	// answer named every client on the instance and its ingest volume — a
+	// scoped reader must not learn which other tenants exist (ADR 0028), a rule
+	// this route was never held to (#463).
+	//
+	// It exists only so an upgrade does not blind an operator's scrape the
+	// moment it lands: a Prometheus job with no bearer gets 401 the second the
+	// server restarts. Set it, add the token to the scrape, then unset it. The
+	// server says at startup which mode it is in, because an operator must not
+	// have to read the config to know whether this is open.
+	MetricsPublic bool `yaml:"metrics_public"`
+
 	// AuthTokens are accepted bearer tokens for the data surfaces (GraphQL, MCP,
 	// debug UI, OTLP ingest). Empty disables auth (trusted-network default). These
 	// are secrets: source them from TOISE_AUTH_TOKENS (env), never a flag.
@@ -536,6 +549,13 @@ func (c *Config) applyEnv(getenv func(string) string) error {
 			return fmt.Errorf("invalid TOISE_ACCEPT_UNKNOWN_TYPES %q: %w", v, err)
 		}
 		c.AcceptUnknownTypes = b
+	}
+	if v := getenv("TOISE_METRICS_PUBLIC"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("invalid TOISE_METRICS_PUBLIC %q: %w", v, err)
+		}
+		c.MetricsPublic = b
 	}
 	if v := getenv("TOISE_TENANT_AUTO_CREATE"); v != "" {
 		b, err := strconv.ParseBool(v)

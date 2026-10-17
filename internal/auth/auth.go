@@ -93,7 +93,21 @@ type Authenticator struct {
 	// asserts the ingest listener runs RequireAndVerifyClientCert (cmd validates
 	// mTLS is actually configured before enabling this).
 	ingestMTLSOnly bool
+	// tenantExempt names paths that authenticate but are not bound to one
+	// tenant, so the per-tenant authorization is skipped for them. See
+	// SetTenantExemptPaths.
+	tenantExempt map[string]bool
 }
+
+// SetTenantExemptPaths names HTTP paths that require a valid read token but do
+// NOT target one tenant. The scrape surface is the only one: it is not routed to
+// a tenant, it is FILTERED to what the caller's token may see (MetricsScope).
+//
+// Without this, a tenant-scoped token is refused there with 403 — the middleware
+// resolves the request's tenant, finds the default one because the path carries
+// none, and rejects the token for a tenant it never asked about. Set before
+// serving; not synchronized against concurrent use.
+func (a *Authenticator) SetTenantExemptPaths(paths map[string]bool) { a.tenantExempt = paths }
 
 // SetOIDC attaches an OIDC verifier for the read surfaces (ADR 0028); returns a
 // for chaining. nil (the default) leaves OIDC off. Set before serving.
@@ -169,6 +183,40 @@ func (a *Authenticator) EffectiveTenantHTTP(r *http.Request) (string, bool) {
 		}
 	}
 	return tenant.FromHTTP(r)
+}
+
+// MetricsScope reports which tenants' series a caller may read on the scrape
+// surface: all is true for a global token (and when auth is disabled, the
+// trusted-network default), otherwise the single tenant the bearer is bound to.
+//
+// It fails CLOSED. A bearer that is neither global nor bound to exactly one
+// tenant gets the empty tenant, which matches no series, because the middleware
+// has already authenticated the request before this runs: reaching here without
+// a resolvable scope means a token bound to several tenants, and handing that
+// caller every tenant's series is the exact disclosure this exists to prevent.
+//
+// The scrape surface needs its own resolver rather than EffectiveTenantHTTP:
+// that one falls back to the client-supplied header, which decides nothing here
+// — a caller must not widen its own scope by naming a tenant.
+func (a *Authenticator) MetricsScope(r *http.Request) (tenantID string, all bool) {
+	if !a.Enabled() {
+		return "", true
+	}
+	if id, ok := r.Context().Value(resolvedTenantKey).(string); ok && id != "" {
+		return id, false // a verified OIDC claim is always one tenant
+	}
+	h := r.Header.Get("Authorization")
+	t := bearer(h)
+	if t == "" {
+		return "", false
+	}
+	if got := hashToken(t); matchAny(got, a.tokens) || matchAny(got, a.readTokens) {
+		return "", true
+	}
+	if id, ok := a.TenantForBearer(h); ok {
+		return id, false
+	}
+	return "", false
 }
 
 // EffectiveTenantGRPC resolves the ingest tenant from the gRPC metadata, honoring
@@ -418,7 +466,7 @@ func (a *Authenticator) HTTPMiddleware(public map[string]bool) func(http.Handler
 				// token's own tenant (so a scoped token is always allowed for it),
 				// not the client header. An invalid tenant header passes through —
 				// the tenant router rejects it with a 400 and better context.
-				if id, ok := a.EffectiveTenantHTTP(r); ok && !a.allowedForTenant(bearer(h), id, surfaceRead) {
+				if id, ok := a.EffectiveTenantHTTP(r); ok && !a.tenantExempt[r.URL.Path] && !a.allowedForTenant(bearer(h), id, surfaceRead) {
 					a.failed()
 					http.Error(w, "token not authorized for this tenant", http.StatusForbidden)
 					return

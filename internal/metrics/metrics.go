@@ -159,10 +159,35 @@ func emitByType(ch chan<- prometheus.Metric, desc *prometheus.Desc, counts map[s
 // collector, the standard Go runtime and process collectors, and any extra
 // collectors (the hot-path ingest and auth counters, #113).
 func Handler(c *Collector, extra ...prometheus.Collector) http.Handler {
+	return ScopedHandler(nil, c, extra...)
+}
+
+// ScopedHandler is Handler with a per-request tenant filter. A nil scope serves
+// the whole exposition, which is what an unauthenticated scrape surface did for
+// every caller: the series are labeled by tenant, so one answer named every
+// client and its ingest volume. A scoped caller is served only the families
+// whose metrics carry its own tenant label.
+//
+// Dropping the unlabeled families with it is deliberate. They are server-wide
+// — open tenants, store bytes, Go runtime — and a scoped reader must not learn
+// which other tenants exist, the rule the debug UI's tenant switcher already
+// obeys (ADR 0028). This surface was simply never held to it.
+func ScopedHandler(scope TenantScope, c *Collector, extra ...prometheus.Collector) http.Handler {
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(c, collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	reg.MustRegister(extra...)
-	return promhttp.HandlerFor(reg, promhttp.HandlerOpts{})
+	full := promhttp.HandlerFor(reg, promhttp.HandlerOpts{})
+	if scope == nil {
+		return full
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tenantID, all := scope(r)
+		if all {
+			full.ServeHTTP(w, r)
+			return
+		}
+		serveScoped(w, r, reg, tenantID)
+	})
 }
 
 // NewAnnotationCounts reports, per tenant, how many entities carry an operator
