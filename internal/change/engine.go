@@ -410,6 +410,30 @@ func WithPromiseReporter(fn func(producer, entityType string, declared time.Dura
 	return func(e *Engine) { e.promiseReporter = fn }
 }
 
+// SetDiscardReporter installs the discard reporter on an engine that is already
+// built. The option form only reaches an engine constructed after the callback
+// exists, and the owner of the metric is assembled later than the engines: a
+// registry opens its persisted tenants at boot, so with the option alone those
+// engines keep a nil reporter for their whole life and the series stays at zero
+// for exactly the tenants that have data (#525).
+//
+// The field is read on the observation path under obsMu, so the write takes the
+// same lock; the reporter is called from under it too, which is why this must
+// never be invoked from a reporter.
+func (e *Engine) SetDiscardReporter(fn func(relationType, fromType, toType string)) {
+	e.obsMu.Lock()
+	defer e.obsMu.Unlock()
+	e.discardReporter = fn
+}
+
+// SetPromiseReporter installs the promise reporter on an already-built engine,
+// for the reason given on SetDiscardReporter and under the same lock.
+func (e *Engine) SetPromiseReporter(fn func(producer, entityType string, declared time.Duration)) {
+	e.obsMu.Lock()
+	defer e.obsMu.Unlock()
+	e.promiseReporter = fn
+}
+
 func WithClock(now func() time.Time) Option {
 	return func(e *Engine) { e.now = now }
 }

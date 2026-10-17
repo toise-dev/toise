@@ -11,6 +11,30 @@ Nothing yet.
 
 ## [0.22.0] - 2026-10-16
 
+> **`v0.22.0-beta.5` carries the whole of 0.22.0 and supersedes `beta.4`. The
+> bench refused `beta.4`, and it was right: a counter added earlier in this very
+> release could not fire on a single tenant in production.** The reporter that
+> feeds it was installed on the registry *after* boot had already opened every
+> persisted tenant, and an engine takes that callback at construction — so the
+> engines that hold data kept none. The drop was logged; the series stayed at
+> zero. Only a tenant minted after boot ever counted, which is why it passed
+> every test and every bench run until someone replayed the case on a tenant that
+> already existed.
+>
+> Two things this says, beyond the wiring. The setters' own comment asserted
+> "tenants open lazily on first use" — true the day it was written, false since
+> boot began opening persisted tenants eagerly; the knob next to them was updated
+> for that change and these were not. **A comment that was once true is how a
+> defect becomes invisible.** And the shape is this release's own: a measurement
+> that reads as good news when it is measuring nothing. Zero discarded edges and
+> no discarded edges are indistinguishable from the outside — the same confusion
+> between an absence and an answer that every other entry here corrects, this
+> time in the instrument rather than in the graph.
+>
+> The refused-promise counter had the identical defect and nobody had reported
+> it. Both are fixed, both reach the stacks already open, and both are now
+> installed before the receiver accepts an observation.
+>
 > **`v0.22.0-beta.4` carries the whole of 0.22.0 and supersedes `beta.3`, for the
 > same reason `beta.3` superseded a qualified `beta.2`: preparing the
 > qualification found the gap.** This time it surfaced while proving a reader's
