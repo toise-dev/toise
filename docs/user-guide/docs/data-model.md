@@ -35,14 +35,25 @@ identity is over scalar strings. Translation happens only at the
 
 Toise carries two distinct identity concepts that must not be confused:
 
-- **Logical entity ID** — the stable identifier of an entity across its whole
-  life, even as its identifying attributes evolve. It is a surrogate **ULID**
-  assigned by Toise on first sight, and it **survives identity changes**. This is
-  what consumers reference and what relation endpoints (`from`/`to`) point at.
+- **Logical entity ID** — a surrogate **ULID** assigned by Toise on first sight,
+  stable for as long as the entity's identity is unchanged. It does **not**
+  survive an identity change: an identifying attribute that changes yields a
+  different entity, and nothing bridges the old one to the new (ADR 0018). It is
+  also **replica-local** — each replica mints its own — and it is **re-minted**
+  if an entity returns after more than fifteen minutes of silence. So it is a
+  local detail, not a handle: an id held across a failover or an outage resolves
+  to nothing.
 - **Identity hash** — a deterministic fingerprint of the *current* identifying
   attributes (SHA-256 truncated to 128 bits, type-prefixed, e.g. `host:1a2b...`).
-  It powers O(1) idempotent ingest and **changes** when an identifying attribute
-  changes; the logical ID does not.
+  Every replica computes the same one, which makes it **the handle to carry
+  between calls and to store**. It powers O(1) idempotent ingest, and it changes
+  when an identifying attribute changes — because the entity did.
+
+!!! warning "This page said the opposite until 0.23"
+    Until then it read "survives identity changes", describing the tolerant
+    matching of ADR 0017 that ADR 0018 replaced on 2026-06-01. The tip below was
+    already correct and contradicted it on the same page. If you built on the
+    old sentence, you believed in a continuity the product does not provide.
 
 !!! tip "Put volatile facts in descriptive attributes"
     Identity should be **stable for the entity's lifetime**. If a host's identity
