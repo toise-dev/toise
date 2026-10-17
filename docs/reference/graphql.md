@@ -61,7 +61,9 @@ is refused. Annotations surface on `Entity.annotations`.
 
 ```graphql
 type Entity {
-  id: ID!              # stable logical id (ULID), survives identity changes
+  id: ID!              # replica-local logical id (ULID); re-minted after 15 min of
+                       # silence, and an identity change yields a DIFFERENT entity.
+                       # Carry identityFingerprint between calls, not this.
   type: String!        # e.g. "host", "process", "network.interface"
   identity: [Attribute!]!
   attributes: [Attribute!]!
