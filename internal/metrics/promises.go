@@ -18,14 +18,20 @@ import (
 //
 // The count is published unlabeled and always, including as zero, so a clean
 // fleet is a visible fact rather than an absent series: absence would otherwise
-// read the same as a failed scrape.
+// read the same as a failed scrape. The two detail instruments carry the tenant,
+// which 0.22 shipped without and the bench's GO noted as a reserve — a refusal
+// an operator cannot attribute to a client is a refusal they have to go and
+// look up in the logs.
 type Promises struct {
-	refused *prometheus.CounterVec // producer, entity_type
+	refused *prometheus.CounterVec // tenant, producer, entity_type
 	count   prometheus.Counter
-	worst   *prometheus.GaugeVec // producer, entity_type
+	worst   *prometheus.GaugeVec // tenant, producer, entity_type
 
-	mu   sync.Mutex
-	seen map[[2]string]float64
+	mu sync.Mutex
+	// seen mirrors the worst gauge because a Prometheus gauge cannot be read
+	// back. Keyed by tenant too, or one tenant's larger refusal would suppress
+	// another's — the exact cross-tenant leak this label exists to remove.
+	seen map[[3]string]float64
 }
 
 // NewPromises builds the promise instruments.
@@ -34,7 +40,7 @@ func NewPromises() *Promises {
 		refused: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "toise_refused_liveness_promises_total",
 			Help: "Liveness intervals refused as impossible, by producer and entity type. A producer appearing here has a defect: the entities it asserts carry no cadence at all, which a reader cannot distinguish from an honest absence of promise.",
-		}, []string{"producer", "entity_type"}),
+		}, []string{"tenant", "producer", "entity_type"}),
 		count: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "toise_refused_liveness_promises_count",
 			Help: "How many liveness promises this instance has refused since start. Published as zero too, so alerting on an increase needs no series to exist first.",
@@ -42,8 +48,8 @@ func NewPromises() *Promises {
 		worst: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "toise_refused_liveness_promise_seconds",
 			Help: "The LARGEST interval refused from this producer and entity type, in seconds, since start. The magnitude is the diagnosis: a few times the bound is a misconfiguration, a thousand times over is a unit error.",
-		}, []string{"producer", "entity_type"}),
-		seen: map[[2]string]float64{},
+		}, []string{"tenant", "producer", "entity_type"}),
+		seen: map[[3]string]float64{},
 	}
 }
 
@@ -62,22 +68,23 @@ func (p *Promises) Collectors() []prometheus.Collector {
 // The gauge keeps the largest value seen rather than the latest, mirrored here
 // because Prometheus gauges cannot be read back. A later, smaller refusal from
 // the same producer must not hide the magnitude that identifies the cause.
-func (p *Promises) Refused(producer, entityType string, declared time.Duration) {
+func (p *Promises) Refused(tenantID, producer, entityType string, declared time.Duration) {
 	if p == nil {
 		return
 	}
 	if producer == "" {
 		producer = "unknown"
 	}
-	p.refused.WithLabelValues(producer, entityType).Inc()
+	tenantID = tenantOrUnknown(tenantID)
+	p.refused.WithLabelValues(tenantID, producer, entityType).Inc()
 	p.count.Inc()
 
 	secs := declared.Seconds()
-	key := [2]string{producer, entityType}
+	key := [3]string{tenantID, producer, entityType}
 	p.mu.Lock()
 	if secs > p.seen[key] {
 		p.seen[key] = secs
-		p.worst.WithLabelValues(producer, entityType).Set(secs)
+		p.worst.WithLabelValues(tenantID, producer, entityType).Set(secs)
 	}
 	p.mu.Unlock()
 }

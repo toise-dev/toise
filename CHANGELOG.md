@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The two producer-defect counters say which tenant they are about.** 0.22
+  shipped `toise_discarded_relations_total` and
+  `toise_refused_liveness_promises_total` (plus
+  `toise_refused_liveness_promise_seconds`) without a tenant label, and the
+  bench's GO on the stable recorded it as a reserve rather than a defect. It is
+  worth closing because of what these instruments are for: a discarded edge and
+  a refused cadence leave **no trace in the graph**, so the series is the only
+  way anyone learns — and a figure an operator cannot attribute to a client
+  sends them to the logs to find out, which is the errand the series exists to
+  spare them.
+
+  **Breaking for a dashboard that aggregates these three without `by`.** A new
+  label splits existing series, so a panel summing them unqualified will show
+  one line per tenant where it showed one line. Add `sum without (tenant) (...)`
+  to keep the old shape.
+
+  The attribution comes from the registry, which is the only layer holding the
+  mapping: an engine serves exactly one tenant and has no handle on which, so
+  each stack is now installed with a closure that binds its own id. The
+  `_count` companions stay **unlabeled on purpose** — their whole point is to
+  exist at zero from the first scrape so an alert on an increase needs no series
+  to appear first, and a tenant-labeled series cannot have that property since
+  it only comes into being once that tenant has something to report.
+
 - **`/metrics` is authenticated, and answers only what the caller's token may
   see.** It was public, and its series are labeled by tenant: one
   unauthenticated request named every client on the instance and its ingest

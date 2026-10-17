@@ -88,10 +88,14 @@ type Registry struct {
 	// liveness interval. Set once via SetPromiseReporter before serving; it
 	// applies to every stack opened after. A refusal is already logged, and a
 	// WARN line wakes nobody — this is what makes it alertable.
-	promiseReporter func(producer, entityType string, declared time.Duration)
+	//
+	// It takes the tenant because an engine does not know its own: the registry
+	// is the only layer that holds the mapping, so it is the only one that can
+	// name the tenant a figure belongs to.
+	promiseReporter func(tenantID, producer, entityType string, declared time.Duration)
 	// discardReporter is called when a tenant engine gives up on an edge whose
 	// endpoint never arrived. Set once via SetDiscardReporter before serving.
-	discardReporter func(relationType, fromType, toType string)
+	discardReporter func(tenantID, relationType, fromType, toType string)
 	limits          Limits
 	logger          *slog.Logger
 	// now is the clock each tenant engine uses (liveness floor at boot, Sweep).
@@ -144,24 +148,56 @@ func Open(dataDir string, storeCfg store.Config, relBuf time.Duration, logger *s
 // total: the stacks that miss the reporter are precisely the ones with data, so
 // a production instance, where every tenant exists at boot, reported nothing at
 // all while the WARN lines piled up (#525).
-func (r *Registry) SetDiscardReporter(fn func(relationType, fromType, toType string)) {
+func (r *Registry) SetDiscardReporter(fn func(tenantID, relationType, fromType, toType string)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.discardReporter = fn
-	for _, st := range r.stacks {
-		st.Engine.SetDiscardReporter(fn)
+	for id, st := range r.stacks {
+		st.Engine.SetDiscardReporter(r.discardFor(id))
+	}
+}
+
+// discardFor binds one tenant's id to the installed reporter. The engine's own
+// callback stays tenant-blind: an engine serves exactly one tenant and has no
+// handle on which, so the binding belongs here or nowhere.
+//
+// It reads r.discardReporter without holding r.mu, because the stack-opening
+// path deliberately runs outside the registry mutex (see inflight). That is
+// sound only under the setters' documented contract — installed before serving,
+// never changed afterwards — which is also why main.go installs both before the
+// OTLP receiver accepts anything. A setter called mid-flight would race here,
+// and the field would be the smaller of the two problems.
+func (r *Registry) discardFor(tenantID string) func(relationType, fromType, toType string) {
+	fn := r.discardReporter
+	if fn == nil {
+		return nil
+	}
+	return func(relationType, fromType, toType string) {
+		fn(tenantID, relationType, fromType, toType)
 	}
 }
 
 // SetPromiseReporter installs the callback a tenant engine calls when it
 // refuses an implausible liveness interval, with the same reach as
 // SetDiscardReporter and for the same reason.
-func (r *Registry) SetPromiseReporter(fn func(producer, entityType string, declared time.Duration)) {
+func (r *Registry) SetPromiseReporter(fn func(tenantID, producer, entityType string, declared time.Duration)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.promiseReporter = fn
-	for _, st := range r.stacks {
-		st.Engine.SetPromiseReporter(fn)
+	for id, st := range r.stacks {
+		st.Engine.SetPromiseReporter(r.promiseFor(id))
+	}
+}
+
+// promiseFor is promiseReporter's binding, with the same contract and the same
+// lock caveat as discardFor.
+func (r *Registry) promiseFor(tenantID string) func(producer, entityType string, declared time.Duration) {
+	fn := r.promiseReporter
+	if fn == nil {
+		return nil
+	}
+	return func(producer, entityType string, declared time.Duration) {
+		fn(tenantID, producer, entityType, declared)
 	}
 }
 
@@ -473,8 +509,8 @@ func (r *Registry) openStack(id string) (*Stack, error) {
 		change.WithClock(clock),
 		change.WithLogger(r.logger.With("tenant", id)),
 		change.WithRelationBuffer(r.relBuf),
-		change.WithPromiseReporter(r.promiseReporter),
-		change.WithDiscardReporter(r.discardReporter))
+		change.WithPromiseReporter(r.promiseFor(id)),
+		change.WithDiscardReporter(r.discardFor(id)))
 	// Restore the liveness Memento (#139): absolute deadlines, so a producer
 	// that died during the downtime is swept on the first tick after boot.
 	if err := engine.RestoreLiveness(liveness); err != nil {
