@@ -2,6 +2,8 @@ package registry
 
 import (
 	"path/filepath"
+	"reflect"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -13,21 +15,37 @@ import (
 
 // recorder collects reporter calls from any tenant's engine.
 type recorder struct {
-	mu       sync.Mutex
-	discards []string
-	promises []string
+	mu             sync.Mutex
+	discards       []string
+	promises       []string
+	discardTenants []string
+	promiseTenants []string
 }
 
-func (r *recorder) dropped(relationType, fromType, toType string) {
+func (r *recorder) dropped(tenantID, relationType, fromType, toType string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.discards = append(r.discards, relationType+" "+fromType+"->"+toType)
+	r.discards = append(r.discards, tenantID+" "+relationType+" "+fromType+"->"+toType)
+	r.discardTenants = append(r.discardTenants, tenantID)
 }
 
-func (r *recorder) refused(producer, entityType string, _ time.Duration) {
+func (r *recorder) refused(tenantID, producer, entityType string, _ time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.promises = append(r.promises, producer+" "+entityType)
+	r.promises = append(r.promises, tenantID+" "+producer+" "+entityType)
+	r.promiseTenants = append(r.promiseTenants, tenantID)
+}
+
+// tenants returns the tenants each reporter named, sorted, so a test can assert
+// WHICH tenants were attributed and not merely how many calls arrived.
+func (r *recorder) tenants() (discards, promises []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	discards = append(discards, r.discardTenants...)
+	promises = append(promises, r.promiseTenants...)
+	sort.Strings(discards)
+	sort.Strings(promises)
+	return discards, promises
 }
 
 func (r *recorder) counts() (int, int) {
@@ -97,6 +115,21 @@ func TestReportersReachTenantsOpenedAtBoot(t *testing.T) {
 	}
 	if promises != 2 {
 		t.Errorf("refused promises reported = %d, want 2 (one per tenant); %v", promises, rec.promises)
+	}
+
+	// The count was never the whole contract. A figure an operator cannot
+	// attribute to a client sends them to the logs to find out, which is the
+	// errand these instruments exist to spare them — so assert WHICH tenants
+	// were named, not just that two calls arrived. This is also the assertion
+	// that fails if every stack is handed the same closure: the counts would
+	// still be 2 and 2, and both rows would say the same tenant.
+	want := []string{"acme", "later"}
+	gotDiscards, gotPromises := rec.tenants()
+	if !reflect.DeepEqual(gotDiscards, want) {
+		t.Errorf("discard tenants = %v, want %v", gotDiscards, want)
+	}
+	if !reflect.DeepEqual(gotPromises, want) {
+		t.Errorf("promise tenants = %v, want %v", gotPromises, want)
 	}
 }
 
