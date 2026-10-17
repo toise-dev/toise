@@ -7,7 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- **`/metrics` is authenticated, and answers only what the caller's token may
+  see.** It was public, and its series are labeled by tenant: one
+  unauthenticated request named every client on the instance and its ingest
+  volume. A global token still gets the whole exposition — the per-tenant labels
+  are the only per-client volume signal an operator has, and removing them would
+  cost more than the exposure did. A tenant-scoped token gets its own series and
+  nothing else, the server-wide families included, because their presence alone
+  tells a scoped reader that other tenants exist.
+
+  The rule is not new. The debug UI already withholds the tenant list from a
+  scoped reader, for this exact reason (ADR 0028); this route was simply never
+  held to it. What made it worse than the audit note said is that the route
+  **ignored `?tenant=`**: measured on an instance, one authenticated call
+  returned all three tenants' series. "Labeled by tenant" and "not partitioned"
+  are different findings, and only the second one is true.
+
+  Every scoped answer carries `toise_metrics_scope_info{tenant="..."} 1`. A
+  tenant with no series yet and a broken exporter are otherwise the same empty
+  body, which is the confusion this product exists to remove — in the
+  instrument, again.
+
+  **Breaking for an existing scrape**: a Prometheus job with no bearer gets 401
+  on restart. `metrics_public` restores the old behavior for the length of an
+  upgrade; the server logs at startup which mode it is in, so nobody has to read
+  the config to learn whether this is open.
 
 ## [0.22.0] - 2026-10-16
 

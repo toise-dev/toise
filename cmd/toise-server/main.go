@@ -461,7 +461,11 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		}
 		return out
 	}))
-	mux.Handle("/metrics", metrics.Handler(metrics.NewCollector(
+	// The scrape surface is filtered per caller: a global token reads every
+	// tenant's series (what the operator's single scrape needs), a tenant-scoped
+	// one reads only its own. Unfiltered, one answer named every client on the
+	// instance and its ingest volume (#463).
+	mux.Handle("/metrics", metrics.ScopedHandler(authn.MetricsScope, metrics.NewCollector(
 		aggregateGraph{reg}, aggregateStore{reg}, version.Version, version.Commit), metricsExtra...))
 	if cfg.Playground {
 		mux.Handle("/playground", playground.Handler("Toise", "/graphql"))
@@ -497,8 +501,21 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		}
 		mux.Handle("/", debugRouter)
 	}
-	// Auth wraps the data surfaces; the operational probes/scrape stay public.
-	public := map[string]bool{"/healthz": true, "/readyz": true, "/metrics": true}
+	// Auth wraps the data surfaces; the liveness probes stay public because a
+	// probe must answer before anything is configured. The scrape no longer
+	// does: its series are labeled by tenant, so an open /metrics handed any
+	// caller the list of clients and their volumes (#463). metrics_public
+	// restores the old behavior for the length of an upgrade, so that landing
+	// this does not blind a scrape that has no bearer yet.
+	public := map[string]bool{"/healthz": true, "/readyz": true}
+	if cfg.MetricsPublic {
+		public["/metrics"] = true
+	}
+	// The scrape authenticates but targets no tenant: it is filtered to what the
+	// token may see, so the per-tenant authorization must not run on it.
+	authn.SetTenantExemptPaths(map[string]bool{"/metrics": true})
+	logger.Info("scrape surface", "path", "/metrics",
+		"authenticated", !cfg.MetricsPublic, "per_tenant_scope", !cfg.MetricsPublic)
 	// CORS sits OUTSIDE auth, because a preflight carries no Authorization
 	// header: a browser asks whether it may send one before it sends it. An
 	// empty allowlist makes this a no-op, so same-origin stays the default.

@@ -35,6 +35,11 @@ import (
 
 const bootToken = "boot-test-token"
 
+// bootScopedToken reads only tenant acme. It exists so the boot test proves the
+// scrape filter is WIRED, not merely unit-tested: the counters of #525 passed
+// every unit test while the wiring lost every tenant that mattered.
+const bootScopedToken = "boot-test-acme-read"
+
 func freeAddr(t *testing.T) string {
 	t.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
@@ -63,6 +68,9 @@ func TestServerBoot(t *testing.T) {
 		"--snapshot-interval", "50ms",
 		"--retention-max-age", "24h",
 	}, func(k string) string {
+		if k == "TOISE_TENANT_READ_TOKENS" {
+			return "acme:" + bootScopedToken
+		}
 		if k == "TOISE_AUTH_TOKENS" {
 			return bootToken
 		}
@@ -98,18 +106,41 @@ func TestServerBoot(t *testing.T) {
 	if code := httpCode(t, base+"/graphql", "POST", `{"query":"{ entities { totalCount } }"}`, false); code != http.StatusUnauthorized {
 		t.Errorf("unauthenticated /graphql = %d, want 401", code)
 	}
-	for _, path := range []string{"/healthz", "/readyz", "/metrics"} {
+	// The liveness probes stay public: a probe must answer before anything is
+	// configured. The scrape does not — its series are labeled by tenant, so an
+	// open one handed any caller the list of clients and their volumes (#463).
+	for _, path := range []string{"/healthz", "/readyz"} {
 		if code := httpCode(t, base+path, "GET", "", false); code != http.StatusOK {
 			t.Errorf("unauthenticated %s = %d, want 200", path, code)
 		}
 	}
+	if code := httpCode(t, base+"/metrics", "GET", "", false); code != http.StatusUnauthorized {
+		t.Errorf("unauthenticated /metrics = %d, want 401", code)
+	}
 
-	// The ingest counters are on /metrics end-to-end (#113).
-	body := httpBody(t, base+"/metrics")
+	// The ingest counters are on /metrics end-to-end (#113), for a global token.
+	body := authBody(t, base+"/metrics", bootToken)
 	for _, m := range []string{"toise_ingest_exports_total", "toise_ingest_records_total", "toise_auth_failures_total"} {
 		if !strings.Contains(body, m) {
 			t.Errorf("/metrics missing %s", m)
 		}
+	}
+	for _, want := range []string{`tenant="default"`, `tenant="acme"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("a global token must keep the all-tenant scrape, %s missing", want)
+		}
+	}
+
+	// A tenant-scoped token reads its own tenant and cannot count the others.
+	scoped := authBody(t, base+"/metrics", bootScopedToken)
+	if !strings.Contains(scoped, `tenant="acme"`) {
+		t.Errorf("scoped scrape missing its own tenant:\n%s", scoped)
+	}
+	if strings.Contains(scoped, `tenant="default"`) {
+		t.Errorf("scoped scrape served another tenant's series:\n%s", scoped)
+	}
+	if !strings.Contains(scoped, `toise_metrics_scope_info{tenant="acme"} 1`) {
+		t.Errorf("a scoped answer must name its scope, so that empty cannot be mistaken for broken:\n%s", scoped)
 	}
 
 	// --production hides the development surfaces.
@@ -241,13 +272,21 @@ func httpCode(t *testing.T, url, method, body string, withAuth bool) int {
 	return resp.StatusCode
 }
 
-func httpBody(t *testing.T, url string) string {
+func authBody(t *testing.T, url, token string) string {
 	t.Helper()
-	resp, err := http.Get(url)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
-		t.Fatalf("GET %s: %v", url, err)
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, rerr := http.DefaultClient.Do(req)
+	if rerr != nil {
+		t.Fatalf("GET %s: %v", url, rerr)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s = %d, want 200", url, resp.StatusCode)
+	}
 	b, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatal(err)
