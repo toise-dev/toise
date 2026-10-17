@@ -167,6 +167,23 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	}
 	defer func() { _ = reg.Close() }()
 
+	// Both producer-defect reporters are installed here, before the OTLP
+	// receiver accepts an observation and before the metrics registry is
+	// assembled further down: a reporter installed after the receiver serves
+	// loses whatever happens in between, and one installed after the registry
+	// opened its persisted tenants used to lose them entirely (#525).
+	//
+	// A refused liveness promise is a PRODUCER defect its operator cannot see
+	// from inside the graph: the entity simply ends up with no cadence, which
+	// reads like an honest absence. The series is the only way anyone learns.
+	promises := metrics.NewPromises()
+	reg.SetPromiseReporter(promises.Refused)
+	// An edge discarded for a missing endpoint leaves NO trace in the graph —
+	// no relation, no target, nothing attempted. A tenant lost 47327 of them in
+	// ten days before anyone looked at the right log.
+	discards := metrics.NewDiscards()
+	reg.SetDiscardReporter(discards.Dropped)
+
 	// Final snapshot at graceful shutdown, declared right after the close so it
 	// runs just before it (after the maintenance loops have joined and ingest
 	// has stopped): producer references acquired since the last periodic
@@ -420,17 +437,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	metricsExtra := append(ingestMetrics.Collectors(), authFailures, quarantined, openTenants)
 	metricsExtra = append(metricsExtra, maint.Collectors()...)
 	metricsExtra = append(metricsExtra, exposure.Collectors()...)
-	// A refused liveness promise is a PRODUCER defect its operator cannot see
-	// from inside the graph: the entity simply ends up with no cadence, which
-	// reads like an honest absence. The series is the only way anyone learns.
-	promises := metrics.NewPromises()
-	reg.SetPromiseReporter(promises.Refused)
 	metricsExtra = append(metricsExtra, promises.Collectors()...)
-	// An edge discarded for a missing endpoint leaves NO trace in the graph —
-	// no relation, no target, nothing attempted. A tenant lost 47327 of them in
-	// ten days before anyone looked at the right log.
-	discards := metrics.NewDiscards()
-	reg.SetDiscardReporter(discards.Dropped)
 	metricsExtra = append(metricsExtra, discards.Collectors()...)
 	metricsExtra = append(metricsExtra, queryMetrics.Collectors()...)
 	// Annotation counts per tenant, so a replica-local overlay is at least

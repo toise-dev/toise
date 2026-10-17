@@ -133,22 +133,36 @@ func Open(dataDir string, storeCfg store.Config, relBuf time.Duration, logger *s
 // stack opened later. Call it before serving; a mid-flight change only affects
 // deadlines armed from then on, which is fine for a startup knob and not a
 // correctness issue for anything else.
-// SetPromiseReporter installs the callback a tenant engine calls when it
-// refuses an implausible liveness interval. Call it before serving: it applies
-// to every stack opened afterwards, which in practice is all of them, since
-// tenants open lazily on first use.
 // SetDiscardReporter installs the callback a tenant engine calls when it gives
-// up on an edge whose endpoint never arrived. Call it before serving.
+// up on an edge whose endpoint never arrived. It applies to every stack already
+// open AND to every stack opened later, like SetResurrectionGrace.
+//
+// Both halves are load-bearing. These setters once carried the sentence "it
+// applies to every stack opened afterwards, which in practice is all of them,
+// since tenants open lazily on first use" — true when they were written, false
+// since boot started opening persisted tenants eagerly, and the inversion is
+// total: the stacks that miss the reporter are precisely the ones with data, so
+// a production instance, where every tenant exists at boot, reported nothing at
+// all while the WARN lines piled up (#525).
 func (r *Registry) SetDiscardReporter(fn func(relationType, fromType, toType string)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.discardReporter = fn
+	for _, st := range r.stacks {
+		st.Engine.SetDiscardReporter(fn)
+	}
 }
 
+// SetPromiseReporter installs the callback a tenant engine calls when it
+// refuses an implausible liveness interval, with the same reach as
+// SetDiscardReporter and for the same reason.
 func (r *Registry) SetPromiseReporter(fn func(producer, entityType string, declared time.Duration)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.promiseReporter = fn
+	for _, st := range r.stacks {
+		st.Engine.SetPromiseReporter(fn)
+	}
 }
 
 func (r *Registry) SetResurrectionGrace(d time.Duration) {
