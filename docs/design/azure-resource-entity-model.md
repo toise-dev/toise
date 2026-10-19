@@ -83,12 +83,16 @@ lowercased value in `cloud.resource_id` would make *our* emission violate the
 upstream rule, which is not a trade worth making for a key we do not own.
 
 **Therefore: `cloud.resource_id` keeps the API's casing and stays descriptive,
-serving the telemetry join. The identity key is a separate key of ours, holding
-the lowercase canonical form.** Our precedent for extending an upstream
-namespace deliberately is `host.service.name`, documented as such; do the same
-here and write down *why* the key is ours — because upstream fixes its key's
-rendering for a join, and a join and an identity do not have the same
-requirement.
+serving the telemetry join. The identity key is `azure.resource.id`, holding the
+same ARM id in lowercase.** That is our extension of an upstream namespace,
+taken deliberately on the `host.service.name` precedent, and the contract states
+*why* the key is ours beside the rule itself: upstream fixes its key's rendering
+for a join, and a join and an identity do not have the same requirement.
+
+A third display-only form was considered and dropped: once `cloud.resource_id`
+carries the API's casing, a separate display value holds the same bytes under a
+second name, and two attributes holding one value eventually diverge with nobody
+remembering which was authoritative.
 
 Lowercasing cannot merge two distinct ARM resources: the only case-sensitive
 name Microsoft documents is a blob name, a data-plane object and not an ARM
@@ -228,7 +232,7 @@ applications hold a credential expiring this month" is a different model from
 
 | Question | Answer |
 | --- | --- |
-| Entity type | Generic, keyed on the ARM id in a canonical lowercase form, under a key of ours |
+| Entity type | Generic, keyed `azure.resource.id` — the ARM id, lowercase |
 | `cloud.resource_id` | Upstream's key: **original casing**, descriptive, for the telemetry join — never the identity |
 | Specialisation by family | No — the observer cannot obtain service-level identity |
 | `host.id` on an Azure VM | **Unchanged: the machine-id.** `vmId` is descriptive |
