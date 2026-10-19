@@ -35,8 +35,9 @@ Azure `vmId` is a descriptive attribute on the host, never its identity.**
 
 ## 1. Entity type: generic, keyed on what the observer can obtain
 
-**A single generic type, identified by `cloud.resource_id`** (the full ARM id,
-which is unique and stable for the resource's lifetime).
+**A single generic type, identified by the ARM id in a canonical lowercase
+form** — unique and stable for the resource's lifetime, under a key that is ours
+(§1b explains why it is not `cloud.resource_id`).
 
 The rule it follows is the one already quoted on `network.endpoint`: *emit a
 different entity type keyed on what you can reliably obtain.* What Resource
@@ -56,16 +57,44 @@ not one — it is the generic resource **linked** to the host that already exist
 (§2). The link is what carries the meaning; the type stays honest about what was
 observed.
 
-**On the spelling: `cloud.resource_id` is the proposed key, and it is not yet in
-our contract** — we carry `cloud.provider` and `cloud.platform` and nothing
-else from this namespace. Before it is frozen it should be checked against the
-semantic conventions by the session that tracks them, per the standing rule that
-a data-model key is chosen against the spec and not from memory. If upstream
-spells it otherwise, take upstream's spelling: this is a new key for us and there
-is nothing to migrate.
-
 The ARM type, name, subscription, resource group, region, tags and provisioning
 state are **descriptive** attributes on that entity.
+
+## 1b. The identity key is ours, and `cloud.resource_id` is not it
+
+This replaces an earlier draft of this note, which made `cloud.resource_id` the
+identity key. Two facts arrived afterwards and they do not fit together on one
+key:
+
+- **Upstream owns `cloud.resource_id` and fixes its rendering: keep the casing
+  the API returned, never lowercase it.** It exists so a consumer can join our
+  entity to Azure's own telemetry, and lowercasing it breaks that join — a
+  breakage already observed in the collector's contrib modules.
+- **An identity needs a canonical rendering or it is not an identity.** Microsoft's
+  own naming documentation says ARM names are case-insensitive and that *"the
+  returned value might have different casing than what you originally
+  specified… Always perform a case-insensitive comparison of names."* Two
+  producers reading two APIs therefore hand us two spellings of one resource,
+  and two spellings of one thing are a permanent silent duplicate. The same
+  failure has already cost us twice, on `hw.vendor` and on `host.id`.
+
+So the two rules are both right and they govern different objects. Putting a
+lowercased value in `cloud.resource_id` would make *our* emission violate the
+upstream rule, which is not a trade worth making for a key we do not own.
+
+**Therefore: `cloud.resource_id` keeps the API's casing and stays descriptive,
+serving the telemetry join. The identity key is a separate key of ours, holding
+the lowercase canonical form.** Our precedent for extending an upstream
+namespace deliberately is `host.service.name`, documented as such; do the same
+here and write down *why* the key is ours — because upstream fixes its key's
+rendering for a join, and a join and an identity do not have the same
+requirement.
+
+Lowercasing cannot merge two distinct ARM resources: the only case-sensitive
+name Microsoft documents is a blob name, a data-plane object and not an ARM
+resource. That was checked against the documentation rather than assumed,
+because being wrong would have silently merged two different resources — the
+worst defect available here.
 
 ## 2. The agent's own VM: a third facet, joined by `same_as`
 
@@ -199,7 +228,8 @@ applications hold a credential expiring this month" is a different model from
 
 | Question | Answer |
 | --- | --- |
-| Entity type | Generic, keyed `cloud.resource_id` (the ARM id) |
+| Entity type | Generic, keyed on the ARM id in a canonical lowercase form, under a key of ours |
+| `cloud.resource_id` | Upstream's key: **original casing**, descriptive, for the telemetry join — never the identity |
 | Specialisation by family | No — the observer cannot obtain service-level identity |
 | `host.id` on an Azure VM | **Unchanged: the machine-id.** `vmId` is descriptive |
 | ARM resource vs host | Two entities, joined by `same_as`, basis = matching `vmId` |
