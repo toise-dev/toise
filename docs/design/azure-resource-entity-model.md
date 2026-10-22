@@ -63,13 +63,17 @@ state are **descriptive** attributes on that entity.
 ## 1b. The identity key is ours, and `cloud.resource_id` is not it
 
 This replaces an earlier draft of this note, which made `cloud.resource_id` the
-identity key. Two facts arrived afterwards and they do not fit together on one
-key:
+identity key. Two requirements turned out not to fit on one key:
 
-- **Upstream owns `cloud.resource_id` and fixes its rendering: keep the casing
-  the API returned, never lowercase it.** It exists so a consumer can join our
-  entity to Azure's own telemetry, and lowercasing it breaks that join — a
-  breakage already observed in the collector's contrib modules.
+- **`cloud.resource_id` is an upstream key, and normalising it is not ours to
+  do: keep the casing the API returned.** It exists so a consumer can join our
+  entity to Azure's own telemetry. We hold **no** upstream rule fixing its
+  rendering: an earlier draft of this note asserted one, and asserted a
+  breakage already observed in the collector's contrib modules. Neither can be
+  sourced, and both are withdrawn. What remains is enough to decide: a value we
+  received, on a key we do not own, with no rendering rule we can point to, is
+  not ours to lowercase — and a consumer joining on it would then break on
+  *our* transformation rather than on Azure's own variance.
 - **An identity needs a canonical rendering or it is not an identity.** Microsoft's
   own naming documentation says ARM names are case-insensitive and that *"the
   returned value might have different casing than what you originally
@@ -78,16 +82,15 @@ key:
   and two spellings of one thing are a permanent silent duplicate. The same
   failure has already cost us twice, on `hw.vendor` and on `host.id`.
 
-So the two rules are both right and they govern different objects. Putting a
-lowercased value in `cloud.resource_id` would make *our* emission violate the
-upstream rule, which is not a trade worth making for a key we do not own.
+So the two requirements govern different objects: the join wants the value as it
+arrived, the identity wants one canonical spelling. One key cannot serve both.
 
 **Therefore: `cloud.resource_id` keeps the API's casing and stays descriptive,
 serving the telemetry join. The identity key is `azure.resource.id`, holding the
 same ARM id in lowercase.** That is our extension of an upstream namespace,
 taken deliberately on the `host.service.name` precedent, and the contract states
-*why* the key is ours beside the rule itself: upstream fixes its key's rendering
-for a join, and a join and an identity do not have the same requirement.
+*why* the key is ours beside the rule itself: we normalise only a key we own,
+and a join and an identity do not have the same requirement.
 
 A third display-only form was considered and dropped: once `cloud.resource_id`
 carries the API's casing, a separate display value holds the same bytes under a
@@ -163,9 +166,19 @@ it now would mint two entity types to carry a filter.
 
 **Agreed: nothing but the host link.** Beyond the design argument, there is a
 hard constraint: a record carrying a relation type this Toise does not register
-is **rejected per record, silently from the producer's point of view**, and the
-conformance kit cannot catch it because it validates shape, not registry
-membership. The only observable is a counter.
+is **rejected per record**, its valid siblings kept, and the conformance kit
+cannot catch it because it validates shape, not registry membership — its own
+contract says so (`pkg/emit/conformance/conformance.go:5-7`).
+
+The rejection *is* reported back, and its form matters more than its existence.
+Toise answers the export with an OTLP **partial success** carrying the number of
+rejected records and the **first** error message, and accepts the export so
+nothing is retried (`internal/ingest/receiver.go:200-240`, `:286-296`). So a
+producer that reads `partial_success` learns that something was refused and one
+reason for it — not every reason, and not which record. A producer that ignores
+`partial_success` sees nothing; server-side the only trace is then a warning
+line and the `rejected` counter. Treat it as a signal that needs a reader, not
+as a safety net.
 
 VM → managed disk, NIC → VNet, App Service → plan, database → server would each
 need either a new registered type or an existing one stretched past its meaning.
