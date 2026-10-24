@@ -45,6 +45,12 @@ var displayNameKeys = map[string][]string{
 	// its own identity keys, and LabelName drops the duplicate so a label does not
 	// read "network.address 10.0.0.5 network.address=10.0.0.5".
 	TypeNetworkAddress: {"network.address"},
+	// An ARM id reads like nothing: a human says "vm-lna-01", not
+	// "/subscriptions/<guid>/resourcegroups/rg/providers/...". azure.resource.name
+	// is the descriptive attribute the discovery producer emits for exactly that
+	// (verified in its own contract, not assumed), and it is the only key here
+	// rather than a precedence list because no producer emits a second one.
+	TypeCloudResource: {"azure.resource.name"},
 }
 
 // displayNameNone holds the types that deliberately have no display name, with
