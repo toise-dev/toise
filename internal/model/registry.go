@@ -170,6 +170,15 @@ const (
 	// It carries confidence and basis, the second being a closed vocabulary
 	// because the sources are not equally strong: lldp states its own identity,
 	// arp/ndp map a MAC to an address, fdb heard it on a port.
+	//
+	// NOTHING READS THE CONFIDENCE, and that is stated here because a producer
+	// cannot find it out: ingest accepts and stores it exactly as it does for
+	// same_as, while every reader of the attribute gates on same_as alone — the
+	// canonical walk and the alias-aware traversal both do. So a confidence on
+	// this edge is provenance a human or an LLM can read, and no grouping and no
+	// path decision uses it. Acceptance is not withdrawn, because that would
+	// narrow the wire contract and lose the basis, which is the useful half; the
+	// ingest boundary counts it instead (toise_inert_beliefs_total, #544).
 	RelResolvesTo = wire.RelTypeResolvesTo
 	// RelAggregatedInto links a physical interface to the logical one that
 	// aggregates it — a bond or team member to its master, a switch port to its

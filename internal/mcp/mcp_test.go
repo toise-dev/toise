@@ -1949,3 +1949,90 @@ func TestServiceEndpointIsOfferedOnlyToACheckedListener(t *testing.T) {
 		t.Error("a listener no check targets is offered service.endpoint: that filter returns nothing, which is the partial false promise this design exists to avoid")
 	}
 }
+
+// TestCanonicalNamesTheBeliefItCouldNotUse pins #544 on the read side: an entity
+// whose only same_as evidence is unreadable must not answer like an entity with
+// no alias at all.
+//
+// Before this, canonicalGroup returned nil in both cases. The producer believed
+// it had published an identity join, the consumer read two separate entities,
+// and no surface said a belief had been refused — a failure that is one per
+// machine and scales with the fleet, since the Azure model emits one same_as per
+// VM and a re-key emits one per host.
+func TestCanonicalNamesTheBeliefItCouldNotUse(t *testing.T) {
+	belief := func(id string, from, to model.EntityID, attrs ...model.KeyValue) model.Relation {
+		return model.Relation{ID: model.RelationID(id), Type: model.RelSameAs, From: from, To: to, Attributes: attrs}
+	}
+	conf := func(v float64) model.KeyValue {
+		return model.KeyValue{Key: "confidence", Value: model.DoubleValue(v)}
+	}
+
+	for _, tc := range []struct {
+		name       string
+		attrs      []model.KeyValue
+		wantReason string
+	}{
+		{"no confidence at all", []model.KeyValue{{Key: "basis", Value: sv("vm_id_match")}}, "no_confidence"},
+		{"confidence is a string", []model.KeyValue{{Key: "confidence", Value: sv("0.95")}}, "confidence_not_numeric"},
+		{"confidence above one", []model.KeyValue{conf(1.5)}, "confidence_out_of_range"},
+		{"confidence below zero", []model.KeyValue{conf(-0.1)}, "confidence_out_of_range"},
+	} {
+		g := &fakeGraph{
+			entities: map[model.EntityID]model.Entity{
+				"vmA":   {ID: "vmA", Type: model.TypeComputeVM},
+				"hostB": {ID: "hostB", Type: model.TypeHost},
+			},
+			deleted:   map[model.EntityID]bool{},
+			relations: []model.Relation{belief("s1", "vmA", "hostB", tc.attrs...)},
+		}
+		s := New(g, &fakeStore{})
+		got := s.canonicalGroup(g, "vmA")
+		if got == nil {
+			t.Errorf("%s: canonical block is nil, so an unreadable belief reads exactly like no alias", tc.name)
+			continue
+		}
+		if len(got.Aliases) != 0 {
+			t.Errorf("%s: aliases = %+v, want none — an unreadable belief must never group anything", tc.name, got.Aliases)
+		}
+		if len(got.Inert) != 1 || got.Inert[0].Reason != tc.wantReason {
+			t.Errorf("%s: inert = %+v, want one entry with reason %q", tc.name, got.Inert, tc.wantReason)
+		}
+	}
+
+	// The basis survives an unreadable confidence, because it is the half a human
+	// or an LLM can still act on.
+	g := &fakeGraph{
+		entities: map[model.EntityID]model.Entity{
+			"vmA": {ID: "vmA", Type: model.TypeComputeVM}, "hostB": {ID: "hostB", Type: model.TypeHost},
+		},
+		deleted:   map[model.EntityID]bool{},
+		relations: []model.Relation{belief("s1", "vmA", "hostB", model.KeyValue{Key: "basis", Value: sv("vm_id_match")})},
+	}
+	if got := New(g, &fakeStore{}).canonicalGroup(g, "vmA"); got == nil || len(got.Inert) != 1 || got.Inert[0].Basis != "vm_id_match" {
+		t.Errorf("basis lost on an inert belief: %+v", got)
+	}
+
+	// A readable belief BELOW the threshold is not inert: the producer said "weak"
+	// on purpose, and the threshold is the server's to set. Reporting it here
+	// would turn a deliberate statement into a defect.
+	weak := &fakeGraph{
+		entities: map[model.EntityID]model.Entity{
+			"vmA": {ID: "vmA", Type: model.TypeComputeVM}, "hostB": {ID: "hostB", Type: model.TypeHost},
+		},
+		deleted:   map[model.EntityID]bool{},
+		relations: []model.Relation{belief("s1", "vmA", "hostB", conf(0.4))},
+	}
+	if got := New(weak, &fakeStore{}).canonicalGroup(weak, "vmA"); got != nil {
+		t.Errorf("a weak but readable belief was reported as inert: %+v", got)
+	}
+
+	// And an entity with genuinely nothing still answers nil, so the block does
+	// not appear on every entity in the graph.
+	bare := &fakeGraph{
+		entities: map[model.EntityID]model.Entity{"vmA": {ID: "vmA", Type: model.TypeComputeVM}},
+		deleted:  map[model.EntityID]bool{},
+	}
+	if got := New(bare, &fakeStore{}).canonicalGroup(bare, "vmA"); got != nil {
+		t.Errorf("an entity with no belief at all returned a block: %+v", got)
+	}
+}

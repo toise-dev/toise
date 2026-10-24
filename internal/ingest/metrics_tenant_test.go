@@ -11,6 +11,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
+	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/plog/plogotlp"
 	"google.golang.org/grpc"
@@ -157,5 +158,84 @@ func TestSeenTenantHasItsSeriesAtZero(t *testing.T) {
 		if strings.Contains(k, "toise_ingest_records_total") && strings.HasSuffix(k, "|globex") {
 			t.Error("a tenant never seen must not have series")
 		}
+	}
+}
+
+// TestInertBeliefReasons pins #544 on the write side: the reason vocabulary, and
+// the fact that a resolves_to carrying no confidence is NOT reported.
+//
+// The four reasons are deliberately the conformance kit's own words, so the
+// producer-side check and the server-side counter cannot describe one defect two
+// ways. The classification matches canonical.Confidence, which is what the
+// overlay actually applies — a second copy of that rule is how a counter and a
+// reader come to disagree about the same edge.
+func TestInertBeliefReasons(t *testing.T) {
+	desc := func(build func(m pcommon.Map)) pcommon.Map {
+		m := pcommon.NewMap()
+		build(m)
+		return m
+	}
+
+	for _, tc := range []struct {
+		name    string
+		relType string
+		build   func(m pcommon.Map)
+		want    string
+	}{
+		{"same_as with a usable confidence says nothing", model.RelSameAs,
+			func(m pcommon.Map) { m.PutDouble("confidence", 1.0) }, ""},
+		{"same_as weak but readable says nothing", model.RelSameAs,
+			func(m pcommon.Map) { m.PutDouble("confidence", 0.2) }, ""},
+		{"same_as with no confidence", model.RelSameAs,
+			func(m pcommon.Map) { m.PutStr("basis", "vm_id_match") }, "no_confidence"},
+		{"same_as with a string confidence", model.RelSameAs,
+			func(m pcommon.Map) { m.PutStr("confidence", "0.95") }, "confidence_not_numeric"},
+		{"same_as above one", model.RelSameAs,
+			func(m pcommon.Map) { m.PutDouble("confidence", 1.5) }, "confidence_out_of_range"},
+		{"same_as below zero as an int", model.RelSameAs,
+			func(m pcommon.Map) { m.PutInt("confidence", -2) }, "confidence_out_of_range"},
+		{"resolves_to with a confidence nothing reads", model.RelResolvesTo,
+			func(m pcommon.Map) { m.PutDouble("confidence", 1.0) }, "relation_has_no_reader"},
+		{"resolves_to with only a basis is silent", model.RelResolvesTo,
+			func(m pcommon.Map) { m.PutStr("basis", "lldp") }, ""},
+	} {
+		_, got := beliefAttributes(desc(tc.build), tc.relType)
+		if got != tc.want {
+			t.Errorf("%s: reason = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+
+	// A usable confidence is still carried onto the edge, whatever the reason:
+	// ADR 0022 stores the value as the producer sent it, and reporting must never
+	// become dropping.
+	attrs, _ := beliefAttributes(desc(func(m pcommon.Map) {
+		m.PutDouble("confidence", 1.5)
+		m.PutStr("basis", "vm_id_match")
+	}), model.RelSameAs)
+	if len(attrs) != 2 {
+		t.Errorf("an out-of-range confidence was dropped instead of stored: %+v", attrs)
+	}
+}
+
+// TestInertBeliefSeriesAreZeroForASeenTenant keeps the same property the record
+// results have: a tenant that has been seen and has no inert belief must read as
+// a measured zero, not as an absent series. An absent series and a zero one mean
+// very different things, and only one of them is a success.
+func TestInertBeliefSeriesAreZeroForASeenTenant(t *testing.T) {
+	m := NewMetrics()
+	m.ensure("acme")
+	counts := readCounters(t, m)
+	// Label VALUES are rendered in the label NAME's alphabetical order:
+	// reason, relation_type, tenant.
+	for _, c := range inertBeliefCases {
+		if v := counter(t, counts, "toise_inert_beliefs_total", c[1], c[0], "acme"); v != 0 {
+			t.Errorf("acme %s/%s = %v, want a zero series", c[0], c[1], v)
+		}
+	}
+
+	m.addInertBelief("acme", model.RelSameAs, "no_confidence")
+	counts = readCounters(t, m)
+	if v := counter(t, counts, "toise_inert_beliefs_total", "no_confidence", model.RelSameAs, "acme"); v != 1 {
+		t.Errorf("after one inert belief = %v, want 1", v)
 	}
 }
