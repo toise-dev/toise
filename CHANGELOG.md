@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`cloud.resource` is a registered entity type**, keyed `{azure.resource.id}` —
+  the ARM id in lower case. Until now it was registered nowhere, and an
+  unregistered type has its record rejected per record with the relationships
+  embedded in it dropped alongside, so nothing of the Azure resource model could
+  be emitted at all.
+
+  The identity key is ours on purpose. `cloud.resource_id` keeps the casing the
+  API returned, because a consumer joins on it to reach Azure's own telemetry and
+  we hold **no** upstream rule fixing that rendering — a value we received, on a
+  key we do not own, is not ours to normalise. An identity has the opposite
+  requirement: identity is byte-exact and Azure returns the same id cased
+  differently depending on which API answered.
+
+  The type is **generic** rather than one per service family: the observer polls
+  a resource graph, which hands it the provider's identity for the object and
+  nothing it could key the service *inside* that object by.
+
+- **`toise_start_time_seconds`**, unlabeled, so a rule can ask how long **this**
+  server has been up without joining to `process_start_time_seconds`.
+
+  It exists because three alert rules needed that answer and there was no Toise
+  metric for it. Reading `process_start_time_seconds` — which every process in a
+  tenant publishes — gave 6391 s of apparent uptime against 239 s of real uptime
+  on one park, and had 22 candidate series on another: the guard was silently
+  always true. The workaround joined on `(job, instance, target)`, which is a
+  cross-join wherever the collection carries none of those labels. **A guard about
+  Toise belongs to Toise.**
+
+- **The belief that changes no answer is counted and named.**
+  `toise_inert_beliefs_total{tenant, relation_type, reason}` counts belief
+  attributes accepted at ingest that no decision will use, and `get_entity`'s
+  `canonical` block carries them as `inert`.
+
+  A `same_as` whose `confidence` is absent, non-numeric or outside `[0,1]` is
+  stored and the overlay ignores it: the producer believes it published an
+  identity join, the consumer reads two separate entities, and nothing said so.
+  The block used to answer `nil` both when there was no alias and when the only
+  evidence was unreadable — the same answer for two different facts. A belief
+  merely **below** the threshold is not reported: the producer said weak on
+  purpose, and the threshold is the server's to set.
+
+  `resolves_to` is covered because ingest accepts belief attributes on it exactly
+  as on `same_as` while every reader gates on `same_as` alone, so a confidence
+  there is parsed, stored and consulted by nothing. Acceptance is not withdrawn —
+  that would narrow the wire contract and lose the `basis`, which is the useful
+  half (#544).
+
 ### Changed
 
 - **`/metrics` is authenticated, and answers only what the caller's token may
@@ -34,6 +83,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on restart. `metrics_public` restores the old behavior for the length of an
   upgrade; the server logs at startup which mode it is in, so nobody has to read
   the config to learn whether this is open.
+
+### Upgrade notes
+
+- **`rejected` changed grain, so the number does not carry across an upgrade.**
+  Before 0.18 the rejected-records counter existed only as a **global** total
+  (18369 on the bench instance, for example); it is now
+  `toise_ingest_records_total{tenant, result="rejected"}`. Two consequences for
+  anyone comparing one version to another: the old total and the sum of the new
+  series are not the same object, and the per-tenant series are registered only
+  at a tenant's **first ingestion**, so after an upgrade they start from zero.
+
+  A baseline taken right after a migration therefore reads as an improvement when
+  nothing improved. Take the baseline, write it down, and compare only forward
+  from it.
 
 ## [0.22.0] - 2026-10-16
 
