@@ -2,6 +2,8 @@ module github.com/toise-dev/toise/pkg/emit
 
 go 1.26.9
 
+toolchain go1.26.10
+
 require (
 	go.opentelemetry.io/collector/pdata v1.59.0
 	google.golang.org/grpc v1.83.2
