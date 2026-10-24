@@ -32,6 +32,15 @@ jobs:
           go-version-file: go.mod
           check-latest: true
 
+      - name: Report the toolchain that actually builds
+        # setup-go@v5 reads only the `go` directive from go.mod, so the step
+        # above installs and prints 1.26.9 while the build switches to the
+        # `toolchain` version. Without this line the log contradicts the
+        # toolchain the binaries are built with (GO-2026-6809).
+        run: |
+          go version
+          (cd pkg/emit && go version)
+
       - name: Download dependencies
         run: go mod download
 
