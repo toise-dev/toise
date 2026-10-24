@@ -136,6 +136,21 @@ deployed" gate. It carries `confidence` and `basis`; the basis here is the
 `vmId` read from IMDS inside the guest matching the `vmId` on the ARM resource,
 which is a strong, non-heuristic match and should be named as such.
 
+**The model is right and the emission is NOT in 0.6.5.** Only discovery emits in
+0.6.5: it is the observer that holds the ARM id, and the guest — the only side
+holding *both* identities — does not emit the alias until 0.7.0. This note
+asserted the join as though it shipped with the rest, which made it a document
+ahead of its version; the producer's own contract had the same gap and both are
+now corrected (senhub-agent ent#755).
+
+The consequence is worth stating, because it is what an operator who enables the
+type in 0.6.5 will actually see: with no `same_as`, an ARM resource is reachable
+only by the `monitors` edge from the `service.instance` of the agent that
+discovered it. **It hangs off its observer, not off the machine it IS.** Walking
+from the host does not reach it, and asking what a machine is does not show it.
+That is a correct inventory and not yet a graph — and it is precisely what the
+0.7.0 alias changes.
+
 ### A consequence the producer should know about
 
 `same_as` feeds the read-time canonical collapse, so emitting one per Azure VM
@@ -249,9 +264,9 @@ applications hold a credential expiring this month" is a different model from
 | `cloud.resource_id` | Upstream's key: **original casing**, descriptive, for the telemetry join — never the identity |
 | Specialisation by family | No — the observer cannot obtain service-level identity |
 | `host.id` on an Azure VM | **Unchanged: the machine-id.** `vmId` is descriptive |
-| ARM resource vs host | Two entities, joined by `same_as`, basis = matching `vmId` |
+| ARM resource vs host | Two entities, joined by `same_as`, basis = matching `vmId` — **the alias is emitted from 0.7.0**, by the guest, the only side holding both identities |
 | Subscription / resource group | Descriptive attributes, not entities |
-| ARM relations | None in 0.6.5 beyond the host link |
+| ARM relations | None in 0.6.5. The host link is 0.7.0 too, so in 0.6.5 a resource is reached only by `monitors` from its discovering agent — not from the machine it is |
 | Disappearance | Two missed cycles → producer removal; declare an interval above the cadence |
 | Excluded by filter | Never silent — `delete_reason = unmonitored` leaving scope, a counter for what never entered |
 | Entra ID | Out of scope; metrics on the tenant attribute |
