@@ -1,6 +1,10 @@
 package ingest
 
-import "github.com/prometheus/client_golang/prometheus"
+import (
+	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/toise-dev/toise/internal/model"
+)
 
 // Metrics are the hot-path ingest counters: unlike the scrape-time state
 // collector (internal/metrics, #44), these count events that cannot be
@@ -24,6 +28,18 @@ type Metrics struct {
 	// droppedValues and unknownTypes are per-record, so they carry the tenant.
 	droppedValues *prometheus.CounterVec // tenant
 	unknownTypes  *prometheus.CounterVec // tenant
+	// inertBeliefs counts belief attributes that no decision will use. It carries
+	// the RELATION TYPE because the two cases it covers are different statements:
+	// on same_as the confidence is unreadable, so the edge is stored and the
+	// canonical overlay ignores it; on resolves_to the confidence is perfectly
+	// readable and nothing reads it, because every reader gates on same_as. The
+	// producer cannot tell the two apart from outside, which is the whole point.
+	//
+	// It does NOT carry the producer. A producer identity is caller-supplied, and
+	// labeling it would let an unauthenticated caller mint unbounded series — the
+	// same reason tenantRejections stays unlabeled. The producer is named on the
+	// warning line instead, where cardinality costs nothing.
+	inertBeliefs *prometheus.CounterVec // tenant, relation_type, reason
 	// tenantRejections stays unlabeled ON PURPOSE. It counts ids that FAILED
 	// validation, and on an open server that value is caller-supplied: labeling
 	// it would hand an unauthenticated caller a way to mint unbounded series.
@@ -58,6 +74,13 @@ func NewMetrics() *Metrics {
 			Name: "toise_ingest_unknown_type_records_total",
 			Help: "Records accepted with an entity type outside the built-in registry (accept_unknown_types), by tenant.",
 		}, []string{"tenant"}),
+		inertBeliefs: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "toise_inert_beliefs_total",
+			Help: "Belief attributes stored at ingest that no decision will use, by tenant, relation type and reason. " +
+				"A same_as whose confidence is absent, non-numeric or out of [0,1] is stored and collapses nothing; " +
+				"a resolves_to confidence is readable and read by nothing. Both leave a producer believing it published " +
+				"something that changes no answer.",
+		}, []string{"tenant", "relation_type", "reason"}),
 	}
 	for _, v := range []string{"ok", "error"} {
 		m.exports.WithLabelValues(v)
@@ -68,6 +91,18 @@ func NewMetrics() *Metrics {
 // recordResults are the values of the records counter's result label, listed so
 // ensure can pre-register all of them for a tenant at once.
 var recordResults = [...]string{"handled", "ignored", "rejected"}
+
+// inertBeliefCases are the (relation type, reason) pairs the ingest boundary can
+// report, listed so ensure pre-registers them per tenant: a zero here must be a
+// measured zero, exactly as for the record results. The vocabulary is closed and
+// matches the conformance kit's own messages word for word, so the producer-side
+// check and the server-side counter cannot describe the same defect differently.
+var inertBeliefCases = [...][2]string{
+	{model.RelSameAs, "no_confidence"},
+	{model.RelSameAs, "confidence_not_numeric"},
+	{model.RelSameAs, "confidence_out_of_range"},
+	{model.RelResolvesTo, "relation_has_no_reader"},
+}
 
 // ensure creates a tenant's series at zero, so that a tenant which has been
 // seen but has had nothing rejected reads as a measured zero instead of an
@@ -82,12 +117,15 @@ func (m *Metrics) ensure(tenant string) {
 	}
 	m.droppedValues.WithLabelValues(tenant)
 	m.unknownTypes.WithLabelValues(tenant)
+	for _, c := range inertBeliefCases {
+		m.inertBeliefs.WithLabelValues(tenant, c[0], c[1])
+	}
 }
 
 // Collectors returns the underlying collectors for registration on a
 // Prometheus registry (alongside the scrape-time state collector).
 func (m *Metrics) Collectors() []prometheus.Collector {
-	return []prometheus.Collector{m.exports, m.records, m.droppedValues, m.tenantRejections, m.unknownTypes}
+	return []prometheus.Collector{m.exports, m.records, m.droppedValues, m.tenantRejections, m.unknownTypes, m.inertBeliefs}
 }
 
 func (m *Metrics) export(ok bool) {
@@ -106,6 +144,13 @@ func (m *Metrics) addRecords(tenant, result string, n int) {
 		return
 	}
 	m.records.WithLabelValues(tenant, result).Add(float64(n))
+}
+
+func (m *Metrics) addInertBelief(tenant, relationType, reason string) {
+	if m == nil || tenant == "" {
+		return
+	}
+	m.inertBeliefs.WithLabelValues(tenant, relationType, reason).Inc()
 }
 
 func (m *Metrics) addDroppedValues(tenant string, n int) {

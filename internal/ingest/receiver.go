@@ -129,6 +129,13 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (re
 	ld := req.Logs()
 	var handled, skipped, rejected int
 	var rejectMsg, rejectTenant string
+	// Inert beliefs are counted per export and reported on ONE warning line, the
+	// same shape as rejections: a line per export that had any, with no
+	// deduplication across exports. That choice was paid for — a rejection line
+	// read as absent over 48 h turned out to be a log that did not reach back
+	// that far, so a once-per-process line would have hidden a weekly defect.
+	var inert int
+	var inertMsg, inertProducer, inertTenant string
 	var dropped []string
 	// Per-tenant tallies: one OTLP stream can carry several tenants, so an
 	// export-wide total would attribute one tenant's rejections to another.
@@ -221,8 +228,15 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (re
 					}
 					// Embedded relationships ride on entity-state events (spec PR
 					// #4836); reconcile them additively alongside routeRecord.
-					edrop, eerr := reconciler.handleVocab(b, lr, producer, scope, !s.acceptUnknown)
+					edrop, ebeliefs, eerr := reconciler.handleVocab(b, lr, producer, scope, !s.acceptUnknown)
 					dropped = append(dropped, edrop...)
+					for _, bn := range ebeliefs {
+						s.metrics.addInertBelief(tenantID, bn.relType, bn.reason)
+						if inertMsg == "" {
+							inertMsg, inertProducer, inertTenant = bn.reason+" on "+bn.relType, producer, tenantID
+						}
+						inert++
+					}
 					if eerr != nil {
 						// Same per-record split as above: an unregistered
 						// relationship.type can never become valid, so the record
@@ -293,6 +307,15 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (re
 		// records were refused when several tenants share a server (#405).
 		s.logger.Warn("rejected entity records violating the wire contract",
 			"rejected", rejected, "tenant", rejectTenant, "first_error", rejectMsg)
+	}
+	if inert > 0 {
+		// NOT a rejection and NOT reported in partial_success: the edges are
+		// stored exactly as sent (ADR 0022). What is wrong is that the producer
+		// stated a belief that changes no answer and had no way to find out
+		// (#544). The producer is named here rather than on the counter, where it
+		// would be a caller-supplied label of unbounded cardinality.
+		s.logger.Warn("belief attributes accepted that no decision will use: the edges are stored and change no answer",
+			"inert", inert, "tenant", inertTenant, "producer", inertProducer, "first_case", inertMsg)
 	}
 	return resp, nil
 }

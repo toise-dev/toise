@@ -44,25 +44,25 @@ func newEmbeddedReconciler() *embeddedReconciler {
 // It is a no-op for non-entity records (those are routed by routeRecord). It
 // returns the dotted keys of any non-scalar or malformed descriptor values it
 // dropped, so the caller can surface the loss rather than discard it silently.
-func (r *embeddedReconciler) handle(e engine, lr plog.LogRecord, producer, scope string) (dropped []string, err error) {
+func (r *embeddedReconciler) handle(e engine, lr plog.LogRecord, producer, scope string) (dropped []string, beliefs []beliefNote, err error) {
 	return r.handleVocab(e, lr, producer, scope, true)
 }
 
 // handleVocab is handle with the vocabulary check selectable, mirroring
 // routeRecordVocab: with strictVocab false (accept_unknown_types, #141) an
 // unknown relationship.type passes as long as the descriptor's shape is sound.
-func (r *embeddedReconciler) handleVocab(e engine, lr plog.LogRecord, producer, scope string, strictVocab bool) (dropped []string, err error) {
+func (r *embeddedReconciler) handleVocab(e engine, lr plog.LogRecord, producer, scope string, strictVocab bool) (dropped []string, beliefs []beliefNote, err error) {
 	attrs := lr.Attributes()
 	et := lr.EventName()
 	if et != evEntityState && et != evEntityDelete {
-		return nil, nil // not an entity event
+		return nil, nil, nil // not an entity event
 	}
 	sourceType, okT := strAttr(attrs, attrEntityType)
 	sourceID, idDropped, okI := mapAttr(attrs, attrEntityID, false)
 	if !okT || !okI || len(sourceID) == 0 {
 		// malformed/incomplete entity event — routeRecord surfaces the error; we
 		// have no source to key on, so there is nothing to reconcile.
-		return idDropped, nil
+		return idDropped, nil, nil
 	}
 	source := change.EndpointRef{Type: sourceType, Identity: sourceID}
 	// Keyed by COLLECTION METHOD, producer AND entity, because each of the three
@@ -98,21 +98,22 @@ func (r *embeddedReconciler) handleVocab(e engine, lr plog.LogRecord, producer, 
 				r.mu.Unlock()
 			})
 		}
-		return idDropped, nil
+		return idDropped, nil, nil
 	case evEntityState:
 		when := eventTimeOf(lr)
-		rels, relDropped, relErr := embeddedRelations(attrs, source, producer, when, strictVocab)
+		rels, relDropped, relBeliefs, relErr := embeddedRelations(attrs, source, producer, when, strictVocab)
 		dropped = append(dropped, idDropped...)
 		dropped = append(dropped, relDropped...)
+		beliefs = append(beliefs, relBeliefs...)
 		// The valid descriptors are still reconciled when one is rejected: the
 		// record's good edges (and absence-based removals) must not be held
 		// hostage by a sibling descriptor that can never become valid.
 		if rerr := r.reconcile(e, sk, rels, when); rerr != nil {
-			return dropped, rerr
+			return dropped, beliefs, rerr
 		}
-		return dropped, relErr
+		return dropped, beliefs, relErr
 	default:
-		return idDropped, nil
+		return idDropped, nil, nil
 	}
 }
 
@@ -174,10 +175,10 @@ func (r *embeddedReconciler) reconcile(e engine, sourceKey string, desired []cha
 // (errInvalidRecord): validating here, before staging, bounds the blast radius —
 // the store would otherwise reject the producer's whole batch for one bad
 // descriptor, and the retryable failure would poison every subsequent export.
-func embeddedRelations(attrs pcommon.Map, source change.EndpointRef, producer string, when time.Time, strictVocab bool) (rels []change.RelationObservation, dropped []string, err error) {
+func embeddedRelations(attrs pcommon.Map, source change.EndpointRef, producer string, when time.Time, strictVocab bool) (rels []change.RelationObservation, dropped []string, beliefs []beliefNote, err error) {
 	v, ok := attrs.Get(attrEntityRelationships)
 	if !ok || v.Type() != pcommon.ValueTypeSlice {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	srcInterval := reportEntityInterval(attrs)
 	sl := v.Slice()
@@ -230,31 +231,81 @@ func embeddedRelations(attrs pcommon.Map, source change.EndpointRef, producer st
 		// a general mechanism on purpose: an edge carrying arbitrary attributes is
 		// what that ADR refuses.
 		if relType == model.RelSameAs || relType == model.RelResolvesTo {
-			obs.Attributes = beliefAttributes(m)
+			var reason string
+			obs.Attributes, reason = beliefAttributes(m, relType)
+			if reason != "" {
+				beliefs = append(beliefs, beliefNote{relType: relType, reason: reason})
+			}
 		}
 		rels = append(rels, obs)
 	}
-	return rels, dropped, err
+	return rels, dropped, beliefs, err
 }
 
-// beliefAttributes extracts a same_as descriptor's confidence and basis into
-// relation attributes. Confidence keeps its numeric type (double or int); the
-// canonical overlay validates the [0,1] range at read time (ADR 0022 stores the
-// value as-is). A missing or non-scalar value is simply not carried.
-func beliefAttributes(m pcommon.Map) []model.KeyValue {
+// beliefNote records that a belief attribute was accepted and will change no
+// answer. It is not an error and does not reject anything: ADR 0022 stores the
+// value exactly as the producer sent it. It is reported because the producer
+// cannot otherwise tell a belief that was used from one that was not (#544).
+type beliefNote struct {
+	relType string
+	reason  string
+}
+
+// beliefAttributes extracts a belief descriptor's confidence and basis into
+// relation attributes, and names the reason the belief will change no answer,
+// or "" when it will.
+//
+// Confidence keeps its numeric type (double or int); the canonical overlay
+// validates the [0,1] range at read time (ADR 0022 stores the value as-is). A
+// missing or non-scalar value is simply not carried.
+//
+// The reasons are deliberately the same four cases the conformance kit reports,
+// in the same words, so that the producer-side check and the server-side counter
+// cannot describe one defect two ways. And the two relation types carry
+// DIFFERENT statements: on same_as the confidence is unreadable, so the edge is
+// stored and the overlay ignores it; on resolves_to any confidence is readable
+// and read by nothing, because every reader gates on same_as. A resolves_to
+// carrying no confidence is not reported at all — the basis alone is the useful
+// half, and demanding a value nothing reads would be worse than saying nothing.
+func beliefAttributes(m pcommon.Map, relType string) (attrs []model.KeyValue, reason string) {
 	var out []model.KeyValue
-	if v, ok := m.Get(relDescConfidence); ok {
+	v, present := m.Get(relDescConfidence)
+	usable := false
+	if present {
 		switch v.Type() {
 		case pcommon.ValueTypeDouble:
-			out = append(out, model.KeyValue{Key: relDescConfidence, Value: model.DoubleValue(v.Double())})
+			c := v.Double()
+			out = append(out, model.KeyValue{Key: relDescConfidence, Value: model.DoubleValue(c)})
+			usable = c >= 0 && c <= 1
+			if !usable {
+				reason = "confidence_out_of_range"
+			}
 		case pcommon.ValueTypeInt:
+			c := float64(v.Int())
 			out = append(out, model.KeyValue{Key: relDescConfidence, Value: model.IntValue(v.Int())})
+			usable = c >= 0 && c <= 1
+			if !usable {
+				reason = "confidence_out_of_range"
+			}
+		default:
+			reason = "confidence_not_numeric"
+		}
+	} else {
+		reason = "no_confidence"
+	}
+	if relType == model.RelResolvesTo {
+		// Nothing reads a resolution belief's confidence, so its readability is
+		// beside the point: what the producer needs told is that the value is
+		// consumed by no decision. Absent means nothing to say.
+		reason = ""
+		if present {
+			reason = "relation_has_no_reader"
 		}
 	}
 	if v, ok := m.Get(relDescBasis); ok && v.Type() == pcommon.ValueTypeStr && v.Str() != "" {
 		out = append(out, model.KeyValue{Key: relDescBasis, Value: model.StringValue(v.Str())})
 	}
-	return out
+	return out, reason
 }
 
 func strFromMap(m pcommon.Map, key string) (string, bool) {

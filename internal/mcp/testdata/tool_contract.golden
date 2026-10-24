@@ -53,6 +53,11 @@ tool get_entity
       id string
       label string
       type string
+    inert []object
+      basis string
+      from string
+      reason string
+      to string
     links []object
       basis string
       confidence float64
