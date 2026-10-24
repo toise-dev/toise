@@ -170,6 +170,25 @@ const (
 	// becomes k8s.pod in that release, with the four bare identity keys and the
 	// Kubernetes container key.
 	TypeK8sNode = "k8s.node"
+	// TypeCloudResource is a resource as the cloud's own control plane holds it —
+	// an ARM resource on Azure — keyed on {azure.resource.id}. It is deliberately
+	// GENERIC rather than one type per service family: the observer polls a
+	// resource graph, which hands it the provider's identity for the object and
+	// nothing it could key the service inside that object by. A cloud.sql or
+	// cloud.cache type would promise a specialisation the producer cannot supply;
+	// the family rides as the descriptive azure.resource.type instead.
+	//
+	// Beside host and compute.vm it is a THIRD facet of one machine, on the rule
+	// those two already follow: the control plane's view is not the in-guest
+	// view, so they are separate entities joined by a same_as belief (basis
+	// vm_id_match, on azure.vm.id) and never merged. host.id stays the OS
+	// machine-id — putting the provider's vmId there re-keys every cloud host at
+	// once, with nothing bridging the old entity to the new one.
+	//
+	// Subscription, resource group and region are descriptive attributes rather
+	// than entities: they carry no hop, and an entity nothing traverses is a
+	// filter written as a graph.
+	TypeCloudResource = "cloud.resource"
 	// TypeNetworkSegment is a broadcast and reachability domain bearing an
 	// assigned identifier: two workloads on the same segment can address each
 	// other, two on different segments cannot, whatever the firewall says.
@@ -338,7 +357,7 @@ func EntityTypes() []string {
 		TypeNetworkRoute, TypeServiceListener, TypeServiceInstance, TypeDatabase,
 		TypeNetworkDevice, TypeNetworkEndpoint, TypeComputeVM, TypeContainer,
 		TypePod, TypeK8sNode, TypeNetworkSegment, TypeNetworkNeighbor,
-		TypeHostService,
+		TypeHostService, TypeCloudResource,
 	}
 }
 
@@ -408,6 +427,31 @@ const IdentityNetworkDeviceID = "network.device.id"
 // joins. The conformance kit refuses it in an identity and accepts it
 // everywhere else.
 const IdentityNetworkInterfaceName = "network.interface.name"
+
+// IdentityAzureResourceID identifies a cloud.resource on Azure: the ARM
+// resource id, rendered LOWERCASE.
+//
+// The key is ours, and that is the whole point of it. `cloud.resource_id` is the
+// upstream key a consumer joins on to reach Azure's own telemetry, so it keeps
+// the casing the API returned: we hold no upstream rule fixing that rendering,
+// which leaves a value we received, on a key we do not own, and not ours to
+// normalise. An identity has the opposite requirement — Azure returns the same
+// id with different casing depending on which API answered, and identity is
+// byte-exact (ADR 0018), so two spellings would be two entities for one
+// resource. The two keys therefore live side by side: this one canonical and
+// identifying, cloud.resource_id as sent and descriptive. Lowercasing cannot
+// merge two distinct resources, ARM resource and resource-group names being
+// case-insensitive.
+const IdentityAzureResourceID = "azure.resource.id"
+
+// AzureVMID carries a VM's Azure vmId on both facets that can see it — the
+// cloud.resource, from the resource graph, and the host, from IMDS — and it is
+// descriptive on both. Its rendering is pinned here beside the identity keys
+// because it is the value the same_as belief joining those facets is asserted
+// on: a lowercase hyphenated UUID, as host.id is. Two sources rendering one GUID
+// two ways do not produce a wrong link, they produce no link at all, and nothing
+// reports an absence.
+const AzureVMID = "azure.vm.id"
 
 // OTLP Resource attribute keys on a ResourceLogs carrying entity events.
 const (
