@@ -9,9 +9,17 @@
 //	# or from stdin
 //	my-producer --dump-otlp | toise-conformance
 //
-// It exits 0 when conformant, 1 when there are rejections, and 2 on a usage or
-// decode error. Advisory problems (e.g. a missing service.instance.id) are
-// reported but do not fail the run unless -strict is set.
+// It exits 0 when conformant, 1 when there are blocking problems, and 2 on a
+// usage or decode error. Advisory problems (e.g. a missing
+// service.instance.id) are reported but do not fail the run unless -strict is
+// set.
+//
+// A blocking problem is not the same thing as a record Toise refuses. Some of
+// them Toise accepts and the damage is then silent and permanent — a
+// mis-rendered host.id duplicates a machine for good, a same_as whose
+// confidence cannot be read is stored and collapses nothing — which is exactly
+// why the kit blocks them here rather than leaving them to be discovered in a
+// graph everything already points at.
 package main
 
 import (
@@ -115,7 +123,7 @@ func looksJSON(data []byte) bool {
 }
 
 // report prints problems and returns the exit code: 0 conformant, 1 with
-// rejections (or advisories under strict).
+// blocking problems (or advisories under strict).
 func report(w io.Writer, problems []conformance.Problem, strict bool) int {
 	var rejections, advisories []conformance.Problem
 	for _, p := range problems {
@@ -132,7 +140,9 @@ func report(w io.Writer, problems []conformance.Problem, strict bool) int {
 	}
 
 	if len(rejections) > 0 {
-		fmt.Fprintf(w, "%d rejection(s) — Toise would reject these records:\n", len(rejections))
+		fmt.Fprintf(w, "%d blocking problem(s) — do not ship these records. "+
+			"Toise refuses some of them per record; others it accepts, and the "+
+			"damage is then silent and permanent:\n", len(rejections))
 		for _, p := range rejections {
 			fmt.Fprintf(w, "  %s\n", p)
 		}
