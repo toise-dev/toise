@@ -41,8 +41,17 @@ type Collector struct {
 	store Storer
 
 	version, commit string
+	// startedAt is sampled once, at construction, rather than read from the
+	// process: a rule asking "has this server been up long enough for an absence
+	// to mean something" must be answered by Toise itself. The alternative in use
+	// today joins process_start_time_seconds to toise_build_info, and that join
+	// has gone wrong twice in one night — once reading the oldest unrelated
+	// process in the tenant, once joining on an empty label set in a park whose
+	// collection carries none of job/instance/target.
+	startedAt time.Time
 
 	buildInfo      *prometheus.Desc
+	startTime      *prometheus.Desc
 	entities       *prometheus.Desc
 	entitiesByType *prometheus.Desc
 	relations      *prometheus.Desc
@@ -59,12 +68,18 @@ type Collector struct {
 // from version/commit.
 func NewCollector(g Grapher, s Storer, version, commit string) *Collector {
 	return &Collector{
-		graph:   g,
-		store:   s,
-		version: version,
-		commit:  commit,
+		graph:     g,
+		store:     s,
+		version:   version,
+		commit:    commit,
+		startedAt: time.Now(),
 		buildInfo: prometheus.NewDesc("toise_build_info",
 			"Build information, value is always 1.", []string{"version", "commit"}, nil),
+		startTime: prometheus.NewDesc("toise_start_time_seconds",
+			"When this Toise process started, in Unix seconds. It exists so a rule can ask "+
+				"how long THIS server has been up without joining to process_start_time_seconds, "+
+				"which every process in a tenant publishes: a guard aggregating that one reads "+
+				"the oldest unrelated process and is silently always true.", nil, nil),
 		entities: prometheus.NewDesc("toise_entities",
 			"Number of live entities in the projection.", nil, nil),
 		entitiesByType: prometheus.NewDesc("toise_entities_by_type",
@@ -91,6 +106,7 @@ func NewCollector(g Grapher, s Storer, version, commit string) *Collector {
 // Describe implements prometheus.Collector.
 func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.buildInfo
+	ch <- c.startTime
 	ch <- c.entities
 	ch <- c.entitiesByType
 	ch <- c.relations
@@ -106,6 +122,7 @@ func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 // Collect implements prometheus.Collector, sampling the live state.
 func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	ch <- prometheus.MustNewConstMetric(c.buildInfo, prometheus.GaugeValue, 1, c.version, c.commit)
+	ch <- prometheus.MustNewConstMetric(c.startTime, prometheus.GaugeValue, float64(c.startedAt.Unix()))
 	ch <- prometheus.MustNewConstMetric(c.entities, prometheus.GaugeValue, float64(c.graph.EntityCount()))
 	ch <- prometheus.MustNewConstMetric(c.relations, prometheus.GaugeValue, float64(c.graph.RelationCount()))
 	ch <- prometheus.MustNewConstMetric(c.events, prometheus.CounterValue, float64(c.store.Sequence()))

@@ -126,3 +126,60 @@ func TestMaintenanceObserve(t *testing.T) {
 		t.Errorf("nil Maintenance must run fn (ran=%v err=%v)", ran, err)
 	}
 }
+
+// TestStartTimeIsThisProcessAndNotAnother pins the reason toise_start_time_seconds
+// exists at all.
+//
+// A rule asking "has this server been up long enough that an absence means
+// something" was written against process_start_time_seconds, which EVERY process
+// in a tenant publishes. Aggregating that reads the oldest unrelated process, so
+// the guard was silently always true — measured in production at 6155 s of
+// apparent uptime against 239 s of real uptime on one park, and over 22 series on
+// another. The workaround joined to toise_build_info, which in turn joins on an
+// empty label set wherever the collection carries none of job/instance/target,
+// and then matches every process again.
+//
+// So the value must come from Toise, be published without labels to aggregate
+// over, and move when the process restarts. The test asserts the first two and
+// the third by construction: two collectors built a moment apart do not report
+// the same instant unless the value is not this process's.
+func TestStartTimeIsThisProcessAndNotAnother(t *testing.T) {
+	before := time.Now().Unix()
+	c := NewCollector(fakeGraph{}, fakeStore{}, "1.2.3", "abc123")
+
+	if n := testutil.CollectAndCount(c, "toise_start_time_seconds"); n != 1 {
+		t.Fatalf("toise_start_time_seconds series = %d, want exactly 1 (no labels to aggregate over)", n)
+	}
+
+	reg := prometheus.NewPedanticRegistry()
+	if rerr := reg.Register(c); rerr != nil {
+		t.Fatalf("registering the collector: %v", rerr)
+	}
+	families, gerr := reg.Gather()
+	if gerr != nil {
+		t.Fatalf("gathering: %v", gerr)
+	}
+	var value float64
+	var found bool
+	for _, f := range families {
+		if f.GetName() != "toise_start_time_seconds" {
+			continue
+		}
+		found = true
+		m := f.GetMetric()
+		if len(m) != 1 {
+			t.Fatalf("metric count = %d, want 1", len(m))
+		}
+		if len(m[0].GetLabel()) != 0 {
+			t.Errorf("toise_start_time_seconds carries labels %v; it must carry none, so min() over it is unambiguous", m[0].GetLabel())
+		}
+		value = m[0].GetGauge().GetValue()
+	}
+	if !found {
+		t.Fatal("toise_start_time_seconds was not gathered")
+	}
+	after := time.Now().Unix()
+	if value < float64(before) || value > float64(after) {
+		t.Errorf("start time = %v, want within [%d, %d]: it must be THIS process's start, not another's", value, before, after)
+	}
+}
