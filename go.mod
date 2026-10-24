@@ -2,6 +2,8 @@ module github.com/toise-dev/toise
 
 go 1.26.9
 
+toolchain go1.26.10
+
 require (
 	github.com/99designs/gqlgen v0.17.90
 	github.com/cockroachdb/pebble v1.1.5
