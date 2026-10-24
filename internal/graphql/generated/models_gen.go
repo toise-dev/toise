@@ -77,10 +77,28 @@ type CanonicalGroup struct {
 type CanonicalMember struct {
 	// Logical id of the alias.
 	ID string `json:"id"`
-	// Its entity type, or empty if the alias is unknown or deleted.
+	// Its entity type, or empty when `state` is not `live`. Read `state` to learn
+	// which: an empty type on its own cannot say whether the alias was deleted, was
+	// never held, or merely failed to render.
 	Type string `json:"type"`
-	// A readable rendering (`type key=value …`), or empty if unknown or deleted.
+	// A readable rendering (`type key=value …`), or empty when `state` is not `live`.
 	Label string `json:"label"`
+	// Whether this member is still there, and if not, in which way. Read it before
+	// treating an alias as a usable entity.
+	//
+	// - `live` — held and not deleted; `type` and `label` are filled.
+	// - `deleted` — held as a tombstone: it existed, a producer or a cascade removed
+	//   it, and the belief that named it is still asserted. The group deliberately
+	//   keeps it, because dropping it would make a retracted alias look like one that
+	//   was never claimed.
+	// - `unresolvable` — the belief names an id this graph holds no entity for at
+	//   all. The walk follows `same_as` edges without checking their far end, so an
+	//   edge can outlive the entity it pointed at, or name one that never arrived.
+	//
+	// The three were one empty string until 0.23, and this field exists because a
+	// consumer could not tell them apart — the same confusion between an absence and
+	// an answer that the rest of this schema exists to remove.
+	State CanonicalMemberState `json:"state"`
 }
 
 // A paginated list of change events.
@@ -462,6 +480,69 @@ type SameAsLink struct {
 }
 
 type Subscription struct {
+}
+
+// Whether a canonical group member is still there, and if not, in which way.
+// The same vocabulary backs the MCP `get_entity` overlay, so both surfaces answer
+// with the same words.
+type CanonicalMemberState string
+
+const (
+	// Held and not deleted.
+	CanonicalMemberStateLive CanonicalMemberState = "live"
+	// Held as a tombstone: it existed and was removed, and the belief still names it.
+	CanonicalMemberStateDeleted CanonicalMemberState = "deleted"
+	// The belief names an id this graph holds no entity for.
+	CanonicalMemberStateUnresolvable CanonicalMemberState = "unresolvable"
+)
+
+var AllCanonicalMemberState = []CanonicalMemberState{
+	CanonicalMemberStateLive,
+	CanonicalMemberStateDeleted,
+	CanonicalMemberStateUnresolvable,
+}
+
+func (e CanonicalMemberState) IsValid() bool {
+	switch e {
+	case CanonicalMemberStateLive, CanonicalMemberStateDeleted, CanonicalMemberStateUnresolvable:
+		return true
+	}
+	return false
+}
+
+func (e CanonicalMemberState) String() string {
+	return string(e)
+}
+
+func (e *CanonicalMemberState) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = CanonicalMemberState(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid CanonicalMemberState", str)
+	}
+	return nil
+}
+
+func (e CanonicalMemberState) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *CanonicalMemberState) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e CanonicalMemberState) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
 }
 
 // The direction a change page runs in.

@@ -12,6 +12,13 @@ type CanonicalMember struct {
 	ID    string `json:"id"`
 	Type  string `json:"type"`
 	Label string `json:"label"`
+	// State says whether this member is still there, and if not, in which way:
+	// live, deleted, or unresolvable. Until 0.23 all three answered with an empty
+	// type and label, so a consumer could not tell a retracted alias from one this
+	// graph never held — and the walk follows same_as edges without checking their
+	// far end, so both really happen. Same vocabulary as GraphQL's
+	// CanonicalMemberState, so the two surfaces answer with the same words.
+	State string `json:"state" jsonschema:"live (held and renderable), deleted (held as a tombstone: it existed, was removed, and the belief still names it), or unresolvable (the belief names an id this graph holds no entity for). Read it before treating an alias as a usable entity: type and label are empty unless state is live"`
 }
 
 // SameAsLink is one supporting same_as belief edge, with its provenance.
@@ -73,10 +80,13 @@ func (s *Server) canonicalGroup(g Graph, root model.EntityID) *CanonicalGroup {
 		if id == root {
 			continue
 		}
-		if ent, ok, deleted := g.GetEntity(id); ok && !deleted {
-			aliases = append(aliases, CanonicalMember{ID: string(id), Type: ent.Type, Label: label(ent)})
-		} else {
-			aliases = append(aliases, CanonicalMember{ID: string(id)})
+		switch ent, ok, deleted := g.GetEntity(id); {
+		case ok && !deleted:
+			aliases = append(aliases, CanonicalMember{ID: string(id), Type: ent.Type, Label: label(ent), State: "live"})
+		case ok:
+			aliases = append(aliases, CanonicalMember{ID: string(id), State: "deleted"})
+		default:
+			aliases = append(aliases, CanonicalMember{ID: string(id), State: "unresolvable"})
 		}
 	}
 	if len(aliases) == 0 {

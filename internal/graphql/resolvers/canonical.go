@@ -40,13 +40,22 @@ func (r *queryResolver) Canonical(ctx context.Context, id string, asOf *string) 
 		if mid == root {
 			continue
 		}
-		m := generated.CanonicalMember{ID: string(mid)}
+		m := generated.CanonicalMember{ID: string(mid), State: generated.CanonicalMemberStateUnresolvable}
 		// A deleted alias keeps its id and loses its rendering: the belief edge is
 		// still evidence the thing existed, but presenting a soft-deleted entity as
 		// a live alias would misstate the graph.
-		if ent, ok, deleted := g.GetEntity(mid); ok && !deleted {
+		//
+		// The state says WHICH of the three it is. Until 0.23 all three answered
+		// with an empty type and label, so a consumer could not tell a retracted
+		// alias from one this graph never held — and the walk follows same_as edges
+		// without checking their far end, so both really happen.
+		switch ent, ok, deleted := g.GetEntity(mid); {
+		case ok && !deleted:
+			m.State = generated.CanonicalMemberStateLive
 			m.Type = ent.Type
 			m.Label = entityLabel(ent)
+		case ok:
+			m.State = generated.CanonicalMemberStateDeleted
 		}
 		aliases = append(aliases, m)
 	}

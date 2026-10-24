@@ -2036,3 +2036,58 @@ func TestCanonicalNamesTheBeliefItCouldNotUse(t *testing.T) {
 		t.Errorf("an entity with no belief at all returned a block: %+v", got)
 	}
 }
+
+// TestCanonicalMemberStatesAreDistinguishable pins the engagement owed before
+// 0.23: a canonical member that is deleted, one this graph never held, and one
+// that simply failed to render used to be the SAME answer — an id with an empty
+// type and label.
+//
+// Both non-live cases really happen. canonical.Walk follows same_as edges without
+// checking their far end, so a belief can outlive the entity it pointed at
+// (deleted) or name one that never arrived (unresolvable). Telling them apart
+// matters: a retracted alias is evidence the thing existed, an unresolvable one
+// is a producer naming something nobody ever sent.
+func TestCanonicalMemberStatesAreDistinguishable(t *testing.T) {
+	strong := func(id string, from, to model.EntityID) model.Relation {
+		return model.Relation{ID: model.RelationID(id), Type: model.RelSameAs, From: from, To: to,
+			Attributes: []model.KeyValue{{Key: "confidence", Value: model.DoubleValue(0.99)}}}
+	}
+	g := &fakeGraph{
+		entities: map[model.EntityID]model.Entity{
+			"root":  {ID: "root", Type: model.TypeHost},
+			"alive": {ID: "alive", Type: model.TypeComputeVM},
+			"gone":  {ID: "gone", Type: model.TypeComputeVM},
+			// "ghost" is deliberately absent: the belief names an id nothing holds.
+		},
+		deleted: map[model.EntityID]bool{"gone": true},
+		relations: []model.Relation{
+			strong("s1", "root", "alive"),
+			strong("s2", "root", "gone"),
+			strong("s3", "root", "ghost"),
+		},
+	}
+
+	got := New(g, &fakeStore{}).canonicalGroup(g, "root")
+	if got == nil {
+		t.Fatal("canonical block is nil with three strong beliefs")
+	}
+	want := map[string]string{"alive": "live", "gone": "deleted", "ghost": "unresolvable"}
+	if len(got.Aliases) != len(want) {
+		t.Fatalf("aliases = %+v, want %d members", got.Aliases, len(want))
+	}
+	for _, a := range got.Aliases {
+		w, known := want[a.ID]
+		if !known {
+			t.Errorf("unexpected member %q", a.ID)
+			continue
+		}
+		if a.State != w {
+			t.Errorf("member %q state = %q, want %q", a.ID, a.State, w)
+		}
+		// type and label are filled only for a live member, and the state is what
+		// says why they are empty for the other two.
+		if (a.State == "live") != (a.Type != "") {
+			t.Errorf("member %q: state %q with type %q — type must be filled iff live", a.ID, a.State, a.Type)
+		}
+	}
+}

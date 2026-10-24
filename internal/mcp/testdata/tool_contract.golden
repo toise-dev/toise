@@ -52,6 +52,7 @@ tool get_entity
     aliases []object
       id string
       label string
+      state string
       type string
     inert []object
       basis string

@@ -63,6 +63,7 @@ type ComplexityRoot struct {
 	CanonicalMember struct {
 		ID    func(childComplexity int) int
 		Label func(childComplexity int) int
+		State func(childComplexity int) int
 		Type  func(childComplexity int) int
 	}
 
@@ -308,6 +309,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.CanonicalMember.Label(childComplexity), true
+	case "CanonicalMember.state":
+		if e.ComplexityRoot.CanonicalMember.State == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CanonicalMember.State(childComplexity), true
 	case "CanonicalMember.type":
 		if e.ComplexityRoot.CanonicalMember.Type == nil {
 			break
@@ -1147,10 +1154,46 @@ the entity queried.
 type CanonicalMember {
   "Logical id of the alias."
   id: ID!
-  "Its entity type, or empty if the alias is unknown or deleted."
+  """
+  Its entity type, or empty when ` + "`" + `state` + "`" + ` is not ` + "`" + `live` + "`" + `. Read ` + "`" + `state` + "`" + ` to learn
+  which: an empty type on its own cannot say whether the alias was deleted, was
+  never held, or merely failed to render.
+  """
   type: String!
-  "A readable rendering (` + "`" + `type key=value …` + "`" + `), or empty if unknown or deleted."
+  "A readable rendering (` + "`" + `type key=value …` + "`" + `), or empty when ` + "`" + `state` + "`" + ` is not ` + "`" + `live` + "`" + `."
   label: String!
+  """
+  Whether this member is still there, and if not, in which way. Read it before
+  treating an alias as a usable entity.
+
+  - ` + "`" + `live` + "`" + ` — held and not deleted; ` + "`" + `type` + "`" + ` and ` + "`" + `label` + "`" + ` are filled.
+  - ` + "`" + `deleted` + "`" + ` — held as a tombstone: it existed, a producer or a cascade removed
+    it, and the belief that named it is still asserted. The group deliberately
+    keeps it, because dropping it would make a retracted alias look like one that
+    was never claimed.
+  - ` + "`" + `unresolvable` + "`" + ` — the belief names an id this graph holds no entity for at
+    all. The walk follows ` + "`" + `same_as` + "`" + ` edges without checking their far end, so an
+    edge can outlive the entity it pointed at, or name one that never arrived.
+
+  The three were one empty string until 0.23, and this field exists because a
+  consumer could not tell them apart — the same confusion between an absence and
+  an answer that the rest of this schema exists to remove.
+  """
+  state: CanonicalMemberState!
+}
+
+"""
+Whether a canonical group member is still there, and if not, in which way.
+The same vocabulary backs the MCP ` + "`" + `get_entity` + "`" + ` overlay, so both surfaces answer
+with the same words.
+"""
+enum CanonicalMemberState {
+  "Held and not deleted."
+  live
+  "Held as a tombstone: it existed and was removed, and the belief still names it."
+  deleted
+  "The belief names an id this graph holds no entity for."
+  unresolvable
 }
 
 """
@@ -1727,6 +1770,8 @@ func (ec *executionContext) childFields_CanonicalMember(ctx context.Context, fie
 		return ec.fieldContext_CanonicalMember_type(ctx, field)
 	case "label":
 		return ec.fieldContext_CanonicalMember_label(ctx, field)
+	case "state":
+		return ec.fieldContext_CanonicalMember_state(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type CanonicalMember", field.Name)
 }
@@ -2775,6 +2820,29 @@ func (ec *executionContext) _CanonicalMember_label(ctx context.Context, field gr
 }
 func (ec *executionContext) fieldContext_CanonicalMember_label(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("CanonicalMember", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _CanonicalMember_state(ctx context.Context, field graphql.CollectedField, obj *CanonicalMember) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_CanonicalMember_state(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.State, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v CanonicalMemberState) graphql.Marshaler {
+			return ec.marshalNCanonicalMemberState2githubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐCanonicalMemberState(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_CanonicalMember_state(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("CanonicalMember", field, false, false, errors.New("field of type CanonicalMemberState does not have child fields"))
 }
 
 func (ec *executionContext) _ChangeConnection_edges(ctx context.Context, field graphql.CollectedField, obj *ChangeConnection) (ret graphql.Marshaler) {
@@ -6434,6 +6502,11 @@ func (ec *executionContext) _CanonicalMember(ctx context.Context, sel ast.Select
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "state":
+			out.Values[i] = ec._CanonicalMember_state(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -8090,6 +8163,16 @@ func (ec *executionContext) marshalNCanonicalMember2ᚕgithubᚗcomᚋtoiseᚑde
 	}
 
 	return ret
+}
+
+func (ec *executionContext) unmarshalNCanonicalMemberState2githubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐCanonicalMemberState(ctx context.Context, v any) (CanonicalMemberState, error) {
+	var res CanonicalMemberState
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNCanonicalMemberState2githubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐCanonicalMemberState(ctx context.Context, sel ast.SelectionSet, v CanonicalMemberState) graphql.Marshaler {
+	return v
 }
 
 func (ec *executionContext) marshalNChangeConnection2githubᚗcomᚋtoiseᚑdevᚋtoiseᚋinternalᚋgraphqlᚋgeneratedᚐChangeConnection(ctx context.Context, sel ast.SelectionSet, v ChangeConnection) graphql.Marshaler {
