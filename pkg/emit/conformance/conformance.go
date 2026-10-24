@@ -5,8 +5,14 @@
 // reasons. Type-registry membership is enforced separately: under the default
 // strict vocabulary an entity.type outside the registry is still rejected per
 // record, unless the deployment opts into accept_unknown_types (#141).
-// Problems marked Advisory are not rejections; they flag misconfigurations
-// that degrade consumer behavior.
+// Problems marked Advisory do not fail a run; they flag a misconfiguration
+// that degrades consumer behavior. A problem NOT marked Advisory must not
+// ship, which is not the same statement as "Toise rejects the record": some
+// of them Toise accepts and the damage is then silent and permanent, which is
+// precisely why the kit refuses them. A mis-rendered host.id is stored and
+// duplicates a machine for good; a same_as whose confidence cannot be read is
+// stored and collapses nothing. Neither is a rejection and neither may be
+// shipped.
 //
 // The checked-in fixture (testdata/fixture_v1.bin) is the published contract
 // v1: the toise-emit SDK reproduces it byte for byte, and Toise's own ingest
@@ -27,10 +33,12 @@ import (
 type Problem struct {
 	Record string // which record, e.g. "resourceLogs[0].scopeLogs[0].logRecords[2]"
 	Issue  string
-	// Advisory marks a problem that does not cause per-record rejection but
-	// flags a producer misconfiguration that degrades consumer behavior (e.g.
-	// a missing service.instance.id collapses multi-producer liveness
-	// reference counting, ADR 0019).
+	// Advisory marks a problem the kit reports without failing the run: a
+	// producer misconfiguration that degrades consumer behavior (e.g. a
+	// missing service.instance.id collapses multi-producer liveness reference
+	// counting, ADR 0019). Its absence means "do not ship this", and says
+	// nothing about whether Toise would reject the record — see the package
+	// comment.
 	Advisory bool
 }
 
@@ -187,8 +195,11 @@ func checkRecord(where string, lr plog.LogRecord) []Problem {
 					checkMAC(&out, rw, "entity.id", v.Map())
 					checkIdentityKeySpelling(&out, rw, "entity.id", v.Map())
 				}
-				if rt, _ := m.Get(wire.RelType); rt.Str() == wire.RelTypeSameAs {
+				switch rt, _ := m.Get(wire.RelType); rt.Str() {
+				case wire.RelTypeSameAs:
 					out = append(out, checkSameAsBelief(rw, m)...)
+				case wire.RelTypeResolvesTo:
+					out = append(out, checkResolvesToBelief(rw, m)...)
 				}
 			}
 		}
@@ -196,16 +207,42 @@ func checkRecord(where string, lr plog.LogRecord) []Problem {
 	return out
 }
 
-// checkSameAsBelief advises on a same_as edge's belief attributes. A same_as
-// edge exists to feed the read-time canonical overlay (ADR 0020), which collapses
-// only edges whose confidence is a number in [0,1] at or above the threshold. A
-// missing or out-of-range confidence is not a rejection — Toise stores the edge —
-// but the overlay ignores it, so the belief is inert. Advisory, so a producer
-// catches a same_as that will never merge anything.
+// beliefConfidenceByBasis pins the confidence a named basis carries. See
+// wire.BasisRekey and its neighbors for why these three are fixed at 1.0 and
+// why a basis outside the set is left alone.
+var beliefConfidenceByBasis = map[string]float64{
+	wire.BasisRekey:     1.0,
+	wire.BasisK8sAPI:    1.0,
+	wire.BasisVMIDMatch: 1.0,
+}
+
+// checkSameAsBelief validates a same_as edge's belief attributes, and refuses
+// the edge rather than advising on it.
+//
+// A same_as exists to feed the read-time canonical overlay (ADR 0020), which
+// collapses only edges whose confidence is a number in [0,1] at or above the
+// server's threshold. Toise STORES an edge whose confidence is absent,
+// non-numeric or out of range — it is not a rejection — and the overlay then
+// ignores it. That is the whole problem: the producer believes it published an
+// identity join, the consumer reads two separate entities, and nothing
+// anywhere reports it. Before 0.23 this was advisory, which assumed a producer
+// reads advisories; a per-machine failure that scales with the fleet (one
+// same_as per Azure VM, per re-keyed host, per cluster node) has to stop a
+// producer before it ships.
+//
+// A confidence BELOW the threshold is not flagged: a deliberately weak belief
+// is a legitimate statement, and the threshold is the server's to set.
 func checkSameAsBelief(where string, m pcommon.Map) []Problem {
+	var out []Problem
+
+	basis, hasBasis := m.Get(wire.RelBasis)
+	if !hasBasis || strings.TrimSpace(basis.Str()) == "" {
+		out = append(out, Problem{Record: where, Issue: "same_as edge has no basis; the belief is usable but a reader cannot tell what it rests on, which is the half a human or an LLM reads", Advisory: true})
+	}
+
 	v, ok := m.Get(wire.RelConfidence)
 	if !ok {
-		return []Problem{{Record: where, Issue: "same_as edge has no confidence; the canonical overlay collapses only edges with a confidence in [0,1], so this belief is inert", Advisory: true}}
+		return append(out, Problem{Record: where, Issue: "same_as edge has no confidence; Toise stores the edge and the canonical overlay collapses only edges with a confidence in [0,1], so this belief is inert and nothing reports it"})
 	}
 	var c float64
 	switch v.Type() {
@@ -214,12 +251,35 @@ func checkSameAsBelief(where string, m pcommon.Map) []Problem {
 	case pcommon.ValueTypeInt:
 		c = float64(v.Int())
 	default:
-		return []Problem{{Record: where, Issue: fmt.Sprintf("same_as confidence is %s; it must be a number in [0,1] or the canonical overlay ignores the belief", v.Type()), Advisory: true}}
+		return append(out, Problem{Record: where, Issue: fmt.Sprintf("same_as confidence is %s; it must be a number in [0,1] or the overlay ignores the belief, which is stored either way", v.Type())})
 	}
 	if c < 0 || c > 1 {
-		return []Problem{{Record: where, Issue: fmt.Sprintf("same_as confidence %g is outside [0,1]; the canonical overlay ignores it", c), Advisory: true}}
+		return append(out, Problem{Record: where, Issue: fmt.Sprintf("same_as confidence %g is outside [0,1]; the overlay ignores it and the edge is still stored", c)})
 	}
-	return nil
+
+	if hasBasis {
+		if want, fixed := beliefConfidenceByBasis[basis.Str()]; fixed && c != want {
+			out = append(out, Problem{Record: where, Issue: fmt.Sprintf("same_as basis %q carries a contractual confidence of %g, not %g; this basis is an exact identity match, and a lower value collapses nothing once it falls under the server threshold", basis.Str(), want, c)})
+		}
+	}
+	return out
+}
+
+// checkResolvesToBelief advises that a resolution belief's confidence is
+// accepted and read by nothing.
+//
+// Ingest carries confidence and basis for resolves_to exactly as it does for
+// same_as, but every reader of the attribute gates on same_as alone: the
+// canonical walk and the alias-aware traversal both do. So a producer that
+// states a resolution belief with a confidence has it parsed, stored and
+// consumed by no decision — and cannot tell that from a belief that was simply
+// too weak to act on. Advisory, not a refusal: the basis is genuinely useful
+// as provenance, and withdrawing acceptance would narrow the wire contract.
+func checkResolvesToBelief(where string, m pcommon.Map) []Problem {
+	if _, ok := m.Get(wire.RelConfidence); !ok {
+		return nil
+	}
+	return []Problem{{Record: where, Issue: "resolves_to carries a confidence, which is accepted and stored but read by nothing: no grouping and no path decision uses it, so only the basis is of any use here", Advisory: true}}
 }
 
 // checkHostID flags a host.id whose rendering is not the contract's. Not

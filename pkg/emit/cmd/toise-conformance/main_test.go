@@ -67,8 +67,8 @@ func TestRunRejection(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("exit = %d, want 1", code)
 	}
-	if !strings.Contains(out.String(), "rejection") || !strings.Contains(out.String(), "entity.type") {
-		t.Errorf("want a rejection naming entity.type, got %q", out.String())
+	if !strings.Contains(out.String(), "blocking problem") || !strings.Contains(out.String(), "entity.type") {
+		t.Errorf("want a blocking problem naming entity.type, got %q", out.String())
 	}
 }
 

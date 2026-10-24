@@ -71,6 +71,29 @@ const (
 	RelBasis      = "basis"
 )
 
+// Bases of a same_as belief whose confidence the contract FIXES at 1.0, because
+// each of them is an exact match of two identities rather than an estimate of
+// one: the producer holds both identities itself and is not guessing.
+//
+// They are spelled here so a producer takes them from the SDK instead of by
+// hand. A basis outside this set is legitimate — the vocabulary is open, and
+// hyperv-kvp or serial_match are weaker evidence that deserves a value below 1
+// — but one of these three carrying anything other than 1.0 is a contradiction:
+// it claims an exact match and then asks the reader to doubt it, and below the
+// server's threshold (0.9 by default) it collapses nothing while reading as a
+// deliberate belief.
+const (
+	// BasisRekey: the producer is re-keying an entity it already owned, so it
+	// knows both the old and the new identity first-hand.
+	BasisRekey = "rekey"
+	// BasisK8sAPI: both identities were read from the SAME cluster-API object
+	// (node.UID and node.Status.NodeInfo.MachineID).
+	BasisK8sAPI = "k8s_api"
+	// BasisVMIDMatch: the guest's canonical vmId equals the azure.vm.id of the
+	// ARM resource, both rendered as a lowercase hyphenated UUID.
+	BasisVMIDMatch = "vm_id_match"
+)
+
 // Entity types — the registered vocabulary. Toise's boundary accepts these and
 // refuses the rest under the default strict vocabulary, so a producer that
 // spells a type by hand can only be right by luck. Deriving from these makes a

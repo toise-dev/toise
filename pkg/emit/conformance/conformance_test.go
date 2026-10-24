@@ -6,6 +6,8 @@ import (
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
+
+	"github.com/toise-dev/toise/pkg/emit/wire"
 )
 
 // TestCheckCatchesContractViolations pins each rule a producer CI relies on.
@@ -84,8 +86,11 @@ func TestCheckCatchesContractViolations(t *testing.T) {
 		}
 	}
 
-	// A same_as edge missing confidence is an advisory (inert belief), not a
-	// rejection.
+	// A same_as edge missing confidence BLOCKS. Toise stores it and the overlay
+	// ignores it, so the producer believes it published an identity join while
+	// the consumer reads two entities and nothing reports it. Advisory until
+	// 0.23, which assumed a producer reads advisories; the failure is one per
+	// machine and scales with the fleet.
 	noConf := mk(func(lr plog.LogRecord) {
 		lr.Attributes().PutStr("entity.type", "network.device")
 		lr.Attributes().PutEmptyMap("entity.id").PutStr("name", "sw1")
@@ -94,17 +99,14 @@ func TestCheckCatchesContractViolations(t *testing.T) {
 		d.PutStr("entity.type", "network.device")
 		d.PutEmptyMap("entity.id").PutStr("mac", "AA-BB-CC-DD-EE-FF")
 	})
-	foundAdvisory := false
+	foundBlocking := false
 	for _, p := range Check(noConf) {
-		if p.Advisory && strings.Contains(p.Issue, "no confidence") {
-			foundAdvisory = true
-		}
-		if !p.Advisory {
-			t.Errorf("same_as without confidence must not be a rejection: %v", p)
+		if !p.Advisory && strings.Contains(p.Issue, "no confidence") {
+			foundBlocking = true
 		}
 	}
-	if !foundAdvisory {
-		t.Error("same_as without confidence should raise an advisory")
+	if !foundBlocking {
+		t.Error("same_as without confidence must block, not advise")
 	}
 
 	// A plain log record is not an entity event: ignored, like Toise does.
@@ -430,5 +432,106 @@ func TestCheckFlagsRetiredIdentitySpelling(t *testing.T) {
 		if hit != c.flagged {
 			t.Errorf("%s: flagged=%v, want %v (identity %v, description %v)", c.name, hit, c.flagged, c.inIdent, c.inDesc)
 		}
+	}
+}
+
+// TestBeliefAttributes pins the 0.23 belief contract on both relation types
+// that carry one.
+//
+// Two separate failures hide here, and the producer cannot tell them apart from
+// the outside. On same_as, a confidence the overlay cannot read leaves a stored
+// edge that collapses nothing. On resolves_to, a perfectly readable confidence
+// is stored and consulted by no decision at all, because every reader of the
+// attribute gates on same_as. Both end in a stated belief that changes no
+// answer, which is why one blocks and the other is said out loud.
+func TestBeliefAttributes(t *testing.T) {
+	mk := func(relType string, build func(d pcommon.Map)) plog.Logs {
+		ld := plog.NewLogs()
+		rl := ld.ResourceLogs().AppendEmpty()
+		rl.Resource().Attributes().PutStr("service.instance.id", "p1") // avoid the unrelated advisory
+		lr := rl.ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
+		lr.SetEventName("entity.state")
+		lr.Attributes().PutStr("entity.type", "host")
+		lr.Attributes().PutEmptyMap("entity.id").PutStr("host.id", "h1")
+		d := lr.Attributes().PutEmptySlice("entity.relationships").AppendEmpty().SetEmptyMap()
+		d.PutStr("relationship.type", relType)
+		d.PutStr("entity.type", "cloud.resource")
+		d.PutEmptyMap("entity.id").PutStr("azure.resource.id", "/subscriptions/x/rg/y")
+		build(d)
+		return ld
+	}
+
+	find := func(problems []Problem, advisory bool, substr string) bool {
+		for _, p := range problems {
+			if p.Advisory == advisory && strings.Contains(p.Issue, substr) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// A contractual basis at its contractual confidence: nothing to say.
+	exact := mk(wire.RelTypeSameAs, func(d pcommon.Map) {
+		d.PutStr(wire.RelBasis, wire.BasisVMIDMatch)
+		d.PutDouble(wire.RelConfidence, 1.0)
+	})
+	if problems := Check(exact); len(problems) != 0 {
+		t.Errorf("an exact-match basis at 1.0 was flagged: %v", problems)
+	}
+
+	// The same basis below its contractual value: it claims an exact identity
+	// match and then asks the reader to doubt it. Blocks, because under the
+	// default threshold of 0.9 a value like this one collapses nothing while
+	// reading as a deliberate belief.
+	doubted := mk(wire.RelTypeSameAs, func(d pcommon.Map) {
+		d.PutStr(wire.RelBasis, wire.BasisVMIDMatch)
+		d.PutDouble(wire.RelConfidence, 0.8)
+	})
+	if !find(Check(doubted), false, "contractual confidence") {
+		t.Errorf("basis %s at 0.8 must block: %v", wire.BasisVMIDMatch, Check(doubted))
+	}
+
+	// An unknown basis is left alone: the vocabulary is open and weaker evidence
+	// legitimately carries a lower value.
+	weak := mk(wire.RelTypeSameAs, func(d pcommon.Map) {
+		d.PutStr(wire.RelBasis, "hyperv-kvp")
+		d.PutDouble(wire.RelConfidence, 0.6)
+	})
+	for _, p := range Check(weak) {
+		if !p.Advisory {
+			t.Errorf("an open-vocabulary basis below the threshold must not block: %v", p)
+		}
+	}
+
+	// No basis at all: usable, but a reader cannot tell what the belief rests on.
+	noBasis := mk(wire.RelTypeSameAs, func(d pcommon.Map) {
+		d.PutDouble(wire.RelConfidence, 1.0)
+	})
+	if !find(Check(noBasis), true, "no basis") {
+		t.Errorf("a same_as without basis should advise: %v", Check(noBasis))
+	}
+
+	// resolves_to with a confidence: parsed, stored, read by nothing.
+	resolves := mk(wire.RelTypeResolvesTo, func(d pcommon.Map) {
+		d.PutStr(wire.RelBasis, "lldp")
+		d.PutDouble(wire.RelConfidence, 1.0)
+	})
+	if !find(Check(resolves), true, "read by nothing") {
+		t.Errorf("a resolves_to confidence should advise that nothing reads it: %v", Check(resolves))
+	}
+	for _, p := range Check(resolves) {
+		if !p.Advisory {
+			t.Errorf("resolves_to must not block: %v", p)
+		}
+	}
+
+	// resolves_to without a confidence is silent: the basis alone is the useful
+	// half, and demanding a value nothing reads would be worse than saying
+	// nothing.
+	bare := mk(wire.RelTypeResolvesTo, func(d pcommon.Map) {
+		d.PutStr(wire.RelBasis, "arp")
+	})
+	if problems := Check(bare); len(problems) != 0 {
+		t.Errorf("a resolves_to with a basis and no confidence was flagged: %v", problems)
 	}
 }
