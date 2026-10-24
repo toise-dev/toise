@@ -117,6 +117,7 @@ var identityForms = map[string]string{
 	"db.instance.id":                                  "db",
 	"container.id":                                    "container",
 	"k8s.node.uid":                                    "k8s.node — the cluster's view of a machine, joined to its host by a same_as belief",
+	"azure.resource.id":                               "cloud.resource — a resource as the cloud control plane holds it, keyed on the ARM id in LOWER CASE; the join key cloud.resource_id keeps the API's casing and never identifies",
 	"host.id,host.service.name":                       "host.service, scoped to its machine — a service name is unique only within one host, and the name carries its full supervisor suffix",
 	"network.device.id":                               "network.device",
 	"network.segment.id":                              "network.segment",

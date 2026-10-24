@@ -79,6 +79,22 @@ const (
 	// distinct. Joined to its host by a same_as belief, because each identity is
 	// complete on its own and the collapse would lose no identifying attribute.
 	TypeK8sNode = wire.TypeK8sNode
+	// TypeCloudResource is a resource as the cloud's own control plane holds it —
+	// an ARM resource on Azure — keyed {azure.resource.id}, the ARM id in lower
+	// case. Deliberately generic: the observer polls a resource graph, which
+	// gives it the provider's identity for the object and nothing it could key
+	// the service inside that object by, so a per-family type would promise a
+	// specialisation no producer can supply.
+	//
+	// It is a THIRD facet of a machine beside host and compute.vm, on the rule
+	// those two follow: the control plane's view is not the in-guest view, so
+	// they are separate entities joined by a same_as belief (basis vm_id_match,
+	// on azure.vm.id) and never merged. host.id stays the OS machine-id.
+	//
+	// Subscription, resource group and region are descriptive attributes, not
+	// entities: they carry no hop, and an entity nothing traverses is a filter
+	// written as a graph. See docs/design/azure-resource-entity-model.md.
+	TypeCloudResource = wire.TypeCloudResource
 
 	// TypeHostService is a unit the system's supervisor manages — a systemd unit,
 	// a Windows service — keyed {host.id, host.service.name} with the FULL name
@@ -243,6 +259,7 @@ var entityTypes = map[string]struct{}{
 	TypeServiceListener:  {},
 	TypeK8sNode:          {},
 	TypeHostService:      {},
+	TypeCloudResource:    {},
 	// producer vocabulary
 	TypeServiceInstance: {},
 	TypeDatabase:        {},
