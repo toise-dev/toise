@@ -21,12 +21,19 @@ import (
 // changed_keys / graph_diff), unlike a plain descriptive update. replication.role
 // and read_only make a database failover or a read-only flip a first-class state
 // change rather than a silent attribute update.
+//
+// The producer contract is what decides membership, and the contract already
+// called hw.state state-bearing while this set did not contain it: a power supply
+// going ok -> failed classified exactly like an edited sysLocation. TestStateKeysSet
+// pins the membership so that adding or removing a key is a deliberate act rather
+// than a divergence nobody sees.
 var stateKeys = map[string]struct{}{
 	"oper_state":       {},
 	"admin_state":      {},
 	"status":           {},
 	"replication.role": {},
 	"read_only":        {},
+	"hw.state":         {},
 }
 
 // Appender persists qualified events. The store satisfies it.
