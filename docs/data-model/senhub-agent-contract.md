@@ -1377,8 +1377,15 @@ from this round:
 ## One export has a size cap, and splitting a snapshot is safe
 
 `otlp_max_recv_bytes` caps one OTLP/gRPC export and defaults to gRPC's 4 MiB.
-Past it the export is refused **whole**, with `ResourceExhausted` — nothing is
-silent, and nothing partial lands. A 5,000-host inventory is around 10 MB, so an
+Past it the export is refused **whole**, with `ResourceExhausted`, and nothing
+partial lands.
+
+**The refusal is visible to the producer only.** It happens at the transport,
+before the ingest handler, so Toise neither counts it nor logs it (#556). A
+reader of Toise sees entities missing and no reason given — this server will not
+tell anyone that an export was refused. Size exports on the producer side and
+watch for `ResourceExhausted` there; this paragraph used to say "nothing is
+silent", which was true of the producer and false of everyone reading the graph. A 5,000-host inventory is around 10 MB, so an
 estate of that size cannot send its snapshot in one export (#351). Either raise
 the cap deliberately, remembering that one export is buffered in memory per
 in-flight request, or split.
