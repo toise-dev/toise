@@ -1191,11 +1191,24 @@ function drawDome(){
   g2.textAlign='center'; g2.textBaseline='top';
   const named=drawn.filter(it=>isKind(it.n.id))
     .concat(drawn.filter(it=>!isKind(it.n.id)).sort((a,b)=>b.size-a.size).slice(0,26));
+  // A label that lands on another is worse than no label: two names overprinted
+  // read as a third, wrong one. Brightest first, and a name whose box collides
+  // with one already placed is dropped rather than drawn over it.
+  const placed=[];
   for(const it of named){
     if(!it.n.label) continue;
+    const text=String(it.n.label).split('\n')[0];
+    const w=g2.measureText(text).width, x=it.p.x-w/2, y=it.p.y+it.rad+4;
+    const box={x0:x-2,y0:y-1,x1:x+w+2,y1:y+12};
+    let clash=false;
+    for(const q of placed){
+      if(box.x0<q.x1 && box.x1>q.x0 && box.y0<q.y1 && box.y1>q.y0){ clash=true; break; }
+    }
+    if(clash) continue;
+    placed.push(box);
     g2.globalAlpha=it.alpha;
     g2.fillStyle='rgba(195,209,234,0.92)';
-    g2.fillText(String(it.n.label).split('\n')[0], it.p.x, it.p.y+it.rad+4);
+    g2.fillText(text, it.p.x, y);
     g2.globalAlpha=1;
   }
 
