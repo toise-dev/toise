@@ -1343,8 +1343,8 @@ emitted**. One identity and a half is not two.
   cross-producer consistency.
 - **State-bearing keys are a fixed recognized set with exact spellings** the change
   engine matches: `oper_state`, `admin_state`, `status`, `replication.role`,
-  `read_only` (note the **underscore** forms — they predate and override the dotted
-  convention). A change to one of these classifies as `entity.state_changed`; emit
+  `read_only`, `hw.state` (note the **underscore** forms — they predate and override
+  the dotted convention). A change to one of these classifies as `entity.state_changed`; emit
   the exact string — a dotted variant like `oper.state` is silently treated as an
   ordinary attribute and the state change never fires.
 - **Identity is unchanged** (`network.device.id` precedence `serial:<PEN>`/…, exact
