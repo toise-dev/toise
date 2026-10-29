@@ -232,6 +232,7 @@ below are what Toise recommends. Converge on them; do not be policed by them.
 | `parent_removed` | the producer removed it because its parent went away | resource lifecycle |
 | `unmonitored` | **the observation ended; the resource may well still exist** | observation |
 | `aged_out` | **a cache forgot the entry; nobody saw the thing leave** | observation |
+| `excluded_by_config` | **the configuration removed the report, not the observer: the producer still sees the resource and does not publish it** | observation |
 | `rekeyed` | **nothing happened in the world: the producer changed how it spells this identity** | producer bookkeeping |
 
 **The rule that matters: never use a lifecycle value when you merely stopped
@@ -248,6 +249,24 @@ interchangeable: `unmonitored` means *we stopped looking*, `aged_out` means *we
 are still looking and the table forgot*. An ARP, NDP or FDB entry that ages out
 is the second — and ADR 0006's own note says it: a cache evicts, and **an
 eviction is not a departure**.
+
+The three observation values are not interchangeable either, and the two that
+speak of configuration are the pair most easily confused: `unmonitored` means
+the configuration removed the **observer** — the probe stopped, the target left
+the scope, nobody is looking — while `excluded_by_config` means the
+configuration removed the **report** of something still observed. The producer
+reads the resource, sees it, and its own filter tells it not to publish it. It
+is the only one of the three where the operator holds the lever: change the
+filter and the thing comes back. A filtered removal announced as `unmonitored`
+sends its reader to check the probe inventory; announced as `terminated`, it
+asserts the resource left.
+
+`excluded_by_config` is a **transition marker, not a property of state**. It is
+emitted only on the cycle where the thing stops being published, so this value
+cannot answer *what is excluded today*: a producer that restarts with its filter
+already in place retires nothing, and the entities it published before fall to
+`liveness_expiry`. What a filter withholds in steady state is read on the
+producer's own counter, never on this value.
 
 Do **not** spell that case `evicted`. The word is taken, one row above, for a
 scheduler displacing a resource — the opposite family, where the thing really
@@ -269,6 +288,7 @@ Read together, the pairs are unambiguous:
 | `producer` | `terminated` | the thing ended, and the producer saw it |
 | `producer` | `unmonitored` | the thing may still exist; we stopped watching |
 | `producer` | `aged_out` | the thing may still exist; a cache forgot it |
+| `producer` | `excluded_by_config` | the thing exists and we see it; a configuration tells us not to report it |
 | `producer` | `rekeyed` | the thing is untouched; this spelling of it was retired |
 | `producer` | `parent_removed` | producer-side cascade: the parent went first |
 | `producer` | *(absent)* | the producer decided and gave no motive |
