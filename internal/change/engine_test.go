@@ -129,7 +129,7 @@ func TestStateKeyClassification(t *testing.T) {
 // a failed power supply was indistinguishable from an edited description. A test on
 // one key would not have caught that; only enumerating the set does.
 func TestStateKeysSet(t *testing.T) {
-	want := []string{"admin_state", "hw.state", "oper_state", "read_only", "replication.role", "status"}
+	want := []string{"admin_state", "ha.role", "hw.state", "oper_state", "read_only", "replication.role", "status"}
 	got := make([]string, 0, len(stateKeys))
 	for k := range stateKeys {
 		got = append(got, k)
@@ -145,6 +145,33 @@ func TestStateKeysSet(t *testing.T) {
 // hw.state is the hardware health key of the OTel hw.* namespace. A component going
 // ok -> failed is the event an operator is paged for; before it joined stateKeys it
 // classified as entity.attribute_updated, the same class as a cosmetic edit.
+func TestHARoleIsAStateChange(t *testing.T) {
+	e, _, _ := newEngine(t)
+	ident := []model.KeyValue{kv("service.instance.id", "keepalived:lb-1")}
+
+	if ev, err := e.ObserveEntity(EntityObservation{Type: model.TypeServiceInstance, Identity: ident,
+		Attributes: []model.KeyValue{kv("ha.role", "active")}, EventTime: t0}); err != nil || ev.Entity.ChangeType != model.EntityCreated {
+		t.Fatalf("create = %v, %s", err, ev.Entity.ChangeType)
+	}
+
+	ev, _ := e.ObserveEntity(EntityObservation{Type: model.TypeServiceInstance, Identity: ident,
+		Attributes: []model.KeyValue{kv("ha.role", "standby")}, EventTime: t0})
+	if ev.Entity.ChangeType != model.EntityStateChanged {
+		t.Errorf("ha.role active -> standby = %s, want entity.state_changed", ev.Entity.ChangeType)
+	}
+
+	// ha.role and replication.role are two facts: a node can hold both, and a
+	// change to one must not be read as a change to the other.
+	ev, _ = e.ObserveEntity(EntityObservation{Type: model.TypeServiceInstance, Identity: ident,
+		Attributes: []model.KeyValue{kv("ha.role", "standby"), kv("replication.role", "replica")}, EventTime: t0})
+	if ev.Entity.ChangeType != model.EntityStateChanged {
+		t.Errorf("replication.role add = %s, want entity.state_changed", ev.Entity.ChangeType)
+	}
+	if len(ev.Entity.ChangedKeys) != 1 || ev.Entity.ChangedKeys[0] != "replication.role" {
+		t.Errorf("changed keys = %v, want [replication.role] alone", ev.Entity.ChangedKeys)
+	}
+}
+
 func TestHardwareStateIsAStateChange(t *testing.T) {
 	e, _, _ := newEngine(t)
 	ident := []model.KeyValue{kv("service.instance.id", "redfish:SN-1")}
