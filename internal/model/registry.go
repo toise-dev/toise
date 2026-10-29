@@ -134,8 +134,15 @@ const (
 	// RelConnectedTo is the bare, port-to-port link-layer adjacency in the
 	// topology-as-entities model (ADR 0022): ports are network.interface entities,
 	// so the edge carries no attributes (the ports do). It is the standard, spec-
-	// embeddable form that supersedes adjacent_to + port attributes; device-level
-	// adjacency is derived from it at read time, not stored.
+	// embeddable form that supersedes adjacent_to + port attributes.
+	//
+	// Device-level adjacency is NOT stored and NOT served: a consumer that wants
+	// "which chassis are adjacent" joins this edge to has_interface itself, on
+	// both ends, and in both directions — the edge is recorded once per speaker
+	// and the reverse is never synthesized. Saying it is "derived at read time"
+	// described the consumer's work in the grammar of a product behavior, and a
+	// reader checks whether the fact is stated, not whether anything implements
+	// it.
 	RelConnectedTo = wire.RelTypeConnectedTo
 
 	// RelDependsOn is a durable dependency a producer asserts from one of its own
@@ -206,8 +213,9 @@ const (
 	// and NOT to be emitted by producers: routes_via is replaced by network.route +
 	// has_route + next_hop_via; adjacent_to by port-to-port connected_to; forwards_to
 	// (FDB) by connected_to to the learned port. They remain registered (so the
-	// boundary still accepts them) but the contract derives the device-level views at
-	// read time. See docs/data-model/otel-mapping.md.
+	// boundary still accepts them); the device-level views they used to carry are
+	// left to the CONSUMER to derive, and nothing here derives them.
+	// See docs/data-model/otel-mapping.md.
 	// The deprecation markers are aimed at producers, and the engine is the one
 	// legitimate caller: the boundary must keep accepting these until 1.0, and
 	// spelling the strings by hand here instead would break the cross-check that
