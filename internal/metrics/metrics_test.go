@@ -9,13 +9,16 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	dto "github.com/prometheus/client_model/go"
+
+	"github.com/toise-dev/toise/internal/model"
 )
 
 type fakeGraph struct{}
 
-func (fakeGraph) EntityCount() int            { return 3 }
-func (fakeGraph) RelationCount() int          { return 2 }
-func (fakeGraph) CountByType() map[string]int { return map[string]int{"host": 2, "db": 1} }
+func (fakeGraph) EntitiesOfTypePerTenant(string) [][]model.Entity { return nil }
+func (fakeGraph) EntityCount() int                                { return 3 }
+func (fakeGraph) RelationCount() int                              { return 2 }
+func (fakeGraph) CountByType() map[string]int                     { return map[string]int{"host": 2, "db": 1} }
 
 type fakeStore struct{}
 

@@ -3,6 +3,7 @@ package main
 import (
 	"time"
 
+	"github.com/toise-dev/toise/internal/model"
 	"github.com/toise-dev/toise/internal/registry"
 )
 
@@ -27,6 +28,21 @@ func (g aggregateGraph) RelationCount() int {
 		n += st.Graph.RelationCount()
 	}
 	return n
+}
+
+// EntitiesOfTypePerTenant keeps each tenant's entities in their own slice. The
+// serial-overlap check compares entities to one another, and two estates that
+// never met may carry the same chassis serial: pooling them would publish a
+// cross-tenant comparison as a single number.
+func (g aggregateGraph) EntitiesOfTypePerTenant(typ string) [][]model.Entity {
+	stacks := g.reg.Stacks()
+	out := make([][]model.Entity, 0, len(stacks))
+	for _, st := range stacks {
+		if ents := st.Graph.EntitiesOfType(typ); len(ents) > 0 {
+			out = append(out, ents)
+		}
+	}
+	return out
 }
 
 func (g aggregateGraph) CountByType() map[string]int {

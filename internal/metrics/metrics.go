@@ -15,6 +15,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"github.com/toise-dev/toise/internal/model"
 )
 
 // Grapher is the slice of the projection the collector samples.
@@ -22,6 +24,12 @@ type Grapher interface {
 	EntityCount() int
 	RelationCount() int
 	CountByType() map[string]int
+	// EntitiesOfTypePerTenant returns the live entities of a type, one slice
+	// per independent graph. They are deliberately NOT pooled: a check that
+	// compares entities to one another must not compare across tenants, where
+	// two unrelated estates may legitimately carry the same value and where a
+	// pooled answer would be a cross-tenant comparison published as one number.
+	EntitiesOfTypePerTenant(typ string) [][]model.Entity
 }
 
 // Storer is the slice of the event store the collector samples.
@@ -50,18 +58,20 @@ type Collector struct {
 	// collection carries none of job/instance/target.
 	startedAt time.Time
 
-	buildInfo      *prometheus.Desc
-	startTime      *prometheus.Desc
-	entities       *prometheus.Desc
-	entitiesByType *prometheus.Desc
-	relations      *prometheus.Desc
-	events         *prometheus.Desc
-	diskBytes      *prometheus.Desc
-	prunedEvents   *prometheus.Desc
-	prunedBytes    *prometheus.Desc
-	snapshotSeq    *prometheus.Desc
-	snapshots      *prometheus.Desc
-	pruneHorizon   *prometheus.Desc
+	buildInfo        *prometheus.Desc
+	startTime        *prometheus.Desc
+	entities         *prometheus.Desc
+	entitiesByType   *prometheus.Desc
+	relations        *prometheus.Desc
+	events           *prometheus.Desc
+	diskBytes        *prometheus.Desc
+	prunedEvents     *prometheus.Desc
+	prunedBytes      *prometheus.Desc
+	snapshotSeq      *prometheus.Desc
+	snapshots        *prometheus.Desc
+	pruneHorizon     *prometheus.Desc
+	serialOverlaps   *prometheus.Desc
+	serialPopulation *prometheus.Desc
 }
 
 // NewCollector builds a collector over the graph and store, stamping build info
@@ -98,6 +108,24 @@ func NewCollector(g Grapher, s Storer, version, commit string) *Collector {
 			"Reference sequence of the last projection snapshot written (0 if none).", nil, nil),
 		snapshots: prometheus.NewDesc("toise_snapshots_written_total",
 			"Total projection snapshots written.", nil, nil),
+		serialOverlaps: prometheus.NewDesc("toise_identity_serial_overlaps",
+			"Number of chassis serial numbers carried by more than one live network.device. "+
+				"It measures a COINCIDENCE, not an error: two entities claiming one serial are "+
+				"either one device seen twice under two identities, or a chassis moved from one "+
+				"stack to another — and a genuine move is expected to make this ring. "+
+				"A serial is skipped when two of the entities carrying it declare different hw.vendor "+
+				"values; an unset vendor never disqualifies, so a collision is still seen when only "+
+				"one producer resolved the vendor. Read it beside "+
+				"toise_identity_serial_comparable_entities: zero here means nothing until that one is "+
+				"above zero. No serial appears as a label — a serial names a physical unit, and the "+
+				"cardinality would follow the estate; the count is what you alert on, the identity is "+
+				"read through the API.", nil, nil),
+		serialPopulation: prometheus.NewDesc("toise_identity_serial_comparable_entities",
+			"Number of live network.device entities carrying at least one usable chassis serial, "+
+				"which is the population the overlap check can compare at all. It exists so a zero "+
+				"overlap count can be told apart from a check that had nothing to look at: a fleet "+
+				"whose producers do not emit senhub.chassis.serial_numbers reports zero overlaps "+
+				"forever, and that zero says nothing about the fleet.", nil, nil),
 		pruneHorizon: prometheus.NewDesc("toise_store_prune_horizon_seconds",
 			"Unix time of the latest retention cutoff applied (0 if never pruned); the oldest instant an as-of read can answer completely.", nil, nil),
 	}
@@ -117,6 +145,8 @@ func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.snapshotSeq
 	ch <- c.snapshots
 	ch <- c.pruneHorizon
+	ch <- c.serialOverlaps
+	ch <- c.serialPopulation
 }
 
 // Collect implements prometheus.Collector, sampling the live state.
@@ -137,6 +167,14 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	}
 	ch <- prometheus.MustNewConstMetric(c.pruneHorizon, prometheus.GaugeValue, horizon)
 	emitByType(ch, c.entitiesByType, c.graph.CountByType())
+	overlaps, comparable := 0, 0
+	for _, tenant := range c.graph.EntitiesOfTypePerTenant(typeNetworkDevice) {
+		o, p := SerialOverlap(tenant)
+		overlaps += o
+		comparable += p
+	}
+	ch <- prometheus.MustNewConstMetric(c.serialOverlaps, prometheus.GaugeValue, float64(overlaps))
+	ch <- prometheus.MustNewConstMetric(c.serialPopulation, prometheus.GaugeValue, float64(comparable))
 }
 
 // maxTypeSeries caps the by-type label cardinality: producers control entity
