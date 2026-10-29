@@ -98,7 +98,7 @@ leased IP) in the identity — those are descriptive attributes. Agreed identiti
 | `network.device` | `{network.device.id}` — a single subtype-prefixed value by **precedence**: `serial:` (ENTITY-MIB `entPhysicalSerialNum`) > `engine:` (`snmpEngineID`) > `mac:` (LLDP chassis-id, rendered per the MAC rule below) > `name:` (`sysName`) > `mgmt:` (mgmt IP) | **anchored on SNMP-immutable facts, not LLDP** (often disabled); `mgmt:` is mutable last-resort. Producer canonicalizes (Toise is byte-exact); raw parts descriptive. Endpoints resolved to the canonical id via `ifPhysAddress` before emitting edges. Frozen for Lot 5 — see [`otel-mapping.md`](./otel-mapping.md#networkdevice-identity--snmp-topology-lot-5-frozen). |
 | `compute.vm` | `{host.id, vmid}` — the **hypervisor node's** `host.id` plus the hypervisor's vm id | a VM seen **from the hypervisor**, where the guest machine-id is unavailable. **Not** a `host` (a vmid is not a machine-id). `runs_on` the hypervisor `host`. The in-guest `host` (machine-id) is a separate facet, reconciled later by a `same_as` overlay (ADR 0020), never merged. **If the hypervisor *does* surface the guest machine-id (e.g. Hyper-V KVP), carry it as the descriptive attribute `guest.host.id` — evidence, never identity (the id stays `{host.id, vmid}`) — and still do not emit a `host` facet or merge.** That attribute is the `same_as` join key the overlay will consume; per ADR 0020 the producer asserts `same_as` (basis/confidence) once the read-time collapse lands; `same_as` has been a registered relation type since v0.16.0, with endpoints unconstrained, so a producer holding a justified link may assert it today, and the evidence rides as `guest.host.id` only until then. Same pattern as AT8 (redfish/ibmi carry `hw.serial_number` on both facets). |
 | `network.interface` | `{host.id, network.interface.name}` on a host, `{network.device.id, network.interface.name}` on a polled device — the owner, plus the interface's name **in the semconv spelling** | an interface is named only **within its owner**: `eth0` exists on every machine, so the name alone identifies nothing. **The spelling is closed for identity**: `interface.name`, the pre-semconv key, stays valid as a descriptive attribute and as a telemetry join key — a graph still holds interfaces observed before the migration — and must **never** appear in an identity. Identities are hashed over the keys as sent, with no normalization, so one port named two ways is two entities joined by nothing, and the duplicate surfaces months later. The conformance kit refuses the retired spelling in an identity and accepts it everywhere else. |
-| `host.service` | `{host.id, host.service.name}` — the owner, plus the **full name the supervisor gives**: `nginx.service`, `nginx.socket`, `Spooler` | a unit the system's supervisor manages: a systemd unit on Linux, a Windows service on Windows. **One type for both**, because it is one concept — something the operating system is meant to start by itself. The name is **not** the bare one: `nginx.service` and `nginx.socket` are two different units, and a bare `nginx` fuses them into one entity whose attributes oscillate. Scoped by the host because a service name is unique only **within** its machine, like `eth0`. Emit only what the system is meant to start by itself — **automatic start** on Windows (delayed included), **enabled** units on systemd — plus any the operator names: all ~200 services of a Windows machine would multiply a graph fivefold for a question nobody asked, while an automatic-start service that is **not running** is an incident and a manual one that is not running is normal. Start mode and state are descriptive. `runs_on` to the host. **Our extension** of the upstream `host.*` namespace, on the `entity.host.cpu` precedent — nothing upstream covers this ground, and the two collector-contrib receivers on it use divergent local vocabularies; the spelling is **proposed** until an upstream experience report settles it. |
+| `host.service` | `{host.id, host.service.name}` — the owner, plus the **full name the supervisor gives**: `nginx.service`, `nginx.socket`, `Spooler` | a unit the system's supervisor manages: a systemd unit on Linux, a Windows service on Windows. **One type for both**, because it is one concept — something the operating system is meant to start by itself. The name is **not** the bare one: `nginx.service` and `nginx.socket` are two different units, and a bare `nginx` fuses them into one entity whose attributes oscillate. Scoped by the host because a service name is unique only **within** its machine, like `eth0`. Emit only what the system is meant to start by itself — **automatic start** on Windows (delayed included), **enabled** units on systemd — plus any the operator names: all ~200 services of a Windows machine would multiply a graph fivefold for a question nobody asked, while a manual one that is not running is normal. **Run state is normative — see AT12**: emit `status` from the frozen value set, and enumerate the **installed** units so a stopped service is emitted rather than absent. Start mode stays descriptive. The claim this row used to make — that an automatic-start service which is not running *is an incident* — is **false as stated**: some automatic-start services stop by design, and it was the justification for the whole type (AT12). `runs_on` to the host. **Our extension** of the upstream `host.*` namespace, on the `entity.host.cpu` precedent — nothing upstream covers this ground, and the two collector-contrib receivers on it use divergent local vocabularies; the spelling is **proposed** until an upstream experience report settles it. |
 | `k8s.node` | `{k8s.node.uid}` | the **cluster's view of a machine** — not a second host. It carries the machine's **role in the cluster**: taints, labels, allocatable capacity, conditions, which are not facts about the machine. A node **cordoned while its host is perfectly healthy** is the case that makes the two distinct, the same shape as `compute.vm` beside `host`. Joined to its host by a **`same_as` belief**, which a DaemonSet agent asserts with the cleanest evidence there is: it reads `node.UID` and `node.Status.NodeInfo.MachineID` from the **same** cluster-API object, so it holds both identities itself, and each is a complete identity of one machine — the collapse would lose no identifying attribute, which is the test that makes it a `same_as` rather than a dedicated relation. Cluster-role attributes (`k8s.node.name`, `k8s.kubelet.version`) belong here; `host.uuid` stays on the host. So "which hosts are cluster nodes" becomes a walk over an observed belief instead of a filter on an attribute. |
 | `cloud.resource` | `{azure.resource.id}` — the ARM resource id in **lower case** | a resource as the cloud's own control plane holds it, and a **third facet** of a machine beside `host` and `compute.vm`: the control plane's view is not the in-guest view, so they are separate entities joined by a **`same_as`** belief (basis `vm_id_match`, on `azure.vm.id`) and never merged — `host.id` stays the OS machine-id. The type is deliberately **generic**: the observer polls a resource graph, which hands it the provider's identity for the object and nothing it could key the service *inside* that object by, so a per-family type would promise a specialisation no producer can supply. **The identity key is ours on purpose.** `cloud.resource_id` keeps the casing the API returned, because a consumer joins on it to reach Azure's own telemetry and we hold **no** upstream rule fixing that rendering — a value we received, on a key we do not own, is not ours to normalise. An identity has the opposite requirement: identity is byte-exact (ADR 0018) and Azure returns the same id cased differently depending on which API answered, so two spellings would be two entities for one resource. Lower-casing cannot merge two distinct resources (ARM resource and resource-group names are case-insensitive). Subscription, resource group and region are **descriptive attributes, not entities**: they carry no hop. See `docs/design/azure-resource-entity-model.md`. |
 | `container` | `{container.id}` | an OCI/Docker container — a compute resource, not a `service.instance`. `image`/`name` descriptive; `status` is a **state key** (see below); `runs_on` its `host`. |
@@ -288,7 +288,7 @@ in the change taxonomy (`stateKeys` → `entity.state_changed` vs
 | `service.instance` | `service.name`, `service.version`, `service.namespace` | — |
 | `host` | `host.name`, `host.arch`, `os.type`, `os.version`, `os.description` | — |
 | `container` | `container.name`, `container.image.name`, `container.image.tag`, `container.image.digest`, `container.runtime` | `status` (`running`/`stopped`/`paused`) |
-| `network.device` | `hw.vendor`, `hw.model`, `hw.firmware_version` (hardware semconv); `sysName` and `sysDescr` (SNMP, raw/descriptive); mgmt address (descriptive, **mutable**) | — (reachability / admin status is a metric) |
+| `network.device` | `hw.vendor`, `hw.model`, `hw.firmware_version` (hardware semconv); `sys.name` and `sys.descr` (SNMP, raw/descriptive — the emitted keys are dotted lowercase; `sysName`/`sysDescr` name the MIB objects they are read from, not the keys); mgmt address (descriptive, **mutable**) | — (reachability / admin status is a metric) |
 | | **`hw.vendor` value form is normative** — see below. | |
 | `compute.vm` | `host.name` (vm name); guest `os.type` / `os.version` when the hypervisor reports it; `guest.host.id` when the hypervisor surfaces the guest machine-id (evidence for the `same_as` overlay, not identity); configured capacity reusing the AT10 keys — `host.cpu.logical.count` (vCPUs) and `host.memory.total` (By) — as **config**, not utilization; `host.virtualization` for the hypervisor platform (the AT11 value set: `hyperv`/`vmware`/`kvm`/…) | power state (`running` / `stopped` / `suspended`) |
 | `cloud.resource` | `cloud.resource_id` (the ARM id **as the API returned it** — the upstream key, for the telemetry join, never the identity); `azure.resource.name`, `azure.resource.type`, `azure.resource_group.name`, `azure.resource_provider.namespace`, `azure.tenant.id`, region; `azure.vm.id` on a VM resource (the `same_as` join key, rendered as a **lower-case hyphenated UUID**, same rule as `host.id`) | `azure.resource.provisioning.status` (from ARM's provisioning state) and `azure.resource.status` (the product state) |
@@ -322,6 +322,82 @@ in the change taxonomy (`stateKeys` → `entity.state_changed` vs
 **Follow-ups:** AT4 is **done** — `replication.role` + `read_only` are in Toise's
 `stateKeys` (#217). Agent-side rollout starts with AT1 (redis `db.version` →
 `db.system.version`; thread the captured version onto the mysql/postgres/oracle entity).
+
+#### AT12 — `host.service` run state is normative
+
+`host.service` exists so that "an automatic-start service that is not running" can be
+asked as a graph question. Until now this contract emitted the start mode and froze
+**no** run state at all, saying only that start mode and state "are descriptive" — so
+the type answered the easy half of its own justifying question and none of the hard
+half (#558). Measured on a production estate: 630 of 630 entities carried no run state
+under any spelling, and "which automatic-start services are stopped" returned a clean
+empty list, which reads as "none are".
+
+**The key is `status`**, not a new one. It is already in Toise's `stateKeys`, so the
+change classifies as `entity.state_changed` with no engine change and no version
+coupling between producer and server; `container` (AT5) and `compute.vm` already carry
+the same concept for the same question. It does not collide with `hw.state`
+(`ok`/`degraded`/`failed`/`predicted_failure`), which is **health**, not run state — a
+power supply never runs.
+
+**Frozen value set**, lowercase, one word, extending AT5's three:
+
+`running` · `stopped` · `starting` · `stopping` · `paused` · `failed` · `unknown`
+
+- Windows SCM: `RUNNING`→`running`, `STOPPED`→`stopped`, `PAUSED`→`paused`,
+  `START_PENDING`/`CONTINUE_PENDING`→`starting`,
+  `STOP_PENDING`/`PAUSE_PENDING`→`stopping`.
+- systemd: `active`→`running`, **`reloading`→`running`** (the unit is active, re-reading
+  its configuration), `inactive`→`stopped`, `activating`→`starting`,
+  `deactivating`→`stopping`, `failed`→`failed`.
+
+**Never omit the attribute.** Emit `unknown` when the state is unreadable. On host
+interfaces the equivalent attribute is *omitted* when unreadable, so a consumer writing
+`!= "up"` misses that case: an absent attribute reads as a value (#537).
+
+**`failed` cannot come from Windows and `paused` cannot come from systemd**, and both
+must be declared. The SCM has no failure state — a crashed service reads `STOPPED` — so
+a rule written `status == "failed"` never fires on a Windows estate, and a rule that can
+never fire reads as coverage. The load-bearing test is `status != "running"`; `failed` is
+a systemd refinement that says why.
+
+**Transitional values are signal, not noise.** Under any realistic cadence a restart
+completes inside one poll interval, so `starting`/`stopping` are observed almost only
+when the transition is **stuck**, which is the case worth alerting on. They turn noisy
+only below roughly ten seconds of cadence.
+
+**The emission enumerates installed units, not running ones.** This is the half without
+which the key changes nothing. A producer that keeps enumerating what is running and
+merely adds `status` emits `running` on everything, and a stopped service stays
+**absent** — the empty list stays empty. Measured on the same estate: 121 `host.service`
+deletions in six hours were the producer reporting the service gone, 77 of them one
+delayed-start service that shuts down when idle, a cycle every 23 minutes per host. An
+absent entity reads as a value exactly as an absent attribute does, and it is worse:
+after one stop/start cycle the recreated entity's readable history is two events, so the
+stop is not reconstructible even by a reader who knows to look for it. Keep the
+`start_mode` filter; change what it is applied to.
+
+**No graph-only predicate is sufficient today, and this contract does not pretend
+otherwise.** `start_mode = auto_start AND trigger_start = false AND status != running`
+looks complete and is wrong: on the measured estate the two services that stop most
+often are both `auto_start` and both `trigger_start = false`, and both stop by design.
+492 of 639 entities sit in that set, and at least 28 belong to a service the producer
+deleted inside a single six-hour window. `start_delayed` does not separate them either —
+the two disagree on it. So either the producer gains a discriminator for "stops when
+idle by design", or the rule needs an operator-maintained exclusion. Until one exists
+this contract names what is missing rather than shipping a predicate a reader would turn
+into an alert rule.
+
+`host.service.trigger_start` stays worth emitting and reading: a trigger-start service is
+`auto_start` but launched only on its trigger, so stopped is its normal state. It removes
+a known-false population — 147 of 630 on the measured estate — without making the
+remainder a clean signal.
+
+**The metric stays.** A run-state metric and this attribute are not duplicates: the
+metric carries duration, history at scrape resolution and alerting; the attribute carries
+the graph read and the change event. They **will** disagree transiently, being read at
+different instants — the attribute is authoritative for the graph, the metric for
+alerting, and **neither is a check on the other**.
 
 ### AT8 — remote out-of-band probes & active checks
 
@@ -1227,15 +1303,36 @@ emitted**. One identity and a half is not two.
   So: **`hw.vendor` is the short lowercase name derived from the IANA enterprise
   number** (`cisco`, `juniper`, `arista`, `dell`, `extreme`, `mikrotik`, …).
   ENTITY-MIB is the **fallback only**, used when the enterprise number is unknown.
-  The device's verbose self-description keeps its own home in `sysDescr`, so
+  The device's verbose self-description keeps its own home in `sys.descr`, so
   nothing is lost.
 
   **Documented boundary:** the enterprise-number-to-name mapping is a finite table
   in the producer. A vendor absent from it falls back to the ENTITY-MIB string, so
-  its value has a different shape from its neighbours'. That is accepted, and it
-  means an unresolved enterprise number must be **visible** — counted, or warned
-  once per number — or nobody ever learns the table needs a line. An invisible
-  fallback is how a value silently stops being comparable.
+  its value has a different shape from its neighbours'. That is accepted, on the
+  condition below — which is a mechanism, not a recommendation.
+
+  **The fallback is visible in the data, not in a log.** Beside `hw.vendor` the
+  producer emits the descriptive key **`senhub.hw.vendor.source`**, frozen to two
+  values: `iana_pen` when the value came from the enterprise number, `entity_mib`
+  when it came from the fallback. "Which of my devices carry a vendor value I
+  cannot group on" then becomes a graph query, and the answer is historized like
+  any other attribute.
+
+  An earlier version of this section required only that an unresolved number be
+  **visible** — "counted, or warned once per number". Nothing satisfied it and
+  nothing contradicted it: the fallback ran for a month on two production devices,
+  wrong in two different ways, and no counter and no warning ever fired (#557). The
+  requirement described a witness that no mechanism implemented, which is how a
+  defect stays invisible next to its own description. A counter still helps and is
+  **not** the requirement, because a counter obliges someone to look, while an
+  attribute answers when asked.
+
+  **The key is `hw.vendor`; the bare key `vendor` is forbidden.** `vendor` was
+  retired, and this section never named it — which is how a producer went on
+  emitting it without contradicting anything written here. A value form is fixed
+  only if the key carrying it is fixed too: a correct value on a retired key is
+  unreadable to anyone who follows the contract, and a reader who filters on
+  `hw.vendor` simply does not see that device.
 
   The same rule governs `hw.model` and `hw.serial_number` on this entity the day a
   producer emits them from more than one source. Today ENTITY-MIB is their only
@@ -1280,8 +1377,15 @@ from this round:
 ## One export has a size cap, and splitting a snapshot is safe
 
 `otlp_max_recv_bytes` caps one OTLP/gRPC export and defaults to gRPC's 4 MiB.
-Past it the export is refused **whole**, with `ResourceExhausted` — nothing is
-silent, and nothing partial lands. A 5,000-host inventory is around 10 MB, so an
+Past it the export is refused **whole**, with `ResourceExhausted`, and nothing
+partial lands.
+
+**The refusal is visible to the producer only.** It happens at the transport,
+before the ingest handler, so Toise neither counts it nor logs it (#556). A
+reader of Toise sees entities missing and no reason given — this server will not
+tell anyone that an export was refused. Size exports on the producer side and
+watch for `ResourceExhausted` there; this paragraph used to say "nothing is
+silent", which was true of the producer and false of everyone reading the graph. A 5,000-host inventory is around 10 MB, so an
 estate of that size cannot send its snapshot in one export (#351). Either raise
 the cap deliberately, remembering that one export is buffered in memory per
 in-flight request, or split.
