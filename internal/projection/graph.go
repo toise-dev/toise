@@ -765,3 +765,32 @@ func (g *Graph) SnapshotEvents(when time.Time) []model.Event {
 	}
 	return out
 }
+
+// EntitiesOfType returns all live entities of the given type using the byType
+// index instead of scanning the whole graph. This exists alongside
+// ListEntities because the metrics collector calls it on every Prometheus
+// scrape and cannot afford a full graph traversal plus allocation of a slice
+// sized for the entire graph.
+//
+// The order is UNSPECIFIED: it follows map iteration. Callers that need a
+// stable order must sort, and nothing here may be paginated on it.
+func (g *Graph) EntitiesOfType(typ string) []model.Entity {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	ids := g.byType[typ]
+	if len(ids) == 0 {
+		return nil
+	}
+
+	entities := make([]model.Entity, 0, len(ids))
+	for id := range ids {
+		if g.deleted[id] {
+			continue
+		}
+		if e, ok := g.entities[id]; ok {
+			entities = append(entities, e)
+		}
+	}
+	return entities
+}
