@@ -52,7 +52,7 @@
 -->
 <script src="https://cdn.jsdelivr.net/npm/vis-network@9.1.9/standalone/umd/vis-network.min.js" integrity="sha384-yxKDWWf0wwdUj/gPeuL11czrnKFQROnLgY8ll7En9NYoXibgg3C6NK/UDHNtUgWJ" crossorigin="anonymous"></script>
 <style>
-:root{--bg:#0d1117;--panel:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;--accent:#58a6ff;--warn:#d29922;--ok:#3fb950;}
+:root{--bg:#05070f;--panel:#0a0e1c;--line:#1b2440;--fg:#d9e3f5;--dim:#6f80a0;--accent:#8fb4ff;--warn:#e8b06a;--ok:#7fd4a8;}
 *{box-sizing:border-box;}
 html,body{height:100%;margin:0;}
 body{background:var(--bg);color:var(--fg);font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;display:flex;flex-direction:column;}
@@ -72,7 +72,11 @@ header a:hover{text-decoration:underline;}
 .pulse{animation:p 1.2s ease-out;}
 @keyframes p{from{box-shadow:0 0 0 0 var(--accent);}to{box-shadow:0 0 0 14px rgba(88,166,255,0);}}
 main{flex:1;display:flex;min-height:0;}
-#net{flex:1;min-width:0;transition:opacity .25s ease;}
+#net{flex:1;min-width:0;transition:opacity .25s ease;position:relative;
+  background:radial-gradient(130% 110% at 50% 45%,#0a1024 0%,#05070f 58%,#02030a 100%);}
+/* the engraved field edge: a planisphere is a circle on a plate */
+#net::after{content:"";position:absolute;inset:0;pointer-events:none;
+  box-shadow:inset 0 0 180px 40px rgba(2,3,10,.85);}
 #net.laying{opacity:0;}   /* hidden while the initial layout is computed, then revealed */
 .resizer{flex:none;width:6px;cursor:col-resize;background:var(--line);opacity:.35;}
 .resizer:hover,.resizer.drag{opacity:1;background:var(--accent);}
@@ -86,7 +90,7 @@ aside td.k{color:var(--dim);width:40%;}
 .legend{display:flex;flex-wrap:wrap;gap:.4rem .8rem;padding:.5rem 1rem;background:var(--panel);border-bottom:1px solid var(--line);font-size:12px;}
 .legend span{display:flex;align-items:center;gap:.3rem;cursor:pointer;opacity:.85;}
 .legend span.off{opacity:.3;text-decoration:line-through;}
-.legend i{width:11px;height:11px;border-radius:50%;display:inline-block;}
+.legend i{width:10px;height:10px;border-radius:50%;display:inline-block;}
 .muted{color:var(--dim);}
 .empty{color:var(--dim);padding:2rem;text-align:center;}
 button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:.2rem .5rem;font:inherit;cursor:pointer;}
@@ -134,7 +138,7 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
 </head>
 <body>
 <header>
-  <span class="brand">Toise</span><span class="tag">graph</span>
+  <span class="brand">Toise</span><span class="tag">night sky</span>
   <nav>
     <a href="/">Dashboard</a><a href="/entities">Entities</a><a href="/changes">Changes</a><a href="/playground">GraphQL</a>
   </nav>
@@ -205,7 +209,10 @@ function wsURL(){ let u; try{ u=new URL(API,location.href); }catch{ u=new URL('/
   u.protocol=(u.protocol==='https:'?'wss:':'ws:'); if(TENANT) u.searchParams.set('tenant',TENANT); return u.toString(); }
 
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const PALETTE=["#58a6ff","#3fb950","#d29922","#bc8cff","#f778ba","#39c5cf","#ff7b72","#a5d6ff","#7ee787","#ffa657","#d2a8ff","#79c0ff"];
+// Stellar colour runs blue-white through white and yellow to orange and red.
+// Types take a class in order of first sight — the same stable-by-arrival rule
+// the flat palette used, so a type keeps its colour across a reload.
+const PALETTE=["#a8c2ff","#e9efff","#fbf4dd","#ffdf8f","#ffb46a","#ff8d6d","#8fa7ff","#d7b6ff","#bcd2ff","#ffe9b8","#ffc9a6","#c7ddff"];
 const typeColor={};
 const colorFor=t=>{ if(!(t in typeColor)) typeColor[t]=PALETTE[Object.keys(typeColor).length%PALETTE.length]; return typeColor[t]; };
 const hidden=new Set();
@@ -218,13 +225,26 @@ const nodes=new vis.DataSet(), edges=new vis.DataSet();
 let fitted=false;
 
 const net=new vis.Network(document.getElementById('net'),{nodes,edges},{
-  nodes:{shape:'dot',size:14,font:{color:'#c9d1d9',face:'ui-monospace, monospace',size:12,strokeWidth:3,strokeColor:'#0d1117'},borderWidth:2},
-  edges:{color:{color:'rgba(139,148,158,0.55)',highlight:'#58a6ff',hover:'#58a6ff'},
-         font:{color:'#8b949e',size:10,strokeWidth:3,strokeColor:'#0d1117',align:'middle'},
-         arrows:{to:{enabled:true,scaleFactor:.55}},smooth:false,width:1.6},
+  nodes:{shape:'dot',size:14,font:{color:'#c3d1ea',face:'ui-monospace, monospace',size:11,strokeWidth:0,vadjust:4},borderWidth:0},
+  edges:{color:{color:'rgba(150,178,235,0.26)',highlight:'#cfe0ff',hover:'#cfe0ff'},
+         font:{color:'#6f80a0',size:10,strokeWidth:3,strokeColor:'#05070f',align:'middle'},
+         arrows:{to:{enabled:true,scaleFactor:.3}},smooth:false,width:0.9,selectionWidth:1.6},
   physics:{barnesHut:{gravitationalConstant:-26000,centralGravity:0.12,springLength:200,springConstant:.03,damping:.6,avoidOverlap:0.2},stabilization:{iterations:1500}},
   interaction:{hover:true,tooltipDelay:120,multiselect:true}
 });
+
+// --- the field ----------------------------------------------------------
+// Unnamed stars behind the data, drawn in GRAPH coordinates so they pan and
+// zoom with the chart instead of sliding behind it. Seeded, so it is the same
+// sky on every reload: a chart whose background shuffles reads as noise.
+const FIELD=(function(){ let s=20261029; const out=[];
+  const rnd=()=>{ s=(s*1103515245+12345)&0x7fffffff; return s/0x7fffffff; };
+  for(let i=0;i<460;i++) out.push({x:(rnd()-0.5)*3400,y:(rnd()-0.5)*2600,
+                                   r:0.4+rnd()*1.35,a:0.10+rnd()*0.5});
+  return out; })();
+net.on('beforeDrawing',ctx=>{ for(const f of FIELD){
+  ctx.beginPath(); ctx.arc(f.x,f.y,f.r,0,Math.PI*2);
+  ctx.fillStyle='rgba(205,222,255,'+f.a.toFixed(2)+')'; ctx.fill(); } });
 
 // --- layout settling: run the force simulation only until it stabilises, then
 // FREEZE it, so the graph stops drifting instead of jittering indefinitely (the
@@ -292,7 +312,7 @@ function inferredEdges(visible){
       if(!aid || aid===n.id || !visible.has(aid) || real.has(n.id+'|'+aid)) continue;
       const id='inf:'+n.id+'~'+aid; if(seen.has(id)) continue; seen.add(id);
       out.push({id,from:n.id,to:aid,label:'≈',dashes:true,arrows:'',
-                color:{color:'#d29922',opacity:0.65},font:{color:'#d29922',size:9},smooth:false}); }
+                color:{color:'#e8b06a',opacity:0.65},font:{color:'#e8b06a',size:9},smooth:false}); }
   }
   return out;
 }
@@ -485,9 +505,13 @@ function rebuild(){
     const node={id:n.id,label:labelOf(n)+badge(by),
               title:titleOf(n)+(k?('\nfolded inside: '+badgeFull(by)+'  \u2014 double-click to open'):''),
               opacity:n.deleted?0.45:(q&&!ok?0.12:1),
-              size:Math.min(34,12+Math.sqrt(d)*3.2)+(k?3:0),
-              borderWidth:k?3:2,
-              color:{background:colorFor(n.type),border:n.deleted?'#d29922':(k?'#8b949e':'#0d1117')}};
+              size:Math.min(30,5+Math.sqrt(d)*4.4)+(k?3:0),
+              borderWidth:(n.deleted||k)?2:0,
+              // the halo IS the star: a glow sized on the node, in its own colour,
+              // so degree reads as brightness before any label is legible
+              shadow:{enabled:true,color:colorFor(n.type),
+                      size:Math.min(30,5+Math.sqrt(d)*4.4)*2.1,x:0,y:0},
+              color:{background:colorFor(n.type),border:n.deleted?'#e8b06a':(k?'#6f80a0':'#05070f')}};
     if(firstLoad){ node.x=Math.random()*1600-800; node.y=Math.random()*1600-800; }
     nUp.push(node); });
   // One node per kind under an opened owner. Drawn as a labelled count rather
@@ -504,8 +528,8 @@ function rebuild(){
       shape:'box', opacity:1,
       size:Math.min(30,12+Math.sqrt(k.n)*2.4),
       borderWidth:openable?2:3,
-      font:{color:'#c9d1d9',size:12},
-      color:{background:'#161b22',border:openable?colorFor(k.type):'var(--warn)'}});
+      font:{color:'#d9e3f5',size:12},shadow:{enabled:false},
+      color:{background:'#0a0e1c',border:openable?colorFor(k.type):'#e8b06a'}});
   });
   nodes.update(nUp);
   const ms=document.getElementById('matchStat'); ms.textContent=q?('· '+matched+' match'):'';
@@ -526,7 +550,7 @@ function rebuild(){
   }
   // Edges are ALWAYS added (the springs are what lay the graph out); "off" only makes
   // them invisible, so hiding them can't fling the nodes apart.
-  const vis=showEdges?{color:{color:'rgba(139,148,158,0.55)',highlight:'#58a6ff',hover:'#58a6ff'},arrows:{to:{enabled:true,scaleFactor:.45}}}
+  const vis=showEdges?{color:{color:'rgba(150,178,235,0.26)',highlight:'#cfe0ff',hover:'#cfe0ff'},arrows:{to:{enabled:true,scaleFactor:.3}}}
                      :{color:{color:'rgba(0,0,0,0)',highlight:'rgba(0,0,0,0)',hover:'rgba(0,0,0,0)'},arrows:{to:{enabled:false}}};
   if(folded){
     Object.values(agg).forEach(a=>{ const id='agg:'+a.from+'|'+a.to+'|'+a.type; edgeIds.add(id);
