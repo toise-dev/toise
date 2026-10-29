@@ -113,15 +113,16 @@ Liveness uses two mechanisms:
    closed set — captured, persisted, and surfaced on MCP `recent_changes` /
    `graph_diff` and GraphQL `ChangeEvent.deleteReason`.
 
-    Recommended values: `terminated`, `evicted`, `scaled_down`, `user_requested`,
-    `expired`, `parent_removed` — and **`unmonitored`**, which is the one that
-    matters. The first six say the *resource* ended; `unmonitored` says the
-    *observation* did, and the resource may well still be running. Never use a
-    lifecycle value when a probe was simply removed or a target left the scope: an
-    entity that disappears because someone edited a configuration must not read as
-    "the thing is gone". See the
+    The values split into two families, and the split is what matters: most say
+    the *resource* ended, while some say only that the **observation** did — and
+    then the resource may well still be running. Never use a lifecycle value when
+    a probe was simply removed or a target left the scope: an entity that
+    disappears because someone edited a configuration must not read as "the thing
+    is gone". The
     [contract](https://github.com/toise-dev/toise/blob/main/docs/data-model/senhub-agent-contract.md)
-    for the full table and how each value pairs with `delete_source`.
+    holds the one list — every recommended value, which family it belongs to, and
+    how each pairs with `delete_source`. It is deliberately not copied here: this
+    page's copy had drifted to seven of the nine values.
 2. **Interval backstop.** If a producer set `entity.report.interval` (> 0) and then
    goes silent past that interval, the liveness sweep expires the entity — so a
    producer that crashes without sending a delete doesn't leave stale entities
