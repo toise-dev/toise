@@ -40,6 +40,14 @@
   browsing history so the past view stays put; a request before the retention horizon
   is refused and surfaced.
 
+  Dome (360): a header toggle wraps the SAME layout around the viewer — distance
+  from the centre of the graph becomes the angle away from straight ahead, so the
+  outskirts sit behind your shoulders and you turn to see them. Drag to turn,
+  scroll to change the field of view. It is a second view of one layout, not a
+  second layout, and every star's size, colour, opacity and label is read back
+  from the chart's own data. The projection is gnomonic, so it cannot show the
+  whole sky at once; the flat chart remains the view that can.
+
   Layout: the force simulation runs only until it stabilises, then FREEZES, so the
   graph settles once instead of drifting forever. A structural change (a node/edge
   added or removed) re-runs it briefly and re-freezes; attribute-only heartbeats never
@@ -72,6 +80,23 @@ header a:hover{text-decoration:underline;}
 .pulse{animation:p 1.2s ease-out;}
 @keyframes p{from{box-shadow:0 0 0 0 var(--accent);}to{box-shadow:0 0 0 14px rgba(88,166,255,0);}}
 main{flex:1;display:flex;min-height:0;}
+#stage{flex:1;min-width:0;display:flex;position:relative;}
+/* The dome sits ON TOP of the plate rather than replacing it: vis-network sizes
+   its canvas from the container, and a container set to display:none measures
+   zero. Leaving the plate laid out underneath an opaque canvas costs one hidden
+   redraw and removes every resize fault from switching views. */
+#dome{position:absolute;inset:0;z-index:2;display:block;width:100%;height:100%;
+  touch-action:none;cursor:grab;
+  background:radial-gradient(130% 110% at 50% 45%,#0a1024 0%,#05070f 58%,#02030a 100%);}
+#dome[hidden]{display:none;}
+#dome.drag{cursor:grabbing;}
+.domebar{position:absolute;left:0;right:0;bottom:.7rem;z-index:3;display:flex;
+  justify-content:center;align-items:center;gap:.4rem;font-size:12px;pointer-events:none;}
+.domebar[hidden]{display:none;}
+.domebar>*{pointer-events:auto;}
+.domebar button.on{color:var(--accent);border-color:var(--accent);}
+.domebar .bearing{color:var(--dim);font-variant-numeric:tabular-nums;
+  background:rgba(5,7,15,.78);border:1px solid var(--line);border-radius:4px;padding:.2rem .5rem;}
 #net{flex:1;min-width:0;transition:opacity .25s ease;position:relative;
   background:radial-gradient(130% 110% at 50% 45%,#0a1024 0%,#05070f 58%,#02030a 100%);}
 /* the engraved field edge: a planisphere is a circle on a plate */
@@ -152,6 +177,7 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
     <label class="muted" for="attr">attr<input id="attr" spellcheck="false" autocomplete="off" placeholder="key, key=value, or text" title="Match nodes whose identity/attributes contain the text (a key, key=value, or a free substring). Use the toggle to dim the rest or hide them entirely." style="background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;padding:.1rem .35rem;width:11rem;margin-left:.3rem;"></label>
     <button id="filterMode" title="Search behaviour: dim the non-matching nodes, or show only the matches">match: dim</button>
     <label class="muted" for="tn">tenant<input id="tn" spellcheck="false" autocomplete="off" placeholder="default" title="X-Scope-OrgID — sent as a header on queries and as ?tenant= on the subscription" style="background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;padding:.1rem .35rem;width:8rem;margin-left:.3rem;"></label>
+    <button id="view" title="Switch between the flat chart and the 360 dome. The dome is the SAME layout wrapped around you: the centre of the graph sits straight ahead and its outskirts are behind your shoulders. Drag to turn, scroll to change the field of view.">view: chart</button>
     <button id="labels" title="Toggle node labels: human-readable names vs technical ids">labels: names</button>
     <button id="fold" title="Fold children into their owner: an interface into its device, a service into its host. 88% of a real graph is a child of something, so folding takes it from hundreds of nodes to dozens. Double-click a node to open just that one.">fold: on</button>
     <span class="layers" id="layers" title="Show one layer at a time. A layer is a stratum of the model, not a search: you pick from what is there instead of guessing what to type."></span>
@@ -165,7 +191,16 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
 </header>
 <div class="legend" id="legend"></div>
 <main>
-  <div id="net" class="laying"></div>
+  <div id="stage">
+    <div id="net" class="laying"></div>
+    <canvas id="dome" hidden></canvas>
+    <div class="domebar" id="domebar" hidden>
+      <button id="recentre" title="Point back at the centre of the graph and reset the field of view">recentre</button>
+      <button id="drift" title="Let the sky turn slowly on its own">drift</button>
+      <button id="grid" class="on" title="Show the azimuth/altitude grid">grid</button>
+      <span class="bearing" id="bearing" title="Where you are looking: azimuth and altitude">az 000&deg; alt +00&deg;</span>
+    </div>
+  </div>
   <div class="resizer" id="resizer" title="Drag to resize the panel"></div>
   <aside id="panel">
     <div class="empty">Click a node to inspect its identity &amp; attributes.</div>
@@ -807,11 +842,15 @@ function applyRelation(ce){ if(historical) return; const r=ce&&ce.relation; if(!
   scheduleRebuild();
   if(ce.changeType!=='RELATION_UNCHANGED'){ feed(ce.changeType+'  '+r.type); flashStatus(); } }
 
-net.on('click',p=>{
+// The side panel is filled from an entity id, not from a click: every view of
+// the graph inspects the same way, so a second renderer cannot grow a second
+// opinion of what a node is.
+function inspect(id){
   const panel=document.getElementById('panel');
   const head='<h2 style="margin-top:1rem">Live feed</h2><div id="feed"></div>';
-  if(!p.nodes.length){ panel.innerHTML='<div class="empty">Click a node to inspect its identity &amp; attributes.</div>'+head; return; }
-  const n=ENT[p.nodes[0]]; if(!n) return;
+  const blank='<div class="empty">Click a node to inspect its identity &amp; attributes.</div>'+head;
+  const n=id&&ENT[id];
+  if(!n){ panel.innerHTML=blank; return; }
   const rows=a=>(a||[]).map(x=>'<tr><td class="k">'+esc(x.key)+'</td><td>'+esc(x.value)+'</td></tr>').join('')||'<tr><td class="muted" colspan=2>—</td></tr>';
   panel.innerHTML='<button id="panelClose" title="Close" style="float:right">×</button>'
     +'<h2>'+esc(n.type)+(n.deleted?' <span class="muted">(deleted)</span>':'')+'</h2>'
@@ -819,8 +858,9 @@ net.on('click',p=>{
     +'<h2>Attributes</h2><table>'+rows(n.attributes)+'</table>'
     +'<h2>id</h2><div class="muted" style="word-break:break-all">'+esc(n.id)+'</div>'+head;
   const cb=document.getElementById('panelClose');
-  if(cb) cb.onclick=()=>{ panel.innerHTML='<div class="empty">Click a node to inspect its identity &amp; attributes.</div>'+head; };
-});
+  if(cb) cb.onclick=()=>{ panel.innerHTML=blank; };
+}
+net.on('click',p=>{ inspect(p.nodes.length?p.nodes[0]:null); });
 
 // Realtime: graphql-transport-ws subscriptions, with polling fallback.
 const ENT_SUB='subscription{ entityChanged{ changeType entity{ id type deleted displayName identity{key value} attributes{key value} } } }';
@@ -961,6 +1001,268 @@ document.getElementById('tlPlay').onclick=()=>{ playing?pausePlay():play(); };
     if(b-a>0.02){ const [s,e]=spanBounds(), W=e-s; setSpan(s+a*W, s+b*W); } }); })();
 // Resize the detail panel by dragging its left edge; the graph takes the rest and
 // the panel's fixed-layout tables reflow to the new width. Width is remembered.
+
+// --- the dome: the same chart, wrapped around the viewer --------------------
+// A SECOND VIEW of the one layout, never a second layout. The settled 2-D
+// positions are read back from the network and mapped onto the celestial
+// sphere by an inverted azimuthal projection: distance from the layout's
+// centre becomes polar angle, bearing becomes azimuth. The middle of the graph
+// therefore sits straight ahead and its outskirts wrap behind your shoulders,
+// which is the one arrangement where "turn around to see the rest" is
+// literally true, and where the two views are the same sky rather than two
+// pictures that happen to share a colour scheme.
+//
+// Everything a star looks like is read from the SAME vis.DataSet the plate
+// draws from: size, colour, opacity, label, and an edge's own colour (so
+// "edges: off" paints transparent here too, for free). Nothing about a node's
+// appearance is decided twice. This page already shipped that defect once, by
+// reimplementing the server's display-name cascade in JavaScript.
+//
+// The projection is gnomonic, so a great circle through two stars draws as a
+// STRAIGHT segment: a relation needs no sampling, only clipping at the near
+// plane. It distorts towards the edges, which is why the field of view stays
+// well under 180 degrees — you cannot see the whole sky at once, by
+// construction. That is the trade, and it is why the dome is offered BESIDE
+// the flat chart and never in its place.
+const THETA_MAX=2.6;          // radians: the outskirts land about 150 deg off centre
+const NEAR=0.06;              // near plane, in units of the forward component
+const dirOf={};               // node id -> unit vector on the sphere
+const cv=document.getElementById('dome'), g2=cv.getContext('2d');
+let domeMode=localStorage.getItem('toise_viz_view')==='dome';
+let yaw=0, pitch=0, fov=78*Math.PI/180;
+let domeDrag=false, lastX=0, lastY=0, startX=0, startY=0;
+let drift=false, showGrid=true, raf=null, cvW=0, cvH=0;
+const DPR=Math.min(2,window.devicePixelRatio||1);
+const reduceMotion=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// Unit directions spread uniformly over the whole sphere (uniform in cos, not
+// in the polar angle) so the field is not bunched at the poles. Same seed as
+// the flat field: one sky, identical on every reload.
+const FIELD_DOME=(function(){ let s=20261029; const out=[];
+  const rnd=()=>{ s=(s*1103515245+12345)&0x7fffffff; return s/0x7fffffff; };
+  for(let i=0;i<900;i++){ const u=rnd()*2-1, ph=rnd()*Math.PI*2, r=Math.sqrt(1-u*u);
+    out.push({v:[r*Math.cos(ph),u,r*Math.sin(ph)],r:0.4+rnd()*1.3,a:0.10+rnd()*0.5}); }
+  return out; })();
+
+// Recomputed every frame rather than cached: the graph is live and the force
+// layout keeps moving for a bounded window after any structural change, so a
+// cached wrap would show an arrangement the plate has already left. One hypot
+// and one atan2 per node, next to a projection we do anyway.
+function wrapLayout(){
+  const pos=net.getPositions(), ids=Object.keys(pos);
+  for(const k in dirOf) delete dirOf[k];
+  if(!ids.length) return;
+  let cx=0, cy=0;
+  for(const id of ids){ cx+=pos[id].x; cy+=pos[id].y; }
+  cx/=ids.length; cy/=ids.length;
+  let R=0;
+  for(const id of ids){ const d=Math.hypot(pos[id].x-cx,pos[id].y-cy); if(d>R) R=d; }
+  if(R<=0) R=1;
+  for(const id of ids){
+    const dx=pos[id].x-cx, dy=pos[id].y-cy;
+    const th=Math.min(1,Math.hypot(dx,dy)/R)*THETA_MAX;
+    // -dy: canvas y grows downward, the sky's up does not. Without the flip the
+    // dome is the chart upside down, and the two views stop being one sky.
+    const ph=Math.atan2(-dy,dx), s=Math.sin(th);
+    dirOf[id]=[s*Math.cos(ph),s*Math.sin(ph),Math.cos(th)];
+  }
+}
+
+function sizeCanvas(){
+  const r=cv.getBoundingClientRect();
+  cvW=Math.max(1,Math.round(r.width)); cvH=Math.max(1,Math.round(r.height));
+  cv.width=Math.round(cvW*DPR); cv.height=Math.round(cvH*DPR);
+  g2.setTransform(DPR,0,0,DPR,0,0);
+}
+const dot3=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+function basis(){
+  const cp=Math.cos(pitch), sp=Math.sin(pitch), cy=Math.cos(yaw), sy=Math.sin(yaw);
+  const f=[sy*cp,sp,cy*cp], r=[cy,0,-sy];
+  // up = forward x right, in that order: the other order points at the ground
+  // and the sky draws upside down.
+  const u=[f[1]*r[2]-f[2]*r[1],f[2]*r[0]-f[0]*r[2],f[0]*r[1]-f[1]*r[0]];
+  return {f,r,u};
+}
+function project(v,B,scale){
+  const z=dot3(v,B.f); if(z<=NEAR) return null;
+  return {x:cvW/2+dot3(v,B.r)/z*scale, y:cvH/2-dot3(v,B.u)/z*scale, z};
+}
+// Clip a segment at the near plane, so a line to a star behind you draws its
+// visible half instead of vanishing or whipping across the screen.
+function clipSeg(a,b,B,scale){
+  const za=dot3(a,B.f), zb=dot3(b,B.f);
+  if(za<=NEAR && zb<=NEAR) return null;
+  let A=a, C=b;
+  if(za<=NEAR){ const t=(NEAR-za)/(zb-za); A=[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t,a[2]+(b[2]-a[2])*t]; }
+  if(zb<=NEAR){ const t=(NEAR-zb)/(za-zb); C=[b[0]+(a[0]-b[0])*t,b[1]+(a[1]-b[1])*t,b[2]+(a[2]-b[2])*t]; }
+  const p=project(A,B,scale), q=project(C,B,scale);
+  return (p&&q)?[p,q]:null;
+}
+function stroke2(seg){ g2.beginPath(); g2.moveTo(seg[0].x,seg[0].y); g2.lineTo(seg[1].x,seg[1].y); g2.stroke(); }
+
+function drawGrid(B,scale){
+  g2.strokeStyle='rgba(120,146,200,0.11)'; g2.lineWidth=1;
+  for(let m=0;m<12;m++){            // meridians: great circles, so two points suffice per arc
+    const a=m*Math.PI/6;
+    for(let k=0;k<24;k++){
+      const t0=k*Math.PI/12, t1=(k+1)*Math.PI/12;
+      const seg=clipSeg([Math.sin(t0)*Math.cos(a),Math.cos(t0),Math.sin(t0)*Math.sin(a)],
+                        [Math.sin(t1)*Math.cos(a),Math.cos(t1),Math.sin(t1)*Math.sin(a)],B,scale);
+      if(seg) stroke2(seg);
+    }
+  }
+  for(let i=1;i<6;i++){             // parallels: small circles, sampled
+    const el=(i*30-90)*Math.PI/180, y=Math.sin(el), rr=Math.cos(el);
+    for(let k=0;k<48;k++){
+      const a0=k*Math.PI/24, a1=(k+1)*Math.PI/24;
+      const seg=clipSeg([rr*Math.cos(a0),y,rr*Math.sin(a0)],[rr*Math.cos(a1),y,rr*Math.sin(a1)],B,scale);
+      if(seg) stroke2(seg);
+    }
+  }
+}
+
+const HEX=h=>{ const m=/^#?([0-9a-f]{6})$/i.exec(String(h)||'');
+  if(!m) return [168,194,255];
+  const v=parseInt(m[1],16); return [(v>>16)&255,(v>>8)&255,v&255]; };
+
+let hitBoxes=[];
+function drawDome(){
+  wrapLayout();
+  const B=basis(), scale=(cvH/2)/Math.tan(fov/2);
+  g2.clearRect(0,0,cvW,cvH);
+
+  for(const f of FIELD_DOME){
+    const p=project(f.v,B,scale); if(!p) continue;
+    g2.beginPath(); g2.arc(p.x,p.y,f.r,0,Math.PI*2);
+    g2.fillStyle='rgba(205,222,255,'+f.a.toFixed(2)+')'; g2.fill();
+  }
+  if(showGrid) drawGrid(B,scale);
+
+  for(const e of edges.get()){
+    const A=dirOf[e.from], C=dirOf[e.to]; if(!A||!C) continue;
+    const seg=clipSeg(A,C,B,scale); if(!seg) continue;
+    // The plate's own edge colour, so "edges: off" is off here too: it paints
+    // them fully transparent rather than removing them.
+    g2.strokeStyle=(e.color&&e.color.color)||'rgba(150,178,235,0.26)';
+    g2.lineWidth=e.width||0.9;
+    stroke2(seg);
+  }
+
+  hitBoxes=[]; const drawn=[];
+  for(const n of nodes.get()){
+    if(n.hidden) continue;
+    const v=dirOf[n.id]; if(!v) continue;
+    const p=project(v,B,scale); if(!p) continue;
+    if(p.x<-80||p.x>cvW+80||p.y<-80||p.y>cvH+80) continue;
+    const size=n.size||14;
+    drawn.push({n,p,rad:size*0.62*(0.75+0.45*p.z),size,
+                alpha:(n.opacity===undefined?1:n.opacity)});
+  }
+  drawn.sort((a,b)=>a.rad-b.rad);   // the faint first, so the bright draw over them
+
+  for(const it of drawn){
+    const n=it.n, c=(n.color&&n.color.background)||'#a8c2ff';
+    g2.globalAlpha=it.alpha;
+    if(isKind(n.id)){
+      // A count, not a thing: it keeps the plate's box shape here too, because
+      // drawing it as a star would claim the sky holds one object where it
+      // holds hundreds.
+      const s=Math.max(6,it.rad);
+      g2.fillStyle=c; g2.strokeStyle=(n.color&&n.color.border)||'#6f80a0'; g2.lineWidth=1.4;
+      g2.beginPath(); g2.rect(it.p.x-s,it.p.y-s*0.62,s*2,s*1.24); g2.fill(); g2.stroke();
+    } else {
+      const rgb=HEX(c);
+      const grd=g2.createRadialGradient(it.p.x,it.p.y,0,it.p.x,it.p.y,it.rad*3.1);
+      grd.addColorStop(0,   'rgba('+rgb[0]+','+rgb[1]+','+rgb[2]+',0.95)');
+      grd.addColorStop(0.30,'rgba('+rgb[0]+','+rgb[1]+','+rgb[2]+',0.34)');
+      grd.addColorStop(1,   'rgba('+rgb[0]+','+rgb[1]+','+rgb[2]+',0)');
+      g2.beginPath(); g2.arc(it.p.x,it.p.y,it.rad*3.1,0,Math.PI*2); g2.fillStyle=grd; g2.fill();
+      g2.beginPath(); g2.arc(it.p.x,it.p.y,it.rad,0,Math.PI*2); g2.fillStyle=c; g2.fill();
+    }
+    g2.globalAlpha=1;
+    hitBoxes.push({id:n.id,x:it.p.x,y:it.p.y,r:Math.max(9,it.rad*1.6)});
+  }
+
+  // Only the brightest carry a name. A sky with every label on is a page of
+  // text, and the plate is the view for reading every name. A kind box is the
+  // exception and always keeps its label: the label is what it holds, so an
+  // unlabelled one is an empty rectangle rather than a quieter star.
+  g2.font='10.5px ui-monospace, SFMono-Regular, Menlo, monospace';
+  g2.textAlign='center'; g2.textBaseline='top';
+  const named=drawn.filter(it=>isKind(it.n.id))
+    .concat(drawn.filter(it=>!isKind(it.n.id)).sort((a,b)=>b.size-a.size).slice(0,26));
+  for(const it of named){
+    if(!it.n.label) continue;
+    g2.globalAlpha=it.alpha;
+    g2.fillStyle='rgba(195,209,234,0.92)';
+    g2.fillText(String(it.n.label).split('\n')[0], it.p.x, it.p.y+it.rad+4);
+    g2.globalAlpha=1;
+  }
+
+  const az=((yaw*180/Math.PI)%360+360)%360, alt=pitch*180/Math.PI;
+  document.getElementById('bearing').textContent=
+    'az '+String(Math.round(az)).padStart(3,'0')+'° alt '+
+    (alt<0?'-':'+')+String(Math.round(Math.abs(alt))).padStart(2,'0')+'°';
+}
+
+function domeLoop(){
+  raf=null;
+  if(!domeMode) return;
+  if(!document.hidden){
+    if(drift && !domeDrag && !reduceMotion) yaw+=0.0012;
+    drawDome();
+  }
+  raf=requestAnimationFrame(domeLoop);
+}
+function kick(){ if(domeMode && raf===null) raf=requestAnimationFrame(domeLoop); }
+
+cv.addEventListener('pointerdown',ev=>{ domeDrag=true;
+  lastX=startX=ev.clientX; lastY=startY=ev.clientY;
+  cv.classList.add('drag'); try{ cv.setPointerCapture(ev.pointerId); }catch(_){} });
+cv.addEventListener('pointermove',ev=>{ if(!domeDrag) return;
+  const k=fov/cvH;
+  yaw-=(ev.clientX-lastX)*k;
+  pitch=Math.max(-1.45,Math.min(1.45,pitch+(ev.clientY-lastY)*k));
+  lastX=ev.clientX; lastY=ev.clientY; });
+cv.addEventListener('pointerup',ev=>{ if(!domeDrag) return;
+  domeDrag=false; cv.classList.remove('drag');
+  // Measured from where the press STARTED, not from the last move: a turn ends
+  // a few pixels from its previous frame and would otherwise read as a click.
+  if(Math.hypot(ev.clientX-startX,ev.clientY-startY)<4) pickAt(ev); });
+cv.addEventListener('pointercancel',()=>{ domeDrag=false; cv.classList.remove('drag'); });
+cv.addEventListener('wheel',ev=>{ ev.preventDefault();
+  fov=Math.max(26*Math.PI/180,Math.min(118*Math.PI/180,fov+ev.deltaY*0.0012)); },{passive:false});
+
+function pickAt(ev){
+  const r=cv.getBoundingClientRect(), x=ev.clientX-r.left, y=ev.clientY-r.top;
+  let best=null, bd=Infinity;
+  for(const h of hitBoxes){ const d=Math.hypot(h.x-x,h.y-y); if(d<=h.r && d<bd){ bd=d; best=h.id; } }
+  // A kind box stands for a count; there is nothing to inspect behind it, and
+  // opening it belongs to the plate where double-click lives.
+  inspect(isKind(best)?null:best);
+}
+
+const viewBtn=document.getElementById('view'), domeBar=document.getElementById('domebar');
+function syncView(){
+  viewBtn.textContent='view: '+(domeMode?'dome 360':'chart');
+  viewBtn.style.color=domeMode?'var(--accent)':'';
+  cv.hidden=!domeMode; domeBar.hidden=!domeMode;
+  if(domeMode){ sizeCanvas(); kick(); }
+  else if(raf!==null){ cancelAnimationFrame(raf); raf=null; }
+}
+viewBtn.onclick=()=>{ domeMode=!domeMode;
+  localStorage.setItem('toise_viz_view',domeMode?'dome':'chart'); syncView(); };
+const recentreBtn=document.getElementById('recentre');
+recentreBtn.onclick=()=>{ yaw=0; pitch=0; fov=78*Math.PI/180; };
+const driftBtn=document.getElementById('drift');
+driftBtn.onclick=()=>{ drift=!drift; driftBtn.classList.toggle('on',drift); };
+if(reduceMotion) driftBtn.title='Drift is off: this browser asks for reduced motion.';
+const gridBtn=document.getElementById('grid');
+gridBtn.onclick=()=>{ showGrid=!showGrid; gridBtn.classList.toggle('on',showGrid); };
+window.addEventListener('resize',()=>{ if(domeMode) sizeCanvas(); });
+document.addEventListener('visibilitychange',kick);
+syncView();
+
 (function(){ const rz=document.getElementById('resizer'), aside=document.getElementById('panel');
   const saved=parseInt(localStorage.getItem('toise_viz_aside')||'',10);
   if(saved>=280 && saved<=900) aside.style.width=saved+'px';
