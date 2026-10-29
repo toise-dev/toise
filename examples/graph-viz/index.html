@@ -807,11 +807,15 @@ function applyRelation(ce){ if(historical) return; const r=ce&&ce.relation; if(!
   scheduleRebuild();
   if(ce.changeType!=='RELATION_UNCHANGED'){ feed(ce.changeType+'  '+r.type); flashStatus(); } }
 
-net.on('click',p=>{
+// The side panel is filled from an entity id, not from a click: every view of
+// the graph inspects the same way, so a second renderer cannot grow a second
+// opinion of what a node is.
+function inspect(id){
   const panel=document.getElementById('panel');
   const head='<h2 style="margin-top:1rem">Live feed</h2><div id="feed"></div>';
-  if(!p.nodes.length){ panel.innerHTML='<div class="empty">Click a node to inspect its identity &amp; attributes.</div>'+head; return; }
-  const n=ENT[p.nodes[0]]; if(!n) return;
+  const blank='<div class="empty">Click a node to inspect its identity &amp; attributes.</div>'+head;
+  const n=id&&ENT[id];
+  if(!n){ panel.innerHTML=blank; return; }
   const rows=a=>(a||[]).map(x=>'<tr><td class="k">'+esc(x.key)+'</td><td>'+esc(x.value)+'</td></tr>').join('')||'<tr><td class="muted" colspan=2>—</td></tr>';
   panel.innerHTML='<button id="panelClose" title="Close" style="float:right">×</button>'
     +'<h2>'+esc(n.type)+(n.deleted?' <span class="muted">(deleted)</span>':'')+'</h2>'
@@ -819,8 +823,9 @@ net.on('click',p=>{
     +'<h2>Attributes</h2><table>'+rows(n.attributes)+'</table>'
     +'<h2>id</h2><div class="muted" style="word-break:break-all">'+esc(n.id)+'</div>'+head;
   const cb=document.getElementById('panelClose');
-  if(cb) cb.onclick=()=>{ panel.innerHTML='<div class="empty">Click a node to inspect its identity &amp; attributes.</div>'+head; };
-});
+  if(cb) cb.onclick=()=>{ panel.innerHTML=blank; };
+}
+net.on('click',p=>{ inspect(p.nodes.length?p.nodes[0]:null); });
 
 // Realtime: graphql-transport-ws subscriptions, with polling fallback.
 const ENT_SUB='subscription{ entityChanged{ changeType entity{ id type deleted displayName identity{key value} attributes{key value} } } }';
