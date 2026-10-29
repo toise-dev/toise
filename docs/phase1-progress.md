@@ -184,7 +184,8 @@ break**, not a staged transition:
   is a **bare `connected_to`**, a route's `metric` and an address's `preferred` move
   onto their entities, and provenance moves to the instrumentation scope. The Lot 5
   `adjacent_to` + `{local_port, remote_port}` attributed form is superseded;
-  device-level adjacency is a derived read-side view.
+  device-level adjacency is left to the consumer to derive on read; Toise
+  neither stores nor serves it.
 - **Conformance fixture rewritten embedded-only** and regenerated (the executable
   contract: **6 live entities / 4 relations**, `monitors` added then removed by
   absence, topology via embedded `has_interface`/`connected_to`); `toise-probe`

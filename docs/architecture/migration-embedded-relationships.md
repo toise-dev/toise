@@ -49,7 +49,8 @@ precedence `serial:<PEN>`/…) stays — it is fact.
 ### Phase B — topology as entities (contract change; coordinate with the producer)
 - Ports become `network.interface` entities (identity `{network.device.id,
   interface.name}`); `has_interface` device→interface; a new **bare** `connected_to`
-  interface↔interface; device-level `adjacent_to` → **derived at read** (a surcouche)
+  interface↔interface; device-level `adjacent_to` → **derived by the consumer on
+  read** (a surcouche Toise does not provide)
   or dropped.
 - `metric` → `network.route` attribute; `preferred` → `network.address` attribute;
   `source`/provenance → instrumentation scope.
