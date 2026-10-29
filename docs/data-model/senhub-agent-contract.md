@@ -232,6 +232,7 @@ below are what Toise recommends. Converge on them; do not be policed by them.
 | `parent_removed` | the producer removed it because its parent went away | resource lifecycle |
 | `unmonitored` | **the observation ended; the resource may well still exist** | observation |
 | `aged_out` | **a cache forgot the entry; nobody saw the thing leave** | observation |
+| `excluded_by_config` | **the configuration removed the report, not the observer: the producer still sees the resource and does not publish it** | observation |
 | `rekeyed` | **nothing happened in the world: the producer changed how it spells this identity** | producer bookkeeping |
 
 **The rule that matters: never use a lifecycle value when you merely stopped
@@ -248,6 +249,24 @@ interchangeable: `unmonitored` means *we stopped looking*, `aged_out` means *we
 are still looking and the table forgot*. An ARP, NDP or FDB entry that ages out
 is the second — and ADR 0006's own note says it: a cache evicts, and **an
 eviction is not a departure**.
+
+The three observation values are not interchangeable either, and the two that
+speak of configuration are the pair most easily confused: `unmonitored` means
+the configuration removed the **observer** — the probe stopped, the target left
+the scope, nobody is looking — while `excluded_by_config` means the
+configuration removed the **report** of something still observed. The producer
+reads the resource, sees it, and its own filter tells it not to publish it. It
+is the only one of the three where the operator holds the lever: change the
+filter and the thing comes back. A filtered removal announced as `unmonitored`
+sends its reader to check the probe inventory; announced as `terminated`, it
+asserts the resource left.
+
+`excluded_by_config` is a **transition marker, not a property of state**. It is
+emitted only on the cycle where the thing stops being published, so this value
+cannot answer *what is excluded today*: a producer that restarts with its filter
+already in place retires nothing, and the entities it published before fall to
+`liveness_expiry`. What a filter withholds in steady state is read on the
+producer's own counter, never on this value.
 
 Do **not** spell that case `evicted`. The word is taken, one row above, for a
 scheduler displacing a resource — the opposite family, where the thing really
@@ -269,6 +288,7 @@ Read together, the pairs are unambiguous:
 | `producer` | `terminated` | the thing ended, and the producer saw it |
 | `producer` | `unmonitored` | the thing may still exist; we stopped watching |
 | `producer` | `aged_out` | the thing may still exist; a cache forgot it |
+| `producer` | `excluded_by_config` | the thing exists and we see it; a configuration tells us not to report it |
 | `producer` | `rekeyed` | the thing is untouched; this spelling of it was retired |
 | `producer` | `parent_removed` | producer-side cascade: the parent went first |
 | `producer` | *(absent)* | the producer decided and gave no motive |
@@ -290,6 +310,7 @@ in the change taxonomy (`stateKeys` → `entity.state_changed` vs
 | `container` | `container.name`, `container.image.name`, `container.image.tag`, `container.image.digest`, `container.runtime` | `status` (`running`/`stopped`/`paused`) |
 | `network.device` | `hw.vendor`, `hw.model`, `hw.firmware_version` (hardware semconv); `sys.name` and `sys.descr` (SNMP, raw/descriptive — the emitted keys are dotted lowercase; `sysName`/`sysDescr` name the MIB objects they are read from, not the keys); mgmt address (descriptive, **mutable**) | — (reachability / admin status is a metric) |
 | | **`hw.vendor` value form is normative** — see below. | |
+| | **Identity evidence, carried whatever rung the id uses**: `hw.serial_number`, `senhub.chassis.serial_numbers`, `senhub.lldp.chassis_mac`, `senhub.snmp.engine_id`. They exist so a reader can see **why** an id is spelled the way it is, and so two producers describing one device can be compared without parsing its id. `senhub.chassis.serial_numbers` is a **list, sorted byte-wise and deduplicated** — one element on a standalone device, one per member on a stack. The form is frozen because it is a comparison key: two producers seeing the same stack must send the same list, so order and duplicates are not free. | |
 | `compute.vm` | `host.name` (vm name); guest `os.type` / `os.version` when the hypervisor reports it; `guest.host.id` when the hypervisor surfaces the guest machine-id (evidence for the `same_as` overlay, not identity); configured capacity reusing the AT10 keys — `host.cpu.logical.count` (vCPUs) and `host.memory.total` (By) — as **config**, not utilization; `host.virtualization` for the hypervisor platform (the AT11 value set: `hyperv`/`vmware`/`kvm`/…) | power state (`running` / `stopped` / `suspended`) |
 | `cloud.resource` | `cloud.resource_id` (the ARM id **as the API returned it** — the upstream key, for the telemetry join, never the identity); `azure.resource.name`, `azure.resource.type`, `azure.resource_group.name`, `azure.resource_provider.namespace`, `azure.tenant.id`, region; `azure.vm.id` on a VM resource (the `same_as` join key, rendered as a **lower-case hyphenated UUID**, same rule as `host.id`) | `azure.resource.provisioning.status` (from ARM's provisioning state) and `azure.resource.status` (the product state) |
 | `service.listener` | `process.executable.name`, `process.pid`, `network.transport`, `listen.address`, `port` (the port is also encoded in the `service.endpoint` identity) | — |
