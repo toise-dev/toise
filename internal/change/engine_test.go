@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -119,6 +121,53 @@ func TestStateKeyClassification(t *testing.T) {
 		Attributes: []model.KeyValue{kv("replication.role", "replica"), kv("read_only", "true"), kv("db.system.version", "16.2")}, EventTime: t0})
 	if ev.Entity.ChangeType != model.EntityAttributeUpdated {
 		t.Errorf("version add = %s, want entity.attribute_updated", ev.Entity.ChangeType)
+	}
+}
+
+// TestStateKeysSet pins the membership of stateKeys against the producer contract.
+// The contract declared hw.state state-bearing while the set did not contain it, so
+// a failed power supply was indistinguishable from an edited description. A test on
+// one key would not have caught that; only enumerating the set does.
+func TestStateKeysSet(t *testing.T) {
+	want := []string{"admin_state", "hw.state", "oper_state", "read_only", "replication.role", "status"}
+	got := make([]string, 0, len(stateKeys))
+	for k := range stateKeys {
+		got = append(got, k)
+	}
+	sort.Strings(got)
+	if !slices.Equal(got, want) {
+		t.Errorf("stateKeys = %v, want %v — a key added or removed here must also be declared\n"+
+			"state-bearing in docs/data-model/senhub-agent-contract.md, or the contract and the\n"+
+			"engine disagree in silence", got, want)
+	}
+}
+
+// hw.state is the hardware health key of the OTel hw.* namespace. A component going
+// ok -> failed is the event an operator is paged for; before it joined stateKeys it
+// classified as entity.attribute_updated, the same class as a cosmetic edit.
+func TestHardwareStateIsAStateChange(t *testing.T) {
+	e, _, _ := newEngine(t)
+	ident := []model.KeyValue{kv("service.instance.id", "redfish:SN-1")}
+
+	if ev, err := e.ObserveEntity(EntityObservation{Type: model.TypeServiceInstance, Identity: ident,
+		Attributes: []model.KeyValue{kv("hw.state", "ok")}, EventTime: t0}); err != nil || ev.Entity.ChangeType != model.EntityCreated {
+		t.Fatalf("create = %v, %s", err, ev.Entity.ChangeType)
+	}
+
+	ev, _ := e.ObserveEntity(EntityObservation{Type: model.TypeServiceInstance, Identity: ident,
+		Attributes: []model.KeyValue{kv("hw.state", "failed")}, EventTime: t0})
+	if ev.Entity.ChangeType != model.EntityStateChanged {
+		t.Errorf("hw.state ok -> failed = %s, want entity.state_changed", ev.Entity.ChangeType)
+	}
+	if len(ev.Entity.ChangedKeys) != 1 || ev.Entity.ChangedKeys[0] != "hw.state" {
+		t.Errorf("changed keys = %v, want [hw.state]", ev.Entity.ChangedKeys)
+	}
+
+	// a descriptive hw.* key stays an attribute update: only health is state.
+	ev, _ = e.ObserveEntity(EntityObservation{Type: model.TypeServiceInstance, Identity: ident,
+		Attributes: []model.KeyValue{kv("hw.state", "failed"), kv("hw.firmware_version", "2.1")}, EventTime: t0})
+	if ev.Entity.ChangeType != model.EntityAttributeUpdated {
+		t.Errorf("hw.firmware_version add = %s, want entity.attribute_updated", ev.Entity.ChangeType)
 	}
 }
 
