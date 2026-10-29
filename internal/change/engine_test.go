@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -128,6 +130,84 @@ func TestStateKeyClassification(t *testing.T) {
 // The contract declared hw.state state-bearing while the set did not contain it, so
 // a failed power supply was indistinguishable from an edited description. A test on
 // one key would not have caught that; only enumerating the set does.
+// contractPath is the producer contract, relative to this package. The test below
+// reads it, so moving or renaming the document means updating this constant — and
+// the failure says exactly that rather than reporting a missing file.
+const contractPath = "../../docs/data-model/senhub-agent-contract.md"
+
+// The contract introduces its own list of state-bearing keys as the authoritative
+// one ("a fixed recognized set with exact spellings"), so that list is the half the
+// engine has to agree with. The keys are read from between that sentence's colon and
+// the parenthesis that follows them.
+var (
+	stateBearingSentenceRe = regexp.MustCompile(`(?s)State-bearing keys are a fixed recognized set[^:]*:(.*?)\(note the`)
+	backtickedRe           = regexp.MustCompile("`([^`]+)`")
+)
+
+// TestStateKeysMatchTheContract asserts the agreement TestStateKeysSet only asks
+// for. That test pins the Go set and tells a human to go and update the document;
+// nothing enforced the second half, and the two drifted apart in the very commit
+// that added hw.state (#560) — the contract kept calling its enumeration the fixed
+// recognized set while leaving the new key out of it.
+func TestStateKeysMatchTheContract(t *testing.T) {
+	raw, err := os.ReadFile(contractPath)
+	if err != nil {
+		t.Fatalf("cannot read the producer contract at %s: %v\n"+
+			"This test asserts that the contract's enumeration of state-bearing keys and\n"+
+			"stateKeys in engine.go say the same thing. If the contract moved or was renamed,\n"+
+			"point contractPath in this file at its new location. Do not delete the test: the\n"+
+			"two halves have already drifted apart once without anyone noticing.", contractPath, err)
+	}
+	text := string(raw)
+	loc := stateBearingSentenceRe.FindStringSubmatchIndex(text)
+	if loc == nil {
+		t.Fatalf("the state-bearing enumeration was not found in %s.\n"+
+			"This test looks for the sentence starting \"State-bearing keys are a fixed\n"+
+			"recognized set\" and reads the keys quoted between its colon and \"(note the\".\n"+
+			"If that wording changed, update stateBearingSentenceRe in this file so the two\n"+
+			"lists keep being compared. The comparison is what matters, not the wording.", contractPath)
+	}
+	line := 1 + strings.Count(text[:loc[0]], "\n")
+
+	fromContract := make([]string, 0, len(stateKeys))
+	for _, m := range backtickedRe.FindAllStringSubmatch(text[loc[2]:loc[3]], -1) {
+		fromContract = append(fromContract, m[1])
+	}
+	sort.Strings(fromContract)
+
+	fromEngine := make([]string, 0, len(stateKeys))
+	for k := range stateKeys {
+		fromEngine = append(fromEngine, k)
+	}
+	sort.Strings(fromEngine)
+
+	if slices.Equal(fromEngine, fromContract) {
+		return
+	}
+	t.Errorf("the contract and the change engine disagree on the state-bearing keys.\n"+
+		"  engine   (internal/change/engine.go, stateKeys): %v\n"+
+		"  contract (%s:%d): %v\n"+
+		"  only in the engine:   %v\n"+
+		"  only in the contract: %v\n"+
+		"Fix whichever side is wrong, in the same commit as the change that caused it. A key\n"+
+		"the engine matches and the contract omits hands a producer an incomplete set from the\n"+
+		"document that calls itself authoritative; a key the contract lists and the engine does\n"+
+		"not match never fires the entity.state_changed the contract promises.",
+		fromEngine, contractPath, line, fromContract,
+		missing(fromEngine, fromContract), missing(fromContract, fromEngine))
+}
+
+// missing returns the elements of a that b does not contain.
+func missing(a, b []string) []string {
+	out := []string{}
+	for _, v := range a {
+		if !slices.Contains(b, v) {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 func TestStateKeysSet(t *testing.T) {
 	want := []string{"admin_state", "ha.role", "hw.state", "oper_state", "read_only", "replication.role", "status"}
 	got := make([]string, 0, len(stateKeys))
