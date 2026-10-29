@@ -34,6 +34,7 @@ var stateKeys = map[string]struct{}{
 	"replication.role": {},
 	"read_only":        {},
 	"hw.state":         {},
+	"ha.role":          {},
 }
 
 // Appender persists qualified events. The store satisfies it.

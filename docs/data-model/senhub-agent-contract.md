@@ -399,6 +399,50 @@ the graph read and the change event. They **will** disagree transiently, being r
 different instants — the attribute is authoritative for the graph, the metric for
 alerting, and **neither is a check on the other**.
 
+#### AT13 — `ha.role` is its own key, not a widened `replication.role`
+
+A member of a high-availability pair has a current role: it carries the traffic, or it
+waits. A `network.device` in a firewall cluster, a `service.instance` under keepalived,
+a `db` behind a virtual address and a `host.service` can all be in such a pair, and this
+contract had no key for it.
+
+**It is not `replication.role`.** AT2's rule is one key for one fact, and the test for
+"one fact" is whether an entity can legitimately need both values at the same time. It
+can: a database node is `replication.role=replica` **and** `ha.role=active` when it
+serves reads behind a virtual address while the writes go elsewhere. "Where do the
+writes go" and "which member carries the traffic" are two questions whose answers do not
+always coincide, and one key cannot hold two values. Widening `replication.role` would
+also have made `replication.role == "primary"` a sentence about a firewall.
+
+**State-bearing.** A failover is a state change, not an attribute edit, so `ha.role` is
+in Toise's `stateKeys` and `TestStateKeysSet` pins the membership — the same mechanism
+that caught `hw.state` being state-bearing in this document and absent from the set.
+
+**Frozen value set**, lowercase, one word:
+
+`active` · `standby` · `unknown`
+
+**The mapping is declared per source**, because the vendors disagree and a key whose
+values are not comparable is not a contract — the `hw.vendor` lesson, three occurrences:
+
+- keepalived / VRRP: `MASTER` -> `active`, `BACKUP` -> `standby`.
+- clusters that speak of primary and secondary (firewall pairs among them):
+  `primary` -> `active`, `secondary` -> `standby`.
+- any other source **declares its mapping in this table before emitting the key**. An
+  undeclared vocabulary is the defect this rule exists to prevent, not a detail to settle
+  in the producer.
+
+**Never omit it.** Emit `unknown` when the role is unreadable. An absent attribute reads
+as a value, so a consumer writing `!= "active"` misses the unreadable case — the reason
+AT12 forbids omitting `status`, and the defect of #537.
+
+**What it does not say.** `ha.role=active` names which member carries the traffic now. It
+does **not** say the pair is healthy, and it does **not** say a failover would work. A
+measured incident is the case in point: a keepalived failover completed correctly and
+repaired nothing, because the pair was not redundant on the inbound path. A reader must
+not infer redundancy from two members holding complementary roles — that inference is
+the reason this paragraph is in the contract rather than in a commit message.
+
 ### AT8 — remote out-of-band probes & active checks
 
 Probes that observe a target they do **not** run on (BMC/Redfish, remote SQL, ICMP/HTTP
@@ -1343,7 +1387,7 @@ emitted**. One identity and a half is not two.
   cross-producer consistency.
 - **State-bearing keys are a fixed recognized set with exact spellings** the change
   engine matches: `oper_state`, `admin_state`, `status`, `replication.role`,
-  `read_only`, `hw.state` (note the **underscore** forms — they predate and override
+  `read_only`, `hw.state`, `ha.role` (note the **underscore** forms — they predate and override
   the dotted convention). A change to one of these classifies as `entity.state_changed`; emit
   the exact string — a dotted variant like `oper.state` is silently treated as an
   ordinary attribute and the state change never fires.
