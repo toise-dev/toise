@@ -167,14 +167,14 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	}
 	ch <- prometheus.MustNewConstMetric(c.pruneHorizon, prometheus.GaugeValue, horizon)
 	emitByType(ch, c.entitiesByType, c.graph.CountByType())
-	overlaps, comparable := 0, 0
+	overlaps, population := 0, 0
 	for _, tenant := range c.graph.EntitiesOfTypePerTenant(typeNetworkDevice) {
 		o, p := SerialOverlap(tenant)
 		overlaps += o
-		comparable += p
+		population += p
 	}
 	ch <- prometheus.MustNewConstMetric(c.serialOverlaps, prometheus.GaugeValue, float64(overlaps))
-	ch <- prometheus.MustNewConstMetric(c.serialPopulation, prometheus.GaugeValue, float64(comparable))
+	ch <- prometheus.MustNewConstMetric(c.serialPopulation, prometheus.GaugeValue, float64(population))
 }
 
 // maxTypeSeries caps the by-type label cardinality: producers control entity

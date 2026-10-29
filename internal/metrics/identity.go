@@ -26,7 +26,7 @@ const (
 // number identifies a physical unit and is inventory data; label cardinality
 // would scale with the fleet. The metric alerts by count, identity can be read
 // from the API.
-func SerialOverlap(entities []model.Entity) (overlaps int, comparable int) {
+func SerialOverlap(entities []model.Entity) (overlaps, population int) {
 	type entityID = model.EntityID
 
 	serialToEntities := make(map[string]map[entityID]model.Entity)
@@ -49,7 +49,7 @@ func SerialOverlap(entities []model.Entity) (overlaps int, comparable int) {
 		}
 	}
 
-	comparable = len(comparableIDs)
+	population = len(comparableIDs)
 
 	for _, group := range serialToEntities {
 		if len(group) < 2 {
@@ -61,7 +61,7 @@ func SerialOverlap(entities []model.Entity) (overlaps int, comparable int) {
 		overlaps++
 	}
 
-	return overlaps, comparable
+	return overlaps, population
 }
 
 func extractSerials(e model.Entity) []string {
