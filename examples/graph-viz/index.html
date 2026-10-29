@@ -342,22 +342,30 @@ function idLabel(n){
     return (named?named.value:id.map(a=>a.value).join('·')).toString(); }
   return n.type+' '+n.id.slice(0,6);
 }
+// The readable name is Toise's to decide, not this page's. `displayName` is a
+// contract field computed from a per-type registry, so asking for it is how a
+// consumer gets the same name every other consumer shows.
+//
+// This page used to reimplement that registry, one case per type, and the copy
+// had drifted where it mattered most: a network.device was labelled from its
+// IDENTITY with the rung prefix stripped, so a switch reporting sysName
+// "1000-5510HI-SR08" was drawn as "800063a280ec9b8b46032a00000001". The
+// producer emitted sys.name, the server resolved it, and this page threw it
+// away. Every other case merely duplicated what the server already returns.
+//
+// The one case kept is service.listener, and only because it composes something
+// the registry does not: the port, and the host behind the endpoint's uuid. That
+// is an enrichment, not a second opinion about the name.
 function nameLabel(n){
   const A=attrsOf(n), I=identOf(n);
-  switch(n.type){
-    case 'host':              return A['host.name']||I['host.id'];
-    case 'service.instance':  return A['service.name']||I['service.instance.id'];
-    case 'network.interface': return I['interface.name']||idLabel(n);
-    case 'network.address':   return I['network.address']||idLabel(n);
-    case 'network.route':     return I['route.destination']||idLabel(n);
-    case 'network.device':    return (I['network.device.id']||'').replace(/^(serial|engine|mac|name|mgmt):/i,'')||idLabel(n);
-    case 'service.listener':{
-      const ep=I['service.endpoint']||''; const m=ep.match(/^([0-9a-f-]{36}):(.+)$/i);
-      const proc=A['process.executable.name'];
-      if(proc) return proc+(m?' '+m[2]:'');
-      return m?((hostNameById(m[1])||'')+':'+m[2]):ep;
-    }
+  if(n.type==='service.listener'){
+    const ep=I['service.endpoint']||''; const m=ep.match(/^([0-9a-f-]{36}):(.+)$/i);
+    const proc=A['process.executable.name']||n.displayName;
+    if(proc) return proc+(m?' '+m[2]:'');
+    return m?((hostNameById(m[1])||'')+':'+m[2]):ep;
   }
+  if(n.displayName) return n.displayName;
+  // Only reached against a server too old to send the field.
   const nk=Object.keys(A).find(k=>/(^|\.)name$/i.test(k))||Object.keys(I).find(k=>/(^|\.)name$/i.test(k));
   return (nk&&(A[nk]||I[nk]))||idLabel(n);
 }
@@ -601,7 +609,7 @@ function rebuild(){
 // truncated, inconsistent graph above ~200 entities (orphan nodes whose
 // host lives on a later page). Follow pageInfo.hasNextPage / endCursor to
 // fetch the whole connection before rebuilding (#209).
-const ENT_FIELDS='id type deleted identity{key value} attributes{key value}';
+const ENT_FIELDS='id type deleted displayName identity{key value} attributes{key value}';
 const REL_FIELDS='id type fromId toId';
 async function fetchAll(conn,fields,asOf){
   const nodes=[]; let after=null, guard=0;
@@ -815,7 +823,7 @@ net.on('click',p=>{
 });
 
 // Realtime: graphql-transport-ws subscriptions, with polling fallback.
-const ENT_SUB='subscription{ entityChanged{ changeType entity{ id type deleted identity{key value} attributes{key value} } } }';
+const ENT_SUB='subscription{ entityChanged{ changeType entity{ id type deleted displayName identity{key value} attributes{key value} } } }';
 const REL_SUB='subscription{ relationChanged{ changeType relation{ id type fromId toId } } }';
 let ws=null, pollTimer=null, retry=0, acked=false;
 function setStatus(cls,txt){ const s=document.getElementById('status'); s.className=cls; document.getElementById('statusTxt').textContent=txt; }
