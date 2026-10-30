@@ -46,9 +46,6 @@ type Appender interface {
 // structural relation add/remove.
 type Subscriber func(ev model.Event, highPriority bool)
 
-// Engine classifies observations into qualified events. It is safe for
-// concurrent use, but observations are serialized to keep classification
-// consistent with the projection.
 type Engine struct {
 	graph    *projection.Graph
 	appender Appender
@@ -57,6 +54,9 @@ type Engine struct {
 
 	promiseReporter func(producer, entityType string, declared time.Duration)
 	discardReporter func(relationType, fromType, toType string)
+	// aliasConflictReporter is called when an alias value moves from one
+	// canonical candidate to several, making it ambiguous.
+	aliasConflictReporter func(attributeKey, aliasValue string)
 
 	obsMu sync.Mutex // serializes observation processing
 
@@ -92,6 +92,12 @@ type Engine struct {
 	// Guarded by obsMu.
 	refs    map[model.EntityID]map[string]liveRef
 	relRefs map[model.RelationID]map[string]liveRef
+
+	// aliases is the identity alias index: speaker-asserted equivalences
+	// between identity values, recorded from same_as observations and used to
+	// resolve relation endpoints that arrive under an alias value. Guarded by
+	// obsMu.
+	aliases identityAliasIndex
 
 	// batch staging: while a Batch runs, commit stages each event and its
 	// projection effects here instead of applying them; the durable append, the
@@ -371,6 +377,15 @@ func (st *staged) apply(ev model.Event) {
 // distinguishing a reconcilable out-of-order edge from a real failure.
 var errEndpointMissing = errors.New("relation endpoint not found")
 
+// errEndpointsCollapsed marks a relation both of whose endpoints resolve to the
+// same entity BECAUSE an alias was substituted. Deliberately not wrapping
+// errEndpointMissing: that one means "not yet", and parking is the right answer
+// for it. This one can never become true — the alias target of a same_as is its
+// own source — so parking it would fill the reconciliation buffer with edges
+// that no arrival can resolve, and the full-buffer eviction would then drop
+// legitimate edges and count them lost.
+var errEndpointsCollapsed = errors.New("relation endpoints collapse to the same entity after alias substitution")
+
 // maxPendingRelations caps the out-of-order reconciliation buffer: every parked
 // edge is rescanned on each entity observation, so an unbounded buffer turns a
 // chatty producer with broken references into a quadratic ingest cost (#115).
@@ -408,6 +423,14 @@ const maxPlausibleLivenessPromise = 7 * 24 * time.Hour
 // nothing of a relation it never stored.
 func WithDiscardReporter(fn func(relationType, fromType, toType string)) Option {
 	return func(e *Engine) { e.discardReporter = fn }
+}
+
+// WithIdentityAliasConflictReporter is called when an alias value moves from
+// one canonical candidate to several, making the alias ambiguous: no
+// substitution will use it until a retraction brings it back to one. Called
+// once per ambiguity, under the observation lock, like the other reporters.
+func WithIdentityAliasConflictReporter(fn func(attributeKey, aliasValue string)) Option {
+	return func(e *Engine) { e.aliasConflictReporter = fn }
 }
 
 // WithPromiseReporter is called whenever a producer declares an implausible
@@ -464,7 +487,6 @@ func WithRelationBuffer(ttl time.Duration) Option {
 	return func(e *Engine) { e.bufferTTL = ttl }
 }
 
-// New returns an engine writing to appender and projecting into graph.
 func New(graph *projection.Graph, appender Appender, opts ...Option) *Engine {
 	e := &Engine{
 		graph:         graph,
@@ -475,6 +497,7 @@ func New(graph *projection.Graph, appender Appender, opts ...Option) *Engine {
 		refs:          make(map[model.EntityID]map[string]liveRef),
 		relRefs:       make(map[model.RelationID]map[string]liveRef),
 		pendingHashes: make(map[string]struct{}),
+		aliases:       newIdentityAliasIndex(),
 	}
 	for _, o := range opts {
 		o(e)
@@ -1030,14 +1053,6 @@ type SweepResult struct {
 // Total is the number of things expired, both kinds together.
 func (r SweepResult) Total() int { return r.Entities + r.Relations }
 
-// Sweep expires entities whose liveness backstop has lapsed: an entity observed
-// or edge with an interval that has not been re-asserted within it is soft-deleted
-// (entity.deleted / relation.removed), as a safety net for missed explicit deletes
-// (crash, host off, network partition). It returns the entities and edges
-// expired counted separately, and any commit errors joined: a failed commit is
-// logged and skipped (the pass stays resilient and retries next tick) but also
-// returned, so the maintenance metric's error outcome is reachable instead of
-// structurally impossible. Drive it from a periodic ticker.
 func (e *Engine) Sweep() (SweepResult, error) {
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()
@@ -1061,8 +1076,8 @@ func (e *Engine) Sweep() (SweepResult, error) {
 	var orphaned []model.EntityID
 	// The scope that went silent, remembered as its reference is dropped: the
 	// expiry event is authored by Toise, so without capturing it here the
-	// collection method that stopped speaking dies with the ref — and that is the
-	// question a producer asks when entities vanish (#394).
+	// collection method that stopped speaking dies with the ref — and that is
+	// the question a producer asks when entities vanish (#394).
 	//
 	// When several producers lapse together, the one with the LATEST deadline
 	// wins: it is the collector that spoke most recently, so it is the one whose
@@ -1114,16 +1129,18 @@ func (e *Engine) Sweep() (SweepResult, error) {
 		}
 	}
 
+	// Expire lapsed alias-equivalence references; a claim whose last speaker
+	// went silent disappears from the index. One speaker's silence never
+	// retracts another speaker's claim.
+	e.aliases.sweep(now)
+
 	// Expire parked out-of-order edges past their TTL: flushPending only runs on
 	// entity observations, so without this a quiet instance never drops them.
 	if len(e.pending) > 0 {
 		kept := e.pending[:0]
 		for i := range e.pending {
 			if now.After(e.pending[i].deadline) {
-				obs := e.pending[i].obs
-				e.reportDiscard(obs)
-				e.logger.Warn("dropping relation: endpoints did not arrive within the reconciliation TTL",
-					"relation_type", obs.Type, "from_type", obs.From.Type, "to_type", obs.To.Type)
+				e.dropPendingRelation(e.pending[i].obs)
 				continue
 			}
 			kept = append(kept, e.pending[i])
@@ -1194,7 +1211,24 @@ func (e *Engine) ObserveRelation(obs RelationObservation) (ev model.Event, emitt
 // observeRelationBuffered runs observeRelationLocked and parks an out-of-order
 // edge when the reconciliation buffer is enabled. The caller must hold obsMu.
 func (e *Engine) observeRelationBuffered(obs RelationObservation) (model.Event, bool, error) {
+	// The equivalence a same_as asserts is read from the OBSERVATION, not from a
+	// stored relation: the alias endpoint of the edge itself usually does not
+	// exist yet, so the edge is given up on while the belief is retained here.
+	//
+	// It is recorded HERE and not in observeRelationLocked because flushPending
+	// replays parked edges through that one: recording there would refresh a
+	// speaker's deadline on every replay, and an equivalence would outlive the
+	// silence that was supposed to retract it.
+	if obs.Type == model.RelSameAs {
+		e.recordAliasLocked(obs)
+	}
 	ev, emitted, err := e.observeRelationLocked(obs)
+	if errors.Is(err, errEndpointsCollapsed) {
+		// Not parked: no arrival can resolve it. Counted like any lost edge
+		// unless it is an alias declaration whose belief was retained.
+		e.dropPendingRelation(obs)
+		return model.Event{}, false, nil
+	}
 	if err != nil && e.bufferTTL > 0 && errors.Is(err, errEndpointMissing) {
 		// Out-of-order edge: park it and retry as later entities arrive, instead
 		// of failing. Not an error to the caller.
@@ -1303,9 +1337,7 @@ func (e *Engine) flushPending() {
 		// no longer depends on whether the triggering observation happens to be
 		// the one that completes the endpoints.
 		if now.After(e.pending[i].deadline) {
-			e.reportDiscard(e.pending[i].obs)
-			e.logger.Warn("dropping relation: endpoints did not arrive within the reconciliation TTL",
-				"relation_type", obs.Type, "from_type", obs.From.Type, "to_type", obs.To.Type)
+			e.dropPendingRelation(obs)
 			continue
 		}
 		// Commit under the scope that asserted the edge, not the one that happens to
@@ -1318,6 +1350,8 @@ func (e *Engine) flushPending() {
 		switch {
 		case err == nil:
 			// resolved and committed; drop from the buffer
+		case errors.Is(err, errEndpointsCollapsed):
+			e.dropPendingRelation(obs) // no arrival can resolve it; stop holding it
 		case errors.Is(err, errEndpointMissing):
 			kept = append(kept, e.pending[i]) // still waiting for an endpoint
 		default:
@@ -1336,13 +1370,21 @@ func endpointHash(ref EndpointRef) string {
 }
 
 // rebuildPendingHashes recomputes the waited-on endpoint hash set from the parked
-// edges. Called whenever e.pending changes (park, flush, sweep); the caller must
-// hold obsMu. The hot path (entity observation) only reads the set.
+// edges. Called whenever e.pending changes (park, flush, sweep) or an alias is
+// recorded; the caller must hold obsMu. The hot path (entity observation) only
+// reads the set.
 func (e *Engine) rebuildPendingHashes() {
-	e.pendingHashes = make(map[string]struct{}, 2*len(e.pending))
+	e.pendingHashes = make(map[string]struct{}, 4*len(e.pending))
 	for i := range e.pending {
-		e.pendingHashes[endpointHash(e.pending[i].obs.From)] = struct{}{}
-		e.pendingHashes[endpointHash(e.pending[i].obs.To)] = struct{}{}
+		for _, ref := range []EndpointRef{e.pending[i].obs.From, e.pending[i].obs.To} {
+			e.pendingHashes[endpointHash(ref)] = struct{}{}
+			// A parked edge may be waiting on the ALIAS value while the entity
+			// arrives under the canonical one: index the substituted hash too,
+			// so the two meet.
+			if sub := e.substituteAliases(ref.Identity); sub != nil {
+				e.pendingHashes[(model.Entity{Type: ref.Type, Identity: sub}).IdentityHash()] = struct{}{}
+			}
+		}
 	}
 }
 
@@ -1410,14 +1452,22 @@ func (e *Engine) relationEvent(ct model.ChangeType, rel model.Relation, eventTim
 }
 
 func (e *Engine) resolveEndpoints(from, to EndpointRef) (fromID, toID model.EntityID, err error) {
-	var ok bool
-	fromID, ok = e.matchIdentity(from.Type, from.Identity)
-	if !ok {
+	var fromSub, toSub bool
+	fromID, fromSub = e.resolveEndpoint(from)
+	if fromID == "" {
 		return "", "", fmt.Errorf("relation from-endpoint not found: type %q: %w", from.Type, errEndpointMissing)
 	}
-	toID, ok = e.matchIdentity(to.Type, to.Identity)
-	if !ok {
+	toID, toSub = e.resolveEndpoint(to)
+	if toID == "" {
 		return "", "", fmt.Errorf("relation to-endpoint not found: type %q: %w", to.Type, errEndpointMissing)
+	}
+	// A resolution that used alias substitution and lands both endpoints on the
+	// same entity is refused: the alias target of a same_as is its own source,
+	// so substituting it would make the edge reflexive and commit "A is the same
+	// as A". A reflexive relation whose endpoints both resolved exactly is not
+	// concerned.
+	if (fromSub || toSub) && fromID == toID {
+		return "", "", fmt.Errorf("relation %q: %w", from.Type, errEndpointsCollapsed)
 	}
 	return fromID, toID, nil
 }
