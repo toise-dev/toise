@@ -572,6 +572,73 @@ interface carries:
 | `network.interface.addresses` | string[] | `["10.10.0.60/24"]` | the interface's own addresses, each with its prefix |
 | `network.interface.subnets` | string[] | `["10.10.0.0/24"]` | the subnets those addresses sit in, deduplicated — **provisional**, see below |
 
+- **`interface.type` has a precedence, because its four values are not exclusive.** A
+  loopback is also a virtual device; a wireless card is also physical hardware. Without
+  a stated order, two producers looking at the same interface both classify it correctly
+  and disagree, and the disagreement is invisible: each value is in the vocabulary and
+  nothing is violated.
+
+  **The order is total, most specific first: `loopback`, then `wireless`, then `virtual`,
+  then `physical`.** A partial order is not enough. Ranking only `loopback` above
+  `virtual` and `wireless` above `physical` leaves `wireless` and `virtual` unordered,
+  so a virtual radio interface — a software access point, Wi-Fi presented to a virtual
+  machine, a VLAN over a radio — stays classifiable both ways, which is the same
+  invisible disagreement one level down.
+
+  **A value added later declares its rank in the same change that adds it.** Where it
+  sits is a decision, not a deduction: a bridge or a link aggregate may be realized in
+  hardware or in software, so neither inherits a rank from being "more specific than
+  `virtual`".
+
+  **`physical` is the residual value.** It is what remains when none of the three more
+  specific facts was observed, and there is no test for it — so it attests nothing. A
+  producer that examined the interface and a producer that simply did not look both
+  report `physical`, and nothing distinguishes them.
+
+  **The precedence says which single value to report. It does not say the unreported
+  facts are false, and it does not say they are true.** An interface reported `wireless`
+  may be a radio card or a software access point; one reported `physical` may be
+  hardware or merely unexamined. So **this key answers neither "is this real hardware"
+  nor "is this virtual"**, and a consumer that needs either must not derive it here. The
+  attribute holds one value because it is single-valued, not because the others were
+  ruled out.
+
+  **Classify on what the source exposes, never on the interface name.** A loopback is its
+  loopback flag (`IFF_LOOPBACK`, or `ifType` 24 over SNMP), not an interface called `lo`
+  — a Windows host calls it "Loopback Pseudo-Interface 1", and a name test fails there
+  without a word. The other three have no equivalent single flag: a radio and a virtual
+  device are each recognized by their own facts the kernel exposes (on Linux, `wireless/`
+  or `phy80211` present under the interface, and the interface present under
+  `/sys/devices/virtual/net`). Those are what to test; the name is never one of them.
+
+  **A poller reading `ifType` has nothing to arbitrate, and that is the limit of the
+  order above.** `ifType` answers once per interface, so a poller receives one value and
+  never sees two competing facts — the precedence is for a producer that observes them
+  separately, which is the host case: the reference host probe tests for a radio before
+  it tests for a virtual device, and that is what the order records.
+
+  **The single value a poller receives can be less specific than the truth**, and the
+  order cannot repair that, because the poller is not holding the facts it would rank.
+  IF-MIB does carry distinct values for the virtual cases — `l2vlan`, `l3ipvlan`,
+  `tunnel`, `propVirtual` and `ieee8023adLag` are their own values, not `ethernetCsmacd`
+  — so the weakness is not the MIB. It is that **`ifType`'s unfaithfulness about the
+  medium runs one way**: a stack under-reports, answering `ethernetCsmacd` for a radio,
+  and in practice never over-reports — nothing returns `ieee80211` for a copper port. So
+  `ieee80211` is a positive assertion by the device, reliable when it is made, while its
+  absence proves nothing.
+
+  The consequence is that the two sources do not expose the same facts about one
+  interface: a VLAN over a radio answers `l2vlan` to a poller, while its host sees a
+  radio. **So the SNMP rendering and the host rendering of one interface can differ,
+  legitimately, and a consumer must not read that difference as a contradiction.** What
+  each of those observations folds onto is the unspecified part below, not something this
+  order settles.
+
+  The `ifType`-to-value mapping is **not specified here**, which is the same gap one
+  level down: a mapping every poller invents is not a contract. Frozen in a later
+  change, with the producer side, rather than by freezing one implementation's table in
+  passing.
+
 - **Addresses and subnets are arrays, and their value form is upstream's.** Both are
   `string[]`, one element per address — **never** a joined string. A comma appears in
   no IP text form, which is exactly what makes a joined value dangerous: it parses
