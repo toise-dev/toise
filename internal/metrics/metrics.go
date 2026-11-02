@@ -72,6 +72,9 @@ type Collector struct {
 	pruneHorizon     *prometheus.Desc
 	serialOverlaps   *prometheus.Desc
 	serialPopulation *prometheus.Desc
+	vendorNonNorm    *prometheus.Desc
+	vendorComparable *prometheus.Desc
+	vendorRetired    *prometheus.Desc
 }
 
 // NewCollector builds a collector over the graph and store, stamping build info
@@ -126,6 +129,22 @@ func NewCollector(g Grapher, s Storer, version, commit string) *Collector {
 				"overlap count can be told apart from a check that had nothing to look at: a fleet "+
 				"whose producers do not emit senhub.chassis.serial_numbers reports zero overlaps "+
 				"forever, and that zero says nothing about the fleet.", nil, nil),
+		vendorNonNorm: prometheus.NewDesc("toise_identity_vendor_non_normative",
+			"Number of live network.device entities whose hw.vendor is present but outside the "+
+				"normative form (non-empty, already lowercase, no surrounding whitespace) — usually the "+
+				"ENTITY-MIB free-form fallback, which cannot be grouped, so a fleet query by vendor silently "+
+				"undercounts. Not asserted to be an error: a registry name could one day contain a character "+
+				"this rule rejects. Read it beside toise_identity_vendor_comparable_entities. No vendor value "+
+				"appears as a label — a vendor is inventory data and the cardinality would follow the fleet; the "+
+				"count is what you alert on, the value is read through the API.", nil, nil),
+		vendorComparable: prometheus.NewDesc("toise_identity_vendor_comparable_entities",
+			"Number of live network.device entities carrying hw.vendor, the population the normative-form "+
+				"check can look at. It exists so a zero non-normative count can be told apart from a check that "+
+				"had nothing to look at.", nil, nil),
+		vendorRetired: prometheus.NewDesc("toise_identity_vendor_retired_key",
+			"Number of live network.device entities still carrying the retired `vendor` key, in identity or "+
+				"attributes. The key was replaced by hw.vendor; a value left on the old key is invisible to every "+
+				"filter written against the new one, and the empty result reads as an empty fleet.", nil, nil),
 		pruneHorizon: prometheus.NewDesc("toise_store_prune_horizon_seconds",
 			"Unix time of the latest retention cutoff applied (0 if never pruned); the oldest instant an as-of read can answer completely.", nil, nil),
 	}
@@ -147,6 +166,9 @@ func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.pruneHorizon
 	ch <- c.serialOverlaps
 	ch <- c.serialPopulation
+	ch <- c.vendorNonNorm
+	ch <- c.vendorComparable
+	ch <- c.vendorRetired
 }
 
 // Collect implements prometheus.Collector, sampling the live state.
@@ -175,6 +197,17 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	}
 	ch <- prometheus.MustNewConstMetric(c.serialOverlaps, prometheus.GaugeValue, float64(overlaps))
 	ch <- prometheus.MustNewConstMetric(c.serialPopulation, prometheus.GaugeValue, float64(population))
+	nonNormative, vendorPopulation, retired := 0, 0, 0
+	for _, tenant := range c.graph.EntitiesOfTypePerTenant(typeNetworkDevice) {
+		n, p := VendorNonNormative(tenant)
+		r := RetiredVendorKey(tenant)
+		nonNormative += n
+		vendorPopulation += p
+		retired += r
+	}
+	ch <- prometheus.MustNewConstMetric(c.vendorNonNorm, prometheus.GaugeValue, float64(nonNormative))
+	ch <- prometheus.MustNewConstMetric(c.vendorComparable, prometheus.GaugeValue, float64(vendorPopulation))
+	ch <- prometheus.MustNewConstMetric(c.vendorRetired, prometheus.GaugeValue, float64(retired))
 }
 
 // maxTypeSeries caps the by-type label cardinality: producers control entity
