@@ -201,3 +201,27 @@ func TestSerialOverlapDoesNotCompareAcrossTenants(t *testing.T) {
 		t.Error("the comparable population must still count both entities")
 	}
 }
+
+// anonCounter is the fleet-wide total the per-tenant engines sum to.
+type anonCounter struct{ n int }
+
+func (a anonCounter) AnonymousReferenceEntities() int { return a.n }
+
+// The series has to be published at zero as well: an absent series cannot be
+// told apart from a control that is not running, which is the reading the
+// count exists to prevent.
+func TestAnonymousReferenceSeriesIsExposedEvenAtZero(t *testing.T) {
+	body := scrape(t, Handler(NewCollector(fakeGraph{}, fakeStore{}, "1.2.3", "abc"), perTenantFixture()))
+	if !strings.Contains(body, "toise_anonymous_reference_entities 0") {
+		t.Error("the scrape does not carry the series at zero")
+	}
+}
+
+func TestAnonymousReferenceSeriesCarriesTheCount(t *testing.T) {
+	c := NewCollector(fakeGraph{}, fakeStore{}, "1.2.3", "abc")
+	c.SetAnonymousReferenceCounter(anonCounter{n: 3})
+	body := scrape(t, Handler(c, perTenantFixture()))
+	if !strings.Contains(body, "toise_anonymous_reference_entities 3") {
+		t.Error("the scrape does not carry the wired count")
+	}
+}

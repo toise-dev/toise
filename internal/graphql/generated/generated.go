@@ -107,6 +107,7 @@ type ComplexityRoot struct {
 		ID                  func(childComplexity int) int
 		Identity            func(childComplexity int) int
 		IdentityFingerprint func(childComplexity int) int
+		Provenance          func(childComplexity int) int
 		Resolution          func(childComplexity int) int
 		SchemaURL           func(childComplexity int) int
 		Type                func(childComplexity int) int
@@ -195,6 +196,7 @@ type ComplexityRoot struct {
 type EntityResolver interface {
 	Annotations(ctx context.Context, obj *Entity) (*Annotation, error)
 	AssertedBy(ctx context.Context, obj *Entity) ([]string, error)
+	Provenance(ctx context.Context, obj *Entity) (*string, error)
 	CollectedBy(ctx context.Context, obj *Entity) ([]string, error)
 	Resolution(ctx context.Context, obj *Entity) (*Resolution, error)
 }
@@ -505,6 +507,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Entity.IdentityFingerprint(childComplexity), true
+	case "Entity.provenance":
+		if e.ComplexityRoot.Entity.Provenance == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Entity.Provenance(childComplexity), true
 	case "Entity.resolution":
 		if e.ComplexityRoot.Entity.Resolution == nil {
 			break
@@ -1102,6 +1110,20 @@ type Entity {
   about who asserted an entity at a past instant from a GraphQL ` + "`" + `asOf` + "`" + ` query.
   """
   assertedBy: [String!]! @goField(forceResolver: true)
+  """
+  A sentence naming what an empty ` + "`" + `assertedBy` + "`" + ` actually means, or null when
+  there is nothing to say.
+
+  An empty ` + "`" + `assertedBy` + "`" + ` covers two situations: nothing asserts the entity, and
+  it survives on a zero deadline; or something asserts it and sent no producer
+  identity — a live claim nobody can be asked about, and one no named producer
+  can ever release. This field is non-null only in the second case, and says
+  so. The MCP surface carries the same distinction in its provenance field.
+
+  **Live state, like ` + "`" + `assertedBy` + "`" + `: an ` + "`" + `asOf` + "`" + ` query answers it from today's
+  table, not from the instant asked for.**
+  """
+  provenance: String @goField(forceResolver: true)
 
   """
   The collection methods asserting this entity right now — how it was gathered.
@@ -1861,6 +1883,8 @@ func (ec *executionContext) childFields_Entity(ctx context.Context, field graphq
 		return ec.fieldContext_Entity_annotations(ctx, field)
 	case "assertedBy":
 		return ec.fieldContext_Entity_assertedBy(ctx, field)
+	case "provenance":
+		return ec.fieldContext_Entity_provenance(ctx, field)
 	case "collectedBy":
 		return ec.fieldContext_Entity_collectedBy(ctx, field)
 	case "resolution":
@@ -3630,6 +3654,29 @@ func (ec *executionContext) _Entity_assertedBy(ctx context.Context, field graphq
 	)
 }
 func (ec *executionContext) fieldContext_Entity_assertedBy(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("Entity", field, true, true, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _Entity_provenance(ctx context.Context, field graphql.CollectedField, obj *Entity) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Entity_provenance(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Entity().Provenance(ctx, obj)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_Entity_provenance(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("Entity", field, true, true, errors.New("field of type String does not have child fields"))
 }
 
@@ -6819,6 +6866,39 @@ func (ec *executionContext) _Entity(ctx context.Context, sel ast.SelectionSet, o
 				if res == graphql.Null {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "provenance":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Entity_provenance(ctx, field, obj)
 				return res
 			}
 

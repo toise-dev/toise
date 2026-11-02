@@ -43,10 +43,21 @@ type Storer interface {
 	PruneHorizon() time.Time
 }
 
+// AnonymousReferenceCounter supplies the total of live entities carrying at
+// least one producer reference with no identity. There is one engine per
+// tenant, so it is satisfied by whatever holds the engines and sums across
+// them. Optional: a collector wired without it still publishes the series, at
+// zero — an absent series would be indistinguishable from a control that is
+// not running.
+type AnonymousReferenceCounter interface {
+	AnonymousReferenceEntities() int
+}
+
 // Collector samples the live graph and store on each Prometheus scrape.
 type Collector struct {
 	graph Grapher
 	store Storer
+	anon  AnonymousReferenceCounter
 
 	version, commit string
 	// startedAt is sampled once, at construction, rather than read from the
@@ -75,6 +86,7 @@ type Collector struct {
 	vendorNonNorm    *prometheus.Desc
 	vendorComparable *prometheus.Desc
 	vendorRetired    *prometheus.Desc
+	anonEntities     *prometheus.Desc
 }
 
 // NewCollector builds a collector over the graph and store, stamping build info
@@ -145,9 +157,22 @@ func NewCollector(g Grapher, s Storer, version, commit string) *Collector {
 			"Number of live network.device entities still carrying the retired `vendor` key, in identity or "+
 				"attributes. The key was replaced by hw.vendor; a value left on the old key is invisible to every "+
 				"filter written against the new one, and the empty result reads as an empty fleet.", nil, nil),
+		anonEntities: prometheus.NewDesc("toise_anonymous_reference_entities",
+			"Live entities carrying at least one producer reference with no producer identity. "+
+				"An empty asserted_by on such an entity does not mean unclaimed: something asserts it "+
+				"anonymously, so there is nobody to ask about a suspect value and no named producer can "+
+				"ever release it. Published even at zero, so an absent series is never confused with a "+
+				"control that is not running.", nil, nil),
 		pruneHorizon: prometheus.NewDesc("toise_store_prune_horizon_seconds",
 			"Unix time of the latest retention cutoff applied (0 if never pruned); the oldest instant an as-of read can answer completely.", nil, nil),
 	}
+}
+
+// SetAnonymousReferenceCounter wires the fleet-wide anonymous-reference total,
+// summed across the per-tenant engines by the holder passed in. Call it after
+// NewCollector; without it the series is still published, at zero.
+func (c *Collector) SetAnonymousReferenceCounter(src AnonymousReferenceCounter) {
+	c.anon = src
 }
 
 // Describe implements prometheus.Collector.
@@ -169,6 +194,7 @@ func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.vendorNonNorm
 	ch <- c.vendorComparable
 	ch <- c.vendorRetired
+	ch <- c.anonEntities
 }
 
 // Collect implements prometheus.Collector, sampling the live state.
@@ -209,6 +235,11 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	ch <- prometheus.MustNewConstMetric(c.vendorNonNorm, prometheus.GaugeValue, float64(nonNormative))
 	ch <- prometheus.MustNewConstMetric(c.vendorComparable, prometheus.GaugeValue, float64(vendorPopulation))
 	ch <- prometheus.MustNewConstMetric(c.vendorRetired, prometheus.GaugeValue, float64(retired))
+	anon := 0
+	if c.anon != nil {
+		anon = c.anon.AnonymousReferenceEntities()
+	}
+	ch <- prometheus.MustNewConstMetric(c.anonEntities, prometheus.GaugeValue, float64(anon))
 }
 
 // maxTypeSeries caps the by-type label cardinality: producers control entity

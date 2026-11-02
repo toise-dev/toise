@@ -121,3 +121,19 @@ func (s aggregateStore) PruneHorizon() time.Time {
 	}
 	return latest
 }
+
+// aggregateEngines sums the anonymous-reference count across tenants. Unlike
+// the serial-overlap check this compares nothing between entities, so a single
+// fleet-wide total is the right answer rather than a cross-tenant comparison
+// published as one number.
+type aggregateEngines struct{ reg *registry.Registry }
+
+func (g aggregateEngines) AnonymousReferenceEntities() int {
+	n := 0
+	for _, st := range g.reg.Stacks() {
+		if st.Engine != nil {
+			n += st.Engine.AnonymousReferenceEntities()
+		}
+	}
+	return n
+}

@@ -1002,6 +1002,28 @@ func (e *Engine) AnonymousReferences(id model.EntityID) int {
 	return n
 }
 
+// AnonymousReferenceEntities counts the live entities carrying at least one
+// producer reference with no identity. An empty asserted_by on such an entity
+// does not mean unclaimed: something asserts it anonymously, so there is
+// nobody to ask about a suspect value and no named producer can ever release
+// it. The fleet-wide total was unknown because the only way to spot one was a
+// contradiction between two fields.
+func (e *Engine) AnonymousReferenceEntities() int {
+	e.obsMu.Lock()
+	defer e.obsMu.Unlock()
+
+	n := 0
+	for _, speakers := range e.refs {
+		for key := range speakers {
+			if producer, _ := splitRefKey(key); producer == "" {
+				n++
+				break
+			}
+		}
+	}
+	return n
+}
+
 func (e *Engine) AssertingScopes(id model.EntityID) []string {
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()

@@ -135,3 +135,32 @@ func (r *entityResolver) CollectedBy(_ context.Context, obj *generated.Entity) (
 	}
 	return out, nil
 }
+
+// Provenance carries the same distinction the MCP surface puts in its own
+// provenance field: an empty assertedBy that is NOT unclaimed, because
+// anonymous references exist. Null when there is nothing to say, including
+// when the engine is absent — a read surface wired without the engine is a
+// configuration, not a failure.
+func (r *entityResolver) Provenance(_ context.Context, obj *generated.Entity) (*string, error) {
+	if r.Engine == nil || obj == nil {
+		return nil, nil
+	}
+	id := model.EntityID(obj.ID)
+	if len(r.Engine.AssertingProducers(id)) > 0 {
+		return nil, nil
+	}
+	count := r.Engine.AnonymousReferences(id)
+	if count == 0 {
+		return nil, nil
+	}
+	noun := "reference"
+	if count != 1 {
+		noun = "references"
+	}
+	s := fmt.Sprintf("assertedBy is empty and that does NOT mean unclaimed: %d %s on this entity "+
+		"carry no producer identity. Something is asserting it and sent no name, so there is nobody "+
+		"to ask about a suspect value, and no named producer can ever release it — only a delete that "+
+		"also carries no identity reaches it. Treat this as a PRODUCER DEFECT to report, not as an "+
+		"entity nobody wants.", count, noun)
+	return &s, nil
+}

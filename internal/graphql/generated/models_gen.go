@@ -294,6 +294,18 @@ type Entity struct {
 	// `asOf` read; this surface does not yet (toise#528). Do not conclude anything
 	// about who asserted an entity at a past instant from a GraphQL `asOf` query.
 	AssertedBy []string `json:"assertedBy"`
+	// A sentence naming what an empty `assertedBy` actually means, or null when
+	// there is nothing to say.
+	//
+	// An empty `assertedBy` covers two situations: nothing asserts the entity, and
+	// it survives on a zero deadline; or something asserts it and sent no producer
+	// identity — a live claim nobody can be asked about, and one no named producer
+	// can ever release. This field is non-null only in the second case, and says
+	// so. The MCP surface carries the same distinction in its provenance field.
+	//
+	// **Live state, like `assertedBy`: an `asOf` query answers it from today's
+	// table, not from the instant asked for.**
+	Provenance *string `json:"provenance,omitempty"`
 	// The collection methods asserting this entity right now — how it was gathered.
 	//
 	// One instrumentation scope per method (`senhub-agent/snmp-route`, ...), which is
