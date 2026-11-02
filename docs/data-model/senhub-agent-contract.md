@@ -621,10 +621,18 @@ interface carries:
   order cannot repair that, because the poller is not holding the facts it would rank.
   IF-MIB does carry distinct values for the virtual cases — `l2vlan`, `l3ipvlan`,
   `tunnel`, `propVirtual` and `ieee8023adLag` are their own values, not `ethernetCsmacd`
-  — but many stacks report `ethernetCsmacd` for a radio, and a VLAN over a radio reports
-  `l2vlan`, which this order would rank below the `wireless` its host would report. So
-  the SNMP rendering and the host rendering of one interface can differ, legitimately,
-  and **a consumer must not read that difference as a contradiction.**
+  — so the weakness is not the MIB. It is that **`ifType`'s unfaithfulness about the
+  medium runs one way**: a stack under-reports, answering `ethernetCsmacd` for a radio,
+  and in practice never over-reports — nothing returns `ieee80211` for a copper port. So
+  `ieee80211` is a positive assertion by the device, reliable when it is made, while its
+  absence proves nothing.
+
+  The consequence is that the two sources do not expose the same facts about one
+  interface: a VLAN over a radio answers `l2vlan` to a poller, while its host sees a
+  radio. **So the SNMP rendering and the host rendering of one interface can differ,
+  legitimately, and a consumer must not read that difference as a contradiction.** What
+  each of those observations folds onto is the unspecified part below, not something this
+  order settles.
 
   The `ifType`-to-value mapping is **not specified here**, which is the same gap one
   level down: a mapping every poller invents is not a contract. Frozen in a later
