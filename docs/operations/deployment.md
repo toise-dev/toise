@@ -8,6 +8,15 @@ and CGO-free, so the binaries are static and the image is distroless.
 > enable TLS and bearer-token auth (see [Configuration](./configuration.md#authentication--tls))
 > or front it with a proxy.
 
+> `/metrics` is served without authentication by design, so an instance exposed
+> beyond a trusted network must be fronted by a server that restricts it. The
+> endpoint discloses the exact build version and commit (`toise_build_info`),
+> tenant labels on several series, per-type entity counts
+> (`toise_entities`, `toise_entities_by_type`), and event counts and on-disk size
+> (`toise_events_total`, `toise_store_disk_bytes`) —
+> which is why the front-server requirement exists, not just the TLS one.
+> `/healthz` and `/readyz` disclose nothing comparable and stay open.
+
 ## Prebuilt binaries
 
 Each [GitHub Release](https://github.com/toise-dev/toise/releases) attaches a
