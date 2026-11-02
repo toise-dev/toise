@@ -1,6 +1,7 @@
 package change
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -141,5 +142,20 @@ func TestContestedEntityGoneStopsCounting(t *testing.T) {
 	}
 	if got := e.ContestedDisplayNames(); got != 0 {
 		t.Fatalf("a deleted entity is still counted: got %d, want 0", got)
+	}
+}
+
+// More distinct display names inside one liveness window than the cap retains.
+// The eviction would drop each value before it had the chance to recur, so an
+// identity contested by many speakers would read as clean — the count itself
+// has to establish the condition.
+func TestContestedMoreNamesThanTheCap(t *testing.T) {
+	e, clock := contestedEngine(t)
+	for i := 0; i < maxContestedDisplayNames+3; i++ {
+		contestedObserve(t, e, "h1", fmt.Sprintf("model-%d", i), time.Hour)
+		clock.advance(time.Minute)
+	}
+	if got := e.ContestedDisplayNames(); got != 1 {
+		t.Fatalf("more names than the cap: got %d, want 1", got)
 	}
 }

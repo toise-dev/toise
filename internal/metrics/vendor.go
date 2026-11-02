@@ -29,7 +29,11 @@ func VendorNonNormative(entities []model.Entity) (nonNormative, population int) 
 			continue
 		}
 		population++
-		if !isNormativeVendor(vendorString(value)) {
+		// The normative form is a NAME. A hw.vendor that is not a string cannot
+		// be one, whatever it renders as: the raw enterprise number 729 renders
+		// as "729", which is non-empty, lowercase and unpadded, and would pass
+		// a check written on the rendering alone.
+		if value.Kind() != model.KindString || !isNormativeVendor(value.Str()) {
 			nonNormative++
 		}
 	}
@@ -48,13 +52,6 @@ func RetiredVendorKey(entities []model.Entity) (retired int) {
 		}
 	}
 	return retired
-}
-
-func vendorString(v model.Value) string {
-	if v.Kind() == model.KindString {
-		return v.Str()
-	}
-	return v.Display()
 }
 
 func isNormativeVendor(s string) bool {

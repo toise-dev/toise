@@ -832,6 +832,12 @@ func (e *Engine) trackDisplayName(id model.EntityID, obs EntityObservation, prev
 		c.contested = true
 	}
 	if len(c.values) >= maxContestedDisplayNames {
+		// At the cap the condition is already established by the COUNT: that many
+		// distinct display names inside one liveness window is not a sequence of
+		// renames. Latching here matters because the eviction below would
+		// otherwise drop a value before it had the chance to recur, so an
+		// identity contested by more speakers than the cap would read as clean.
+		c.contested = true
 		oldestValue, oldestAt := "", time.Time{}
 		for v, at := range c.values {
 			if oldestValue == "" || at.Before(oldestAt) {

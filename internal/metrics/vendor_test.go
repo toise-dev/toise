@@ -39,7 +39,7 @@ func TestVendorNonNormative(t *testing.T) {
 		{
 			name: "capitalized value",
 			entities: []model.Entity{
-				entity("a", []model.KeyValue{{Key: attrHWVendor, Value: stringValue("Fortinet")}}, nil),
+				entity("a", []model.KeyValue{{Key: attrHWVendor, Value: stringValue("Acme")}}, nil),
 			},
 			wantNonNorm:    1,
 			wantPopulation: 1,
@@ -161,7 +161,7 @@ func TestVendorUndercountIsVisibleAsAWhole(t *testing.T) {
 	}
 	g := tenantGraph{perTenant: [][]model.Entity{{
 		dev("a", attrHWVendor, "cisco"),
-		dev("b", attrHWVendor, "Fortinet"),
+		dev("b", attrHWVendor, "Acme"),
 		dev("c", attrHWVendor, "Cisco Systems, Inc."),
 		dev("d", attrHWVendor, " h3c "),
 		dev("e", "vendor", "h3c"),
@@ -175,5 +175,17 @@ func TestVendorUndercountIsVisibleAsAWhole(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("the scrape does not carry %q", want)
 		}
+	}
+}
+
+// The raw enterprise number renders as "729": non-empty, lowercase, unpadded.
+// A check written on the rendering alone would call it normative, and the one
+// value that is certainly not a registry name would never alert.
+func TestVendorNonStringIsNotNormative(t *testing.T) {
+	got, pop := VendorNonNormative([]model.Entity{
+		entity("a", []model.KeyValue{{Key: attrHWVendor, Value: model.IntValue(729)}}, nil),
+	})
+	if got != 1 || pop != 1 {
+		t.Fatalf("VendorNonNormative() = (%d, %d), want (1, 1)", got, pop)
 	}
 }

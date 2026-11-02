@@ -189,22 +189,23 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	}
 	ch <- prometheus.MustNewConstMetric(c.pruneHorizon, prometheus.GaugeValue, horizon)
 	emitByType(ch, c.entitiesByType, c.graph.CountByType())
+	// One snapshot for every per-entity check: two calls would sample the graph
+	// twice, and two gauges describing the same population would then disagree
+	// about its size whenever an entity appeared between them.
+	perTenant := c.graph.EntitiesOfTypePerTenant(typeNetworkDevice)
 	overlaps, population := 0, 0
-	for _, tenant := range c.graph.EntitiesOfTypePerTenant(typeNetworkDevice) {
+	nonNormative, vendorPopulation, retired := 0, 0, 0
+	for _, tenant := range perTenant {
 		o, p := SerialOverlap(tenant)
 		overlaps += o
 		population += p
+		nn, vp := VendorNonNormative(tenant)
+		nonNormative += nn
+		vendorPopulation += vp
+		retired += RetiredVendorKey(tenant)
 	}
 	ch <- prometheus.MustNewConstMetric(c.serialOverlaps, prometheus.GaugeValue, float64(overlaps))
 	ch <- prometheus.MustNewConstMetric(c.serialPopulation, prometheus.GaugeValue, float64(population))
-	nonNormative, vendorPopulation, retired := 0, 0, 0
-	for _, tenant := range c.graph.EntitiesOfTypePerTenant(typeNetworkDevice) {
-		n, p := VendorNonNormative(tenant)
-		r := RetiredVendorKey(tenant)
-		nonNormative += n
-		vendorPopulation += p
-		retired += r
-	}
 	ch <- prometheus.MustNewConstMetric(c.vendorNonNorm, prometheus.GaugeValue, float64(nonNormative))
 	ch <- prometheus.MustNewConstMetric(c.vendorComparable, prometheus.GaugeValue, float64(vendorPopulation))
 	ch <- prometheus.MustNewConstMetric(c.vendorRetired, prometheus.GaugeValue, float64(retired))
