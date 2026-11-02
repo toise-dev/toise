@@ -735,12 +735,26 @@ does not know. Absence is a measurement we did not take. Both are legal, **neith
 **`admin_state`, the key this one defers to.** It is a state key the engine matches, and
 it had no frozen vocabulary either — so forbidding the administrative flag under
 `oper_state` would have pointed a producer at an unspecified key, which displaces the
-defect rather than closing it. Its vocabulary is closed at two values:
+defect rather than closing it. Its vocabulary is closed at the **three** values of the
+RFC 2863 `ifAdminStatus` enumeration, by the same rule that closes `oper_state` at seven:
 
-| Canonical | Meaning |
-| --- | --- |
-| `up` | the interface is administratively enabled |
-| `down` | it is administratively disabled |
+| Canonical | IF-MIB (SNMP) | Meaning |
+| --- | --- | --- |
+| `up` | `up` | the interface is administratively enabled |
+| `down` | `down` | it is administratively disabled |
+| `testing` | `testing` | it is in a test mode, and no operational traffic may pass |
+
+**`testing` is there because dropping it would have rebuilt the ambiguity this section
+exists to remove.** Freezing the vocabulary at `up`/`down` leaves a producer that reads
+`ifAdminStatus = testing(3)` with no legal value, so by the omission rule below it drops
+the attribute — and that omission is then indistinguishable from "the administrative flags
+were unreadable", which is a different fact. The device answered; the contract has to let
+it be reported.
+
+**The two sources are asymmetric here, as they are for `not_present`.** The SNMP source
+can render all three. The host source reads a binary administrative flag and can only ever
+render `up` or `down`, so `testing` never arrives from a host — the absence of that value
+on a host is not evidence about the interface.
 
 Omitted when the administrative flags are unreadable, by the same rule as above: absence
 is a measurement not taken. **It is never derived from `oper_state`, and `oper_state` is
