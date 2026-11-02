@@ -152,6 +152,12 @@ func checkRecord(where string, lr plog.LogRecord) []Problem {
 			// second rendering breaks that join as thoroughly as it would an
 			// identity. Same rule, same failure.
 			checkMAC(&out, where, "entity.description", desc.Map())
+			// And the same argument one step further: a value outside a frozen
+			// vocabulary is not comparable either, so it does not group. A
+			// rendering the kit refuses and a value it does not is the difference
+			// between a defect found here and a defect found in a graph months
+			// later (#579).
+			checkValueVocabularies(&out, where, "entity.description", desc.Map())
 		}
 	}
 
