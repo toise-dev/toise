@@ -173,10 +173,6 @@ func identityValueMap(identity []model.KeyValue) map[string]model.Value {
 	return m
 }
 
-// aliasDeadline is the expiry of one speaker's equivalence: the observation's
-// own interval, else the source's re-emit cadence, else zero — and a zero
-// deadline never expires, the convention for an assertion with no refresh
-// promise.
 // aliasSlackFactor holds a speaker's equivalence for longer than its own
 // re-emission cycle. Without it the deadline lands exactly where the next
 // re-emission is due, so one late cycle expires the claim, every edge it
@@ -189,15 +185,50 @@ func identityValueMap(identity []model.KeyValue) map[string]model.Value {
 // that has genuinely stopped is still forgotten within a bounded time.
 const aliasSlackFactor = 2
 
-func aliasDeadline(now time.Time, obs RelationObservation) time.Time {
+// aliasDeadline is the expiry of one speaker's equivalence: the observation's
+// own interval, else the source's re-emit cadence, else zero — and a zero
+// deadline never expires, the convention for an assertion with no refresh
+// promise. The second return is false when the declared cycle may not be
+// believed at all.
+//
+// An interval the engine refuses as a liveness promise is refused here too, and
+// it must NOT fall through to the no-interval case: zero never expires, so
+// reading an implausible cycle as "no cycle" would make the least trustworthy
+// claim there is the only immortal one — an identity merge surviving on a
+// promise every other path has already rejected.
+//
+// The same bound removes the multiplication's overflow. Above roughly 146 years
+// the product wraps to a negative Duration, the deadline lands in the past, and
+// the claim expires on the next sweep — the exact failure the slack exists to
+// prevent, reintroduced by the slack itself. One bound answers both, so there
+// is no second mechanism to keep in step with this one.
+//
+// The refusal is already logged and counted on this same observation's own
+// liveness path, so nothing is reported from here.
+func aliasDeadline(now time.Time, obs RelationObservation) (time.Time, bool) {
 	switch {
 	case obs.Interval > 0:
-		return now.Add(obs.Interval * aliasSlackFactor)
+		if obs.Interval > maxPlausibleLivenessPromise {
+			return time.Time{}, false
+		}
+		return now.Add(obs.Interval * aliasSlackFactor), true
 	case obs.SourceInterval > 0:
-		return now.Add(obs.SourceInterval * aliasSlackFactor)
+		if obs.SourceInterval > maxPlausibleLivenessPromise {
+			return time.Time{}, false
+		}
+		return now.Add(obs.SourceInterval * aliasSlackFactor), true
 	default:
-		return time.Time{}
+		return time.Time{}, true
 	}
+}
+
+// aliasDeclaredCycle is the interval aliasDeadline would have used, for the
+// refusal log: which of the two the speaker got wrong is the actionable part.
+func aliasDeclaredCycle(obs RelationObservation) time.Duration {
+	if obs.Interval > 0 {
+		return obs.Interval
+	}
+	return obs.SourceInterval
 }
 
 // recordAliasLocked records the equivalence a same_as observation asserts, if
@@ -208,7 +239,14 @@ func (e *Engine) recordAliasLocked(obs RelationObservation) {
 		return
 	}
 	speaker := refKey(obs.Producer, e.currentScope())
-	_, conflict := e.aliases.record(claim, speaker, liveRef{deadline: aliasDeadline(e.now(), obs)})
+	deadline, believable := aliasDeadline(e.now(), obs)
+	if !believable {
+		e.logger.Warn("refusing an identity equivalence whose speaker declared an implausible cycle: the alias is NOT retained, so nothing resolves through it",
+			"attribute_key", claim.alias.attributeKey, "producer", obs.Producer,
+			"declared", aliasDeclaredCycle(obs).String(), "max", maxPlausibleLivenessPromise.String())
+		return
+	}
+	_, conflict := e.aliases.record(claim, speaker, liveRef{deadline: deadline})
 	if conflict && e.aliasConflictReporter != nil {
 		e.aliasConflictReporter(claim.alias.attributeKey, claim.alias.aliasValue)
 	}
