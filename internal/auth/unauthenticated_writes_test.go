@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -97,10 +98,51 @@ func TestUnauthenticatedWritesAllowedNeedsNothingAuthenticating(t *testing.T) {
 		{"opt-in but a tenant token exists", NewWithRoles(nil, nil, nil, map[string][]string{"acme": {"t"}}).SetUnauthenticatedWrites(true), false},
 		{"opt-in but a scoped read token exists", NewWithRoles(nil, nil, nil, nil).
 			WithScopedRoleTokens(map[string][]string{"acme": {"t"}}, nil).SetUnauthenticatedWrites(true), false},
+		// OIDC declared but its verifier not built yet. This is the case a recette
+		// caught: the verifier comes from a network discovery against the issuer,
+		// so a caller asking before it completes was told nothing authenticated —
+		// and on an OIDC-only deployment the stdio transport then granted writes.
+		{"opt-in but OIDC is declared, verifier not built", NewWithRoles(nil, nil, nil, nil).
+			SetUnauthenticatedWrites(true).SetOIDCDeclared(true), false},
+		{"opt-in but an OIDC verifier is installed", NewWithRoles(nil, nil, nil, nil).
+			SetUnauthenticatedWrites(true).SetOIDC(stubVerifier{}), false},
 	}
 	for _, c := range cases {
 		if got := c.a.UnauthenticatedWritesAllowed(); got != c.want {
 			t.Errorf("%s: UnauthenticatedWritesAllowed = %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+// stubVerifier stands in for a built OIDC verifier; it is never consulted here,
+// only its presence is.
+type stubVerifier struct{}
+
+func (stubVerifier) Verify(context.Context, string) (string, string, bool) { return "", "", false }
+
+// TestEnabledFollowsTheDeclarationNotTheVerifier pins the ordering hazard
+// directly. Enabled() answers "is a credential required". Answering it from the
+// verifier made it mean "can a credential be checked right now", which is false
+// for the whole window between configuration and discovery — and callers wired
+// inside that window took it as "nothing authenticates".
+func TestEnabledFollowsTheDeclarationNotTheVerifier(t *testing.T) {
+	a := NewWithRoles(nil, nil, nil, nil)
+	if a.Enabled() {
+		t.Fatal("nothing configured: auth must be off")
+	}
+	if !a.SetOIDCDeclared(true).Enabled() {
+		t.Error("OIDC declared must enforce auth before its verifier exists")
+	}
+	// Setting the verifier sets the declaration with it, in BOTH directions, so
+	// the pair cannot hold "declared, never verifiable" — a state that would
+	// refuse every bearer OIDC exists to accept, turning a permissive bug into a
+	// total refusal with no diagnostic.
+	b := NewWithRoles(nil, nil, nil, nil).SetOIDC(stubVerifier{})
+	if !b.Enabled() || !b.oidcDeclared {
+		t.Error("installing a verifier must also declare OIDC")
+	}
+	c := NewWithRoles(nil, nil, nil, nil).SetOIDCDeclared(true).SetOIDC(nil)
+	if c.oidcDeclared || c.Enabled() {
+		t.Error("clearing the verifier must clear the declaration: declared with nothing to verify refuses everything")
 	}
 }

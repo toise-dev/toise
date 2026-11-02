@@ -94,6 +94,19 @@ type Authenticator struct {
 	// oidc, when set, verifies an OIDC/JWT bearer on the read surfaces as a second
 	// path after the static tokens (ADR 0028). nil = OIDC off.
 	oidc OIDCVerifier
+	// oidcDeclared records that the operator configured OIDC, which is NOT the
+	// same fact as oidc being set and not a duplicate of it: the verifier is
+	// built by a network discovery against the issuer, so there is a window
+	// where OIDC is required and no verifier exists yet. Enabled() answers "is a
+	// credential required", which is the declaration; the verifier answers "can
+	// one be checked here".
+	//
+	// The distinction is load-bearing. A transport that serves no read surface
+	// must not pay for that discovery, yet still has to know a credential is
+	// expected: the stdio server is wired before it, and reading the verifier
+	// there made it decide that nothing authenticated and grant writes on an
+	// OIDC-only deployment.
+	oidcDeclared bool
 	// ingestMTLSOnly decouples ingest auth from read auth (#262): when set, the
 	// OTLP ingest surface is authenticated by mutual TLS at the transport, so the
 	// gRPC interceptors neither require nor consult a bearer on ingest — while the
@@ -126,6 +139,21 @@ func (a *Authenticator) SetTenantExemptPaths(paths map[string]bool) { a.tenantEx
 // for chaining. nil (the default) leaves OIDC off. Set before serving.
 func (a *Authenticator) SetOIDC(v OIDCVerifier) *Authenticator {
 	a.oidc = v
+	// Setting the verifier sets the declaration with it, in both directions, so
+	// the pair cannot hold the contradictory state "declared, never verifiable"
+	// — which would refuse every bearer OIDC was meant to accept. An earlier
+	// shape only ever declared, and claimed in this comment that the two could
+	// not contradict each other, while SetOIDC(nil) left the declaration
+	// standing: a guarantee asserted in prose and not in the code.
+	a.oidcDeclared = v != nil
+	return a
+}
+
+// SetOIDCDeclared records that OIDC is configured, before the verifier exists.
+// Call it as soon as the configuration is known and SetOIDC once discovery has
+// produced a verifier. Returns a for chaining; set before serving.
+func (a *Authenticator) SetOIDCDeclared(v bool) *Authenticator {
+	a.oidcDeclared = v
 	return a
 }
 
@@ -364,10 +392,13 @@ func hashToken(t string) []byte {
 }
 
 // Enabled reports whether any token or OIDC is configured (i.e. auth is
-// enforced). An OIDC-only deployment (no static tokens) still enforces auth.
+// enforced). An OIDC-only deployment (no static tokens) still enforces auth —
+// from the moment it is DECLARED, not from the moment its verifier is built, so
+// a caller that asks before discovery is not told that nothing authenticates.
 func (a *Authenticator) Enabled() bool {
 	return len(a.tokens) > 0 || len(a.readTokens) > 0 || len(a.ingestTokens) > 0 ||
-		len(a.scoped) > 0 || len(a.scopedRead) > 0 || len(a.scopedIngest) > 0 || a.oidc != nil
+		len(a.scoped) > 0 || len(a.scopedRead) > 0 || len(a.scopedIngest) > 0 ||
+		a.oidc != nil || a.oidcDeclared
 }
 
 // matchAny reports, in constant time per candidate, whether token equals any of

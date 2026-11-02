@@ -437,3 +437,48 @@ func TestUnauthenticatedWritesDefaultsOnAndProductionForcesItOff(t *testing.T) {
 		t.Error("the production lockdown must win over an explicit re-enable")
 	}
 }
+
+// TestProductionLockdownNamesWhatItOverrode covers the silence a recette asked
+// about. The lockdown winning is deliberate; winning without a word is what let
+// a deployment carry debug_ui: true for weeks while its operator believed the
+// interface was served. Resolution now reports what it took away, so the
+// startup line can name it.
+func TestProductionLockdownNamesWhatItOverrode(t *testing.T) {
+	cfg, err := Load([]string{"--production"}, env(nil))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	// The dev defaults have all four on, so all four are overridden.
+	want := map[string]bool{
+		"graphql_introspection": true, "playground": true,
+		"debug_ui": true, "allow_unauthenticated_writes": true,
+	}
+	if len(cfg.ProductionOverrides) != len(want) {
+		t.Fatalf("overrides = %v, want the %d default-on toggles", cfg.ProductionOverrides, len(want))
+	}
+	for _, name := range cfg.ProductionOverrides {
+		if !want[name] {
+			t.Errorf("unexpected override %q", name)
+		}
+	}
+
+	// Nothing to say when the toggles were already off: the list reports what
+	// was taken away, not what the profile would have taken.
+	cfg, err = Load([]string{"--production", "--playground=false", "--debug-ui=false",
+		"--graphql-introspection=false", "--allow-unauthenticated-writes=false"}, env(nil))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.ProductionOverrides) != 0 {
+		t.Errorf("nothing was on, yet overrides = %v", cfg.ProductionOverrides)
+	}
+
+	// And without the profile there is nothing to override.
+	cfg, err = Load(nil, env(nil))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.ProductionOverrides) != 0 {
+		t.Errorf("no production profile, yet overrides = %v", cfg.ProductionOverrides)
+	}
+}

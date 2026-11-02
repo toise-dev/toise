@@ -138,6 +138,17 @@ type Config struct {
 	// scope.
 	AllowUnauthenticatedWrites bool `yaml:"allow_unauthenticated_writes"`
 
+	// ProductionOverrides names the toggles the production lockdown turned off
+	// that were on in the resolved layers beneath it. Not configuration: it is
+	// resolution output, so an operator can be told that a line they wrote was
+	// overridden instead of inferring it from behavior.
+	//
+	// The silence was real and it cost a reading: a deployment carried
+	// debug_ui: true for weeks under production, and its operator believed the
+	// interface was being served, because nothing ever said the lockdown had
+	// taken the value away.
+	ProductionOverrides []string `yaml:"-"`
+
 	// TenantAutoCreate allows a first write to a new tenant id to create its
 	// isolated stack (the open multi-tenant posture). Off, only pre-existing
 	// tenants and the default are served. TenantAllowlist, when non-empty,
@@ -890,10 +901,20 @@ func resolve(args []string, getenv func(string) string) (Config, error) {
 	// "be safe" can never be silently re-opened. For fine-grained control, set the
 	// toggles without --production.
 	if cfg.Production {
-		cfg.GraphQLIntrospection = false
-		cfg.Playground = false
-		cfg.DebugUI = false
-		cfg.AllowUnauthenticatedWrites = false
+		for _, t := range []struct {
+			name string
+			on   *bool
+		}{
+			{"graphql_introspection", &cfg.GraphQLIntrospection},
+			{"playground", &cfg.Playground},
+			{"debug_ui", &cfg.DebugUI},
+			{"allow_unauthenticated_writes", &cfg.AllowUnauthenticatedWrites},
+		} {
+			if *t.on {
+				cfg.ProductionOverrides = append(cfg.ProductionOverrides, t.name)
+				*t.on = false
+			}
+		}
 	}
 	return cfg, nil
 }
