@@ -16,6 +16,7 @@ type recorder struct {
 	mu       sync.Mutex
 	discards []string
 	promises []string
+	aliases  []string
 }
 
 func (r *recorder) dropped(relationType, fromType, toType string) {
@@ -30,10 +31,16 @@ func (r *recorder) refused(producer, entityType string, _ time.Duration) {
 	r.promises = append(r.promises, producer+" "+entityType)
 }
 
-func (r *recorder) counts() (int, int) {
+func (r *recorder) conflicted(attributeKey, aliasValue string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return len(r.discards), len(r.promises)
+	r.aliases = append(r.aliases, attributeKey+"="+aliasValue)
+}
+
+func (r *recorder) counts() (int, int, int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.discards), len(r.promises), len(r.aliases)
 }
 
 // TestReportersReachTenantsOpenedAtBoot is the regression test for #525: the
@@ -67,6 +74,7 @@ func TestReportersReachTenantsOpenedAtBoot(t *testing.T) {
 	rec := &recorder{}
 	reg.SetDiscardReporter(rec.dropped)
 	reg.SetPromiseReporter(rec.refused)
+	reg.SetIdentityAliasConflictReporter(rec.conflicted)
 
 	boot, err := reg.For("acme")
 	if err != nil {
@@ -80,6 +88,7 @@ func TestReportersReachTenantsOpenedAtBoot(t *testing.T) {
 	for _, st := range []*Stack{boot, later} {
 		parkDoomedRelation(t, st.Engine, now)
 		refuseImplausiblePromise(t, st.Engine, now)
+		provokeAliasConflict(t, st.Engine, now)
 	}
 
 	// Past the reconciliation TTL the parked edges are given up on, which is the
@@ -91,12 +100,15 @@ func TestReportersReachTenantsOpenedAtBoot(t *testing.T) {
 		}
 	}
 
-	discards, promises := rec.counts()
+	discards, promises, aliases := rec.counts()
 	if discards != 2 {
 		t.Errorf("discards reported = %d, want 2 (one per tenant); %v", discards, rec.discards)
 	}
 	if promises != 2 {
 		t.Errorf("refused promises reported = %d, want 2 (one per tenant); %v", promises, rec.promises)
+	}
+	if aliases != 2 {
+		t.Errorf("alias conflicts reported = %d, want 2 (one per tenant); %v", aliases, rec.aliases)
 	}
 }
 
@@ -126,5 +138,30 @@ func refuseImplausiblePromise(t *testing.T, eng *change.Engine, at time.Time) {
 		EventTime: at,
 	}); err != nil {
 		t.Fatalf("observe host with an implausible interval: %v", err)
+	}
+}
+
+// provokeAliasConflict has two devices each declare that one alias value is
+// theirs. Neither claim can be chosen, which is the right answer and a silent
+// one: every edge that resolved through that value stops resolving, and a reader
+// sees an adjacency that never came back. The refusal has to be reported.
+func provokeAliasConflict(t *testing.T, eng *change.Engine, at time.Time) {
+	t.Helper()
+	deviceID := func(v string) []model.KeyValue {
+		return []model.KeyValue{{Key: "network.device.id", Value: model.StringValue(v)}}
+	}
+	for _, from := range []string{"serial:9:AAA", "serial:9:BBB"} {
+		if _, _, err := eng.ObserveRelation(change.RelationObservation{
+			Type: model.RelSameAs,
+			From: change.EndpointRef{Type: model.TypeNetworkDevice, Identity: deviceID(from)},
+			To:   change.EndpointRef{Type: model.TypeNetworkDevice, Identity: deviceID("mac:30-3F-BB-DA-80-ED")},
+			Attributes: []model.KeyValue{
+				{Key: "confidence", Value: model.DoubleValue(1)},
+				{Key: "basis", Value: model.StringValue("lldp_chassis")},
+			},
+			EventTime: at,
+		}); err != nil {
+			t.Fatalf("observe competing alias from %s: %v", from, err)
+		}
 	}
 }

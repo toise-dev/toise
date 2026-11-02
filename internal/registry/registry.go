@@ -92,8 +92,11 @@ type Registry struct {
 	// discardReporter is called when a tenant engine gives up on an edge whose
 	// endpoint never arrived. Set once via SetDiscardReporter before serving.
 	discardReporter func(relationType, fromType, toType string)
-	limits          Limits
-	logger          *slog.Logger
+	// aliasConflictReporter is called when two speakers claim one alias value
+	// for different canonical values, so neither resolves.
+	aliasConflictReporter func(attributeKey, aliasValue string)
+	limits                Limits
+	logger                *slog.Logger
 	// now is the clock each tenant engine uses (liveness floor at boot, Sweep).
 	// time.Now in production; injectable so tests drive deadlines deterministically
 	// instead of racing the wall clock.
@@ -150,6 +153,19 @@ func (r *Registry) SetDiscardReporter(fn func(relationType, fromType, toType str
 	r.discardReporter = fn
 	for _, st := range r.stacks {
 		st.Engine.SetDiscardReporter(fn)
+	}
+}
+
+// SetIdentityAliasConflictReporter wires the conflict reporter into every open
+// stack and every stack opened later. Without it the refusal is correct and
+// silent: a reader sees an adjacency that never came back and has nothing to
+// consult.
+func (r *Registry) SetIdentityAliasConflictReporter(fn func(attributeKey, aliasValue string)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.aliasConflictReporter = fn
+	for _, st := range r.stacks {
+		st.Engine.SetIdentityAliasConflictReporter(fn)
 	}
 }
 
@@ -474,7 +490,8 @@ func (r *Registry) openStack(id string) (*Stack, error) {
 		change.WithLogger(r.logger.With("tenant", id)),
 		change.WithRelationBuffer(r.relBuf),
 		change.WithPromiseReporter(r.promiseReporter),
-		change.WithDiscardReporter(r.discardReporter))
+		change.WithDiscardReporter(r.discardReporter),
+		change.WithIdentityAliasConflictReporter(r.aliasConflictReporter))
 	// Restore the liveness Memento (#139): absolute deadlines, so a producer
 	// that died during the downtime is swept on the first tick after boot.
 	if err := engine.RestoreLiveness(liveness); err != nil {

@@ -184,6 +184,12 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	discards := metrics.NewDiscards()
 	reg.SetDiscardReporter(discards.Dropped)
 
+	// The refusal of two competing aliases is correct and invisible: neither is
+	// chosen, so every edge that resolved through that value stops resolving,
+	// and the reader sees an adjacency that never came back.
+	aliasConflicts := metrics.NewAliasConflicts()
+	reg.SetIdentityAliasConflictReporter(aliasConflicts.Refused)
+
 	// Final snapshot at graceful shutdown, declared right after the close so it
 	// runs just before it (after the maintenance loops have joined and ingest
 	// has stopped): producer references acquired since the last periodic
@@ -439,6 +445,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	metricsExtra = append(metricsExtra, exposure.Collectors()...)
 	metricsExtra = append(metricsExtra, promises.Collectors()...)
 	metricsExtra = append(metricsExtra, discards.Collectors()...)
+	metricsExtra = append(metricsExtra, aliasConflicts.Collectors()...)
 	metricsExtra = append(metricsExtra, queryMetrics.Collectors()...)
 	// Annotation counts per tenant, so a replica-local overlay is at least
 	// measurable (#365): log shipping replicates the log, not the sidecar, so a
