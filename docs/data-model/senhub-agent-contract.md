@@ -573,18 +573,44 @@ interface carries:
 | `network.interface.subnets` | string[] | `["10.10.0.0/24"]` | the subnets those addresses sit in, deduplicated — **provisional**, see below |
 
 - **`interface.type` has a precedence, because its four values are not exclusive.** A
-  loopback is also a virtual device; a wireless card is also physical. Without a stated
-  order, two producers looking at the same interface both classify it correctly and
-  disagree, and the disagreement is invisible: each value is in the vocabulary.
-  **The most specific value wins** — `loopback` before `virtual`, `wireless` before
-  `physical`. Both reference probes already classify in that order, so this records what
-  they do rather than changing it; writing it down is what makes it answerable for a
-  third producer, and for any value added later (`tunnel`, `bridge`, an aggregate) which
-  will be more specific than `virtual` in the same way.
+  loopback is also a virtual device; a wireless card is also physical hardware. Without
+  a stated order, two producers looking at the same interface both classify it correctly
+  and disagree, and the disagreement is invisible: each value is in the vocabulary and
+  nothing is violated.
 
-  **Classify on the flag, never on the name.** A loopback is identified by its loopback
-  flag (`IFF_LOOPBACK`, or `ifType` 24 over SNMP), not by being called `lo` — a Windows
-  host calls it "Loopback Pseudo-Interface 1", and a name test fails there in silence.
+  **The order is total, most specific first: `loopback`, then `wireless`, then `virtual`,
+  then `physical`.** A partial order is not enough. Ranking only `loopback` above
+  `virtual` and `wireless` above `physical` leaves `wireless` and `virtual` unordered,
+  so a virtual radio interface — a software access point, Wi-Fi presented to a virtual
+  machine, a VLAN over a radio — stays classifiable both ways, which is the same
+  invisible disagreement one level down.
+
+  **A value added later declares its rank in the same change that adds it.** Where it
+  sits is a decision, not a deduction: a bridge or a link aggregate may be realized in
+  hardware or in software, so neither inherits a rank from being "more specific than
+  `virtual`".
+
+  **The precedence says which single value to report, never which facts are false.** An
+  interface reported `wireless` is still physical hardware; one reported `loopback` is
+  still a virtual device. A consumer must not read `wireless` as "not physical" — the
+  attribute holds one value because it is single-valued, not because the others were
+  ruled out. A reader who needs "is this real hardware" cannot get it from this key.
+
+  **Classify on what the source exposes, never on the interface name.** A loopback is its
+  loopback flag (`IFF_LOOPBACK`, or `ifType` 24 over SNMP), not an interface called `lo`
+  — a Windows host calls it "Loopback Pseudo-Interface 1", and a name test fails there
+  without a word. The other three have no equivalent single flag: a radio and a virtual
+  device are each recognized by their own facts the kernel exposes (on Linux, `wireless/`
+  or `phy80211` present under the interface, and the interface present under
+  `/sys/devices/virtual/net`). Those are what to test; the name is never one of them.
+
+  **A poller reading `ifType` has a mapping, not a precedence to apply.** `ifType`
+  answers once per interface and IF-MIB distinguishes the cases — `l2vlan`, `l3ipvlan`,
+  `tunnel`, `propVirtual` and `ieee8023adLag` are their own values, not `ethernetCsmacd`
+  — so a single lookup already yields one answer and no two facts compete. The order
+  above is for a producer that observes several facts about one interface separately,
+  which is the host case: the reference host probe tests for a radio before it tests for
+  a virtual device, and that is the behavior the order records.
 
 - **Addresses and subnets are arrays, and their value form is upstream's.** Both are
   `string[]`, one element per address — **never** a joined string. A comma appears in
