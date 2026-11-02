@@ -482,11 +482,12 @@ func TestAliasReplayDoesNotRefreshTheSpeakersDeadline(t *testing.T) {
 	if _, _, err := e.ObserveRelation(aliasConnectedTo("serial:S", "eth9", "mac:Y", "eth0")); err != nil {
 		t.Fatalf("connected_to: %v", err)
 	}
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 6; i++ {
 		clock.advance(5 * time.Minute)
 		aliasObserveSpeaker(t, e)
 	}
-	// Twenty minutes of silence from agent-a, against a ten-minute promise.
+	// Thirty minutes of silence from agent-a, against a ten-minute promise held
+	// for twice that: past the slack, so a lapse here is a real retraction.
 	if _, err := e.Sweep(); err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
@@ -498,5 +499,43 @@ func TestAliasReplayDoesNotRefreshTheSpeakersDeadline(t *testing.T) {
 	}
 	if n := len(aliasRelations(g, model.RelConnectedTo)); n != 0 {
 		t.Fatalf("connected_to = %d, want 0: an equivalence its speaker stopped asserting still resolved an edge", n)
+	}
+}
+
+// The equivalence rides on its source entity's state, so it carries that
+// entity's re-emission cycle and nothing of its own. A deadline of exactly one
+// cycle lands where the next re-emission is due, so one late cycle expires the
+// claim and every edge it resolved stops resolving — on the cadence this park
+// declares, half an hour of a live link reading as no link at all.
+func TestAliasSurvivesOneLateReemission(t *testing.T) {
+	const cycle = 30 * time.Minute
+	clock := &aliasClock{t: fixedNow()}
+	e, g, _ := aliasTestEngine(t, WithClock(clock.now), WithRelationBuffer(30*time.Second))
+	aliasObserveSpeaker(t, e)
+	// The entities are declared with the slack the contract asks a producer for,
+	// so only the equivalence's own lifetime is under test here.
+	if _, err := e.ObserveEntity(EntityObservation{Type: model.TypeNetworkDevice, Identity: aliasDeviceIdentity("serial:A"), Interval: 4 * cycle}); err != nil {
+		t.Fatalf("device: %v", err)
+	}
+	if _, err := e.ObserveEntity(EntityObservation{Type: model.TypeNetworkInterface, Identity: aliasInterfaceIdentity("serial:A", "eth0"), Interval: 4 * cycle}); err != nil {
+		t.Fatalf("interface: %v", err)
+	}
+	alias := aliasSameAs("serial:A", "mac:Y", aliasConfidence())
+	alias.Producer = "agent-a"
+	alias.SourceInterval = cycle
+	if _, _, err := e.ObserveRelation(alias); err != nil {
+		t.Fatalf("same_as: %v", err)
+	}
+
+	// One second past the cycle: the re-emission is late, not absent.
+	clock.advance(cycle + time.Second)
+	if _, err := e.Sweep(); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if _, _, err := e.ObserveRelation(aliasConnectedTo("serial:S", "eth9", "mac:Y", "eth0")); err != nil {
+		t.Fatalf("connected_to: %v", err)
+	}
+	if n := len(aliasRelations(g, model.RelConnectedTo)); n != 1 {
+		t.Fatalf("connected_to = %d, want 1: one late re-emission expired the equivalence", n)
 	}
 }

@@ -177,12 +177,24 @@ func identityValueMap(identity []model.KeyValue) map[string]model.Value {
 // own interval, else the source's re-emit cadence, else zero — and a zero
 // deadline never expires, the convention for an assertion with no refresh
 // promise.
+// aliasSlackFactor holds a speaker's equivalence for longer than its own
+// re-emission cycle. Without it the deadline lands exactly where the next
+// re-emission is due, so one late cycle expires the claim, every edge it
+// resolved stops resolving, and the adjacency disappears until the cycle after
+// that — on a 30-minute cadence, half an hour of a link that is up reading as a
+// link that is not there. This is the reconciliation buffer's own reasoning
+// (toise-dev/toise#269), applied to the belief rather than to the parked edge:
+// a window shorter than the producer's cycle makes the loss systematic rather
+// than occasional. Two, so one missed re-emission is survived and a producer
+// that has genuinely stopped is still forgotten within a bounded time.
+const aliasSlackFactor = 2
+
 func aliasDeadline(now time.Time, obs RelationObservation) time.Time {
 	switch {
 	case obs.Interval > 0:
-		return now.Add(obs.Interval)
+		return now.Add(obs.Interval * aliasSlackFactor)
 	case obs.SourceInterval > 0:
-		return now.Add(obs.SourceInterval)
+		return now.Add(obs.SourceInterval * aliasSlackFactor)
 	default:
 		return time.Time{}
 	}
