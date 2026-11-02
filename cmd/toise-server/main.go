@@ -28,6 +28,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -232,6 +233,13 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		WithScopedRoleTokens(scopedRead, scopedIngest) // per-tenant RBAC (ADR 0028)
 	authn.SetTenantTrustMode(cfg.DeriveOnlyTenancy()) // ADR 0028 anti-spoofing; off by default
 	authn.SetIngestMTLSOnly(cfg.IngestMTLSOnly)       // #262: ingest gated by mTLS, reads by scoped token
+	if len(cfg.ProductionOverrides) > 0 {
+		// Say it once, naming the settings: the lockdown wins on purpose, but an
+		// operator who wrote one of these lines has to learn it was overridden
+		// from us rather than from a behavior they did not expect.
+		logger.Warn("the production profile overrode settings that were on: they cannot be re-enabled while production is set, so drop it and set the individual toggles if that is really wanted",
+			"overridden", strings.Join(cfg.ProductionOverrides, ","))
+	}
 	authn.SetUnauthenticatedWrites(cfg.AllowUnauthenticatedWrites)
 	// Declared here, before the discovery below builds the verifier: the stdio
 	// server is wired in between and has to know a credential is expected.
