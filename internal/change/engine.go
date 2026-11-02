@@ -476,6 +476,16 @@ func (e *Engine) SetDiscardReporter(fn func(relationType, fromType, toType strin
 	e.discardReporter = fn
 }
 
+// SetIdentityAliasConflictReporter installs the conflict reporter on an
+// already-built engine, for the same reason the discard one has a setter: a
+// stack opened before the reporter exists would otherwise never report, and on
+// a production instance every tenant exists at boot.
+func (e *Engine) SetIdentityAliasConflictReporter(fn func(attributeKey, aliasValue string)) {
+	e.obsMu.Lock()
+	defer e.obsMu.Unlock()
+	e.aliasConflictReporter = fn
+}
+
 // SetPromiseReporter installs the promise reporter on an already-built engine,
 // for the reason given on SetDiscardReporter and under the same lock.
 func (e *Engine) SetPromiseReporter(fn func(producer, entityType string, declared time.Duration)) {
@@ -1287,10 +1297,11 @@ func (e *Engine) Sweep() (SweepResult, error) {
 		kept := e.pending[:0]
 		for i := range e.pending {
 			if now.After(e.pending[i].deadline) {
-				obs := e.pending[i].obs
-				e.reportDiscard(obs)
-				e.logger.Warn("dropping relation: endpoints did not arrive within the reconciliation TTL",
-					"relation_type", obs.Type, "from_type", obs.From.Type, "to_type", obs.To.Type)
+				// Through dropPendingRelation, like the flush path: an alias
+				// declaration whose belief was retained is not a lost edge, and
+				// counting it here would have made the discard counter read high
+				// for exactly the quiet instances this branch exists to serve.
+				e.dropPendingRelation(e.pending[i].obs)
 				continue
 			}
 			kept = append(kept, e.pending[i])
