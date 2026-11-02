@@ -206,22 +206,6 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		}()
 	}
 
-	if cfg.MCPStdio {
-		// stdio carries no per-request tenant metadata, so it serves the default
-		// tenant only (ADR 0025).
-		st, ferr := reg.For(tenant.Default)
-		if ferr != nil {
-			return fmt.Errorf("opening default tenant: %w", ferr)
-		}
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		defer stop()
-		logger.Info("serving MCP over stdio", "data_dir", cfg.DataDir, "tenant", tenant.Default)
-		if serveErr := mcp.New(st.Graph, st.Store).SetTenant(st.Tenant).SetCadence(st.Engine).SetAnnotations(st.Annotations).SetIdentityThreshold(cfg.IdentityThreshold).ServeStdio(ctx); serveErr != nil && !errors.Is(serveErr, context.Canceled) {
-			return fmt.Errorf("mcp stdio: %w", serveErr)
-		}
-		return nil
-	}
-
 	engineFor := func(t string) (*change.Engine, error) {
 		st, ferr := reg.For(t)
 		if ferr != nil {
@@ -248,6 +232,37 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		WithScopedRoleTokens(scopedRead, scopedIngest) // per-tenant RBAC (ADR 0028)
 	authn.SetTenantTrustMode(cfg.DeriveOnlyTenancy()) // ADR 0028 anti-spoofing; off by default
 	authn.SetIngestMTLSOnly(cfg.IngestMTLSOnly)       // #262: ingest gated by mTLS, reads by scoped token
+	authn.SetUnauthenticatedWrites(cfg.AllowUnauthenticatedWrites)
+
+	if cfg.MCPStdio {
+		// stdio carries no per-request tenant metadata, so it serves the default
+		// tenant only (ADR 0025).
+		st, ferr := reg.For(tenant.Default)
+		if ferr != nil {
+			return fmt.Errorf("opening default tenant: %w", ferr)
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		// stdio runs no HTTP middleware, so nothing would record a write decision
+		// and CanWrite would refuse every annotation. A stdio caller can present no
+		// credential at all, so it writes only where unauthenticated writes are
+		// allowed AND nothing authenticates: once an operator configures tokens or
+		// OIDC they have asked for writes to carry a credential, and a transport
+		// that cannot carry one must not become the way around that.
+		//
+		// This is why the stdio server is wired here and not before the
+		// authenticator: the decision is asked of the authenticator itself, so
+		// this transport and the HTTP middleware cannot drift apart.
+		stdioWrites := authn.UnauthenticatedWritesAllowed()
+		ctx = auth.WithWritable(ctx, stdioWrites)
+		logger.Info("serving MCP over stdio", "data_dir", cfg.DataDir, "tenant", tenant.Default,
+			"writes", stdioWrites)
+		if serveErr := mcp.New(st.Graph, st.Store).SetTenant(st.Tenant).SetCadence(st.Engine).SetAnnotations(st.Annotations).SetIdentityThreshold(cfg.IdentityThreshold).ServeStdio(ctx); serveErr != nil && !errors.Is(serveErr, context.Canceled) {
+			return fmt.Errorf("mcp stdio: %w", serveErr)
+		}
+		return nil
+	}
+
 	if cfg.OIDCEnabled() {
 		// OIDC/JWT verification on the read surfaces (ADR 0028). Discovery hits the
 		// issuer once at startup; off unless an issuer is configured.
@@ -764,6 +779,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		"tenants", len(reg.Stacks()),
 		"tls", cfg.TLSEnabled(),
 		"auth", authn.Enabled(),
+		"unauthenticated_writes", cfg.AllowUnauthenticatedWrites && !authn.Enabled(),
 		"production", cfg.Production)
 
 	go func() {
@@ -1152,6 +1168,15 @@ func insecureConditions(cfg config.Config, authEnabled bool) []metrics.Condition
 			}
 		}
 	}
+	// An unauthenticated write is an exposure in its own right, and it is not
+	// covered by the no_auth condition above: that one fires on a listener with
+	// no credential path at all, while this fires whenever an anonymous caller
+	// may MUTATE the graph — including on an instance whose reads are
+	// authenticated. A WARN at boot would not do: this is the shape that sat
+	// unnoticed in production for four releases.
+	if cfg.AllowUnauthenticatedWrites && !authEnabled && cfg.Listen != "" && !loopbackAddr(cfg.Listen) {
+		out = append(out, metrics.Condition{Surface: "write", Addr: cfg.Listen, Reason: "unauthenticated_writes"})
+	}
 	if cleartextShipping(cfg) {
 		reason := "cleartext"
 		if publicIPEndpoint(cfg.LogShipS3Endpoint) {
@@ -1171,6 +1196,7 @@ func insecureConditions(cfg config.Config, authEnabled bool) []metrics.Condition
 func configDeclarations(cfg config.Config) []metrics.Declaration {
 	return []metrics.Declaration{
 		{Name: "tls_terminated_upstream", On: cfg.TLSTerminatedUpstream},
+		{Name: "allow_unauthenticated_writes", On: cfg.AllowUnauthenticatedWrites},
 	}
 }
 

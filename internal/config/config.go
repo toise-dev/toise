@@ -126,6 +126,18 @@ type Config struct {
 	// first-class identities with no merge ambiguity. Off by default. (#141)
 	AcceptUnknownTypes bool `yaml:"accept_unknown_types"`
 
+	// AllowUnauthenticatedWrites decides whether a caller may write (annotate an
+	// entity) when no authentication is configured. True by default, so a
+	// zero-config instance on a trusted network keeps the one write its operator
+	// has: the alternative is removing it silently on upgrade.
+	//
+	// The production profile forces it OFF, and wins over an explicit value like
+	// every other lockdown toggle: under production this cannot be turned back
+	// on at all — drop production and set the individual toggles instead. A
+	// hardened instance must refuse a write from a caller carrying no write
+	// scope.
+	AllowUnauthenticatedWrites bool `yaml:"allow_unauthenticated_writes"`
+
 	// TenantAutoCreate allows a first write to a new tenant id to create its
 	// isolated stack (the open multi-tenant posture). Off, only pre-existing
 	// tenants and the default are served. TenantAllowlist, when non-empty,
@@ -468,25 +480,26 @@ func (c Config) OIDCEnabled() bool { return c.OIDCIssuer != "" }
 // mirror the historical flag defaults: loopback listeners, no retention cap.
 func Default() Config {
 	return Config{
-		Listen:                "127.0.0.1:8080",
-		OTLPListen:            "127.0.0.1:4317",
-		DataDir:               "toise-data",
-		MCPStdio:              false,
-		RelationBufferTTL:     Duration(30 * time.Second),
-		LivenessSweepInterval: Duration(30 * time.Second),
-		RetentionMaxAge:       0,
-		CompactionInterval:    Duration(time.Hour),
-		SnapshotInterval:      Duration(5 * time.Minute),
-		LogFormat:             "text",
-		LogLevel:              "info",
-		TenantTrustMode:       "trust-header",
-		Production:            false,
-		GraphQLIntrospection:  true,
-		Playground:            true,
-		DebugUI:               true,
-		TenantAutoCreate:      true,
-		IdentityThreshold:     0.9,
-		LogShipS3UseSSL:       true,
+		Listen:                     "127.0.0.1:8080",
+		OTLPListen:                 "127.0.0.1:4317",
+		DataDir:                    "toise-data",
+		MCPStdio:                   false,
+		RelationBufferTTL:          Duration(30 * time.Second),
+		LivenessSweepInterval:      Duration(30 * time.Second),
+		RetentionMaxAge:            0,
+		CompactionInterval:         Duration(time.Hour),
+		SnapshotInterval:           Duration(5 * time.Minute),
+		LogFormat:                  "text",
+		LogLevel:                   "info",
+		TenantTrustMode:            "trust-header",
+		Production:                 false,
+		GraphQLIntrospection:       true,
+		Playground:                 true,
+		DebugUI:                    true,
+		TenantAutoCreate:           true,
+		AllowUnauthenticatedWrites: true,
+		IdentityThreshold:          0.9,
+		LogShipS3UseSSL:            true,
 	}
 }
 
@@ -627,6 +640,7 @@ func (c *Config) applyEnv(getenv func(string) string) error {
 		{"TOISE_PLAYGROUND", &c.Playground},
 		{"TOISE_DEBUG_UI", &c.DebugUI},
 		{"TOISE_INGEST_MTLS_ONLY", &c.IngestMTLSOnly},
+		{"TOISE_ALLOW_UNAUTHENTICATED_WRITES", &c.AllowUnauthenticatedWrites},
 		{"TOISE_TLS_TERMINATED_UPSTREAM", &c.TLSTerminatedUpstream},
 	} {
 		if v := getenv(e.key); v != "" {
@@ -804,6 +818,8 @@ func resolve(args []string, getenv func(string) string) (Config, error) {
 	allowedOrigins := fs.String("allowed-origins", strings.Join(cfg.AllowedOrigins, ","),
 		"comma-separated browser Origin allowlist for WebSocket/CORS (empty = same-origin only)")
 	acceptUnknownTypes := fs.Bool("accept-unknown-types", cfg.AcceptUnknownTypes, "accept entity/relation types outside the built-in registry (shape still validated)")
+	allowUnauthWrites := fs.Bool("allow-unauthenticated-writes", cfg.AllowUnauthenticatedWrites,
+		"let an unauthenticated caller write (annotate); forced off under --production")
 	tenantAutoCreate := fs.Bool("tenant-auto-create", cfg.TenantAutoCreate, "allow a first write to a new tenant id to create its stack")
 	tenantAllowlist := fs.String("tenant-allowlist", strings.Join(cfg.TenantAllowlist, ","), "comma-separated tenant ids allowed to be created (empty: any)")
 	tenantNames := fs.String("tenant-names", strings.Join(cfg.TenantNames, ","), "comma-separated tenant:name pairs, a human label beside the id (presentational only; never a tenant selector)")
@@ -846,6 +862,7 @@ func resolve(args []string, getenv func(string) string) (Config, error) {
 	cfg.DebugUI = *debugUI
 	cfg.AllowedOrigins = splitOrigins(*allowedOrigins)
 	cfg.AcceptUnknownTypes = *acceptUnknownTypes
+	cfg.AllowUnauthenticatedWrites = *allowUnauthWrites
 	cfg.TenantAutoCreate = *tenantAutoCreate
 	cfg.TenantAllowlist = splitOrigins(*tenantAllowlist)
 	cfg.TenantNames = splitOrigins(*tenantNames)
@@ -876,6 +893,7 @@ func resolve(args []string, getenv func(string) string) (Config, error) {
 		cfg.GraphQLIntrospection = false
 		cfg.Playground = false
 		cfg.DebugUI = false
+		cfg.AllowUnauthenticatedWrites = false
 	}
 	return cfg, nil
 }

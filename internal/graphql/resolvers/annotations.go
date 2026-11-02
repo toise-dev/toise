@@ -32,7 +32,7 @@ func (r *mutationResolver) AnnotateEntity(ctx context.Context, id string, in []g
 		return nil, fmt.Errorf("annotations are not enabled on this server")
 	}
 	if !auth.CanWrite(ctx) {
-		return nil, fmt.Errorf("a read-only token cannot annotate; use a full-role token")
+		return nil, fmt.Errorf("this caller may not annotate: a write needs a write-capable credential (a full or tenant-scoped token), and where none can be presented it needs allow_unauthenticated_writes, which the production profile forces off and no credential can override")
 	}
 	if len(in) == 0 {
 		return nil, fmt.Errorf("at least one annotation is required (an empty value removes a key)")

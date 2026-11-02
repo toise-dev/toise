@@ -409,3 +409,31 @@ func TestTenantNamesMap(t *testing.T) {
 		t.Error("a name resolved as if it were a tenant id")
 	}
 }
+
+// TestUnauthenticatedWritesDefaultsOnAndProductionForcesItOff covers both halves
+// of the choice this knob encodes. On by default: a zero-config instance on a
+// trusted network keeps the one write its operator has, instead of losing it
+// silently at an upgrade. Forced off by the hardening profile, and the profile
+// wins over an explicit re-enable, like every other lockdown toggle — a hardened
+// instance must refuse a write from a caller carrying no write scope.
+func TestUnauthenticatedWritesDefaultsOnAndProductionForcesItOff(t *testing.T) {
+	if !Default().AllowUnauthenticatedWrites {
+		t.Error("the default must keep the trusted-network write, or an upgrade removes it in silence")
+	}
+
+	cfg, err := Load(nil, env(nil))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.AllowUnauthenticatedWrites {
+		t.Error("with no flag and no production profile, the write stays allowed")
+	}
+
+	cfg, err = Load([]string{"--production", "--allow-unauthenticated-writes=true"}, env(nil))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.AllowUnauthenticatedWrites {
+		t.Error("the production lockdown must win over an explicit re-enable")
+	}
+}
