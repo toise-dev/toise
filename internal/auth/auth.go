@@ -49,13 +49,21 @@ type OIDCVerifier interface {
 	Verify(ctx context.Context, rawToken string) (tenant, role string, ok bool)
 }
 
+// WithWritable records the write decision for ctx. A transport without an HTTP
+// middleware (the MCP server on stdio, wired locally) must record a decision
+// itself; without it CanWrite refuses every write on that transport.
+func WithWritable(ctx context.Context, writable bool) context.Context {
+	return context.WithValue(ctx, writableKey, writable)
+}
+
 // CanWrite reports whether the caller in ctx may perform a write (e.g. annotate
 // an entity). Writes require a full or tenant-scoped token; a read-only token
-// cannot. It defaults to true when no decision was recorded — with auth disabled
-// (trusted network) every caller may write.
+// cannot. It fails closed: writing requires an explicit recorded decision, and
+// a context with no decision refuses — the middleware (or the transport wiring)
+// is what records it.
 func CanWrite(ctx context.Context) bool {
 	v, ok := ctx.Value(writableKey).(bool)
-	return !ok || v
+	return ok && v
 }
 
 // surface is the data surface a token is being checked against.
@@ -97,6 +105,11 @@ type Authenticator struct {
 	// tenant, so the per-tenant authorization is skipped for them. See
 	// SetTenantExemptPaths.
 	tenantExempt map[string]bool
+	// unauthenticatedWrites decides whether a NON-AUTHENTICATED caller may
+	// write — what the middleware records when authentication is off. False by
+	// default (the zero value), the safe default for a struct whose zero value
+	// must be the safest.
+	unauthenticatedWrites bool
 }
 
 // SetTenantExemptPaths names HTTP paths that require a valid read token but do
@@ -126,6 +139,29 @@ func (a *Authenticator) SetTenantTrustMode(deriveOnly bool) { a.deriveOnly = der
 // path does not require a bearer, while GraphQL/MCP still require their scoped
 // tokens. Returns a for chaining; set before serving.
 func (a *Authenticator) SetIngestMTLSOnly(v bool) *Authenticator { a.ingestMTLSOnly = v; return a }
+
+// SetUnauthenticatedWrites sets whether a caller may write when authentication
+// is off (no tokens configured) — the decision the middleware records in that
+// case. Returns a for chaining; set before serving; it is not synchronized
+// against concurrent use, like the other setters.
+func (a *Authenticator) SetUnauthenticatedWrites(v bool) *Authenticator {
+	a.unauthenticatedWrites = v
+	return a
+}
+
+// UnauthenticatedWritesAllowed reports whether a caller carrying no credential
+// may write: the opt-in, and only while nothing authenticates. Once any token
+// or OIDC is configured the operator has asked for writes to carry a
+// credential, and the opt-in grants nothing.
+//
+// It is exported because a transport without the HTTP middleware has to take
+// the same decision — the stdio MCP server — and asking here keeps one source
+// for it. A predicate rebuilt over the configuration would be a second
+// enumeration to keep in step by hand, and the two drifting apart is the shape
+// of the hole this gate closes.
+func (a *Authenticator) UnauthenticatedWritesAllowed() bool {
+	return a.unauthenticatedWrites && !a.Enabled()
+}
 
 // TenantForBearer returns the single tenant a scoped bearer is bound to, and
 // true, when the token is a per-client tenant-scoped token. A global (operator)
@@ -452,7 +488,10 @@ func (a *Authenticator) AllowedForTenantGRPC(ctx context.Context, tenantID strin
 func (a *Authenticator) HTTPMiddleware(public map[string]bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		if !a.Enabled() {
-			return next
+			writable := a.UnauthenticatedWritesAllowed()
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				next.ServeHTTP(w, r.WithContext(WithWritable(r.Context(), writable)))
+			})
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if public[r.URL.Path] {
@@ -473,7 +512,7 @@ func (a *Authenticator) HTTPMiddleware(public map[string]bool) func(http.Handler
 				}
 				// Tag the request so write handlers (annotate) can reject a
 				// read-only token: full/scoped tokens may write, read-only cannot.
-				ctx := context.WithValue(r.Context(), writableKey, a.canWriteHeader(h))
+				ctx := WithWritable(r.Context(), a.canWriteHeader(h))
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
@@ -489,7 +528,7 @@ func (a *Authenticator) HTTPMiddleware(public map[string]bool) func(http.Handler
 						return
 					}
 					ctx := context.WithValue(r.Context(), resolvedTenantKey, tID)
-					ctx = context.WithValue(ctx, writableKey, role == "full")
+					ctx = WithWritable(ctx, role == "full")
 					next.ServeHTTP(w, r.WithContext(ctx))
 					return
 				}

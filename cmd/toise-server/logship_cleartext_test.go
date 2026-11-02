@@ -156,11 +156,33 @@ func TestExposureReportsZero(t *testing.T) {
 // declaration were on, its absence would mean both "not declared" and "not
 // scraped" — the very ambiguity the unlabeled total exists to remove.
 func TestDeclarationsArePublishedEitherWay(t *testing.T) {
+	// The invariant is per declaration, not a count: pinning the number made this
+	// test fail on the arrival of a second declaration that obeyed it perfectly,
+	// which is a test guarding its own shape instead of the property.
 	for _, on := range []bool{true, false} {
-		cfg := config.Config{Listen: "0.0.0.0:8080", TLSTerminatedUpstream: on}
+		cfg := config.Config{
+			Listen:                     "0.0.0.0:8080",
+			TLSTerminatedUpstream:      on,
+			AllowUnauthenticatedWrites: on,
+		}
 		ds := configDeclarations(cfg)
-		if len(ds) != 1 || ds[0].Name != "tls_terminated_upstream" || ds[0].On != on {
-			t.Fatalf("declarations with tls_terminated_upstream=%v = %+v", on, ds)
+		if len(ds) == 0 {
+			t.Fatal("no declaration is published at all")
+		}
+		seen := map[string]bool{}
+		for _, d := range ds {
+			if d.On != on {
+				t.Errorf("declaration %q = %v, want %v: every declaration must report the value it was set to", d.Name, d.On, on)
+			}
+			if seen[d.Name] {
+				t.Errorf("declaration %q is published twice", d.Name)
+			}
+			seen[d.Name] = true
+		}
+		for _, want := range []string{"tls_terminated_upstream", "allow_unauthenticated_writes"} {
+			if !seen[want] {
+				t.Errorf("declaration %q is not published", want)
+			}
 		}
 	}
 }

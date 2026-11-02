@@ -209,9 +209,9 @@ func TestTokenRoles(t *testing.T) {
 	}
 }
 
-// TestCanWrite pins the 0.7.0 write capability the middleware tags onto the
-// request context (annotate_entity gate): a full or tenant-scoped token may
-// write, a read-only token may not, and with auth disabled every caller may.
+// TestCanWrite pins the write capability the middleware tags onto the request
+// context (annotate_entity gate): a full or tenant-scoped token may write, a
+// read-only token may not, and a context with no decision refuses.
 func TestCanWrite(t *testing.T) {
 	probe := func(a *Authenticator, token, tenantID string) (writable, served bool) {
 		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -242,9 +242,11 @@ func TestCanWrite(t *testing.T) {
 		t.Errorf("read-only token: writable=%v served=%v, want NOT writable but served", w, served)
 	}
 
-	// Auth disabled: no decision recorded, so every caller may write.
-	if CanWrite(context.Background()) != true {
-		t.Error("absent decision must default to writable (auth disabled)")
+	// A context carrying no decision at all must refuse: CanWrite fails closed.
+	// The previous shape of this test asserted the opposite, which is how an
+	// instance with no token configured let any caller write for four releases.
+	if CanWrite(context.Background()) {
+		t.Error("an absent write decision must refuse, not default to writable")
 	}
 }
 

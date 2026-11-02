@@ -12,6 +12,7 @@ import (
 	"github.com/99designs/gqlgen/client"
 
 	"github.com/toise-dev/toise/internal/annotations"
+	"github.com/toise-dev/toise/internal/auth"
 	"github.com/toise-dev/toise/internal/change"
 	"github.com/toise-dev/toise/internal/graphql"
 	"github.com/toise-dev/toise/internal/graphql/generated"
@@ -63,6 +64,19 @@ func newStack(t *testing.T) *stack {
 
 func (s *stack) client(t *testing.T) *client.Client {
 	return client.New(graphql.NewHandler(s.res, graphql.Config{}))
+}
+
+// writableClient is the client for the one mutation this surface exposes. The
+// plain client runs no auth middleware, so nothing records a write decision and
+// the mutation is refused — writes fail closed. Recording it here is what the
+// middleware does in a real deployment, and making the test say so keeps the
+// gate visible instead of hiding it behind a permissive default.
+func (s *stack) writableClient(t *testing.T) *client.Client {
+	t.Helper()
+	h := graphql.NewHandler(s.res, graphql.Config{})
+	return client.New(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.ServeHTTP(w, r.WithContext(auth.WithWritable(r.Context(), true)))
+	}))
 }
 
 func TestIntrospectionToggle(t *testing.T) {
@@ -118,7 +132,7 @@ func TestAnnotateEntityMutation(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = annStore.Close() })
 	s.res.Annotations = annStore
-	c := s.client(t)
+	c := s.writableClient(t)
 
 	var mut struct {
 		AnnotateEntity struct {

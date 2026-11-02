@@ -36,7 +36,7 @@ func TestAnnotateEntity(t *testing.T) {
 	defer func() { _ = store.Close() }()
 	s.SetAnnotations(store)
 
-	ctx := context.Background() // auth disabled => writable
+	ctx := auth.WithWritable(context.Background(), true)
 
 	// Set then surface on get_entity.
 	_, out, err := s.annotateEntity(ctx, nil, AnnotateEntityInput{

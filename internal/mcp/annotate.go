@@ -44,7 +44,7 @@ func (s *Server) annotateEntity(ctx context.Context, _ *mcpsdk.CallToolRequest, 
 		return nil, AnnotateEntityOutput{}, fmt.Errorf("annotations are not enabled on this server")
 	}
 	if !auth.CanWrite(ctx) {
-		return nil, AnnotateEntityOutput{}, fmt.Errorf("a read-only token cannot annotate; use a full-role token")
+		return nil, AnnotateEntityOutput{}, fmt.Errorf("this caller may not annotate: a write needs a write-capable credential (a full or tenant-scoped token), and where none can be presented it needs allow_unauthenticated_writes, which the production profile forces off and no credential can override")
 	}
 	if in.EntityID == "" {
 		return nil, AnnotateEntityOutput{}, fmt.Errorf("an entity_id is required")
