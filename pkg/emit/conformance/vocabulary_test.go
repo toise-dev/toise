@@ -44,7 +44,11 @@ func TestFrozenVocabularyRefusesAValueOutsideAClosedSet(t *testing.T) {
 		// the table stops being complete.
 		{name: "open enum is advisory", key: "host.virtualization", value: "Hyper-V", wantProblem: true, wantAdvisory: true},
 		{name: "open enum member passes", key: "host.virtualization", value: "hyperv"},
-		{name: "unverified producer is advisory", key: "host.chassis.type", value: "tower", wantProblem: true, wantAdvisory: true},
+		// Closed in the contract and verified total in the producer, so refused
+		// rather than advised. "tower" is the SMBIOS word the mapping folds onto
+		// desktop, which is why it is the value a producer would get wrong.
+		{name: "closed and verified is refused", key: "host.chassis.type", value: "tower", wantProblem: true},
+		{name: "a mapped chassis value passes", key: "host.chassis.type", value: "blade"},
 		// A key the contract freezes no vocabulary for must not be judged.
 		{name: "unfrozen key is left alone", key: "mtu_note", value: "whatever"},
 	} {
@@ -182,9 +186,41 @@ var (
 	attributeKeyLike = regexp.MustCompile(`^[a-z][a-z0-9]*([._][a-z0-9]+)*$`)
 	// A section boundary, for cutting the span a heading governs.
 	sectionBreakRe = regexp.MustCompile("(?m)^#{1,6} ")
-	// The contract declares an enum open in these words (AT11).
+	// A fenced code block, removed before any of the above runs: a line
+	// starting with "# " inside a shell example is not a section boundary, and
+	// letting it cut a span produces a false "value no longer appears" — the
+	// kind of failure that gets a test weakened rather than read.
+	codeFenceRe = regexp.MustCompile("(?s)\n```.*?\n```")
+	// The contract declares an enum open in these words (AT11). Searched only
+	// in the declaration paragraph, never the whole section: "unlike
+	// `host.virtualization`, this is not an open enum" is a natural sentence to
+	// write inside a CLOSED vocabulary's section, and finding it there would
+	// fail the test for a reason that does not exist.
 	openEnumRe = regexp.MustCompile(`(?i)open enum`)
+	// Keys are taken from the part of a heading BEFORE it announces the
+	// vocabulary. A cross-reference lives after ("... value vocabulary (compare
+	// with `interface.name`)") and would otherwise be recorded as frozen, or
+	// have a real key's values checked against another key's section.
+	vocabAnnounceRe = regexp.MustCompile(`(?i)value vocabular`)
 )
+
+// declarationParagraph is the heading plus the prose up to the first blank
+// line after it — where a vocabulary says what it is, before the mapping
+// tables and the notes.
+func declarationParagraph(span string) string {
+	body := span
+	if nl := strings.IndexByte(body, '\n'); nl >= 0 {
+		rest := body[nl+1:]
+		if end := strings.Index(rest, "\n\n"); end >= 0 {
+			// Skip a leading blank line between the heading and its prose.
+			trimmed := strings.TrimLeft(rest, "\n")
+			if end2 := strings.Index(trimmed, "\n\n"); end2 >= 0 {
+				return body[:nl] + "\n" + trimmed[:end2]
+			}
+		}
+	}
+	return body
+}
 
 // TestFrozenVocabulariesMatchTheContract is the half nothing enforced. The
 // contract freezes a vocabulary in prose, the kit refuses values in code, and
@@ -218,6 +254,16 @@ var (
 //     the reverse — closed in the document, advisory in the kit — is the
 //     deliberate ordering rule and must stay allowed.
 //
+// Two parsing fragilities are knowingly left, because both fail LOUDLY and
+// neither can pass in silence. A vocabulary declared by a table row has the row
+// as its span, so values moved to a continuation line or a note below the table
+// would fail check 2 by name — which is a signal to widen the locus, not a hole.
+// And a Setext heading (underlined with "===") is not recognized as a section
+// boundary, so a span would run into the next section and weaken check 2; the
+// document uses ATX headings throughout, and switching style is a visible
+// editorial change rather than a silent one. Both are written down because the
+// alternative is a parser elaborate enough to have its own defects.
+//
 // What it does NOT check: that the kit's set is exactly the document's. The
 // document writes values in prose, in tables, with glosses and abridged
 // mappings, and a parser strict enough to extract the SET would break on an
@@ -235,7 +281,8 @@ func TestFrozenVocabulariesMatchTheContract(t *testing.T) {
 			"at its new location. Do not delete the test: a frozen vocabulary nothing reads is\n"+
 			"what #579 is about.", contractPath, err)
 	}
-	text := string(raw)
+	// Fenced code goes first: a "# " line in a shell example is not a heading.
+	text := codeFenceRe.ReplaceAllString(string(raw), "\n")
 
 	// span is the stretch of the document that freezes a key: the section a
 	// heading governs, or the table row itself.
@@ -249,7 +296,13 @@ func TestFrozenVocabulariesMatchTheContract(t *testing.T) {
 			end = b[0]
 		}
 		span := heading + rest[:end]
-		for _, m := range backtickKey.FindAllStringSubmatch(heading, -1) {
+		// Only the part of the heading before it announces the vocabulary: a
+		// cross-reference after that is not a key this section freezes.
+		declared := heading
+		if a := vocabAnnounceRe.FindStringIndex(heading); a != nil {
+			declared = heading[:a[0]]
+		}
+		for _, m := range backtickKey.FindAllStringSubmatch(declared, -1) {
 			if attributeKeyLike.MatchString(m[1]) {
 				fromContract[m[1]] = locus{"heading: " + strings.TrimSpace(heading), span}
 			}
@@ -308,7 +361,7 @@ func TestFrozenVocabulariesMatchTheContract(t *testing.T) {
 			}
 		}
 		// 3. an open enum must not be refused.
-		if v.refuse && openEnumRe.MatchString(l.span) {
+		if v.refuse && openEnumRe.MatchString(declarationParagraph(l.span)) {
 			t.Errorf("the kit REFUSES values outside %s, but the contract declares that enum open (%s).\n"+
 				"An open enum exists so new members can arrive; refusing one rejects a value the\n"+
 				"contract permits. Report it as advisory instead.", v.key, l.where)

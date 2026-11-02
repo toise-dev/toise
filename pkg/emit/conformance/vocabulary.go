@@ -96,13 +96,14 @@ var frozenVocabularies = []frozenVocabulary{
 	{
 		key:    "host.chassis.type",
 		values: []string{"desktop", "laptop", "server", "blade", "vm", "other"},
-		refuse: false,
+		refuse: true,
 		why: "the contract normalizes about thirty numeric chassis codes onto these six because the raw codes are " +
 			"high-cardinality and unfriendly; a seventh value defeats that and leaves a fleet view with a bucket nobody " +
 			"asked for",
-		verified: "NOT yet verified on the reference producer: the value reaches the attribute through a detection path " +
-			"and a separate store strategy, and neither was read against this set. Advisory until it is — refusing a " +
-			"value somebody emits turns their conformance suite red",
+		verified: "one function in the reference producer builds the value (chassisName in common/hostInfo.go) and it is " +
+			"total: every branch returns one of these six, with no empty escape, so no path can emit anything else. Every " +
+			"source reaching the attribute goes through it — the Linux and Windows chassis reads, the entity detection, " +
+			"and the separate store strategy, which copies the already-mapped value rather than re-deriving it",
 	},
 }
 
