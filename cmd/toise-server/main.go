@@ -233,6 +233,9 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	authn.SetTenantTrustMode(cfg.DeriveOnlyTenancy()) // ADR 0028 anti-spoofing; off by default
 	authn.SetIngestMTLSOnly(cfg.IngestMTLSOnly)       // #262: ingest gated by mTLS, reads by scoped token
 	authn.SetUnauthenticatedWrites(cfg.AllowUnauthenticatedWrites)
+	// Declared here, before the discovery below builds the verifier: the stdio
+	// server is wired in between and has to know a credential is expected.
+	authn.SetOIDCDeclared(cfg.OIDCEnabled())
 
 	if cfg.MCPStdio {
 		// stdio carries no per-request tenant metadata, so it serves the default
@@ -250,9 +253,22 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		// OIDC they have asked for writes to carry a credential, and a transport
 		// that cannot carry one must not become the way around that.
 		//
-		// This is why the stdio server is wired here and not before the
-		// authenticator: the decision is asked of the authenticator itself, so
-		// this transport and the HTTP middleware cannot drift apart.
+		// The decision is asked of the authenticator itself, so this transport and
+		// the HTTP middleware cannot drift apart — which is why the stdio server
+		// is wired after it is built and not before.
+		//
+		// Every credential path must therefore be DECLARED on the authenticator
+		// above this point, even one whose verifier is built further down. The
+		// first shape of this read the OIDC verifier, which discovery had not
+		// created yet, concluded that nothing authenticated, and granted writes
+		// on an OIDC-only deployment.
+		//
+		// NOT GUARANTEED, and worth knowing before adding a credential path:
+		// that ordering is a convention held by this comment, not by the
+		// compiler. A path declared BELOW this point would reopen exactly the
+		// same hole, silently. Closing it for good means taking the declarations
+		// as constructor arguments instead of setters, so a half-declared
+		// authenticator cannot be built at all.
 		stdioWrites := authn.UnauthenticatedWritesAllowed()
 		ctx = auth.WithWritable(ctx, stdioWrites)
 		logger.Info("serving MCP over stdio", "data_dir", cfg.DataDir, "tenant", tenant.Default,
