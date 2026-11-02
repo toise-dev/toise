@@ -590,11 +590,18 @@ interface carries:
   hardware or in software, so neither inherits a rank from being "more specific than
   `virtual`".
 
-  **The precedence says which single value to report, never which facts are false.** An
-  interface reported `wireless` is still physical hardware; one reported `loopback` is
-  still a virtual device. A consumer must not read `wireless` as "not physical" — the
+  **`physical` is the residual value.** It is what remains when none of the three more
+  specific facts was observed, and there is no test for it — so it attests nothing. A
+  producer that examined the interface and a producer that simply did not look both
+  report `physical`, and nothing distinguishes them.
+
+  **The precedence says which single value to report. It does not say the unreported
+  facts are false, and it does not say they are true.** An interface reported `wireless`
+  may be a radio card or a software access point; one reported `physical` may be
+  hardware or merely unexamined. So **this key answers neither "is this real hardware"
+  nor "is this virtual"**, and a consumer that needs either must not derive it here. The
   attribute holds one value because it is single-valued, not because the others were
-  ruled out. A reader who needs "is this real hardware" cannot get it from this key.
+  ruled out.
 
   **Classify on what the source exposes, never on the interface name.** A loopback is its
   loopback flag (`IFF_LOOPBACK`, or `ifType` 24 over SNMP), not an interface called `lo`
@@ -604,13 +611,25 @@ interface carries:
   or `phy80211` present under the interface, and the interface present under
   `/sys/devices/virtual/net`). Those are what to test; the name is never one of them.
 
-  **A poller reading `ifType` has a mapping, not a precedence to apply.** `ifType`
-  answers once per interface and IF-MIB distinguishes the cases — `l2vlan`, `l3ipvlan`,
+  **A poller reading `ifType` has nothing to arbitrate, and that is the limit of the
+  order above.** `ifType` answers once per interface, so a poller receives one value and
+  never sees two competing facts — the precedence is for a producer that observes them
+  separately, which is the host case: the reference host probe tests for a radio before
+  it tests for a virtual device, and that is what the order records.
+
+  **The single value a poller receives can be less specific than the truth**, and the
+  order cannot repair that, because the poller is not holding the facts it would rank.
+  IF-MIB does carry distinct values for the virtual cases — `l2vlan`, `l3ipvlan`,
   `tunnel`, `propVirtual` and `ieee8023adLag` are their own values, not `ethernetCsmacd`
-  — so a single lookup already yields one answer and no two facts compete. The order
-  above is for a producer that observes several facts about one interface separately,
-  which is the host case: the reference host probe tests for a radio before it tests for
-  a virtual device, and that is the behavior the order records.
+  — but many stacks report `ethernetCsmacd` for a radio, and a VLAN over a radio reports
+  `l2vlan`, which this order would rank below the `wireless` its host would report. So
+  the SNMP rendering and the host rendering of one interface can differ, legitimately,
+  and **a consumer must not read that difference as a contradiction.**
+
+  The `ifType`-to-value mapping is **not specified here**, which is the same gap one
+  level down: a mapping every poller invents is not a contract. Frozen in a later
+  change, with the producer side, rather than by freezing one implementation's table in
+  passing.
 
 - **Addresses and subnets are arrays, and their value form is upstream's.** Both are
   `string[]`, one element per address — **never** a joined string. A comma appears in
