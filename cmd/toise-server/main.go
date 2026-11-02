@@ -465,8 +465,12 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	// tenant's series (what the operator's single scrape needs), a tenant-scoped
 	// one reads only its own. Unfiltered, one answer named every client on the
 	// instance and its ingest volume (#463).
-	mux.Handle("/metrics", metrics.ScopedHandler(authn.MetricsScope, metrics.NewCollector(
-		aggregateGraph{reg}, aggregateStore{reg}, version.Version, version.Commit), metricsExtra...))
+	scrapeCollector := metrics.NewCollector(
+		aggregateGraph{reg}, aggregateStore{reg}, version.Version, version.Commit)
+	// Without this the series publishes at zero for ever, and a control that can
+	// never fire reads as coverage.
+	scrapeCollector.SetAnonymousReferenceCounter(aggregateEngines{reg})
+	mux.Handle("/metrics", metrics.ScopedHandler(authn.MetricsScope, scrapeCollector, metricsExtra...))
 	if cfg.Playground {
 		mux.Handle("/playground", playground.Handler("Toise", "/graphql"))
 	}
