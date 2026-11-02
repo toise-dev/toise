@@ -76,6 +76,24 @@ unchanged. The read-side capability (per-client tokens with a read/full role,
 individually revocable) is the pre-existing per-tenant RBAC of point 4; #262 adds
 the surface decoupling, not a new token type.
 
+## Unauthenticated paths
+
+`/metrics` is served **without authentication by design** — the zero-config,
+trusted-network posture of ADR 0024/0030, pinned by a test. This is defensible
+for a collector on a trusted network, but the perimeter requirement must not
+stay implicit: an instance reachable beyond that network must be fronted by a
+server (proxy or firewall) that denies anonymous access to `/metrics`, exactly
+as it must terminate TLS and authenticate `/graphql` and the MCP surface.
+
+What an anonymous reader of `/metrics` obtains is not a liveness boolean: the
+exact build version and commit (hence which published security advisories apply
+to this instance), tenant labels on several series (on a multi-tenant instance,
+customer names), per-type entity counts (the shape of the fleet), and event
+counts plus on-disk size (its size and growth). The liveness and readiness
+probes (`/healthz`, `/readyz`) disclose nothing comparable and are not in
+question. Whether identity-bearing series should be separated from operational
+series on the endpoint itself is a design question that remains undecided.
+
 ## Consequences
 
 - External tenants can be **authenticated, isolated, and audited**; the
