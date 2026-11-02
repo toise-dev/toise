@@ -695,6 +695,99 @@ addresses that repeat by convention — the range table in this contract is the
 same on a machine that has nothing to do with this one? Locally administered random
 MACs belong in the same bin when they can be told apart.
 
+### AT15 — `oper_state` and `admin_state` value vocabularies and semantics
+
+`oper_state` is a state key: a change of its value is an `entity.state_changed` event, not a
+silent attribute update. Its spelling and casing are frozen, and its value vocabulary is
+closed at the seven values of the RFC 2863 `ifOperStatus` enumeration:
+
+`up` · `down` · `testing` · `unknown` · `dormant` · `not_present` · `lower_layer_down`
+
+**Canonical casing is lowercase snake_case, not the source's casing.** No interface-state
+attribute exists in semconv yet, so this document sets the precedent — and the neighboring
+precedent `network.connection.state` does not keep its source's casing (`ESTABLISHED` becomes
+`established`, `FIN_WAIT_1` becomes `fin_wait_1`). A mapping table is required anyway, so
+freezing a source's casing buys nothing and would cost a value rename the day semconv rules.
+
+**The mapping table both probes share:**
+
+| Canonical | IF-MIB (SNMP) | Linux `/sys/class/net/<if>/operstate` |
+| --- | --- | --- |
+| `up` | `up` | `up` |
+| `down` | `down` | `down` |
+| `testing` | `testing` | `testing` |
+| `unknown` | `unknown` | `unknown` |
+| `dormant` | `dormant` | `dormant` |
+| `not_present` | `notPresent` | `notpresent` |
+| `lower_layer_down` | `lowerLayerDown` | `lowerlayerdown` |
+
+**Semantics, cited from the RFC rather than reinvented.** An interface carries traffic **if
+and only if** `oper_state == up`. `unknown` and absence say nothing. Every other value means
+"does not carry," and the value itself is the reason: `testing` (no operational traffic can
+pass), `dormant` (waiting on an external event), `lower_layer_down` (a lower layer is at
+fault), `not_present` (a component is missing). A consumer deciding "is this hop cut" must
+test for `up`, not for `down` and not for `!= up` — both of those misread silently.
+
+**Absence is legal, and it is not `unknown`.** `unknown` is a value the device reports: it
+does not know. Absence is a measurement we did not take. Both are legal, **neither equals
+`down`**, and a producer may emit any subset of the vocabulary.
+
+**`admin_state`, the key this one defers to.** It is a state key the engine matches, and
+it had no frozen vocabulary either — so forbidding the administrative flag under
+`oper_state` would have pointed a producer at an unspecified key, which displaces the
+defect rather than closing it. Its vocabulary is closed at the **three** values of the
+RFC 2863 `ifAdminStatus` enumeration, by the same rule that closes `oper_state` at seven:
+
+| Canonical | IF-MIB (SNMP) | Meaning |
+| --- | --- | --- |
+| `up` | `up` | the interface is administratively enabled |
+| `down` | `down` | it is administratively disabled |
+| `testing` | `testing` | it is in a test mode, and no operational traffic may pass |
+
+**`testing` is there because dropping it would have rebuilt the ambiguity this section
+exists to remove.** Freezing the vocabulary at `up`/`down` leaves a producer that reads
+`ifAdminStatus = testing(3)` with no legal value, so by the omission rule below it drops
+the attribute — and that omission is then indistinguishable from "the administrative flags
+were unreadable", which is a different fact. The device answered; the contract has to let
+it be reported.
+
+**The two sources are asymmetric here, as they are for `not_present`.** The SNMP source
+can render all three. The host source reads a binary administrative flag and can only ever
+render `up` or `down`, so `testing` never arrives from a host — the absence of that value
+on a host is not evidence about the interface.
+
+Omitted when the administrative flags are unreadable, by the same rule as above: absence
+is a measurement not taken. **It is never derived from `oper_state`, and `oper_state` is
+never derived from it.** The two are separate observations of separate facts, and a reader
+holding both can draw the inference the RFC allows; a producer that draws it for them
+destroys the distinction.
+
+**Administrative fallback is forbidden under `oper_state`.** When the operational state is
+unreadable, a producer must not report the administrative flag in its place: that is a
+different fact and belongs to `admin_state`. The RFC permits *inferring* "admin down implies
+oper down," but an inference belongs to the reader, who has `admin_state` in view. The
+producer omits.
+
+**`not_present` is live, and the two sources render it differently.** The SNMP source
+filters the case: an absent module means the interface is not emitted at all. The host
+source does not filter, and emits `not_present` from the sysfs value. So **the same
+physical condition — a module pulled from a chassis — produces a value on one source and
+no entity on the other.** A consumer comparing a host to a polled device sees two
+renderings of one fact, and "the interface is not emitted" is an absence that reads as a
+port that never existed. Neither source is wrong; the asymmetry is, and it is recorded
+here until one of them changes.
+
+**A value outside the table is omitted, and that omission must be visible.** A
+producer that reads a state it cannot render drops the attribute rather than
+inventing a value, which is right — but an omission is indistinguishable from a
+measurement never taken, so the table silently stops being complete and nobody
+learns it needs a line. Warn once per process per unrendered value, carrying the
+**source** and the value, so the line says which table is short. An empty value
+from the host source is a missing measurement rather than an unrendered value,
+and is not reported. This is the same boundary `hw.vendor` already carries, and
+for the same reason: an invisible fallback is how a value stops being comparable
+without anyone noticing.
+
 ### Time & liveness — explicit delete + interval backstop
 
 `event_time` = LogRecord `Timestamp`; `recorded_at` stamped by Toise. Liveness uses
