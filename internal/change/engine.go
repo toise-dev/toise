@@ -93,6 +93,11 @@ type Engine struct {
 	refs    map[model.EntityID]map[string]liveRef
 	relRefs map[model.RelationID]map[string]liveRef
 
+	// contested tracks, per entity, the distinct display names observed recently,
+	// so an identity shared by two producers — whose display name alternates —
+	// can be named as a condition. Guarded by obsMu.
+	contested map[model.EntityID]*contestedNames
+
 	// aliases is the identity alias index: speaker-asserted equivalences
 	// between identity values, recorded from same_as observations and used to
 	// resolve relation endpoints that arrive under an alias value. Guarded by
@@ -391,6 +396,20 @@ var errEndpointsCollapsed = errors.New("relation endpoints collapse to the same 
 // chatty producer with broken references into a quadratic ingest cost (#115).
 const maxPendingRelations = 4096
 
+// maxContestedDisplayNames caps the distinct display-name values retained per
+// entity: once one value recurs after another, the alternation is proven, and
+// retaining the rest only grows memory.
+const maxContestedDisplayNames = 8
+
+// contestedNames is the recent display-name history of one entity: the last
+// name observed, each distinct value with the instant it was last observed, and
+// whether a value already recurred after a different one.
+type contestedNames struct {
+	last      string
+	contested bool
+	values    map[string]time.Time
+}
+
 // Option configures an Engine.
 type Option func(*Engine)
 
@@ -487,6 +506,7 @@ func WithRelationBuffer(ttl time.Duration) Option {
 	return func(e *Engine) { e.bufferTTL = ttl }
 }
 
+// New returns an engine writing to appender and projecting into graph.
 func New(graph *projection.Graph, appender Appender, opts ...Option) *Engine {
 	e := &Engine{
 		graph:         graph,
@@ -498,6 +518,7 @@ func New(graph *projection.Graph, appender Appender, opts ...Option) *Engine {
 		relRefs:       make(map[model.RelationID]map[string]liveRef),
 		pendingHashes: make(map[string]struct{}),
 		aliases:       newIdentityAliasIndex(),
+		contested:     make(map[model.EntityID]*contestedNames),
 	}
 	for _, o := range opts {
 		o(e)
@@ -697,6 +718,11 @@ func (e *Engine) observeEntityLocked(obs EntityObservation) (model.Event, error)
 		ct          model.ChangeType
 		entityID    model.EntityID
 		changedKeys []string
+		// The display name BEFORE this observation. It has to be read here, while
+		// the previous state is still in hand: by the time the event is committed
+		// the projection already answers with the new name, and the comparison
+		// would be the new name against itself.
+		prevName string
 	)
 	switch {
 	case !found:
@@ -711,6 +737,7 @@ func (e *Engine) observeEntityLocked(obs EntityObservation) (model.Event, error)
 	default:
 		entityID = id
 		existing, _, _ := e.getEntity(id)
+		prevName = model.DisplayName(existing)
 		changed, stateChanged := diffAttributes(existing.Attributes, obs.Attributes)
 		switch {
 		case len(changed) == 0:
@@ -755,6 +782,7 @@ func (e *Engine) observeEntityLocked(obs EntityObservation) (model.Event, error)
 	} else {
 		speakers[key] = liveRef{}
 	}
+	e.trackDisplayName(entityID, obs, prevName)
 	// A new/updated entity may be the missing endpoint of a parked edge — but
 	// only retry the buffer when this entity is one some edge actually waits on,
 	// rather than rescanning every parked edge on every observation.
@@ -765,6 +793,75 @@ func (e *Engine) observeEntityLocked(obs EntityObservation) (model.Event, error)
 		}
 	}
 	return ev, nil
+}
+
+// trackDisplayName records the observed display name of an entity. An entry is
+// created only when the name actually changed from the entity's previous state,
+// so a stable entity costs nothing. The caller must hold obsMu.
+func (e *Engine) trackDisplayName(id model.EntityID, obs EntityObservation, prev string) {
+	// The whole entity, not just its attributes: the registry's cascade falls
+	// back to identity keys for several types, so a name derived from attributes
+	// alone is a different name from the one any reader is served.
+	name := model.DisplayName(model.Entity{Type: obs.Type, Identity: obs.Identity, Attributes: obs.Attributes})
+	if name == "" {
+		return
+	}
+	if prev == "" {
+		prev = name
+	}
+	now := e.now()
+	c := e.contested[id]
+	if c == nil {
+		if name == prev {
+			return
+		}
+		c = &contestedNames{values: make(map[string]time.Time, 2)}
+		if prev != "" {
+			c.values[prev] = now
+		}
+		c.values[name] = now
+		c.last = name
+		e.contested[id] = c
+		return
+	}
+	if name == c.last {
+		c.values[name] = now
+		return
+	}
+	if _, seen := c.values[name]; seen {
+		c.contested = true
+	}
+	if len(c.values) >= maxContestedDisplayNames {
+		// At the cap the condition is already established by the COUNT: that many
+		// distinct display names inside one liveness window is not a sequence of
+		// renames. Latching here matters because the eviction below would
+		// otherwise drop a value before it had the chance to recur, so an
+		// identity contested by more speakers than the cap would read as clean.
+		c.contested = true
+		oldestValue, oldestAt := "", time.Time{}
+		for v, at := range c.values {
+			if oldestValue == "" || at.Before(oldestAt) {
+				oldestValue, oldestAt = v, at
+			}
+		}
+		delete(c.values, oldestValue)
+	}
+	c.values[name] = now
+	c.last = name
+}
+
+// ContestedDisplayNames reports how many live entities took more than one
+// distinct display name within their own declared liveness interval.
+func (e *Engine) ContestedDisplayNames() int {
+	e.obsMu.Lock()
+	defer e.obsMu.Unlock()
+	n := 0
+	for _, c := range e.contested {
+		if c.contested {
+			n++
+		}
+	}
+	return n
 }
 
 // ObservationInterval returns how often this entity is currently observed: the
@@ -960,6 +1057,13 @@ func (e *Engine) ObservationInterval(id model.EntityID) (time.Duration, bool) {
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()
 
+	return e.livenessIntervalLocked(id)
+}
+
+// livenessIntervalLocked returns the coarsest declared interval among the
+// entity's live references, and whether any was declared. The caller must hold
+// obsMu.
+func (e *Engine) livenessIntervalLocked(id model.EntityID) (time.Duration, bool) {
 	var coarsest time.Duration
 	for _, ref := range e.refs[id] {
 		if ref.interval > coarsest {
@@ -1016,6 +1120,7 @@ func (e *Engine) deleteEntityLocked(obs EntityObservation) (ev model.Event, emit
 	if err := e.commit(ev, false); err != nil {
 		return model.Event{}, false, err
 	}
+	delete(e.contested, id)
 	// The delete emitted; surface any cascade error so a failed edge removal is
 	// retried (idempotent) rather than silently dropped.
 	_, rerr := e.removeIncidentRelations(id, obs.EventTime)
@@ -1053,6 +1158,14 @@ type SweepResult struct {
 // Total is the number of things expired, both kinds together.
 func (r SweepResult) Total() int { return r.Entities + r.Relations }
 
+// Sweep expires entities whose liveness backstop has lapsed: an entity observed
+// or edge with an interval that has not been re-asserted within it is soft-deleted
+// (entity.deleted / relation.removed), as a safety net for missed explicit deletes
+// (crash, host off, network partition). It returns the entities and edges
+// expired counted separately, and any commit errors joined: a failed commit is
+// logged and skipped (the pass stays resilient and retries next tick) but also
+// returned, so the maintenance metric's error outcome is reachable instead of
+// structurally impossible. Drive it from a periodic ticker.
 func (e *Engine) Sweep() (SweepResult, error) {
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()
@@ -1076,8 +1189,8 @@ func (e *Engine) Sweep() (SweepResult, error) {
 	var orphaned []model.EntityID
 	// The scope that went silent, remembered as its reference is dropped: the
 	// expiry event is authored by Toise, so without capturing it here the
-	// collection method that stopped speaking dies with the ref — and that is
-	// the question a producer asks when entities vanish (#394).
+	// collection method that stopped speaking dies with the ref — and that is the
+	// question a producer asks when entities vanish (#394).
 	//
 	// When several producers lapse together, the one with the LATEST deadline
 	// wins: it is the collector that spoke most recently, so it is the one whose
@@ -1101,6 +1214,7 @@ func (e *Engine) Sweep() (SweepResult, error) {
 		ent, ok, deleted := e.graph.GetEntity(id)
 		if !ok || deleted {
 			delete(e.refs, id)
+			delete(e.contested, id)
 			continue
 		}
 		ev := model.Event{Entity: &model.EntityEvent{
@@ -1119,6 +1233,7 @@ func (e *Engine) Sweep() (SweepResult, error) {
 			continue // leave the (empty) ref set to retry next sweep
 		}
 		delete(e.refs, id)
+		delete(e.contested, id)
 		e.logger.Warn("expired stale entity: no producer heartbeat within its interval",
 			"entity_type", ent.Type, "entity_id", id)
 		res.Entities++
@@ -1129,10 +1244,20 @@ func (e *Engine) Sweep() (SweepResult, error) {
 		}
 	}
 
-	// Expire lapsed alias-equivalence references; a claim whose last speaker
-	// went silent disappears from the index. One speaker's silence never
-	// retracts another speaker's claim.
-	e.aliases.sweep(now)
+	// Forget display-name values older than the entity's declared liveness
+	// interval; an entity with no retained value loses its entry entirely.
+	for id, c := range e.contested {
+		if interval, ok := e.livenessIntervalLocked(id); ok {
+			for v, at := range c.values {
+				if now.After(at.Add(interval)) {
+					delete(c.values, v)
+				}
+			}
+		}
+		if len(c.values) == 0 {
+			delete(e.contested, id)
+		}
+	}
 
 	// Expire parked out-of-order edges past their TTL: flushPending only runs on
 	// entity observations, so without this a quiet instance never drops them.
@@ -1140,7 +1265,10 @@ func (e *Engine) Sweep() (SweepResult, error) {
 		kept := e.pending[:0]
 		for i := range e.pending {
 			if now.After(e.pending[i].deadline) {
-				e.dropPendingRelation(e.pending[i].obs)
+				obs := e.pending[i].obs
+				e.reportDiscard(obs)
+				e.logger.Warn("dropping relation: endpoints did not arrive within the reconciliation TTL",
+					"relation_type", obs.Type, "from_type", obs.From.Type, "to_type", obs.To.Type)
 				continue
 			}
 			kept = append(kept, e.pending[i])
@@ -1194,6 +1322,11 @@ func (e *Engine) Sweep() (SweepResult, error) {
 	// did not return to claim (#183). Not counted (no event is emitted — the
 	// entity was already soft-deleted). Runs after the flush so it judges the
 	// tombstones this sweep just applied.
+	// Expire lapsed alias-equivalence references; a claim whose last speaker
+	// went silent disappears from the index. One speaker's silence never
+	// retracts another speaker's claim.
+	e.aliases.sweep(now)
+
 	e.graph.PruneTombstones()
 	return res, errors.Join(errs...)
 }
