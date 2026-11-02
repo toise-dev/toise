@@ -572,6 +572,20 @@ interface carries:
 | `network.interface.addresses` | string[] | `["10.10.0.60/24"]` | the interface's own addresses, each with its prefix |
 | `network.interface.subnets` | string[] | `["10.10.0.0/24"]` | the subnets those addresses sit in, deduplicated — **provisional**, see below |
 
+- **`interface.type` has a precedence, because its four values are not exclusive.** A
+  loopback is also a virtual device; a wireless card is also physical. Without a stated
+  order, two producers looking at the same interface both classify it correctly and
+  disagree, and the disagreement is invisible: each value is in the vocabulary.
+  **The most specific value wins** — `loopback` before `virtual`, `wireless` before
+  `physical`. Both reference probes already classify in that order, so this records what
+  they do rather than changing it; writing it down is what makes it answerable for a
+  third producer, and for any value added later (`tunnel`, `bridge`, an aggregate) which
+  will be more specific than `virtual` in the same way.
+
+  **Classify on the flag, never on the name.** A loopback is identified by its loopback
+  flag (`IFF_LOOPBACK`, or `ifType` 24 over SNMP), not by being called `lo` — a Windows
+  host calls it "Loopback Pseudo-Interface 1", and a name test fails there in silence.
+
 - **Addresses and subnets are arrays, and their value form is upstream's.** Both are
   `string[]`, one element per address — **never** a joined string. A comma appears in
   no IP text form, which is exactly what makes a joined value dangerous: it parses
