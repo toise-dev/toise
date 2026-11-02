@@ -32,6 +32,16 @@ var identityUnspecified = map[string]string{
 // three; and a type was registered with nothing documenting it. Prose cannot be
 // checked, but a vocabulary can, and the vocabulary is where the costly
 // disagreements were.
+//
+// KNOWN GAP, stated here rather than left implicit: this checks that a type has
+// A documented identity, not that every form it accepts is documented. A type
+// with two forms passes with one written down, which is how the host-side
+// interface identity went undeclared while the device-side one was. Enumerating
+// the forms cannot be derived from what the code holds today — identityForms
+// declares one identity per type — so closing it means keying that declaration
+// by type AND form, and then failing here on a form the documents do not state.
+// Reading the forms out of the documents instead would not close it: a form
+// nobody wrote is invisible to a reader of the documents too.
 func TestEveryRegisteredTypeHasADocumentedIdentity(t *testing.T) {
 	root := filepath.Join("..", "..", "docs", "data-model")
 	entries, err := os.ReadDir(root)
