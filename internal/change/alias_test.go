@@ -482,11 +482,12 @@ func TestAliasReplayDoesNotRefreshTheSpeakersDeadline(t *testing.T) {
 	if _, _, err := e.ObserveRelation(aliasConnectedTo("serial:S", "eth9", "mac:Y", "eth0")); err != nil {
 		t.Fatalf("connected_to: %v", err)
 	}
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 6; i++ {
 		clock.advance(5 * time.Minute)
 		aliasObserveSpeaker(t, e)
 	}
-	// Twenty minutes of silence from agent-a, against a ten-minute promise.
+	// Thirty minutes of silence from agent-a, against a ten-minute promise held
+	// for twice that: past the slack, so a lapse here is a real retraction.
 	if _, err := e.Sweep(); err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
@@ -498,5 +499,145 @@ func TestAliasReplayDoesNotRefreshTheSpeakersDeadline(t *testing.T) {
 	}
 	if n := len(aliasRelations(g, model.RelConnectedTo)); n != 0 {
 		t.Fatalf("connected_to = %d, want 0: an equivalence its speaker stopped asserting still resolved an edge", n)
+	}
+}
+
+// The equivalence rides on its source entity's state, so it carries that
+// entity's re-emission cycle and nothing of its own. A deadline of exactly one
+// cycle lands where the next re-emission is due, so one late cycle expires the
+// claim and every edge it resolved stops resolving — on the cadence this park
+// declares, half an hour of a live link reading as no link at all.
+func TestAliasSurvivesOneLateReemission(t *testing.T) {
+	const cycle = 30 * time.Minute
+	clock := &aliasClock{t: fixedNow()}
+	e, g, _ := aliasTestEngine(t, WithClock(clock.now), WithRelationBuffer(30*time.Second))
+	aliasObserveSpeaker(t, e)
+	// The entities are declared with the slack the contract asks a producer for,
+	// so only the equivalence's own lifetime is under test here.
+	if _, err := e.ObserveEntity(EntityObservation{Type: model.TypeNetworkDevice, Identity: aliasDeviceIdentity("serial:A"), Interval: 4 * cycle}); err != nil {
+		t.Fatalf("device: %v", err)
+	}
+	if _, err := e.ObserveEntity(EntityObservation{Type: model.TypeNetworkInterface, Identity: aliasInterfaceIdentity("serial:A", "eth0"), Interval: 4 * cycle}); err != nil {
+		t.Fatalf("interface: %v", err)
+	}
+	alias := aliasSameAs("serial:A", "mac:Y", aliasConfidence())
+	alias.Producer = "agent-a"
+	alias.SourceInterval = cycle
+	if _, _, err := e.ObserveRelation(alias); err != nil {
+		t.Fatalf("same_as: %v", err)
+	}
+
+	// One second past the cycle: the re-emission is late, not absent.
+	clock.advance(cycle + time.Second)
+	if _, err := e.Sweep(); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if _, _, err := e.ObserveRelation(aliasConnectedTo("serial:S", "eth9", "mac:Y", "eth0")); err != nil {
+		t.Fatalf("connected_to: %v", err)
+	}
+	if n := len(aliasRelations(g, model.RelConnectedTo)); n != 1 {
+		t.Fatalf("connected_to = %d, want 1: one late re-emission expired the equivalence", n)
+	}
+}
+
+// A cycle the engine refuses as a liveness promise must not be believed as an
+// alias lifetime either. The slack turned the declared cycle into the belief's
+// lifetime, and nothing on that path applied the plausibility bound the
+// liveness path applies: a producer declaring a month-long cycle got its
+// identity merge believed for two months, on the strength of a promise every
+// other path had already rejected.
+func TestAliasRefusesAnImplausibleDeclaredCycle(t *testing.T) {
+	clock := &aliasClock{t: fixedNow()}
+	e, g, _ := aliasTestEngine(t, WithClock(clock.now), WithRelationBuffer(30*time.Second))
+	aliasObserveSpeaker(t, e)
+	if _, err := e.ObserveEntity(EntityObservation{Type: model.TypeNetworkDevice, Identity: aliasDeviceIdentity("serial:A"), Interval: 24 * time.Hour}); err != nil {
+		t.Fatalf("device: %v", err)
+	}
+	if _, err := e.ObserveEntity(EntityObservation{Type: model.TypeNetworkInterface, Identity: aliasInterfaceIdentity("serial:A", "eth0"), Interval: 24 * time.Hour}); err != nil {
+		t.Fatalf("interface: %v", err)
+	}
+	alias := aliasSameAs("serial:A", "mac:Y", aliasConfidence())
+	alias.Producer = "agent-a"
+	// Past maxPlausibleLivenessPromise, and far below the overflow threshold:
+	// the two failures are different and this one is the likely one.
+	alias.SourceInterval = 30 * 24 * time.Hour
+	if _, _, err := e.ObserveRelation(alias); err != nil {
+		t.Fatalf("same_as: %v", err)
+	}
+	if _, _, err := e.ObserveRelation(aliasConnectedTo("serial:S", "eth9", "mac:Y", "eth0")); err != nil {
+		t.Fatalf("connected_to: %v", err)
+	}
+	if n := len(aliasRelations(g, model.RelConnectedTo)); n != 0 {
+		t.Fatalf("connected_to = %d, want 0: an equivalence resolved on a cycle the engine refuses as a liveness promise", n)
+	}
+}
+
+// The overflow and the refusal are not the same failure, and the overflow
+// cannot be seen through an edge: a deadline in the past and a claim never
+// recorded both leave no adjacency. It is read on the deadline itself, which is
+// where the inversion happens.
+func TestAliasDeadlineNeverLandsInThePast(t *testing.T) {
+	now := fixedNow()
+	for _, tc := range []struct {
+		name            string
+		obs             RelationObservation
+		wantBelievable  bool
+		wantNeverExpire bool
+	}{
+		{
+			// 153 years, the shape a real producer declared in production: twice
+			// that wraps past MaxInt64 nanoseconds into a negative Duration.
+			name:           "implausible interval",
+			obs:            RelationObservation{Interval: 153 * 365 * 24 * time.Hour},
+			wantBelievable: false,
+		},
+		{
+			name:           "implausible source interval",
+			obs:            RelationObservation{SourceInterval: 153 * 365 * 24 * time.Hour},
+			wantBelievable: false,
+		},
+		{
+			// Unchanged convention: a claim with no refresh promise at all is
+			// held indefinitely. Only a promise that is WRONG is refused.
+			name:            "no promise at all",
+			obs:             RelationObservation{},
+			wantBelievable:  true,
+			wantNeverExpire: true,
+		},
+		{
+			name:           "plausible interval",
+			obs:            RelationObservation{Interval: 30 * time.Minute},
+			wantBelievable: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			deadline, believable := aliasDeadline(now, tc.obs)
+			if believable != tc.wantBelievable {
+				t.Fatalf("believable = %v, want %v", believable, tc.wantBelievable)
+			}
+			if !believable {
+				return
+			}
+			if tc.wantNeverExpire {
+				if !deadline.IsZero() {
+					t.Fatalf("deadline = %v, want zero: a claim with no promise must not acquire one", deadline)
+				}
+				return
+			}
+			if deadline.Before(now) {
+				t.Fatalf("deadline = %v is before now = %v: the slack inverted the deadline, so the claim expires at once", deadline, now)
+			}
+		})
+	}
+}
+
+// The bound is what makes the multiplication safe, and nothing else ties the
+// two constants together: raise maxPlausibleLivenessPromise far enough and the
+// slack silently wraps again, which is how this defect arrived in the first
+// place.
+func TestAliasSlackCannotOverflowTheBound(t *testing.T) {
+	if maxPlausibleLivenessPromise*aliasSlackFactor <= 0 {
+		t.Fatalf("maxPlausibleLivenessPromise (%s) times the slack (%d) wraps: every deadline at the bound lands in the past",
+			maxPlausibleLivenessPromise, aliasSlackFactor)
 	}
 }
