@@ -1280,26 +1280,29 @@ type Relation {
   """
   assertedBy: [String!]! @goField(forceResolver: true)
   """
-  The collection methods (instrumentation scopes) asserting this EDGE right now.
+  The collection methods (instrumentation scopes) of this edge's SOURCE entity
+  asserting the EDGE right now — not necessarily the method that observed the
+  link. An edge observed by a different method than its source entity still
+  carries its source's method, so this field cannot tell you which method
+  observed the link, and a methods inventory built from entities cannot show a
+  collector that produces only relations: such a collector has no entity to
+  carry its name.
 
   **Two edges of one type are not the same claim.** An adjacency protocol
   *states* a link; a forwarding table or an address cache lets one be *inferred*.
   Both arrive as ` + "`" + `connected_to` + "`" + `, and told apart one is a measurement and the other
   a correlation — which is the difference a map has to draw, and the reason this
-  field exists (#455).
+  field exists.
 
   One producer running several methods reports **all** of them, the liveness
   reference being keyed on the speaker — the producer AND the method — so read
   this as the set of methods asserting the edge, including several of one agent.
-  Formerly only the last to speak,
-  because the reference count is keyed by producer (#455): read this as a set
-  across producers, not as the list of one agent's collectors.
 
   Empty when no asserting producer recorded a scope, which reads as not recorded
   rather than as no collector.
 
   **Live state, like the field above: an ` + "`" + `asOf` + "`" + ` query answers it from today's
-  table (toise#528).**
+  table, not from the instant asked for.**
   """
   collectedBy: [String!]! @goField(forceResolver: true)
 }
