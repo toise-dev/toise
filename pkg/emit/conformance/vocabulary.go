@@ -109,28 +109,54 @@ var frozenVocabularies = []frozenVocabulary{
 // checkValueVocabularies refuses a value outside a frozen vocabulary.
 //
 // It is keyed on the attribute KEY and not on the entity type, which is the
-// contract's own framing: the vocabulary belongs to the key. A producer that
-// puts one of these keys on an unexpected type still has its value judged,
-// which is right — the key means what the contract says wherever it appears.
+// contract's own framing: the vocabulary belongs to the key, and the key means
+// what the contract says wherever it appears. A producer that puts one of these
+// keys on an unexpected type still has its value judged, which is right — the
+// alternative is a per-type allowlist that silently exempts every type nobody
+// thought of.
 //
-// Only string values are judged. A non-string under one of these keys is a
-// type violation rather than a vocabulary one, and it is already reported as
-// such; judging it here too would name one defect twice.
+// It judges only what entity.description carries, because that is where the
+// wire contract puts descriptive attributes. One of these keys arriving as a
+// resource or record attribute is a different violation — an attribute in the
+// wrong envelope — and is not this check's business.
+//
+// Three shapes of wrong value, three messages, because they are three defects
+// with three different fixes. A value outside the set is a mapping that was
+// never written; an EMPTY value is an attribute emitted where the contract says
+// to omit; a NON-STRING is almost always the raw source enumeration passed
+// through. Collapsing them into one message would name the wrong defect in two
+// cases out of three.
 func checkValueVocabularies(out *[]Problem, where, field string, m pcommon.Map) {
 	for _, v := range frozenVocabularies {
 		got, ok := m.Get(v.key)
-		if !ok || got.Type() != pcommon.ValueTypeStr {
+		if !ok {
+			continue
+		}
+		add := func(issue string) {
+			*out = append(*out, Problem{Record: where, Advisory: !v.refuse, Issue: issue})
+		}
+		// A non-string is not reported anywhere else: entity.description carries
+		// the full AnyValue since 0.9.0, so an int leaf is perfectly legal there
+		// in general. Under a frozen key it is the raw enumeration — ifOperStatus
+		// 7 instead of lower_layer_down — which is the exact defect the frozen
+		// vocabulary exists to stop, and it would otherwise pass in silence.
+		if got.Type() != pcommon.ValueTypeStr {
+			add(fmt.Sprintf("%s.%s is %s, not a string; the contract's vocabulary is a set of NAMES (%s). A raw source "+
+				"enumeration passed through matches no comparison a consumer can write, and entity.description accepts "+
+				"any scalar, so nothing else refuses it. %s", field, v.key, got.Type(), v.list(), v.why))
+			continue
+		}
+		if got.Str() == "" {
+			add(fmt.Sprintf("%s.%s is present and empty; the contract says a measurement not taken is OMITTED, and that "+
+				"an empty string reads as an answer. This is not a missing mapping — it is an attribute emitted where "+
+				"the contract asks for absence, and the two have different fixes", field, v.key))
 			continue
 		}
 		if v.contains(got.Str()) {
 			continue
 		}
-		*out = append(*out, Problem{
-			Record:   where,
-			Advisory: !v.refuse,
-			Issue: fmt.Sprintf("%s.%s is %q, which the contract's frozen vocabulary does not contain (%s). %s",
-				field, v.key, got.Str(), v.list(), v.why),
-		})
+		add(fmt.Sprintf("%s.%s is %q, which the contract's frozen vocabulary does not contain (%s). %s",
+			field, v.key, got.Str(), v.list(), v.why))
 	}
 }
 

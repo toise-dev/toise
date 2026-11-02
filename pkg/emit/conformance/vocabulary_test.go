@@ -81,19 +81,53 @@ func TestFrozenVocabularyRefusesAValueOutsideAClosedSet(t *testing.T) {
 	}
 }
 
-// A non-string under a frozen key is a type violation, and it is reported as
-// one elsewhere. Judging it here too would name one defect twice.
-func TestFrozenVocabularyLeavesANonStringToTheTypeCheck(t *testing.T) {
+// A non-string under a frozen key is refused HERE, because nothing else
+// refuses it. entity.description carries the full AnyValue since 0.9.0, so an
+// int leaf is legal there in general — and an int under oper_state is the raw
+// ifOperStatus enumeration, the exact defect the frozen vocabulary exists to
+// stop.
+//
+// This test replaces one that asserted the opposite. That test passed, and it
+// pinned the hole open: it was written on a comment claiming the type check
+// covered this, and the comment was never checked against checkDescriptionValue,
+// which accepts every scalar in silence.
+func TestFrozenVocabularyRefusesANonString(t *testing.T) {
 	ld := plog.NewLogs()
 	lr := ld.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
 	lr.SetEventName("entity.state")
 	lr.Attributes().PutStr("entity.type", "network.interface")
 	lr.Attributes().PutEmptyMap("entity.id").PutStr("host.id", "11111111-2222-3333-4444-555555555555")
 	lr.Attributes().PutEmptyMap("entity.description").PutInt("oper_state", 7)
+	var found string
 	for _, p := range Check(ld) {
-		if strings.Contains(p.Issue, "frozen vocabulary") {
-			t.Fatalf("a non-string oper_state was judged against the vocabulary: %s", p.Issue)
+		if strings.Contains(p.Issue, "oper_state is Int") {
+			found = p.Issue
 		}
+	}
+	if found == "" {
+		t.Fatalf("a raw ifOperStatus integer under oper_state was accepted; got %v", Check(ld))
+	}
+	if !strings.Contains(found, "set of NAMES") {
+		t.Errorf("the message does not say what was expected instead: %s", found)
+	}
+}
+
+// An attribute emitted EMPTY is not a missing mapping, and saying "outside the
+// vocabulary" would send a producer author looking for the wrong fix. The
+// contract is explicit that a measurement not taken is omitted and that an
+// empty string reads as an answer.
+func TestFrozenVocabularyNamesAnEmptyValueAsItsOwnDefect(t *testing.T) {
+	var found string
+	for _, p := range Check(vocabRecord("oper_state", "")) {
+		if strings.Contains(p.Issue, "oper_state is present and empty") {
+			found = p.Issue
+		}
+	}
+	if found == "" {
+		t.Fatalf("an empty oper_state was not reported as an empty value; got %v", Check(vocabRecord("oper_state", "")))
+	}
+	if strings.Contains(found, "frozen vocabulary does not contain") {
+		t.Errorf("an empty value was reported as a missing mapping, which has a different fix: %s", found)
 	}
 }
 
@@ -133,27 +167,65 @@ const contractPath = "../../../docs/data-model/senhub-agent-contract.md"
 
 var (
 	// A section whose heading announces a value vocabulary: "### AT11 —
-	// `host.virtualization` value vocabulary".
-	vocabHeadingRe = regexp.MustCompile("(?m)^#+ .*`[^`]+`.*value vocabular")
-	// And an attribute table row that declares its type as an enum:
-	// "| `duplex` | enum | `full`/`half`/`unknown` | renegotiable |".
-	enumRowRe   = regexp.MustCompile("(?m)^\\|\\s*`([^`]+)`\\s*\\|\\s*enum\\s*\\|")
-	backtickKey = regexp.MustCompile("`([^`]+)`")
+	// `host.virtualization` value vocabulary". Case-insensitive, because a
+	// Markdown heading gets title-cased by whoever edits it next and a detector
+	// that stops matching is a detector that passes in silence.
+	vocabHeadingRe = regexp.MustCompile("(?im)^#+ .*`[^`]+`.*value vocabular")
+	// And an attribute table row whose type column declares an enum:
+	// "| `duplex` | enum | `full`/`half`/`unknown` | renegotiable |". The cell
+	// is matched loosely so "open enum" or "enum (provisional)" still counts.
+	enumRowRe = regexp.MustCompile("(?im)^\\|\\s*`([^`]+)`\\s*\\|[^|]*\\benum\\b[^|]*\\|")
+	// Only tokens shaped like an attribute key are taken from a heading. The
+	// heading also carries section numbers and prose, and a phantom key makes
+	// the test fail loudly but wrongly — which is how a test gets weakened.
+	backtickKey      = regexp.MustCompile("`([^`]+)`")
+	attributeKeyLike = regexp.MustCompile(`^[a-z][a-z0-9]*([._][a-z0-9]+)*$`)
+	// A section boundary, for cutting the span a heading governs.
+	sectionBreakRe = regexp.MustCompile("(?m)^#{1,6} ")
+	// The contract declares an enum open in these words (AT11).
+	openEnumRe = regexp.MustCompile(`(?i)open enum`)
 )
 
 // TestFrozenVocabulariesMatchTheContract is the half nothing enforced. The
 // contract freezes a vocabulary in prose, the kit refuses values in code, and
 // the two have no reason to stay in step: the document costs one table and
-// nothing reads it. So a vocabulary added to the document and not to the kit is
-// exactly the silence this issue is about, and it fails here.
+// nothing reads it.
 //
-// It deliberately does NOT compare the VALUES of each set. The document writes
-// them in prose, in tables, with glosses and abridged mappings, and a parser
-// strict enough to extract them would fail on an editorial change while a
-// parser loose enough to survive would extract the glosses too. Comparing the
-// set of KEYS is the half that drifts in silence; a wrong value inside a set
-// the kit knows about shows up as a refused or accepted value in the tests
-// above.
+// It checks three agreements, and is honest about the fourth it cannot.
+//
+//  1. every vocabulary the document freezes is one the kit knows about, and
+//     every key the kit enforces is one the document freezes. The second
+//     direction is also the detector's own witness: if a pattern below stops
+//     matching a section, the six known keys become "invented" and this test
+//     fails loudly. Only a NEW vocabulary written in an unmatched format can
+//     slip through, which is the residual risk and the reason the patterns are
+//     deliberately loose;
+//  2. every value the kit holds still appears, backticked, inside the span of
+//     the document that freezes it. So a value removed or renamed in the
+//     document fails here instead of leaving the kit accepting something the
+//     contract no longer permits. Its real strength is narrower than it looks,
+//     and the first witness written for it was wrong: the span includes the
+//     mapping table, whose SOURCE columns repeat several canonical spellings
+//     verbatim, so removing `dormant` from the vocabulary still leaves
+//     `dormant` in the IF-MIB column and this check stays green. It catches a
+//     value whose canonical form is distinctive — `lower_layer_down`, whose
+//     sources are spelled `lowerLayerDown` and `lowerlayerdown` — and not one
+//     that happens to equal its source. Written down rather than overclaimed,
+//     because overclaiming what a check covers is how the hole below got
+//     pinned open;
+//  3. a vocabulary the document declares OPEN is not refused by the kit.
+//     Refusing a value an open enum exists to admit is the harmful direction;
+//     the reverse — closed in the document, advisory in the kit — is the
+//     deliberate ordering rule and must stay allowed.
+//
+// What it does NOT check: that the kit's set is exactly the document's. The
+// document writes values in prose, in tables, with glosses and abridged
+// mappings, and a parser strict enough to extract the SET would break on an
+// editorial change. So a value ADDED to the document and not to the kit is not
+// caught here, and the kit would refuse a value the contract permits. That gap
+// is stated rather than papered over — an earlier version of this comment
+// claimed the behavior tests covered it, which was false: those tests assert
+// against the kit's own set, so both halves would have stayed green together.
 func TestFrozenVocabulariesMatchTheContract(t *testing.T) {
 	raw, err := os.ReadFile(contractPath)
 	if err != nil {
@@ -165,22 +237,35 @@ func TestFrozenVocabulariesMatchTheContract(t *testing.T) {
 	}
 	text := string(raw)
 
-	fromContract := map[string]string{} // key -> where it was found
-	for _, heading := range vocabHeadingRe.FindAllString(text, -1) {
+	// span is the stretch of the document that freezes a key: the section a
+	// heading governs, or the table row itself.
+	type locus struct{ where, span string }
+	fromContract := map[string]locus{}
+	for _, loc := range vocabHeadingRe.FindAllStringIndex(text, -1) {
+		heading := text[loc[0]:loc[1]]
+		rest := text[loc[1]:]
+		end := len(rest)
+		if b := sectionBreakRe.FindStringIndex(rest); b != nil {
+			end = b[0]
+		}
+		span := heading + rest[:end]
 		for _, m := range backtickKey.FindAllStringSubmatch(heading, -1) {
-			fromContract[m[1]] = "heading: " + strings.TrimSpace(heading)
+			if attributeKeyLike.MatchString(m[1]) {
+				fromContract[m[1]] = locus{"heading: " + strings.TrimSpace(heading), span}
+			}
 		}
 	}
-	for _, m := range enumRowRe.FindAllStringSubmatch(text, -1) {
-		if _, already := fromContract[m[1]]; !already {
-			fromContract[m[1]] = "enum table row"
+	for _, loc := range enumRowRe.FindAllStringSubmatchIndex(text, -1) {
+		key := text[loc[2]:loc[3]]
+		if _, already := fromContract[key]; !already {
+			fromContract[key] = locus{"enum table row", text[loc[0]:loc[1]] + lineAfter(text, loc[1])}
 		}
 	}
 	if len(fromContract) == 0 {
 		t.Fatalf("no value vocabulary was found in %s.\n"+
 			"This test looks for headings containing \"value vocabular\" beside a backticked key,\n"+
-			"and for attribute table rows whose type column is `enum`. If that wording changed,\n"+
-			"update the patterns in this file so the two lists keep being compared. The\n"+
+			"and for attribute table rows whose type column declares an enum. If that wording\n"+
+			"changed, update the patterns in this file so the two lists keep being compared. The\n"+
 			"comparison is what matters, not the wording.", contractPath)
 	}
 
@@ -189,9 +274,9 @@ func TestFrozenVocabulariesMatchTheContract(t *testing.T) {
 		known[v.key] = true
 	}
 	var unenforced []string
-	for key, where := range fromContract {
+	for key, l := range fromContract {
 		if !known[key] {
-			unenforced = append(unenforced, key+" ("+where+")")
+			unenforced = append(unenforced, key+" ("+l.where+")")
 		}
 	}
 	sort.Strings(unenforced)
@@ -206,18 +291,44 @@ func TestFrozenVocabulariesMatchTheContract(t *testing.T) {
 			len(unenforced), strings.Join(unenforced, "\n  "))
 	}
 
-	// And the reverse: a key the kit enforces and the document does not freeze
-	// means the kit is inventing a contract.
 	var invented []string
 	for _, v := range frozenVocabularies {
-		if _, ok := fromContract[v.key]; !ok {
+		l, ok := fromContract[v.key]
+		if !ok {
 			invented = append(invented, v.key)
+			continue
+		}
+		// 2. the kit's values must still be written in the document.
+		for _, val := range v.values {
+			if !strings.Contains(l.span, "`"+val+"`") {
+				t.Errorf("the kit holds %s = %q, which no longer appears backticked in the contract (%s).\n"+
+					"Either the document dropped the value and the kit is now accepting something the\n"+
+					"contract does not permit, or it was renamed on one side only. Fix whichever is wrong.",
+					v.key, val, l.where)
+			}
+		}
+		// 3. an open enum must not be refused.
+		if v.refuse && openEnumRe.MatchString(l.span) {
+			t.Errorf("the kit REFUSES values outside %s, but the contract declares that enum open (%s).\n"+
+				"An open enum exists so new members can arrive; refusing one rejects a value the\n"+
+				"contract permits. Report it as advisory instead.", v.key, l.where)
 		}
 	}
 	sort.Strings(invented)
 	if len(invented) > 0 {
 		t.Errorf("the kit enforces %v, which the contract does not freeze.\n"+
 			"Either the document lost the vocabulary, or the kit is refusing values on a rule no\n"+
-			"producer author can read. Fix whichever side is wrong.", invented)
+			"producer author can read. Fix whichever side is wrong. This is also the detector's\n"+
+			"own witness: if the patterns in this file stopped matching a section, a known key\n"+
+			"lands here rather than disappearing in silence.", invented)
 	}
+}
+
+// lineAfter returns the remainder of the line starting at i, so an enum row's
+// span covers the whole row including its values column.
+func lineAfter(text string, i int) string {
+	if n := strings.IndexByte(text[i:], '\n'); n >= 0 {
+		return text[i : i+n]
+	}
+	return text[i:]
 }
