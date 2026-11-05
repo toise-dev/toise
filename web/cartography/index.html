@@ -66,11 +66,19 @@
      published bundle has the integrity
      sha384-yxKDWWf0wwdUj/gPeuL11czrnKFQROnLgY8ll7En9NYoXibgg3C6NK/UDHNtUgWJ -->
 <script src="./vendor/vis-network.min.js" integrity="sha384-yxKDWWf0wwdUj/gPeuL11czrnKFQROnLgY8ll7En9NYoXibgg3C6NK/UDHNtUgWJ"></script>
+<link rel="stylesheet" href="/static/sh-ui/tokens.css">
+<link rel="stylesheet" href="/static/sh-ui/components.css">
+<link rel="stylesheet" href="/static/sh-ui/list.css">
 <style>
 :root{--bg:#05070f;--panel:#0a0e1c;--line:#1b2440;--fg:#d9e3f5;--dim:#6f80a0;--accent:#8fb4ff;--warn:#e8b06a;--ok:#7fd4a8;}
 *{box-sizing:border-box;}
 html,body{height:100%;margin:0;}
-body{background:var(--bg);color:var(--fg);font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;display:flex;flex-direction:column;}
+@font-face{font-family:'Geist Sans';font-style:normal;font-weight:400;font-display:swap;src:url('/static/sh-ui/fonts/geist-sans-latin-400-normal.woff2') format('woff2');}
+@font-face{font-family:'Geist Sans';font-style:normal;font-weight:500;font-display:swap;src:url('/static/sh-ui/fonts/geist-sans-latin-500-normal.woff2') format('woff2');}
+@font-face{font-family:'Geist Sans';font-style:normal;font-weight:600;font-display:swap;src:url('/static/sh-ui/fonts/geist-sans-latin-600-normal.woff2') format('woff2');}
+body{background:var(--bg);color:var(--fg);font:14px/1.5 'Geist Sans',system-ui,sans-serif;display:flex;flex-direction:column;}
+/* Monospace only where a value must be compared character by character. */
+table td,.muted{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
 header{display:flex;align-items:center;gap:1rem;padding:.5rem 1rem;background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap;}
 header .brand{font-weight:700;}
 header .tag{color:var(--dim);font-size:12px;border:1px solid var(--line);border-radius:4px;padding:0 .35rem;}
@@ -170,26 +178,32 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
 </head>
 <body>
 <header>
-  <span class="brand">Toise</span><span class="tag">night sky</span>
   <div class="stats">
+    <button id="vNet" title="Le réseau : interfaces, adresses, segments, équipements, points de terminaison">Réseau</button>
+    <button id="vHosts" title="Les machines : hôtes, machines virtuelles, conteneurs, pods">Machines</button>
+    <button id="vApps" title="Les applications : services, ports en écoute, bases de données">Applications</button>
+    <button id="fit" title="Recentrer la vue sur l'ensemble">Recentrer</button>
     <span id="err"></span>
     <span id="status"><i></i><span id="statusTxt">connecting…</span></span>
-    <span><b id="nNodes">0</b> entities</span>
+    <span><b id="nNodes">0</b> entités</span>
     <span><b id="nEdges">0</b> relations</span>
     <span id="matchStat" class="muted"></span>
     <span id="hint" class="muted"></span>
-    <label class="muted" for="attr">attr<input id="attr" spellcheck="false" autocomplete="off" placeholder="key, key=value, or text" title="Match nodes whose identity/attributes contain the text (a key, key=value, or a free substring). Use the toggle to dim the rest or hide them entirely." style="background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;padding:.1rem .35rem;width:11rem;margin-left:.3rem;"></label>
-    <button id="filterMode" title="Search behaviour: dim the non-matching nodes, or show only the matches">match: dim</button>
-    <button id="view" title="Switch between the flat chart and the 360 dome. The dome is the SAME layout wrapped around you: the centre of the graph sits straight ahead and its outskirts are behind your shoulders. Drag to turn, scroll to change the field of view.">view: chart</button>
-    <button id="labels" title="Toggle node labels: human-readable names vs technical ids">labels: names</button>
-    <button id="fold" title="Fold children into their owner: an interface into its device, a service into its host. 88% of a real graph is a child of something, so folding takes it from hundreds of nodes to dozens. Double-click a node to open just that one.">fold: on</button>
-    <span class="layers" id="layers" title="Show one layer at a time. A layer is a stratum of the model, not a search: you pick from what is there instead of guessing what to type."></span>
-    <button id="edgemode" title="Edges: faint (default), with type labels, or hidden — to declutter a dense graph">edges: on</button>
-    <button id="inferred" title="Overlay derived (not stored) edges linking IP-bearing entities to their network.address hub">inferred: off</button>
-    <button id="static" title="Static layout: keep node positions fixed and don't replay the layout animation on updates">layout: animated</button>
-    <button id="relayout" title="Re-run the force layout, then freeze it">relayout</button>
-    <button id="resync">resync</button>
-    <button id="fit">fit</button>
+    <label class="muted" for="attr">rechercher<input id="attr" spellcheck="false" autocomplete="off" placeholder="un nom, une clé, ou clé=valeur" style="background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;padding:.1rem .35rem;width:11rem;margin-left:.3rem;"></label>
+    <!-- The expert controls stay in the DOM, hidden: every one of them is wired
+         further down, and removing the elements would break that wiring. -->
+    <div id="advanced" hidden>
+      <button id="filterMode">match: dim</button>
+      <button id="view">view: chart</button>
+      <button id="labels">labels: names</button>
+      <button id="fold">fold: on</button>
+      <span class="layers" id="layers"></span>
+      <button id="edgemode">edges: on</button>
+      <button id="inferred">inferred: off</button>
+      <button id="static">layout: animated</button>
+      <button id="relayout">relayout</button>
+      <button id="resync">resync</button>
+    </div>
   </div>
 </header>
 <div class="legend" id="legend"></div>
@@ -832,22 +846,61 @@ function applyRelation(ce){ if(historical) return; const r=ce&&ce.relation; if(!
 // opinion of what a node is.
 function inspect(id){
   const panel=document.getElementById('panel');
-  const head='<h2 style="margin-top:1rem">Live feed</h2><div id="feed"></div>';
-  const blank='<div class="empty">Click a node to inspect its identity &amp; attributes.</div>'+head;
+  const head='<h2 style="margin-top:1rem">Activité</h2><div id="feed"></div>';
+  const blank='<div class="empty">Cliquez un nœud pour voir sa fiche.</div>'+head;
   const n=id&&ENT[id];
   if(!n){ panel.innerHTML=blank; return; }
-  const rows=a=>(a||[]).map(x=>'<tr><td class="k">'+esc(x.key)+'</td><td>'+esc(x.value)+'</td></tr>').join('')||'<tr><td class="muted" colspan=2>—</td></tr>';
-  panel.innerHTML='<button id="panelClose" title="Close" style="float:right">×</button>'
-    +'<h2>'+esc(n.type)+(n.deleted?' <span class="muted">(deleted)</span>':'')+'</h2>'
-    +'<h2>Identity</h2><table>'+rows(n.identity)+'</table>'
-    +'<h2>Attributes</h2><table>'+rows(n.attributes)+'</table>'
-    // The fingerprint, not the id: an id is local to the replica that answered and
-    // is re-minted after a long silence, so it is the wrong thing to show or quote.
-    +'<h2>identity_fingerprint</h2><div class="muted" style="word-break:break-all">'+esc(n.identityFingerprint||'—')+'</div>'+head;
+  // Never surface an attribute whose key mentions a contact: the values are real
+  // personal addresses, and this panel is shown on a screen share.
+  const visible=a=>(a||[]).filter(x=>!/contact/i.test(x.key));
+  const rows=a=>visible(a).map(x=>'<tr><td class="k">'+esc(x.key)+'</td><td>'+esc(x.value)+'</td></tr>').join('')||'<tr><td class="muted" colspan=2>—</td></tr>';
+  const attr=k=>{ const hit=(n.attributes||[]).find(x=>x.key===k); return hit?hit.value:null; };
+  const version=attr('service.version')||attr('db.system.version')||attr('os.version');
+  // REL is an object keyed by relation id, not an array: Object.values first.
+  const hostRel=Object.values(REL).find(r=>r.fromId===id&&r.type==='runs_on');
+  const host=hostRel&&ENT[hostRel.toId]?ENT[hostRel.toId].displayName:null;
+  const status=attr('entity.lifecycle.status');
+  panel.innerHTML='<button id="panelClose" title="Fermer" style="float:right">×</button>'
+    +'<h2>'+esc(n.displayName||n.id)+(n.deleted?' <span class="muted">(supprimé)</span>':'')+'</h2>'
+    +'<table>'
+    +'<tr><td class="k">Nom</td><td>'+esc(n.displayName||n.id)+'</td></tr>'
+    +'<tr><td class="k">Type</td><td>'+esc(n.type)+'</td></tr>'
+    +(version?'<tr><td class="k">Version</td><td>'+esc(version)+'</td></tr>':'')
+    +(host?'<tr><td class="k">Serveur</td><td>'+esc(host)+'</td></tr>':'')
+    +(status?'<tr><td class="k">État</td><td>'+esc(status)+'</td></tr>':'')
+    +'</table>'
+    +'<details><summary class="muted">Détails techniques</summary>'
+    // The fingerprint, not the id: an id is local to the replica that answered.
+    +'<div class="muted" style="word-break:break-all">'+esc(n.identityFingerprint||'—')+'</div>'
+    +'<table>'+rows(n.identity)+'</table>'
+    +'<table>'+rows(n.attributes)+'</table>'
+    +'</details>'+head;
   const cb=document.getElementById('panelClose');
   if(cb) cb.onclick=()=>{ panel.innerHTML=blank; };
 }
 net.on('click',p=>{ inspect(p.nodes.length?p.nodes[0]:null); });
+
+// Three plain-language views for a reader who does not know our type names. Each
+// one fills `hidden` so only its own layer stays drawn.
+//
+// Two things the obvious shape gets wrong: `hidden` is a const Set, so it is
+// cleared and refilled rather than reassigned; and `allTypes` is local to
+// rebuild(), so the set of known types is taken from the entities themselves.
+const VIEWS={
+  vNet:['network.interface','network.address','network.segment','network.device','network.endpoint','network.route','network.neighbor'],
+  vHosts:['host','compute.vm','container','pod'],
+  vApps:['service.instance','service.listener','db','cloud.resource'],
+};
+function applyView(btn){
+  const keep=new Set(VIEWS[btn]);
+  hidden.clear();
+  for(const n of Object.values(ENT)) if(!keep.has(n.type)) hidden.add(n.type);
+  for(const id of Object.keys(VIEWS)){
+    document.getElementById(id).style.color = (id===btn) ? 'var(--accent)' : '';
+  }
+  rebuild();
+}
+for(const id of Object.keys(VIEWS)) document.getElementById(id).onclick=()=>applyView(id);
 
 // Realtime: the relay exposes no subscription, so polling is the only path. The
 // page kept a websocket with a polling fallback; only the fallback remains.
