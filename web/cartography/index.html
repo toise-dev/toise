@@ -528,10 +528,10 @@ function foldedInside(){
 function badge(by){
   if(!by) return '';
   const e=Object.entries(by).sort((a,b)=>b[1]-a[1]);
-  return '  ('+e.slice(0,2).map(([t,c])=>c+' '+t).join(', ')+(e.length>2?', +'+(e.length-2):'')+')';
+  return '  ('+e.slice(0,2).map(([t,c])=>c+' '+typeLabel(t)).join(', ')+(e.length>2?', +'+(e.length-2):'')+')';
 }
 function badgeTotal(by){ return by?Object.values(by).reduce((a,b)=>a+b,0):0; }
-function badgeFull(by){ return Object.entries(by).sort((a,b)=>b[1]-a[1]).map(([t,c])=>c+' '+t).join(', '); }
+function badgeFull(by){ return Object.entries(by).sort((a,b)=>b[1]-a[1]).map(([t,c])=>c+' '+typeLabel(t)).join(', '); }
 
 // kindGroups counts what each kind node stands for. Built from repOf, so it
 // cannot disagree with what is actually drawn.
@@ -574,7 +574,11 @@ function rebuild(){
   CITED_OWNERS.clear();
   if(CITED.size) for(const id of Object.keys(ENT)){
     if(!CITED.has(ENT[id].identityFingerprint)) continue;
-    const r=repOf(id); if(isKind(r)) CITED_OWNERS.add(kindParts(r).owner);
+    const r=repOf(id); if(r===id) continue;      // drawn in its own right, nothing to carry
+    // With nothing expanded -- the default -- repOf returns the OWNER, not a kind
+    // node: kinds only appear once a reader opens an owner. An earlier version only
+    // handled the kind case, so by default this set stayed empty and no owner lit up.
+    CITED_OWNERS.add(isKind(r)?kindParts(r).owner:r);
   }
   const firstLoad=!fitted;   // scatter new nodes on the very first layout so stabilisation spreads them
   const inside=foldedInside();
