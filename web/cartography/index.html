@@ -542,7 +542,11 @@ function kindGroups(){
     if(hidden.has(ENT[id].type)) continue;
     const r=repOf(id); if(!isKind(r)) continue;
     const k=kindParts(r);
-    (g[r]=g[r]||{owner:k.owner,type:k.type,n:0}).n++;
+    const e=(g[r]=g[r]||{owner:k.owner,type:k.type,n:0,cited:0});
+    e.n++;
+    // A cited element folded into its owner must still light something up, or an
+    // answer citing it looks like an answer citing nothing.
+    if(CITED.size&&CITED.has(ENT[id].identityFingerprint)) e.cited++;
   }
   return g;
 }
@@ -564,6 +568,14 @@ function rebuild(){
   const prevNodeIds=new Set(nodes.getIds());
   const allTypes=new Set(), nodeIds=new Set(), nUp=[];
   const q=attrQuery.trim(); let matched=0;
+  // Filled before the node loop below, not inside kindGroups() further down: that one
+  // runs AFTER this loop, so the set would be empty on the first pass and correct on
+  // the next -- wrong intermittently, which is worse than wrong.
+  CITED_OWNERS.clear();
+  if(CITED.size) for(const id of Object.keys(ENT)){
+    if(!CITED.has(ENT[id].identityFingerprint)) continue;
+    const r=repOf(id); if(isKind(r)) CITED_OWNERS.add(kindParts(r).owner);
+  }
   const firstLoad=!fitted;   // scatter new nodes on the very first layout so stabilisation spreads them
   const inside=foldedInside();
   let hiddenByFold=0;
@@ -579,7 +591,7 @@ function rebuild(){
     const by=inside[n.id], k=badgeTotal(by), d=degree[n.id]||0;
     const node={id:n.id,label:labelOf(n)+badge(by),
               title:titleOf(n)+(k?('\nfolded inside: '+badgeFull(by)+'  \u2014 double-click to open'):''),
-              opacity:n.deleted?0.45:((q&&!ok)||(CITED.size&&!CITED.has(n.identityFingerprint))?0.12:1),
+              opacity:n.deleted?0.45:((q&&!ok)||(CITED.size&&!CITED.has(n.identityFingerprint)&&!CITED_OWNERS.has(n.id))?0.12:1),
               size:Math.min(30,5+Math.sqrt(d)*4.4)+(k?3:0),
               borderWidth:(n.deleted||k)?2:0,
               // the halo IS the star: a glow sized on the node, in its own colour,
@@ -597,10 +609,10 @@ function rebuild(){
     if(!nodeIds.has(k.owner)) return;            // its owner is filtered out; the kind has nothing to hang from
     nodeIds.add(id);
     const openable=k.n<=KIND_OPEN_MAX;
-    nUp.push({id,label:k.n+' '+k.type,
-      title:k.n+' '+k.type+' inside '+(labelOf(ENT[k.owner])||k.owner)+'\n'+
+    nUp.push({id,label:k.n+' '+typeLabel(k.type),
+      title:k.n+' '+typeLabel(k.type)+' inside '+(labelOf(ENT[k.owner])||k.owner)+'\n'+
             (openable?'double-click to open them':'too many to draw \u2014 narrow with the attribute filter instead, then open'),
-      shape:'box', opacity:1,
+      shape:'box', opacity:(CITED.size&&!k.cited)?0.12:1,
       size:Math.min(30,12+Math.sqrt(k.n)*2.4),
       borderWidth:openable?2:3,
       font:{color:'#d9e3f5',size:12},shadow:{enabled:false},
@@ -909,6 +921,7 @@ net.on('click',p=>{ inspect(p.nodes.length?p.nodes[0]:null); });
 // the portal relay, which holds both. Everything coming back is written with
 // textContent, because an answer is text from a model, not markup we authored.
 const CITED=new Set();   // fingerprints the latest answer cited; dims the rest
+const CITED_OWNERS=new Set();   // owners holding a cited child, so a folded hit still shows
 const askQ=document.getElementById('askQ'), askBtn=document.getElementById('askBtn');
 const askState=document.getElementById('askState'), askOut=document.getElementById('askOut');
 async function ask(){
