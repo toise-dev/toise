@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-11-05
+
 ### Added
 
 - **`cloud.resource` is a registered entity type**, keyed `{azure.resource.id}` —
@@ -56,6 +58,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that would narrow the wire contract and lose the `basis`, which is the useful
   half (#544).
 
+### Security
+
+- **A write needed no decision, so an instance with no token configured accepted
+  one from anybody.** `auth.CanWrite` returned true when nothing had recorded a
+  decision, and the HTTP middleware recorded none at all when authentication was
+  off: it handed the request straight through. The one write the read surface
+  exposes — `annotate_entity`, on MCP and on GraphQL — was therefore open to
+  anyone who could reach the port. Reads being open there is the documented
+  trusted-network posture; writes being open **with no way to refuse them** was
+  not a posture, it was the absence of one.
+
+  `CanWrite` now fails closed, and the decision is recorded on every path. What
+  it records comes from **`allow_unauthenticated_writes`**, on by default so a
+  trusted-network instance keeps the one write its operator has rather than
+  losing it in silence at an upgrade, and **forced off by `production`**, which
+  cannot be overridden while that profile is set.
+
+  A transport with no middleware takes the same decision from the same place:
+  the stdio MCP server asks the authenticator, so it writes only while nothing
+  authenticates. OIDC counts from the moment it is **declared**, not from the
+  moment its network discovery produces a verifier — the two differ for the
+  whole window in between, and a transport wired inside that window was told
+  nothing authenticated (found in qualification, not review).
+
+  An anonymous writer reachable on a non-loopback listener now raises a
+  `toise_insecure_config{surface="write",reason="unauthenticated_writes"}`
+  condition, and the setting is published as a declaration either way, so
+  "locked" reads differently from "not scraped" (#589, #590).
+
+- **The production lockdown says what it overrode.** It winning over the
+  individual toggles is deliberate; winning without a word is not. A deployment
+  carried `debug_ui: true` under `production` for weeks and its operator
+  believed the interface was served, because nothing ever said the profile had
+  taken the value away. Startup now names the toggles it turned off that were on
+  beneath it.
+
 ### Changed
 
 - **`/metrics` is authenticated, and answers only what the caller's token may
@@ -85,6 +123,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the config to learn whether this is open.
 
 ### Upgrade notes
+
+- **Under `production`, `annotate_entity` is refused.** The profile forces
+  `allow_unauthenticated_writes` off, so on an instance with no token configured
+  no caller can write at all. This is the point of the change, and it is a
+  behavior change for anyone who annotated through an unauthenticated read path:
+  **place any annotation you still need before upgrading.** Restoring the
+  ability afterwards means configuring a write-capable token — and configuring
+  any token enables authentication for *every* reader, so a scrape or a client
+  with no bearer gets 401 at the next restart. Decoupling authentication per
+  surface is not in this release.
+
+  Nothing changes for an instance that is not under `production`: the setting is
+  on by default precisely so a trusted-network deployment does not lose the one
+  write its operator has without being told.
 
 - **`rejected` changed grain, so the number does not carry across an upgrade.**
   Before 0.18 the rejected-records counter existed only as a **global** total
