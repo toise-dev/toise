@@ -120,6 +120,15 @@ main{flex:1;display:flex;min-height:0;}
 #net.laying{opacity:0;}   /* hidden while the initial layout is computed, then revealed */
 .resizer{flex:none;width:6px;cursor:col-resize;background:var(--line);opacity:.35;}
 .resizer:hover,.resizer.drag{opacity:1;background:var(--accent);}
+aside.wide{width:480px;}
+/* Labels are prose, not values: they follow the page font. */
+label.muted,#askState,summary,#askOut{font-family:inherit;}
+#ask{margin-bottom:.8rem;}
+#askQ{width:100%;box-sizing:border-box;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;padding:.3rem;}
+#askOut table.sh-list{width:100%;border-collapse:collapse;margin-top:.5rem;}
+#askOut table.sh-list th{text-align:left;font-weight:600;border-bottom:1px solid var(--line);padding:.2rem .3rem;}
+#askOut table.sh-list td{padding:.2rem .3rem;font-family:inherit;}
+#askOut .sh-export{margin-top:.5rem;display:flex;gap:.4rem;}
 aside{width:360px;flex:none;border-left:1px solid var(--line);background:var(--panel);overflow-y:auto;overflow-x:hidden;padding:.8rem;}
 aside h2{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;margin:.2rem 0 .6rem;}
 /* table-layout:fixed + wrap-anywhere keeps long ids/values inside the panel instead
@@ -219,7 +228,13 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
   </div>
   <div class="resizer" id="resizer" title="Drag to resize the panel"></div>
   <aside id="panel">
-    <div class="empty">Click a node to inspect its identity &amp; attributes.</div>
+    <div id="ask">
+      <textarea id="askQ" maxlength="1000" rows="2" placeholder="Ask a question about this map"></textarea>
+      <button id="askBtn">Ask</button>
+      <div id="askState" class="muted"></div>
+      <div id="askOut"></div>
+    </div>
+    <div class="empty">Click an element to see its details.</div>
     <h2 style="margin-top:1rem">Live feed</h2>
     <div id="feed"></div>
   </aside>
@@ -564,7 +579,7 @@ function rebuild(){
     const by=inside[n.id], k=badgeTotal(by), d=degree[n.id]||0;
     const node={id:n.id,label:labelOf(n)+badge(by),
               title:titleOf(n)+(k?('\nfolded inside: '+badgeFull(by)+'  \u2014 double-click to open'):''),
-              opacity:n.deleted?0.45:(q&&!ok?0.12:1),
+              opacity:n.deleted?0.45:((q&&!ok)||(CITED.size&&!CITED.has(n.identityFingerprint))?0.12:1),
               size:Math.min(30,5+Math.sqrt(d)*4.4)+(k?3:0),
               borderWidth:(n.deleted||k)?2:0,
               // the halo IS the star: a glow sized on the node, in its own colour,
@@ -639,9 +654,8 @@ function rebuild(){
   nE.style.color=showEdges?'':'var(--warn)';
   presentTypes=allTypes; renderLayers();
   const leg=document.getElementById('legend'); leg.innerHTML='';
-  if(inferred){ const s=document.createElement('span'); s.style.cursor='default'; s.style.opacity='.85';
-    s.innerHTML='<i style="background:none;border-top:2px dashed #d29922;border-radius:0;height:0;width:14px"></i>inferred (derived, not stored)';
-    leg.appendChild(s); }
+  // The inferred-links legend is jargon for this audience; the overlay itself
+  // stays available under the advanced controls.
   [...allTypes].sort().forEach(t=>{ const s=document.createElement('span'); s.className=hidden.has(t)?'off':'';
     s.innerHTML='<i style="background:'+colorFor(t)+'"></i>'+esc(typeLabel(t));
     s.onclick=()=>{ hidden.has(t)?hidden.delete(t):hidden.add(t); rebuild(); }; leg.appendChild(s); });
@@ -857,7 +871,7 @@ function applyRelation(ce){ if(historical) return; const r=ce&&ce.relation; if(!
 function inspect(id){
   const panel=document.getElementById('panel');
   const head='<h2 style="margin-top:1rem">Activity</h2><div id="feed"></div>';
-  const blank='<div class="empty">Click a node to see its details.</div>'+head;
+  const blank='<div class="empty">Click an element to see its details.</div>'+head;
   const n=id&&ENT[id];
   if(!n){ panel.innerHTML=blank; return; }
   // Never surface an attribute whose key mentions a contact: the values are real
@@ -889,6 +903,88 @@ function inspect(id){
   if(cb) cb.onclick=()=>{ panel.innerHTML=blank; };
 }
 net.on('click',p=>{ inspect(p.nodes.length?p.nodes[0]:null); });
+
+// --- the question panel ------------------------------------------------------
+// The browser never sends GraphQL and never sees a tenant: it posts a question to
+// the portal relay, which holds both. Everything coming back is written with
+// textContent, because an answer is text from a model, not markup we authored.
+const CITED=new Set();   // fingerprints the latest answer cited; dims the rest
+const askQ=document.getElementById('askQ'), askBtn=document.getElementById('askBtn');
+const askState=document.getElementById('askState'), askOut=document.getElementById('askOut');
+async function ask(){
+  const q=askQ.value.trim(); if(!q) return;
+  askBtn.disabled=true; askState.textContent='Working…'; askOut.textContent='';
+  const say=t=>{ const p=document.createElement('p'); p.textContent=t; askOut.appendChild(p); };
+  const ac=new AbortController(); let timedOut=false;
+  const timer=setTimeout(()=>{ timedOut=true; ac.abort(); },30000);
+  try{
+    const r=await fetch('/cartography/ask',{method:'POST',headers:{'Content-Type':'application/json'},
+      credentials:'same-origin',body:JSON.stringify({question:q}),signal:ac.signal});
+    if(!r.ok){
+      let msg='Request failed.';
+      try{ const j=await r.json(); if(j&&j.error) msg=String(j.error); }catch(_){}
+      say(msg); return;
+    }
+    const j=await r.json();
+    if(j&&j.answer!=null) say(String(j.answer));
+    if(j&&j.table) renderTable(j.table);
+    CITED.clear();
+    if(j&&Array.isArray(j.cited)) for(const f of j.cited) CITED.add(String(f));
+    rebuild();
+    document.getElementById('panel').classList.add('wide');
+  }catch(_){
+    say(timedOut?'The question took longer than 30 seconds and was cancelled.':'Request failed.');
+  }finally{ clearTimeout(timer); askBtn.disabled=false; askState.textContent=''; }
+}
+// A row is an ARRAY, positional against columns -- not an object keyed by label.
+const cellOf=(row,i)=>{ const v=Array.isArray(row)?row[i]:undefined; return (v===null||v===undefined)?null:v; };
+function renderTable(t){
+  if(!t||!Array.isArray(t.columns)||!Array.isArray(t.rows)) return;
+  const table=document.createElement('table'); table.className='sh-list';
+  const thead=document.createElement('thead'), hr=document.createElement('tr');
+  for(const c of t.columns){ const th=document.createElement('th'); th.textContent=c&&c.label?c.label:''; hr.appendChild(th); }
+  thead.appendChild(hr); table.appendChild(thead);
+  const tb=document.createElement('tbody');
+  for(const row of t.rows){
+    const tr=document.createElement('tr');
+    t.columns.forEach((c,i)=>{ const td=document.createElement('td');
+      const v=cellOf(row,i); td.textContent=v===null?'—':String(v); tr.appendChild(td); });
+    tb.appendChild(tr);
+  }
+  table.appendChild(tb); askOut.appendChild(table);
+  if(t.truncated){ const d=document.createElement('div'); d.className='muted';
+    d.textContent='Incomplete list.'; askOut.appendChild(d); }
+  const bar=document.createElement('div'); bar.className='sh-export';
+  const add=(label,name,mime,make)=>{ const b=document.createElement('button'); b.type='button';
+    b.textContent=label; b.addEventListener('click',()=>download(name,mime,make(t))); bar.appendChild(b); };
+  add('Export CSV','result.csv','text/csv;charset=utf-8',toCSV);
+  add('Export JSON','result.json','application/json',toJSON);
+  askOut.appendChild(bar);
+}
+function toCSV(t){
+  const cell=v=>{
+    let s=(v===null||v===undefined)?'':String(v);
+    // A leading =, +, - or @ makes a spreadsheet treat the cell as a formula, so it
+    // is prefixed with an apostrophe. The export is data, never something to run.
+    if(/^[=+\-@]/.test(s)) s="'"+s;
+    if(/[",\r\n]/.test(s)) s='"'+s.replace(/"/g,'""')+'"';
+    return s;
+  };
+  const out=[t.columns.map(c=>cell(c&&c.label)).join(',')];
+  for(const row of t.rows) out.push(t.columns.map((c,i)=>cell(cellOf(row,i))).join(','));
+  return out.join('\r\n');
+}
+function toJSON(t){
+  return JSON.stringify(t.rows.map(row=>{ const o={};
+    t.columns.forEach((c,i)=>{ o[(c&&c.label)||('c'+i)]=cellOf(row,i); }); return o; }),null,2);
+}
+function download(name,mime,text){
+  const url=URL.createObjectURL(new Blob([text],{type:mime}));
+  const a=document.createElement('a'); a.href=url; a.download=name;
+  document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+}
+askBtn.addEventListener('click',ask);
+askQ.addEventListener('keydown',e=>{ if((e.ctrlKey||e.metaKey)&&e.key==='Enter'){ e.preventDefault(); ask(); } });
 
 // Three plain-language views for a reader who does not know our type names. Each
 // one fills `hidden` so only its own layer stays drawn.
