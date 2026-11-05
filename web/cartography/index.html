@@ -34,8 +34,10 @@
   match (a key, key=value, or a free substring) and dims the rest — a read-time view
   over the fetched data, so it works on whatever attributes producers emit.
 
-  Timeline (time travel): the bottom bar folds the graph to a past instant via the
-  entities(asOf:) / relations(asOf:) event-time arguments — drag left to rewind, click
+  Timeline (time travel): REMOVED in this build. The relay exposes no document
+  carrying an asOf argument, and every drag of the slider was a read at a past
+  instant whose cost follows the journal size. The footer is hidden and its
+  handlers are unreachable.
   LIVE (or drag back to now) to resume streaming. Live updates are ignored while
   browsing history so the past view stays put; a request before the retention horizon
   is refused and surfaced.
@@ -668,11 +670,12 @@ async function loadFull(){
   }catch(e){ err.textContent='⚠ '+e.message; }
 }
 
-// --- timeline: view the topology as-of a past instant (event-time) --------------
-// Drag the slider left to fold the log up to an earlier moment via the GraphQL
-// entities(asOf:)/relations(asOf:) time-travel arguments; the far right is live.
-// While browsing history, live subscription updates are ignored so the past view
-// stays put; "LIVE" (or dragging back to now) resumes streaming.
+// --- timeline: HIDDEN in this build ---------------------------------------------
+// The relay exposes no asOf document, so there is nothing to fold the graph with.
+// The code below is left in place rather than cut out, because removing it would
+// mean rewriting the density profile and the live-feed wiring that share it; the
+// footer carries `hidden` AND an explicit display rule, so none of it is
+// reachable. loadAsOf is a no-op that says so once.
 let historical=false;
 const WINDOWS={'1h':3600e3,'6h':6*3600e3,'24h':86400e3,'7d':604800e3};
 let tlWindow=localStorage.getItem('toise_viz_window')||'24h';
