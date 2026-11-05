@@ -966,7 +966,17 @@ function toCSV(t){
     let s=(v===null||v===undefined)?'':String(v);
     // A leading =, +, - or @ makes a spreadsheet treat the cell as a formula, so it
     // is prefixed with an apostrophe. The export is data, never something to run.
-    if(/^[=+\-@]/.test(s)) s="'"+s;
+    //
+    // The test skips leading whitespace and control characters first: a cell of
+    // "\t=cmd" passes a naive first-character check, and the spreadsheet strips the
+    // tab before parsing, so the formula runs anyway. Column labels go through this
+    // same function, because a header is a cell too.
+    // A plain number is exempt: "-5" is a value, and prefixing it would turn a
+    // numeric column into text that no longer adds up. Anything else starting with
+    // one of those characters is prefixed, whatever the column claims its type is --
+    // trusting the declared type would move the decision to the relay.
+    const lead=s.replace(/^[\s\u0000-\u001f]+/,'');
+    if(/^[=+\-@]/.test(lead) && !/^[+-]?\d+(\.\d+)?$/.test(lead)) s="'"+s;
     if(/[",\r\n]/.test(s)) s='"'+s.replace(/"/g,'""')+'"';
     return s;
   };
