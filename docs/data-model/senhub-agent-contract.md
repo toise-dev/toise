@@ -611,6 +611,32 @@ interface carries:
   or `phy80211` present under the interface, and the interface present under
   `/sys/devices/virtual/net`). Those are what to test; the name is never one of them.
 
+  **Whether to emit a loopback interface at all differs between a host and a polled
+  device, and the asymmetry is deliberate.** On a **host**, emit nothing: no
+  `network.interface` entity, no `has_interface`. A host loopback carries no hop — it
+  joins the machine to itself — and it is identical on every machine, so it answers a
+  question no reader asks and the answer is the same everywhere. That is the same
+  reasoning that keeps an Azure subscription or resource group a descriptive attribute
+  rather than an entity. On a **polled device**, emit it: a device loopback is a stable,
+  routable management identity (the address a router is known by, independent of which
+  physical port is up), so it does carry a hop.
+
+  A service bound to a loopback address loses nothing by this. The fact rides as
+  `listen.address` on the `service.listener`, and the hop is `runs_on` to the host —
+  there is no dangling `listens_on` to an interface that was never emitted, which would
+  be discarded and counted rather than served.
+
+  The matching address rule is **not** stated here: a loopback address must never be the
+  target of `bound_to` or `next_hop_via`, for the stronger reason that `network.address`
+  is deliberately not host-scoped, so one shared entity would make every machine a
+  neighbour of every other. See the repeating-address rule and its range table below,
+  which already covers `127.0.0.0/8` and `::1` and gives the general test.
+
+  **Consequence to leave alone: `loopback` is therefore reachable only through the SNMP
+  path.** A deployment running the host probe alone never emits that value. This is the
+  asymmetry above, not a gap — making the host probe emit a loopback interface to
+  "complete" the vocabulary reopens exactly what this clause closes.
+
   **A poller reading `ifType` has nothing to arbitrate, and that is the limit of the
   order above.** `ifType` answers once per interface, so a poller receives one value and
   never sees two competing facts — the precedence is for a producer that observes them
