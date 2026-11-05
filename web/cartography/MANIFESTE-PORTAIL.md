@@ -11,11 +11,24 @@ relais détient les textes ci-dessous.
 ```graphql
 query Entities($first: Int, $after: String) {
   entities(first: $first, after: $after) {
-    edges { node { id type deleted displayName identity { key value } attributes { key value } } }
+    edges { node { id identityFingerprint type deleted displayName identity { key value } attributes { key value } } }
     pageInfo { hasNextPage endCursor }
   }
 }
 ```
+
+**`identityFingerprint` est le champ de citation**, et c'est lui qu'un agent doit renvoyer,
+jamais `id`. L'`id` est **local au réplica qui répond** : il diffère entre réplicas et il est
+reforgé quand une entité revient après un long silence (ADR 0035). La production tourne sur
+**deux réplicas derrière un tour de rôle DNS**, donc des citations par `id` auraient désigné
+des entités introuvables **par intermittence** — le pire mode de panne, qui marche à la
+répétition et rate en séance. L'empreinte, elle, est calculée identiquement par tous les
+réplicas.
+
+**Format, mesuré sur 21 entités de 7 types** : `<type>:<32 hexadécimaux minuscules>`, par
+exemple `host:f31b9158b93d2b8c350906e6c471e7ac`. **Longueurs de 35 à 50 caractères**, le
+maximum théorique étant 50 (`network.interface`, le plus long nom de type du registre, plus
+`:` plus 32). Le filtre `[A-Za-z0-9:._-]{1,128}` du portail les accepte toutes.
 
 | variable | type | validation attendue |
 |---|---|---|

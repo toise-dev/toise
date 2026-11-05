@@ -131,7 +131,6 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
 #feed{font-size:11px;color:var(--dim);max-height:30vh;overflow:auto;margin-top:.4rem;}
 #feed div{padding:.15rem 0;border-bottom:1px solid var(--line);}
 #err{color:var(--warn);font-size:12px;}
-.timeline[hidden]{display:none;}   /* an author display rule beats the browser's [hidden], so say it */
 .timeline{display:flex;align-items:center;gap:.7rem;padding:.35rem 1rem .45rem;background:var(--panel);border-top:1px solid var(--line);font-size:12px;}
 .tlwrap{flex:1;min-width:260px;display:flex;flex-direction:column;gap:3px;}
 /* change-density heatmap: one row per entity type, a grid of cells (empty = faint
@@ -172,9 +171,6 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
 <body>
 <header>
   <span class="brand">Toise</span><span class="tag">night sky</span>
-  <nav>
-    <a href="/">Dashboard</a><a href="/entities">Entities</a><a href="/changes">Changes</a><a href="/playground">GraphQL</a>
-  </nav>
   <div class="stats">
     <span id="err"></span>
     <span id="status"><i></i><span id="statusTxt">connecting…</span></span>
@@ -215,29 +211,23 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
     <div id="feed"></div>
   </aside>
 </main>
-<footer class="timeline" id="timeline" hidden>
-  <button id="tlLive" title="Jump back to the live view">● LIVE</button>
-  <button id="tlPlay" title="Replay history forward from the cursor (fast-forward, like scrubbing a video)">▶</button>
-  <select id="tlSpeed" title="Replay speed">
-    <option value="10">1×</option><option value="35" selected>4×</option><option value="90">12×</option></select>
+<footer class="timeline" id="timeline">
   <div class="tlwrap">
     <div class="tlprofrow">
       <div class="tlgutter" id="tlGutter"></div>
-      <div class="tlprofile" id="tlProfile" title="Change density per entity type — coloured cells are changes, faint cells are none. Drag across to zoom into that period."></div>
+      <div class="tlprofile" id="tlProfile" title="Change density per entity type over the selected window — coloured cells are changes, faint cells are none."></div>
     </div>
     <div class="tlaxisrow">
       <div class="tlspacer"></div>
       <div class="tlaxis">
         <div class="tlruler" id="tlRuler"></div>
-        <input type="range" id="tlRange" min="0" max="1000" value="1000" step="1"
-          title="Drag left to view the topology as it was at a past instant (event-time). Far right = live.">
       </div>
     </div>
   </div>
   <label class="muted">window <select id="tlWin">
     <option value="1h">1h</option><option value="6h">6h</option>
     <option value="24h">24h</option><option value="7d">7d</option></select></label>
-  <span id="tlLabel">now</span>
+  <span id="tlLabel">24h</span>
 </footer>
 <script>
 // Fixed endpoint: the portal relay owns the GraphQL documents and only accepts
@@ -780,10 +770,7 @@ function updateCursorLabel(){
   else{ lbl.textContent=t.toLocaleString(); live.classList.add('hist'); }
 }
 async function loadAsOf(iso){
-  // No persisted document carries an asOf argument, so the relay cannot serve a
-  // past instant. The signature stays so no caller breaks, and the timeline that
-  // called it is hidden in this build.
-  console.warn('loadAsOf: the relay exposes no asOf document; ignoring', iso);
+  // Kept only so no existing reference breaks; no caller reaches it any more.
 }
 function returnLive(){ playing=false; clearTimeout(playTimer); syncPlayBtn(); historical=false;
   spanEnd=null; spanMs=WINDOWS[tlWindow]||WINDOWS['24h']; tlRange().value=1000;
@@ -854,7 +841,9 @@ function inspect(id){
     +'<h2>'+esc(n.type)+(n.deleted?' <span class="muted">(deleted)</span>':'')+'</h2>'
     +'<h2>Identity</h2><table>'+rows(n.identity)+'</table>'
     +'<h2>Attributes</h2><table>'+rows(n.attributes)+'</table>'
-    +'<h2>id</h2><div class="muted" style="word-break:break-all">'+esc(n.id)+'</div>'+head;
+    // The fingerprint, not the id: an id is local to the replica that answered and
+    // is re-minted after a long silence, so it is the wrong thing to show or quote.
+    +'<h2>identity_fingerprint</h2><div class="muted" style="word-break:break-all">'+esc(n.identityFingerprint||'—')+'</div>'+head;
   const cb=document.getElementById('panelClose');
   if(cb) cb.onclick=()=>{ panel.innerHTML=blank; };
 }
@@ -956,27 +945,25 @@ function syncStaticBtn(){ stBtn.textContent='layout: '+(staticLayout?'static':'a
 syncStaticBtn();
 stBtn.onclick=()=>{ staticLayout=!staticLayout; localStorage.setItem('toise_viz_static',staticLayout?'1':'0');
   syncStaticBtn(); if(staticLayout) freeze(); };
-document.getElementById('resync').onclick=()=>{ loadProfile(); if(historical){ const t=tlInstant(); if(t){ loadAsOf(t.toISOString()); return; } } loadFull(); };
+document.getElementById('resync').onclick=()=>{ loadProfile(); loadFull(); };
 document.getElementById('fit').onclick=()=>net.fit({animation:true});
 document.getElementById('relayout').onclick=()=>settle(2600);
+// The heatmap and the ruler stay: they are fed by recentChanges, which reads the
+// PRESENT. Only the controls that travelled in time are gone, because the relay
+// exposes no document carrying an asOf argument for them to call.
 const tlWin=document.getElementById('tlWin'); tlWin.value=tlWindow;
+const tlLabelEl=document.getElementById('tlLabel'); tlLabelEl.textContent=tlWindow;
 tlWin.onchange=()=>{ tlWindow=tlWin.value; localStorage.setItem('toise_viz_window',tlWindow);
-  spanEnd=null; spanMs=WINDOWS[tlWindow]||WINDOWS['24h']; renderRuler(); loadProfile(); updateCursorLabel(); onTimeline(); };
-tlRange().addEventListener('input',()=>{ if(playing) pausePlay(); updateCursorLabel(); onTimeline(); });
-renderRuler(); syncPlayBtn(); loadProfile();
-setInterval(()=>{ if(isLiveSpan() && !playing && !historical) loadProfile(); }, 60000);   // keep the live profile fresh
-document.getElementById('tlLive').onclick=returnLive;
-document.getElementById('tlPlay').onclick=()=>{ playing?pausePlay():play(); };
-// Brush the density profile to zoom into a period.
-(function(){ const strip=document.getElementById('tlProfile'); let x0=null, brush=null;
-  const frac=ev=>{ const r=strip.getBoundingClientRect(); return Math.max(0,Math.min(1,(ev.clientX-r.left)/r.width)); };
-  strip.addEventListener('mousedown',ev=>{ x0=frac(ev); brush=document.createElement('div'); brush.className='brush';
-    brush.style.left=(x0*100)+'%'; brush.style.width='0'; strip.appendChild(brush); ev.preventDefault(); });
-  window.addEventListener('mousemove',ev=>{ if(x0==null) return; const x=frac(ev), a=Math.min(x0,x), b=Math.max(x0,x);
-    brush.style.left=(a*100)+'%'; brush.style.width=((b-a)*100)+'%'; });
-  window.addEventListener('mouseup',ev=>{ if(x0==null) return; const x=frac(ev), a=Math.min(x0,x), b=Math.max(x0,x);
-    if(brush){ brush.remove(); brush=null; } x0=null;
-    if(b-a>0.02){ const [s,e]=spanBounds(), W=e-s; setSpan(s+a*W, s+b*W); } }); })();
+  spanEnd=null; spanMs=WINDOWS[tlWindow]||WINDOWS['24h']; renderRuler(); loadProfile();
+  tlLabelEl.textContent=tlWindow; };
+renderRuler(); loadProfile();
+setInterval(()=>{ if(isLiveSpan()) loadProfile(); }, 60000);   // keep the live profile fresh
+// The brush that zoomed the density profile into a period is REMOVED. It reached
+// for the slider and the LIVE button to put the view back, and both are gone with
+// the time travel — so dragging across the strip would have thrown, on the very
+// first thing a reader is invited to do. And with no LIVE button there would have
+// been no way back out of the zoomed window. The window selector covers the need.
+
 // Resize the detail panel by dragging its left edge; the graph takes the rest and
 // the panel's fixed-layout tables reflow to the new width. Width is remembered.
 
