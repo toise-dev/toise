@@ -571,6 +571,18 @@ function rebuild(){
   // Filled before the node loop below, not inside kindGroups() further down: that one
   // runs AFTER this loop, so the set would be empty on the first pass and correct on
   // the next -- wrong intermittently, which is worse than wrong.
+  // #567: the fold check used to return before the filter ran, so a folded child was
+  // never tested. The page then reported "0 match", which reads as "this estate has
+  // no eth0" -- an absence produced by the reader's own bounds, stated as a fact about
+  // the world. Measured: 0 matches folded against 54 unfolded, same graph, same query.
+  MATCH_OWNERS.clear(); foldedMatches=0;
+  if(q) for(const id of Object.keys(ENT)){
+    const n=ENT[id]; if(hidden.has(n.type)) continue;
+    const r=repOf(id); if(r===id) continue;          // drawn in its own right
+    if(!attrMatch(n)) continue;
+    foldedMatches++;
+    MATCH_OWNERS.add(isKind(r)?kindParts(r).owner:r);
+  }
   CITED_OWNERS.clear();
   if(CITED.size) for(const id of Object.keys(ENT)){
     if(!CITED.has(ENT[id].identityFingerprint)) continue;
@@ -590,12 +602,12 @@ function rebuild(){
     if(a!==b){ degree[a]=(degree[a]||0)+1; degree[b]=(degree[b]||0)+1; } });
   Object.values(ENT).forEach(n=>{ allTypes.add(n.type); if(hidden.has(n.type)) return;
     if(repOf(n.id)!==n.id){ hiddenByFold++; return; }            // folded into an owner
-    const ok=attrMatch(n); if(q && !ok && filterOnly) return;   // "only" mode: hide non-matching outright
+    const ok=attrMatch(n); if(q && !ok && !MATCH_OWNERS.has(n.id) && filterOnly) return;   // "only" mode hides non-matching, but not an owner hiding a match
     nodeIds.add(n.id); if(q&&ok) matched++;
     const by=inside[n.id], k=badgeTotal(by), d=degree[n.id]||0;
     const node={id:n.id,label:labelOf(n)+badge(by),
               title:titleOf(n)+(k?('\nfolded inside: '+badgeFull(by)+'  \u2014 double-click to open'):''),
-              opacity:n.deleted?0.45:((q&&!ok)||(CITED.size&&!CITED.has(n.identityFingerprint)&&!CITED_OWNERS.has(n.id))?0.12:1),
+              opacity:n.deleted?0.45:((q&&!ok&&!MATCH_OWNERS.has(n.id))||(CITED.size&&!CITED.has(n.identityFingerprint)&&!CITED_OWNERS.has(n.id))?0.12:1),
               size:Math.min(30,5+Math.sqrt(d)*4.4)+(k?3:0),
               borderWidth:(n.deleted||k)?2:0,
               // the halo IS the star: a glow sized on the node, in its own colour,
@@ -623,7 +635,10 @@ function rebuild(){
       color:{background:'#0a0e1c',border:openable?colorFor(k.type):'#e8b06a'}});
   });
   nodes.update(nUp);
-  const ms=document.getElementById('matchStat'); ms.textContent=q?('· '+matched+' match'):'';
+  // Say what is not shown. "0 match" was the lie; "0 shown, 54 inside folded nodes"
+  // is the same number with its bound declared.
+  const ms=document.getElementById('matchStat');
+  ms.textContent=q?('· '+matched+' shown'+(foldedMatches?(', '+foldedMatches+' inside folded nodes'):'')):'';
   const ai=document.getElementById('attr'); if(ai) ai.style.color=(q&&matched===0)?'var(--warn)':'var(--fg)';
   nodes.getIds().forEach(id=>{ if(!nodeIds.has(id)) nodes.remove(id); });
   const edgeIds=new Set(), eUp=[];
@@ -926,6 +941,8 @@ net.on('click',p=>{ inspect(p.nodes.length?p.nodes[0]:null); });
 // textContent, because an answer is text from a model, not markup we authored.
 const CITED=new Set();   // fingerprints the latest answer cited; dims the rest
 const CITED_OWNERS=new Set();   // owners holding a cited child, so a folded hit still shows
+const MATCH_OWNERS=new Set();   // owners holding a filter match hidden by the fold (#567)
+let foldedMatches=0;
 const askQ=document.getElementById('askQ'), askBtn=document.getElementById('askBtn');
 const askState=document.getElementById('askState'), askOut=document.getElementById('askOut');
 async function ask(){
