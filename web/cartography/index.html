@@ -179,17 +179,16 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
 <body>
 <header>
   <div class="stats">
-    <button id="vNet" title="Le réseau : interfaces, adresses, segments, équipements, points de terminaison">Réseau</button>
-    <button id="vHosts" title="Les machines : hôtes, machines virtuelles, conteneurs, pods">Machines</button>
-    <button id="vApps" title="Les applications : services, ports en écoute, bases de données">Applications</button>
-    <button id="fit" title="Recentrer la vue sur l'ensemble">Recentrer</button>
+    <button id="vNet" title="The network: interfaces, addresses, segments, devices, endpoints">Network</button>
+    <button id="vHosts" title="Machines: hosts, virtual machines, containers, pods">Machines</button>
+    <button id="vApps" title="Applications: services, listening ports, databases">Applications</button>
+    <button id="fit" title="Recenter the view on the whole graph">Recenter</button>
     <span id="err"></span>
-    <span id="status"><i></i><span id="statusTxt">connecting…</span></span>
-    <span><b id="nNodes">0</b> entités</span>
+    <span><b id="nNodes">0</b> entities</span>
     <span><b id="nEdges">0</b> relations</span>
     <span id="matchStat" class="muted"></span>
     <span id="hint" class="muted"></span>
-    <label class="muted" for="attr">rechercher<input id="attr" spellcheck="false" autocomplete="off" placeholder="un nom, une clé, ou clé=valeur" style="background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;padding:.1rem .35rem;width:11rem;margin-left:.3rem;"></label>
+    <label class="muted" for="attr">search<input id="attr" spellcheck="false" autocomplete="off" placeholder="a name, a key, or key=value" style="background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;padding:.1rem .35rem;width:11rem;margin-left:.3rem;font-family:inherit;"></label>
     <!-- The expert controls stay in the DOM, hidden: every one of them is wired
          further down, and removing the elements would break that wiring. -->
     <div id="advanced" hidden>
@@ -255,6 +254,17 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
 // Types take a class in order of first sight — the same stable-by-arrival rule
 // the flat palette used, so a type keeps its colour across a reload.
 const PALETTE=["#a8c2ff","#e9efff","#fbf4dd","#ffdf8f","#ffb46a","#ff8d6d","#8fa7ff","#d7b6ff","#bcd2ff","#ffe9b8","#ffc9a6","#c7ddff"];
+// Internal type names are the model's vocabulary, not a reader's. A fallback to the
+// raw name keeps an unknown type visible rather than silently unlabelled.
+const TYPE_LABEL={
+  host:'Host', 'compute.vm':'Virtual machine', container:'Container', pod:'Pod',
+  'service.instance':'Service', 'service.listener':'Listening port', 'host.service':'System unit',
+  db:'Database', 'network.interface':'Interface', 'network.address':'IP address',
+  'network.segment':'Network', 'network.device':'Network device', 'network.endpoint':'Endpoint',
+  'network.route':'Route', 'network.neighbor':'Neighbour', 'cloud.resource':'Cloud resource',
+  process:'Process'
+};
+const typeLabel=t=>TYPE_LABEL[t]||t;
 const typeColor={};
 const colorFor=t=>{ if(!(t in typeColor)) typeColor[t]=PALETTE[Object.keys(typeColor).length%PALETTE.length]; return typeColor[t]; };
 const hidden=new Set();
@@ -267,7 +277,7 @@ const nodes=new vis.DataSet(), edges=new vis.DataSet();
 let fitted=false;
 
 const net=new vis.Network(document.getElementById('net'),{nodes,edges},{
-  nodes:{shape:'dot',size:14,font:{color:'#c3d1ea',face:'ui-monospace, monospace',size:11,strokeWidth:0,vadjust:4},borderWidth:0},
+  nodes:{shape:'dot',size:14,font:{color:'#c3d1ea',face:"'Geist Sans', system-ui, sans-serif",size:11,strokeWidth:0,vadjust:4},borderWidth:0},
   edges:{color:{color:'rgba(150,178,235,0.26)',highlight:'#cfe0ff',hover:'#cfe0ff'},
          font:{color:'#6f80a0',size:10,strokeWidth:3,strokeColor:'#05070f',align:'middle'},
          arrows:{to:{enabled:true,scaleFactor:.3}},smooth:false,width:0.9,selectionWidth:1.6},
@@ -625,7 +635,7 @@ function rebuild(){
   // the counter says which of the two it is.
   const nE=document.getElementById('nEdges');
   const inf=inferred?' +'+(edgeIds.size-realCount)+' inferred':'';
-  nE.textContent=realCount+inf+(showEdges?'':' — HIDDEN, click "edges"');
+  nE.textContent=realCount;   // the inferred count and the HIDDEN warning are jargon
   nE.style.color=showEdges?'':'var(--warn)';
   presentTypes=allTypes; renderLayers();
   const leg=document.getElementById('legend'); leg.innerHTML='';
@@ -633,7 +643,7 @@ function rebuild(){
     s.innerHTML='<i style="background:none;border-top:2px dashed #d29922;border-radius:0;height:0;width:14px"></i>inferred (derived, not stored)';
     leg.appendChild(s); }
   [...allTypes].sort().forEach(t=>{ const s=document.createElement('span'); s.className=hidden.has(t)?'off':'';
-    s.innerHTML='<i style="background:'+colorFor(t)+'"></i>'+esc(t);
+    s.innerHTML='<i style="background:'+colorFor(t)+'"></i>'+esc(typeLabel(t));
     s.onclick=()=>{ hidden.has(t)?hidden.delete(t):hidden.add(t); rebuild(); }; leg.appendChild(s); });
   // Re-run the layout only when the set of nodes changed (a node appeared or went
   // away), then freeze — never on a plain attribute/heartbeat update.
@@ -770,10 +780,10 @@ function renderProfile(data,s,e){
       d.style.left=(i*cw)+'%'; d.style.width='calc('+cw+'% - '+GAP_PX+'px)';
       d.style.top=(ri*ROW_PX)+'px'; d.style.height=(ROW_PX-GAP_PX)+'px';
       if(n){ d.style.background=col; d.style.opacity=(0.3+0.7*(n/max)).toFixed(2);
-        d.title=ty+' · '+n+' change'+(n>1?'s':''); }
+        d.title=typeLabel(ty)+' · '+n+' change'+(n>1?'s':''); }
       else d.style.background='rgba(180,190,205,.06)';   // empty = faint grey square
       el.appendChild(d); }
-    const lab=document.createElement('div'); lab.className='rowlab'; lab.textContent=ty;
+    const lab=document.createElement('div'); lab.className='rowlab'; lab.textContent=typeLabel(ty);
     lab.style.top=(ri*ROW_PX)+'px'; lab.style.color=col; gut.appendChild(lab); });
 }
 // Immediate cursor readout: the exact timestamp under the handle, updated on every
@@ -846,8 +856,8 @@ function applyRelation(ce){ if(historical) return; const r=ce&&ce.relation; if(!
 // opinion of what a node is.
 function inspect(id){
   const panel=document.getElementById('panel');
-  const head='<h2 style="margin-top:1rem">Activité</h2><div id="feed"></div>';
-  const blank='<div class="empty">Cliquez un nœud pour voir sa fiche.</div>'+head;
+  const head='<h2 style="margin-top:1rem">Activity</h2><div id="feed"></div>';
+  const blank='<div class="empty">Click a node to see its details.</div>'+head;
   const n=id&&ENT[id];
   if(!n){ panel.innerHTML=blank; return; }
   // Never surface an attribute whose key mentions a contact: the values are real
@@ -860,16 +870,16 @@ function inspect(id){
   const hostRel=Object.values(REL).find(r=>r.fromId===id&&r.type==='runs_on');
   const host=hostRel&&ENT[hostRel.toId]?ENT[hostRel.toId].displayName:null;
   const status=attr('entity.lifecycle.status');
-  panel.innerHTML='<button id="panelClose" title="Fermer" style="float:right">×</button>'
-    +'<h2>'+esc(n.displayName||n.id)+(n.deleted?' <span class="muted">(supprimé)</span>':'')+'</h2>'
+  panel.innerHTML='<button id="panelClose" title="Close" style="float:right">×</button>'
+    +'<h2>'+esc(n.displayName||n.id)+(n.deleted?' <span class="muted">(deleted)</span>':'')+'</h2>'
     +'<table>'
-    +'<tr><td class="k">Nom</td><td>'+esc(n.displayName||n.id)+'</td></tr>'
-    +'<tr><td class="k">Type</td><td>'+esc(n.type)+'</td></tr>'
-    +(version?'<tr><td class="k">Version</td><td>'+esc(version)+'</td></tr>':'')
-    +(host?'<tr><td class="k">Serveur</td><td>'+esc(host)+'</td></tr>':'')
-    +(status?'<tr><td class="k">État</td><td>'+esc(status)+'</td></tr>':'')
+    +'<tr><td class="k" style="font-family:inherit">Name</td><td style="font-family:inherit">'+esc(n.displayName||n.id)+'</td></tr>'
+    +'<tr><td class="k" style="font-family:inherit">Type</td><td style="font-family:inherit">'+esc(typeLabel(n.type))+'</td></tr>'
+    +(version?'<tr><td class="k" style="font-family:inherit">Version</td><td style="font-family:inherit">'+esc(version)+'</td></tr>':'')
+    +(host?'<tr><td class="k" style="font-family:inherit">Server</td><td style="font-family:inherit">'+esc(host)+'</td></tr>':'')
+    +(status?'<tr><td class="k" style="font-family:inherit">State</td><td style="font-family:inherit">'+esc(status)+'</td></tr>':'')
     +'</table>'
-    +'<details><summary class="muted">Détails techniques</summary>'
+    +'<details><summary class="muted">Technical details</summary>'
     // The fingerprint, not the id: an id is local to the replica that answered.
     +'<div class="muted" style="word-break:break-all">'+esc(n.identityFingerprint||'—')+'</div>'
     +'<table>'+rows(n.identity)+'</table>'
@@ -905,7 +915,13 @@ for(const id of Object.keys(VIEWS)) document.getElementById(id).onclick=()=>appl
 // Realtime: the relay exposes no subscription, so polling is the only path. The
 // page kept a websocket with a polling fallback; only the fallback remains.
 let pollTimer=null;
-function setStatus(cls,txt){ const s=document.getElementById('status'); s.className=cls; document.getElementById('statusTxt').textContent=txt; }
+function setStatus(cls,txt){
+  // The status pill is not shown in this build: "polling" says nothing to a reader
+  // who did not ask how the page refreshes. Tolerate its absence rather than throw
+  // at load, since the polling fallback calls this before anything else runs.
+  const s=document.getElementById('status'); if(!s) return;
+  s.className=cls; const t=document.getElementById('statusTxt'); if(t) t.textContent=txt;
+}
 function startPolling(){ if(!pollTimer) pollTimer=setInterval(loadFull,6000); }
 function stopPolling(){ if(pollTimer){ clearInterval(pollTimer); pollTimer=null; } }
 function fallback(){ setStatus('poll','polling'); startPolling(); }
