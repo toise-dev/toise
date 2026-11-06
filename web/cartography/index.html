@@ -942,7 +942,11 @@ function inspect(id){
   const cb=document.getElementById('panelClose');
   if(cb) cb.onclick=()=>{ box.innerHTML=blank; };
 }
-net.on('click',p=>{ inspect(p.nodes.length?p.nodes[0]:null); if(!p.nodes.length) clearHighlight(); });
+net.on('click',p=>{ inspect(p.nodes.length?p.nodes[0]:null); });
+// Clearing the highlight is deliberately NOT bound to a background click: the canvas
+// emits one at the end of a pan over empty space, so moving the view would have
+// silently thrown the highlight away and forced a full redraw. The labelled button
+// under the answer is the only way out, which is also the discoverable one.
 // Dimming everything but an answer's citations is a state, and a state needs a way
 // out: if the citations match nothing held here, the whole graph goes faint and the
 // reader is stuck. Clicking the background clears it, and a button says so.
