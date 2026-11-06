@@ -770,13 +770,9 @@ function renderRuler(){
   for(let t=Math.ceil(s/major)*major;t<=e;t+=major){ const f=(t-s)/W; add('tick maj',f); add('lab',f,fmtAbs(new Date(t),W)); }
 }
 // Zoom the timeline to a selected [a,b] period (ms since epoch).
-function setSpan(a,b){ if(b-a<60000) return;
-  spanMs=b-a; spanEnd=new Date(b); historical=true; tlRange().value=1000;
-  document.getElementById('tlLabel').textContent=new Date(b).toLocaleString();
-  document.getElementById('tlLive').classList.add('hist');
-  renderRuler(); loadProfile();
-  setStatus('poll','as-of '+new Date(b).toLocaleString()); loadAsOf(new Date(b).toISOString()); }
-
+// setSpan is REMOVED with the brush that was its only caller. It set spanMs to an
+// arbitrary span, which the relay's closed list of windows would refuse, and it
+// reached for the slider and the LIVE button that no longer exist.
 // --- change-density heatmap: one row per entity type, a grid of small cells across
 // the span (empty cells drawn faint grey, like a contribution graph), cell colour =
 // the type's colour and intensity = how many changes it saw — so which kind of thing
@@ -788,7 +784,13 @@ let profileGen=0;
 async function loadProfile(){
   const el=document.getElementById('tlProfile'); if(!el) return;
   const gen=++profileGen;   // supersede any in-flight profile load
-  const [s,e]=spanBounds(); const durS=Math.max(1,Math.ceil((Date.now()-s)/1000));
+  const [s,e]=spanBounds();
+  // Derived from the window, never from a second clock read: spanBounds() already
+  // took the time, and reading it again makes the span one millisecond longer, so
+  // the duration comes out 86401s for a 24h window. The relay accepts a closed list
+  // of windows, so that is a 400 and an empty heatmap -- and it only looked right
+  // when both reads landed in the same millisecond, which is to say by luck.
+  const durS=Math.round(spanMs/1000);
   const data=new Map();     // entity type -> [event timestamps within the span]
   let after=null, guard=0;
   try{
