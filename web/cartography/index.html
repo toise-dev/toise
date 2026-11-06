@@ -34,10 +34,11 @@
   match (a key, key=value, or a free substring) and dims the rest — a read-time view
   over the fetched data, so it works on whatever attributes producers emit.
 
-  Timeline (time travel): REMOVED in this build. The relay exposes no document
-  carrying an asOf argument, and every drag of the slider was a read at a past
-  instant whose cost follows the journal size. The footer is hidden and its
-  handlers are unreachable.
+  Timeline: the time travel is REMOVED in this build -- the relay exposes no
+  document carrying an asOf argument, and every drag of the slider was a read at a
+  past instant whose cost follows the journal size. What REMAINS and is visible is
+  the change-density heatmap with its ruler and a window selector, all fed by
+  recentChanges, which reads the present.
   LIVE (or drag back to now) to resume streaming. Live updates are ignored while
   browsing history so the past view stays put; a request before the retention horizon
   is refused and surfaced.
@@ -234,8 +235,8 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
       <div id="askState" class="muted"></div>
       <div id="askOut"></div>
     </div>
-    <div class="empty">Click an element to see its details.</div>
-    <h2 style="margin-top:1rem">Live feed</h2>
+    <div id="detail"><div class="empty">Click an element to see its details.</div></div>
+    <h2 style="margin-top:1rem">Activity</h2>
     <div id="feed"></div>
   </aside>
 </main>
@@ -567,6 +568,7 @@ function rebuild(){
   computeOwners();
   const prevNodeIds=new Set(nodes.getIds());
   const allTypes=new Set(), nodeIds=new Set(), nUp=[];
+  syncView();   // re-apply the chosen view to whatever types exist now
   const q=attrQuery.trim(); let matched=0;
   // Filled before the node loop below, not inside kindGroups() further down: that one
   // runs AFTER this loop, so the set would be empty on the first pass and correct on
@@ -680,8 +682,10 @@ function rebuild(){
   // invisible the canvas is indistinguishable from a graph with no relations, so
   // the counter says which of the two it is.
   const nE=document.getElementById('nEdges');
-  const inf=inferred?' +'+(edgeIds.size-realCount)+' inferred':'';
-  nE.textContent=realCount;   // the inferred count and the HIDDEN warning are jargon
+  // The count must match what is drawn. Saying only the stored edges while the
+  // inferred overlay adds more to the screen is a wrong number, which is worse than
+  // the jargon that was removed with it.
+  nE.textContent=showEdges?edgeIds.size:0;
   nE.style.color=showEdges?'':'var(--warn)';
   presentTypes=allTypes; renderLayers();
   const leg=document.getElementById('legend'); leg.innerHTML='';
@@ -731,10 +735,10 @@ async function loadFull(){
 
 // --- timeline: HIDDEN in this build ---------------------------------------------
 // The relay exposes no asOf document, so there is nothing to fold the graph with.
-// The code below is left in place rather than cut out, because removing it would
-// mean rewriting the density profile and the live-feed wiring that share it; the
-// footer carries `hidden` AND an explicit display rule, so none of it is
-// reachable. loadAsOf is a no-op that says so once.
+// The slider, the replay and the LIVE button are gone from the markup, so the
+// functions below have no caller; they are left in place rather than cut out,
+// because removing them would mean rewriting the density profile and the ruler
+// that share their helpers. The footer itself IS visible: it carries the heatmap.
 let historical=false;
 const WINDOWS={'1h':3600e3,'6h':6*3600e3,'24h':86400e3,'7d':604800e3};
 let tlWindow=localStorage.getItem('toise_viz_window')||'24h';
@@ -902,40 +906,52 @@ function applyRelation(ce){ if(historical) return; const r=ce&&ce.relation; if(!
 // the graph inspects the same way, so a second renderer cannot grow a second
 // opinion of what a node is.
 function inspect(id){
-  const panel=document.getElementById('panel');
-  const head='<h2 style="margin-top:1rem">Activity</h2><div id="feed"></div>';
-  const blank='<div class="empty">Click an element to see its details.</div>'+head;
+  // Writes into #detail, never into the whole aside: the question panel and the
+  // activity feed are siblings, and replacing the aside's contents destroyed both
+  // on the first click -- the ask box could not be used again without a reload.
+  const box=document.getElementById('detail');
+  const blank='<div class="empty">Click an element to see its details.</div>';
   const n=id&&ENT[id];
-  if(!n){ panel.innerHTML=blank; return; }
+  if(!n){ box.innerHTML=blank; return; }
   // Never surface an attribute whose key mentions a contact: the values are real
-  // personal addresses, and this panel is shown on a screen share.
+  // personal addresses, and this panel gets screen-shared.
   const visible=a=>(a||[]).filter(x=>!/contact/i.test(x.key));
-  const rows=a=>visible(a).map(x=>'<tr><td class="k">'+esc(x.key)+'</td><td>'+esc(x.value)+'</td></tr>').join('')||'<tr><td class="muted" colspan=2>—</td></tr>';
+  const rows=a=>visible(a).map(x=>'<tr><td class="k">'+esc(x.key)+'</td><td>'+esc(x.value)+'</td></tr>').join('')||'<tr><td class="muted" colspan=2>\u2014</td></tr>';
   const attr=k=>{ const hit=(n.attributes||[]).find(x=>x.key===k); return hit?hit.value:null; };
   const version=attr('service.version')||attr('db.system.version')||attr('os.version');
   // REL is an object keyed by relation id, not an array: Object.values first.
   const hostRel=Object.values(REL).find(r=>r.fromId===id&&r.type==='runs_on');
   const host=hostRel&&ENT[hostRel.toId]?ENT[hostRel.toId].displayName:null;
   const status=attr('entity.lifecycle.status');
-  panel.innerHTML='<button id="panelClose" title="Close" style="float:right">×</button>'
+  const F='style="font-family:inherit"';
+  box.innerHTML='<button id="panelClose" title="Close" style="float:right">\u00d7</button>'
     +'<h2>'+esc(n.displayName||n.id)+(n.deleted?' <span class="muted">(deleted)</span>':'')+'</h2>'
     +'<table>'
-    +'<tr><td class="k" style="font-family:inherit">Name</td><td style="font-family:inherit">'+esc(n.displayName||n.id)+'</td></tr>'
-    +'<tr><td class="k" style="font-family:inherit">Type</td><td style="font-family:inherit">'+esc(typeLabel(n.type))+'</td></tr>'
-    +(version?'<tr><td class="k" style="font-family:inherit">Version</td><td style="font-family:inherit">'+esc(version)+'</td></tr>':'')
-    +(host?'<tr><td class="k" style="font-family:inherit">Server</td><td style="font-family:inherit">'+esc(host)+'</td></tr>':'')
-    +(status?'<tr><td class="k" style="font-family:inherit">State</td><td style="font-family:inherit">'+esc(status)+'</td></tr>':'')
+    +'<tr><td class="k" '+F+'>Name</td><td '+F+'>'+esc(n.displayName||n.id)+'</td></tr>'
+    +'<tr><td class="k" '+F+'>Type</td><td '+F+'>'+esc(typeLabel(n.type))+'</td></tr>'
+    +(version?'<tr><td class="k" '+F+'>Version</td><td '+F+'>'+esc(version)+'</td></tr>':'')
+    +(host?'<tr><td class="k" '+F+'>Server</td><td '+F+'>'+esc(host)+'</td></tr>':'')
+    +(status?'<tr><td class="k" '+F+'>State</td><td '+F+'>'+esc(status)+'</td></tr>':'')
     +'</table>'
     +'<details><summary class="muted">Technical details</summary>'
     // The fingerprint, not the id: an id is local to the replica that answered.
-    +'<div class="muted" style="word-break:break-all">'+esc(n.identityFingerprint||'—')+'</div>'
+    +'<div class="muted" style="word-break:break-all">'+esc(n.identityFingerprint||'\u2014')+'</div>'
     +'<table>'+rows(n.identity)+'</table>'
     +'<table>'+rows(n.attributes)+'</table>'
-    +'</details>'+head;
+    +'</details>';
   const cb=document.getElementById('panelClose');
-  if(cb) cb.onclick=()=>{ panel.innerHTML=blank; };
+  if(cb) cb.onclick=()=>{ box.innerHTML=blank; };
 }
-net.on('click',p=>{ inspect(p.nodes.length?p.nodes[0]:null); });
+net.on('click',p=>{ inspect(p.nodes.length?p.nodes[0]:null); if(!p.nodes.length) clearHighlight(); });
+// Dimming everything but an answer's citations is a state, and a state needs a way
+// out: if the citations match nothing held here, the whole graph goes faint and the
+// reader is stuck. Clicking the background clears it, and a button says so.
+function clearHighlight(){
+  if(!CITED.size) return;
+  CITED.clear(); document.getElementById('panel').classList.remove('wide');
+  const b=document.getElementById('clearHl'); if(b) b.remove();
+  rebuild();
+}
 
 // --- the question panel ------------------------------------------------------
 // The browser never sends GraphQL and never sees a tenant: it posts a question to
@@ -968,6 +984,11 @@ async function ask(){
     if(j&&Array.isArray(j.cited)) for(const f of j.cited) CITED.add(String(f));
     rebuild();
     document.getElementById('panel').classList.add('wide');
+    if(CITED.size){
+      const b=document.createElement('button'); b.type='button'; b.id='clearHl';
+      b.textContent='Clear highlight'; b.addEventListener('click',clearHighlight);
+      askOut.appendChild(b);
+    }
   }catch(_){
     say(timedOut?'The question took longer than 30 seconds and was cancelled.':'Request failed.');
   }finally{ clearTimeout(timer); askBtn.disabled=false; askState.textContent=''; }
@@ -1043,12 +1064,21 @@ const VIEWS={
   vHosts:['host','compute.vm','container','pod'],
   vApps:['service.instance','service.listener','db','cloud.resource'],
 };
-function applyView(btn){
-  const keep=new Set(VIEWS[btn]);
+// The chosen view is remembered and re-applied on every redraw, not filled once at
+// click time: the page polls every six seconds, so a type that arrives later would
+// otherwise have escaped the filter and invited itself into all three views.
+let activeView=null;
+function syncView(){
+  if(!activeView) return;
+  const keep=new Set(VIEWS[activeView]);
   hidden.clear();
   for(const n of Object.values(ENT)) if(!keep.has(n.type)) hidden.add(n.type);
+}
+function applyView(btn){
+  activeView = (activeView===btn) ? null : btn;   // clicking the active view shows everything again
+  if(!activeView) hidden.clear(); else syncView();
   for(const id of Object.keys(VIEWS)){
-    document.getElementById(id).style.color = (id===btn) ? 'var(--accent)' : '';
+    document.getElementById(id).style.color = (id===activeView) ? 'var(--accent)' : '';
   }
   rebuild();
 }
