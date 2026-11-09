@@ -857,23 +857,13 @@ function fitEmphasised() {
     if (!n || !dimmed.has(n.type)) lit.push(id);   // kind nodes keep the frame too
   }
   fitReservingPanel(lit.length ? lit : null);
-  nameThemAll();
-}
-
-// Zoom until every lit thing has a name. In sky mode nothing moves, so the only
-// way to put room between two names is to put more pixels between their nodes.
-// Bounded: past a point the frame holds so little that the zoom costs more than
-// the names are worth, and the rest is reached by zooming or hovering.
-function nameThemAll() {
-  for (let tries = 0; tries < 6; tries++) {
-    if (declutterLabels() === 0) return;
-    const sc = net.getScale();
-    if (sc >= 3) break;
-    try { net.moveTo({ scale: Math.min(3, sc * 1.25) }); } catch (e) { break; }
-    syncLabelSize();
-  }
   declutterLabels();
 }
+// The zoom escalation that used to live here is gone. Measured on the real sky:
+// naming all twenty machines took a scale of 0.84 and pushed NINETEEN of them
+// out of the frame -- it honoured "everything named" by making almost nothing
+// visible, which is a worse answer than a missing name. Three names still
+// overlapped on top of that.
 
 function fitReservingPanel(onlyNodes) {
   try { net.fit(onlyNodes ? {nodes:onlyNodes,animation:false,maxZoomLevel:3} : {animation:false,maxZoomLevel:3}); } catch (e) {}
