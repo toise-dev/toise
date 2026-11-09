@@ -34,11 +34,12 @@
   match (a key, key=value, or a free substring) and dims the rest — a read-time view
   over the fetched data, so it works on whatever attributes producers emit.
 
-  Timeline: the time travel is REMOVED in this build -- the relay exposes no
-  document carrying an asOf argument, and every drag of the slider was a read at a
-  past instant whose cost follows the journal size. What REMAINS and is visible is
-  the change-density heatmap with its ruler and a window selector, all fed by
-  recentChanges, which reads the present.
+  Timeline: the time travel is PRESENT in this build -- the relay exposes an
+  asOf argument on entities, relations and graphScope, and the slider tlAt
+  picks the instant on a five-minute grid, with tlLive returning to now and
+  tlAtLabel showing the served instant against the server's horizon.
+  What REMAINS as before is the change-density heatmap with its ruler and a
+  window selector, all fed by recentChanges, which reads the present.
   LIVE (or drag back to now) to resume streaming. Live updates are ignored while
   browsing history so the past view stays put; a request before the retention horizon
   is refused and surfaced.
@@ -260,6 +261,9 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
     <option value="1h">1h</option><option value="6h">6h</option>
     <option value="24h">24h</option><option value="7d">7d</option></select></label>
   <span id="tlLabel">24h</span>
+<input type="range" id="tlAt" min="0" max="1000" value="1000" step="1" title="The handle picks the moment to revisit; playback starts on release" style="width:12rem">
+  <button id="tlLive">live</button>
+  <span id="tlAtLabel" class="muted"></span>
 </footer>
 <script>
 // Fixed endpoint: the portal relay owns the GraphQL documents and only accepts
@@ -769,7 +773,10 @@ function rebuild(){
 async function fetchAll(id){
   const nodes=[]; let after=null, guard=0;
   do{
-    const variables=after?{first:200,after}:{first:200};
+    const asOf = asOfISO();
+    const variables = after
+      ? { first: 200, after, ...(asOf ? { asOf } : {}) }
+      : { first: 200, ...(asOf ? { asOf } : {}) };
     const r=await fetch(API,{method:'POST',headers:gqlHeaders(),credentials:'same-origin',body:JSON.stringify({id,variables})});
     const j=await r.json(); if(j.errors) throw new Error(j.errors[0].message);
     const c=j.data[id];
@@ -829,7 +836,7 @@ function sayIncomplete(loadedE, loadedR) {
 
 async function loadFull() {
   // Callers invoke this directly without checking the flag, so the guard belongs here.
-  if (loading) return;
+  if (loading) return false;
   loading = true;
   const err = document.getElementById('err'); err.textContent = '';
   try {
@@ -843,17 +850,107 @@ async function loadFull() {
   } catch (e) {
     err.textContent = '⚠ ' + e.message;
     noteLoadFailure();
+    return false;
   } finally {
     loading = false;
   }
+  return true;
 }
 
-// --- timeline: HIDDEN in this build ---------------------------------------------
-// The relay exposes no asOf document, so there is nothing to fold the graph with.
-// The slider, the replay and the LIVE button are gone from the markup, so the
-// functions below have no caller; they are left in place rather than cut out,
-// because removing them would mean rewriting the density profile and the ruler
-// that share their helpers. The footer itself IS visible: it carries the heatmap.
+const GRID_MS = 300000; // Producers observe in ticks of a few minutes; a finer grid would offer precision the data does not have.
+let asOfMs = null; // null means "the present"
+
+function snapToGrid(ms) {
+  return Math.floor(ms / GRID_MS) * GRID_MS;
+}
+
+function asOfISO() {
+  if (asOfMs === null) return null;
+  return new Date(asOfMs).toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+function horizonMs() {
+  if (SCOPE && SCOPE.oldestAnswerable) {
+    const t = Date.parse(SCOPE.oldestAnswerable);
+    return Number.isNaN(t) ? null : t;
+  }
+  return null;
+}
+
+function withinHorizon(ms) {
+  const h = horizonMs();
+  if (h === null) return false; // unknown horizon: never offer a journey whose bound we don't know
+  return ms >= h && ms <= Date.now();
+}
+
+let replaying = false;
+
+async function goToInstant(ms) {
+  if (replaying) {
+    say('A past read is already in flight…');
+    return;
+  }
+  if (ms !== null && !withinHorizon(ms)) {
+    const h = horizonMs();
+    say('That instant is outside the readable window (oldest answerable: ' +
+        (h === null ? 'unknown' : new Date(h).toISOString()) + ').');
+    return;
+  }
+  if (loading) {
+    say('A load is already running, please wait…');
+    return;
+  }
+  const prevAsOf = asOfMs;
+  asOfMs = ms === null ? null : snapToGrid(ms);
+  replaying = true;
+  try {
+    // Restore the previous instant on failure: otherwise the page would claim to show an instant it did not load.
+    const ok = await loadFull();
+    if (!ok) {
+      asOfMs = prevAsOf;
+      say('That instant could not be read; the view remains at the previous instant.');
+    }
+  } finally {
+    replaying = false;
+  }
+}
+
+function readFailureMessage(status, fallback) {
+  // 503 means "too loaded, retry" — it must never be readable as an empty park.
+  if (status === 503) {
+    return 'The server is too loaded to re-read the past right now — please retry.';
+  }
+  return fallback;
+}
+
+function sliderToMs(v) {
+  if (v === 1000) return null;
+  const h = horizonMs();
+  if (h == null) return null;
+  const now = Date.now();
+  return snapToGrid(h + (v / 1000) * (now - h));
+}
+
+function sayInstant() {
+  const el = document.getElementById('tlAtLabel');
+  if (!el) return;
+  const fmt = ms => new Date(ms).toLocaleString();
+  if (asOfMs == null) {
+    el.textContent = 'live';
+    return;
+  }
+  const h = horizonMs();
+  el.textContent = h == null
+    ? `as of ${fmt(asOfMs)}`
+    : `as of ${fmt(asOfMs)} · readable back to ${fmt(h)}`;
+}
+
+// --- timeline: PRESENT in this build --------------------------------------------
+// The relay exposes an asOf argument on entities, relations and graphScope, so
+// the slider tlAt, the LIVE button tlLive and the label tlAtLabel all have a
+// caller. Reads happen on change only, with a single replay in flight, and a
+// 503 is read as "too busy, retry", never as an empty park. The footer itself
+// IS visible: it carries the heatmap.
 let historical=false;
 const WINDOWS={'1h':3600e3,'6h':6*3600e3,'24h':86400e3,'7d':604800e3};
 let tlWindow=localStorage.getItem('toise_viz_window')||'24h';
@@ -916,7 +1013,21 @@ async function loadProfile(){
     do{
       // MEANINGFUL entity changes only — heartbeats (entity.unchanged) are not changes
       // and would drown the signal; relation changes have no entity type, so skip them.
-      const variables=after?{window:durS+'s',first:200,after}:{window:durS+'s',first:200};
+      const asOf = asOfISO();
+      let windowVars;
+      if (asOf) {
+        const [fromMs, toMs] = spanBounds();
+        windowVars = {
+          from: new Date(fromMs).toISOString().replace(/\.\d{3}Z$/, 'Z'),
+          to: new Date(toMs).toISOString().replace(/\.\d{3}Z$/, 'Z'),
+          asOf
+        };
+      } else {
+        windowVars = { window: durS + 's' };
+      }
+      const variables = after
+        ? { ...windowVars, first: 200, after }
+        : { ...windowVars, first: 200 };
       const r=await fetch(API,{method:'POST',headers:gqlHeaders(),credentials:'same-origin',body:JSON.stringify({id:'recentChanges',variables})});
       const j=await r.json(); if(j.errors) throw new Error(j.errors[0].message);
       if(gen!==profileGen) return;   // a newer load started; drop this one
@@ -1328,20 +1439,40 @@ document.getElementById('resync').onclick=()=>{ loadProfile(); loadFull(); };
 document.getElementById('fit').onclick=()=>net.fit({animation:true});
 document.getElementById('relayout').onclick=()=>settle(2600);
 // The heatmap and the ruler stay: they are fed by recentChanges, which reads the
-// PRESENT. Only the controls that travelled in time are gone, because the relay
-// exposes no document carrying an asOf argument for them to call.
+// PRESENT. The controls that travel in time are wired to the asOf documents the
+// relay now exposes, so they call them on release only, with a single replay in flight.
 const tlWin=document.getElementById('tlWin'); tlWin.value=tlWindow;
 const tlLabelEl=document.getElementById('tlLabel'); tlLabelEl.textContent=tlWindow;
 tlWin.onchange=()=>{ tlWindow=tlWin.value; localStorage.setItem('toise_viz_window',tlWindow);
   spanEnd=null; spanMs=WINDOWS[tlWindow]||WINDOWS['24h']; renderRuler(); loadProfile();
   tlLabelEl.textContent=tlWindow; };
 renderRuler(); loadProfile();
+const tlAt = document.getElementById('tlAt');
+const tlLive = document.getElementById('tlLive');
+if (tlAt) {
+  // input fires on every pixel of the drag; change fires only on release,
+  // so the platform enforces the rule instead of us faking it with a timer.
+  tlAt.addEventListener('change', async () => {
+    // Wait for the load to settle so the label never claims a moment that failed to load.
+    await goToInstant(sliderToMs(Number(tlAt.value)));
+    sayInstant();
+  });
+}
+if (tlLive) {
+  tlLive.addEventListener('click', async () => {
+    if (tlAt) tlAt.value = '1000';
+    // Wait for the live restore so the label reflects the instant actually loaded.
+    await goToInstant(null);
+    sayInstant();
+  });
+}
+sayInstant();
 setInterval(()=>{ if(isLiveSpan()) loadProfile(); }, 60000);   // keep the live profile fresh
-// The brush that zoomed the density profile into a period is REMOVED. It reached
-// for the slider and the LIVE button to put the view back, and both are gone with
-// the time travel — so dragging across the strip would have thrown, on the very
-// first thing a reader is invited to do. And with no LIVE button there would have
-// been no way back out of the zoomed window. The window selector covers the need.
+// The brush that zoomed the density profile into a period is REMOVED. A brush
+// would select an arbitrary period, while the profile window is taken from a
+// closed list (from/to served by the relay, or the 1h/6h/24h/7d selector), and
+// the window selector already covers the need -- so dragging across the strip
+// would offer a precision the data and the API do not have.
 
 // Resize the detail panel by dragging its left edge; the graph takes the rest and
 // the panel's fixed-layout tables reflow to the new width. Width is remembered.
