@@ -621,6 +621,17 @@ function drawnEdgeCount(nodeIds) {
 // An earlier version tested "is the tile bound by its width", which was a proxy,
 // and it answered on the WIDENED tile -- so it reported that labels fit right
 // after widening had made them not fit. Measured: 96 overlaps out of 260.
+// entity.lifecycle.status is an OPEN enum, so an unrecognised value must NOT be
+// painted as if it were fine: it gets the neutral border, exactly like an absent
+// one. And only the border carries state -- the fill is the type, which is what
+// the legend maps, and repainting it would make the legend lie.
+const LIFECYCLE_BORDER = {active:'#7fd4a8', maintenance:'#e8b06a', decommissioning:'#e8b06a', retired:'#6f80a0'};
+function stateBorder(n){
+  const a=(n.attributes||[]).find(x=>x.key==='entity.lifecycle.status');
+  const v=a&&typeof a.value==='string'?a.value.trim().toLowerCase():'';
+  return v && Object.prototype.hasOwnProperty.call(LIFECYCLE_BORDER,v) ? LIFECYCLE_BORDER[v] : null;
+}
+
 function layOutOnGrid(nUp) {
   // Children follow their parent in the sequence rather than being ringed around
   // it: the grid is packed so labels fit, which leaves 1.4 units free above a
@@ -943,6 +954,7 @@ function rebuild(){
     // is ~250px wide and eighty of them overlap. It lives in the tooltip and in
     // the disc's size, both of which cost no horizontal room.
     const node={id:n.id,label:labelOf(n),
+              childCount:k,   // the REAL number folded inside, which the grid sizes the disc from
               title:titleOf(n)+(k?('\nfolded inside: '+badgeFull(by)+'  \u2014 double-click to open'):''),
               opacity:n.deleted?0.45:((q&&!ok&&!MATCH_OWNERS.has(n.id))||(CITED.size&&!CITED.has(n.identityFingerprint)&&!CITED_OWNERS.has(n.id))?0.12:1),
               size:Math.min(34,5+Math.sqrt(d)*4.4)+(k?Math.min(12,Math.sqrt(k)*2.6):0),
@@ -951,7 +963,7 @@ function rebuild(){
               // so degree reads as brightness before any label is legible
               shadow:{enabled:true,color:colorFor(n.type),
                       size:Math.min(30,5+Math.sqrt(d)*4.4)*2.1,x:0,y:0},
-              color:{background:colorFor(n.type),border:n.deleted?'#e8b06a':(k?'#6f80a0':'#05070f')}};
+              color:{background:colorFor(n.type),border:n.deleted?'#e8b06a':(stateBorder(n)||(k?'#6f80a0':'#05070f'))}};
     if(firstLoad){ node.x=Math.random()*1600-800; node.y=Math.random()*1600-800; }
     nUp.push(node); });
   // One node per kind under an opened owner. Drawn as a labelled count rather
@@ -990,7 +1002,18 @@ if (gridded) {
   // constant: a disc that shrinks to let the name be read beats a disc that
   // covers the name of the row above it. Measured, 178 such collisions at 190.
   const layout = layOutOnGrid(nUp);
-  nUp.forEach(nd => { if (typeof nd.size === 'number') nd.size = Math.min(nd.size, layout.labelsFit ? layout.radius : 13); });
+  // Proportional to what a machine really carries, between a floor and the
+  // maximum the ROW allows. Never above that maximum: the row's budget is what
+  // keeps a disc off the name below it. Square root, so one machine with sixty
+  // children does not flatten all the others onto the floor.
+  const capR = layout.labelsFit ? layout.radius : 13;
+  const maxChild = nUp.reduce((m, nd) => Math.max(m, nd.childCount || 0), 0);
+  const floorR = Math.min(4, capR);
+  nUp.forEach(nd => {
+    if (typeof nd.size !== 'number') return;
+    const share = maxChild > 0 ? Math.sqrt((nd.childCount || 0) / maxChild) : 0;
+    nd.size = Math.min(nd.size, Math.round(floorR + (capR - floorR) * share));
+  });
   if (!layout.labelsFit) {
     nUp.forEach(nd => { nd.label = undefined; });
   }
