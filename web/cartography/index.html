@@ -1321,7 +1321,10 @@ async function loadFull() {
     const second = SCOPE ? { entities: SCOPE.entities, relations: SCOPE.relations } : null;
     // Remember what the scope said at the moment this graph was read, so the
     // poll can tell "nothing happened" from "we have not looked".
-    if (SCOPE) loadedStamp = String(SCOPE.newestEvent||'')+'/'+SCOPE.entities+'/'+SCOPE.relations;
+    if (SCOPE) loadedCounts = SCOPE.entities+'/'+SCOPE.relations;
+    // Date.now() as the floor when the probe cannot answer: it makes the next tick
+    // compare against now rather than against zero, which would reload forever.
+    newestMeaningfulChange().then(t=>{ loadedChangeAt = (t === null || t === 0) ? Date.now() : t; });
     const bounds = [first, second].filter(Boolean);
     sayIncomplete(Object.keys(ENT).length, Object.keys(REL).length, bounds.length ? bounds : undefined);
   } catch (e) {
@@ -2029,7 +2032,8 @@ document.addEventListener('visibilitychange',()=>{
 let loading=false;   // one in-flight load at a time: overlapping full reloads pile up on a big park
 let failedAt=0;      // after a definitive failure, wait before retrying: hammering a broken endpoint every 6s turns an outage into load
 let lastScopeAt=0;
-let loadedStamp='';   // what the scope said when the graph we hold was read   // above the entity threshold, refresh only the scope, and at most once a minute
+let loadedCounts='';      // the counts when the graph we hold was read
+let loadedChangeAt=0;     // and the newest NON-heartbeat change at that moment   // above the entity threshold, refresh only the scope, and at most once a minute
 
 // The grid is computed from the container height, and that height can change after layout settles.
 function watchCanvasSize() {
@@ -2047,6 +2051,32 @@ function watchCanvasSize() {
     if (timer !== null) clearTimeout(timer);
     timer = setTimeout(function () { if (!loading) fitEmphasised(); }, 150);   // the layout is stable; only the framing follows the canvas
   }).observe(el);
+}
+
+// The newest change that is NOT a heartbeat, in milliseconds; 0 when the window
+// holds none, and null when the question could not be answered -- a caller must
+// treat those two differently, because "nothing changed" lets the page hold still
+// while "I could not tell" must not.
+//
+// One edge is enough: the answer is newest-first and the persisted document fixes
+// includeHeartbeats to false, so the first edge IS the newest real change.
+async function newestMeaningfulChange(){
+  try{
+    const r = await fetch(API,{method:'POST',headers:gqlHeaders(),credentials:'same-origin',
+      body:JSON.stringify({id:'recentChanges',variables:{window:'3600s',first:1}})});
+    if(!r.ok) return null;
+    const j = await r.json();
+    if(j.errors) return null;
+    const rc = j.data && j.data.recentChanges;
+    if(!rc || !rc.edges) return null;
+    if(!rc.edges.length) return 0;                      // an hour with no real change
+    const n = rc.edges[0].node;
+    // The document excludes heartbeats, so this should not fire. If it ever does,
+    // the filter is not what this code believes and guessing would be worse.
+    if(!n || !n.eventTime || String(n.changeType||'').endsWith('UNCHANGED')) return null;
+    const t = Date.parse(n.eventTime);
+    return Number.isNaN(t) ? null : t;
+  }catch(_){ return null; }
 }
 
 function tick(){
@@ -2071,9 +2101,18 @@ function tick(){
   lastScopeAt=Date.now();
   refreshScope({quiet:true}).then(()=>{
     if(!SCOPE) return;
-    const stamp = String(SCOPE.newestEvent||'')+'/'+SCOPE.entities+'/'+SCOPE.relations;
-    if(stamp === loadedStamp) return;   // nothing new: the map we hold IS the map
-    loadFull();
+    // Counts first: an entity gained or lost is a change whatever the journal says.
+    const counts = SCOPE.entities+'/'+SCOPE.relations;
+    if(counts !== loadedCounts){ loadFull(); return; }
+    // Then ask what CHANGED, not when anything last happened. graphScope's
+    // newestEvent is the last key of the time index, heartbeats included, so on a
+    // fleet that beats it advances without anything visible moving -- measured by
+    // the portal, two full reloads in a hundred seconds for nothing. A heartbeat
+    // is a producer saying it is still there; it is not a change.
+    newestMeaningfulChange().then(t=>{
+      if(t === null){ loadFull(); return; }        // could not tell: reload rather than go stale
+      if(t > loadedChangeAt) loadFull();
+    });
   });
 }
 
