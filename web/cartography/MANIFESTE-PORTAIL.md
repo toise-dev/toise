@@ -160,7 +160,27 @@ Deux pièges de filtrage à retenir : le relais doit écarter les mêmes types
 l'avertissement d'incomplétude retentirait en permanence dès qu'un lecteur
 remonte dans le temps.
 
-## Ce que le relais doit faire en plus
+#### Un 503 ne doit jamais devenir une réponse vide
+
+La lecture d'un instant passé est un rejeu complet du journal, et les
+rejeux sont bornés pour tout le processus. Sous charge d'ingestion, le
+serveur répond donc **HTTP 503**, et c'est un mode d'échec **déclaré**,
+pas un incident.
+
+**L'obligation du relais** : propager cet échec en tant qu'échec. Il ne
+doit ni le transformer en réponse vide, ni rendre un `data` sans contenu,
+ni avaler le statut. Un 503 avalé devient, chez le lecteur, un parc vide —
+c'est-à-dire une affirmation fausse sur l'infrastructure du client.
+
+La page tient sa part : elle refuse toute réponse dont le statut n'est
+pas `ok` avant même de lire le corps, et affiche « trop chargé, réessaie ».
+Mais elle ne peut rien faire si le relais lui a déjà remis un corps vide
+avec un statut 200.
+
+Règle générale, qui vaut au-delà de ce cas : **un intermédiaire qui
+transforme un échec en réponse vide fabrique une fausseté que personne en
+aval ne peut détecter.** C'est la même faute que de servir une page vide
+en se déclarant la dernière.
 
 ## Ce que le relais doit faire en plus
 
