@@ -2066,6 +2066,12 @@ function watchCanvasSize() {
 //
 // One edge is enough: the answer is newest-first and the persisted document fixes
 // includeHeartbeats to false, so the first edge IS the newest real change.
+// Why a reload happened, on the console. Three guesses have now been made about
+// an unnecessary reload five seconds after opening -- the portal's, mine, and the
+// one before it -- and all three were reasoning about code instead of reading
+// what the page did. A branch that fires should say so.
+function sayReload(why){ try{ console.log('[toise/carto] reload: '+why); }catch(_){ } }
+
 async function newestMeaningfulChange(){
   try{
     const r = await fetch(API,{method:'POST',headers:gqlHeaders(),credentials:'same-origin',
@@ -2109,15 +2115,15 @@ function tick(){
     if(!SCOPE) return;
     // Counts first: an entity gained or lost is a change whatever the journal says.
     const counts = SCOPE.entities+'/'+SCOPE.relations;
-    if(counts !== loadedCounts){ loadFull(); return; }
+    if(counts !== loadedCounts){ sayReload('counts '+loadedCounts+' -> '+counts); loadFull(); return; }
     // Then ask what CHANGED, not when anything last happened. graphScope's
     // newestEvent is the last key of the time index, heartbeats included, so on a
     // fleet that beats it advances without anything visible moving -- measured by
     // the portal, two full reloads in a hundred seconds for nothing. A heartbeat
     // is a producer saying it is still there; it is not a change.
     newestMeaningfulChange().then(t=>{
-      if(t === null){ loadFull(); return; }        // could not tell: reload rather than go stale
-      if(t > loadedChangeAt) loadFull();
+      if(t === null){ sayReload('probe unanswerable'); loadFull(); return; }
+      if(t > loadedChangeAt) sayReload('change '+new Date(t).toISOString()+' newer than read '+new Date(loadedChangeAt).toISOString()), loadFull();
     });
   });
 }
