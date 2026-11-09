@@ -1,7 +1,7 @@
 package projection
 
 import (
-	"container/heap"
+	"cmp"
 	"sort"
 	"strings"
 	"sync"
@@ -459,28 +459,75 @@ func (g *Graph) visitNeighbor(nb model.EntityID, relType, edgeType string, visit
 // total counts the WHOLE matching set, independent of the cursor: a page that
 // reported its own size as the total would be the lying answer this surface
 // exists to remove.
-type fpHeap []string
+// boundedTop keeps the limit smallest keys seen so far in a max-heap: the root
+// is the largest of the kept set and is replaced whenever a smaller key arrives.
+type boundedTop[T cmp.Ordered] struct {
+	items []T
+	limit int
+}
 
-func (h fpHeap) Len() int           { return len(h) }
-func (h fpHeap) Less(i, j int) bool { return h[i] > h[j] }
-func (h fpHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
-func (h *fpHeap) Push(x any)        { *h = append(*h, x.(string)) }
-func (h *fpHeap) Pop() any          { old := *h; n := len(old); x := old[n-1]; *h = old[:n-1]; return x }
+func newBoundedTop[T cmp.Ordered](limit int) *boundedTop[T] {
+	return &boundedTop[T]{limit: limit}
+}
 
-type relIDHeap []model.RelationID
+func (t *boundedTop[T]) offer(x T) {
+	if t.limit <= 0 {
+		return
+	}
+	if len(t.items) < t.limit {
+		t.items = append(t.items, x)
+		t.siftUp(len(t.items) - 1)
+		return
+	}
+	if x < t.items[0] {
+		t.items[0] = x
+		t.siftDown(0)
+	}
+}
 
-func (h relIDHeap) Len() int           { return len(h) }
-func (h relIDHeap) Less(i, j int) bool { return h[i] > h[j] }
-func (h relIDHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
-func (h *relIDHeap) Push(x any)        { *h = append(*h, x.(model.RelationID)) }
-func (h *relIDHeap) Pop() any          { old := *h; n := len(old); x := old[n-1]; *h = old[:n-1]; return x }
+func (t *boundedTop[T]) sorted() []T {
+	out := make([]T, len(t.items))
+	copy(out, t.items)
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+func (t *boundedTop[T]) siftUp(i int) {
+	for i > 0 {
+		parent := (i - 1) / 2
+		if t.items[parent] >= t.items[i] {
+			break
+		}
+		t.items[parent], t.items[i] = t.items[i], t.items[parent]
+		i = parent
+	}
+}
+
+func (t *boundedTop[T]) siftDown(i int) {
+	n := len(t.items)
+	for {
+		left := 2*i + 1
+		right := 2*i + 2
+		largest := i
+		if left < n && t.items[left] > t.items[largest] {
+			largest = left
+		}
+		if right < n && t.items[right] > t.items[largest] {
+			largest = right
+		}
+		if largest == i {
+			break
+		}
+		t.items[i], t.items[largest] = t.items[largest], t.items[i]
+		i = largest
+	}
+}
 
 func (g *Graph) PageEntitiesByFingerprint(typ, after string, limit int) (page []model.Entity, next string, total int) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
-	h := &fpHeap{}
-	heap.Init(h)
+	top := newBoundedTop[string](limit)
 	seen := 0
 	for fp, id := range g.byHash {
 		if g.deleted[id] {
@@ -496,26 +543,18 @@ func (g *Graph) PageEntitiesByFingerprint(typ, after string, limit int) (page []
 		}
 		seen++
 		if limit > 0 {
-			if h.Len() < limit {
-				heap.Push(h, fp)
-			} else if fp < (*h)[0] {
-				(*h)[0] = fp
-				heap.Fix(h, 0)
-			}
+			top.offer(fp)
 		}
 	}
 
-	fps := make([]string, h.Len())
-	for i := len(fps) - 1; i >= 0; i-- {
-		fps[i] = heap.Pop(h).(string)
-	}
+	keys := top.sorted()
 
-	page = make([]model.Entity, 0, len(fps))
-	for _, fp := range fps {
+	page = make([]model.Entity, 0, len(keys))
+	for _, fp := range keys {
 		page = append(page, g.entities[g.byHash[fp]])
 	}
 	if seen > limit && limit > 0 {
-		next = fps[len(fps)-1]
+		next = keys[len(keys)-1]
 	}
 	return page, next, total
 }
@@ -537,8 +576,7 @@ func (g *Graph) PageRelations(typ string, from, to model.EntityID, after string,
 		return true
 	}
 
-	h := &relIDHeap{}
-	heap.Init(h)
+	top := newBoundedTop[string](limit)
 	seen := 0
 
 	offer := func(rid model.RelationID) {
@@ -547,12 +585,7 @@ func (g *Graph) PageRelations(typ string, from, to model.EntityID, after string,
 		}
 		seen++
 		if limit > 0 {
-			if h.Len() < limit {
-				heap.Push(h, rid)
-			} else if rid < (*h)[0] {
-				(*h)[0] = rid
-				heap.Fix(h, 0)
-			}
+			top.offer(string(rid))
 		}
 	}
 
@@ -588,17 +621,14 @@ func (g *Graph) PageRelations(typ string, from, to model.EntityID, after string,
 		}
 	}
 
-	ids := make([]model.RelationID, h.Len())
-	for i := len(ids) - 1; i >= 0; i-- {
-		ids[i] = heap.Pop(h).(model.RelationID)
-	}
+	keys := top.sorted()
 
-	page = make([]model.Relation, 0, len(ids))
-	for _, rid := range ids {
-		page = append(page, g.relations[rid])
+	page = make([]model.Relation, 0, len(keys))
+	for _, key := range keys {
+		page = append(page, g.relations[model.RelationID(key)])
 	}
 	if seen > limit && limit > 0 {
-		next = string(ids[len(ids)-1])
+		next = keys[len(keys)-1]
 	}
 	return page, next, total
 }
