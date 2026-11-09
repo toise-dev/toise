@@ -165,12 +165,15 @@ aside h2{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing
 aside table{border-collapse:collapse;width:100%;table-layout:fixed;}
 aside td{padding:.25rem .4rem;border-bottom:1px solid var(--line);vertical-align:top;overflow-wrap:anywhere;word-break:break-word;}
 aside td.k{color:var(--dim);width:40%;word-break:normal;overflow-wrap:break-word;}
-.legend{display:flex;flex-wrap:nowrap;gap:.4rem .8rem;overflow-x:auto;overflow-y:hidden;font-size:12px;scrollbar-width:thin;}
+.legend{display:flex;flex-wrap:nowrap;gap:.4rem .8rem;overflow-x:auto;overflow-y:hidden;font-size:12px;scrollbar-width:thin;flex:0 1 auto;flex-shrink:1;min-width:0;}
 .legend span{display:flex;align-items:center;gap:.3rem;cursor:pointer;opacity:.85;background:var(--bg);border:1px solid var(--line);border-radius:999px;padding:.15rem .55rem;white-space:nowrap;flex-shrink:0;}
 .legend span.off{opacity:.3;text-decoration:line-through;}
 .legend i{width:10px;height:10px;border-radius:50%;display:inline-block;}
-.subbar{display:flex;align-items:center;gap:1rem;padding:.5rem 1rem;background:var(--panel);border-bottom:1px solid var(--line);font-size:12px;flex-wrap:nowrap;overflow:hidden;white-space:nowrap;}
-.subbar>#scopeStat{margin-left:auto;flex-shrink:0;}
+.subbar{display:flex;align-items:center;gap:1rem;padding:.4rem 1rem;background:var(--panel);border-bottom:1px solid var(--line);font-size:12px;flex-wrap:nowrap;overflow:hidden;white-space:nowrap;height:2.1rem;box-sizing:border-box;}
+/* The legend is what lets a reader switch a type back on, so it never gives
+   way: the scope yields first and ellipses. flex-shrink:0 on the scope was
+   the defect -- it refused to shrink, so the legend was the one that lost. */
+.subbar>#scopeStat{margin-left:auto;flex:0 1 auto;flex-shrink:999;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:var(--dim);}
 .mapstat{position:absolute;left:.8rem;bottom:.6rem;display:flex;flex-wrap:wrap;gap:.3rem 1rem;align-items:center;color:var(--dim);font-size:12px;pointer-events:none;z-index:5;}
 .muted{color:var(--dim);}
 .empty{color:var(--dim);padding:2rem;text-align:center;}
