@@ -142,6 +142,18 @@ label.muted,#askState,summary,#askOut{font-family:inherit;}
 #askOut table.sh-list td{padding:.2rem .3rem;font-family:inherit;}
 #askOut .sh-export{margin-top:.5rem;display:flex;gap:.4rem;}
 aside{width:360px;flex:none;border-left:1px solid var(--line);background:var(--panel);overflow-y:auto;overflow-x:hidden;padding:.8rem;}
+/* The map takes the whole width; the column is HIDDEN and not removed, because
+   two places call getElementById('panel').classList without tolerating its
+   absence, and the question panel inside it is wired further down. */
+#panel{display:none;}
+.resizer{display:none;}
+.actions{display:flex;gap:10px;border-top:1px solid var(--line);padding-top:12px;margin-top:12px}
+.actions button{cursor:pointer;font:inherit;padding:6px 12px;border-radius:6px;background:transparent}
+.actions .primary{border:1px solid var(--accent);color:var(--accent)}
+.actions .secondary{border:1px solid transparent;color:var(--dim)}
+.actions .secondary:hover{color:var(--fg)}
+#detail{position:absolute;top:1rem;right:1rem;width:21rem;max-width:calc(100% - 2rem);max-height:calc(100% - 2rem);overflow-y:auto;overflow-x:hidden;background:var(--panel);border:1px solid var(--line);border-radius:.5rem;box-shadow:0 .25rem 1rem rgba(0,0,0,.35);padding:.8rem;z-index:10;}
+#detail:has(.empty){visibility:hidden;pointer-events:none;}
 aside h2{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;margin:.2rem 0 .6rem;}
 /* table-layout:fixed + wrap-anywhere keeps long ids/values inside the panel instead
    of overflowing and getting clipped. */
@@ -247,6 +259,7 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
       <button id="grid" class="on" title="Show the azimuth/altitude grid">grid</button>
       <span class="bearing" id="bearing" title="Where you are looking: azimuth and altitude">az 000&deg; alt +00&deg;</span>
     </div>
+    <div id="detail"><div class="empty">Click an element to see its details.</div></div>
   </div>
   <div class="resizer" id="resizer" title="Drag to resize the panel"></div>
   <aside id="panel">
@@ -256,7 +269,6 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
       <div id="askState" class="muted"></div>
       <div id="askOut"></div>
     </div>
-    <div id="detail"><div class="empty">Click an element to see its details.</div></div>
     <h2 style="margin-top:1rem">Activity</h2>
     <div id="feed"></div>
   </aside>
@@ -1177,8 +1189,17 @@ function renderRuler(){
     d.style.left=(frac*100)+'%'; if(txt!=null) d.textContent=txt; el.appendChild(d); };
   add('base',0);
   const minor=niceStep(W,26); for(let t=Math.ceil(s/minor)*minor;t<=e;t+=minor) add('tick min',(t-s)/W);
-  const major=Math.max(niceStep(W,6),minor);
-  for(let t=Math.ceil(s/major)*major;t<=e;t+=major){ const f=(t-s)/W; add('tick maj',f); add('lab',f,fmtAbs(new Date(t),W)); }
+  // A "nice" step knows nothing about screen width; only pixels tell whether two labels would collide.
+  const cw=el.clientWidth;
+  const nLab=cw>0?Math.min(8,Math.max(2,Math.round(cw/110))):6;
+  const major=Math.max(niceStep(W,nLab),minor);
+  // Every k-th major, not "skip the ones that are too close": when consecutive
+  // steps fall just under the gap, skipping drops them ALL and leaves one label.
+  const stepFrac=major/W, minGap=cw>0?110/cw:0;
+  const stride=(stepFrac>0&&minGap>0)?Math.max(1,Math.ceil(minGap/stepFrac)):1;
+  let k=0;
+  for(let t=Math.ceil(s/major)*major;t<=e;t+=major,k++){ const f=(t-s)/W; add('tick maj',f);
+    if(k%stride===0) add('lab',f,fmtAbs(new Date(t),W)); }
 }
 // Zoom the timeline to a selected [a,b] period (ms since epoch).
 // setSpan is REMOVED with the brush that was its only caller. It set spanMs to an
@@ -1385,9 +1406,23 @@ const escKeyBreakable=s=>esc(s).replace(/([._:\-\/])/g,'$1<wbr>');
     +'<div class="muted" style="word-break:break-all">'+esc(n.identityFingerprint||'\u2014')+'</div>'
     +'<table>'+rows(n.identity)+'</table>'
     +'<table>'+rows(n.attributes)+'</table>'
-    +'</details>';
-  const cb=document.getElementById('panelClose');
-  if(cb) cb.onclick=()=>{ box.innerHTML=blank; };
++'</details>'
+    +'<div class="actions">'
+    +'<button id="btnAsk" class="primary"'+(n.identityFingerprint?'':' hidden')+'>Ask about it</button>'
+    +'<button id="btnNeighbors" class="secondary">Neighbors</button>'
+    +'</div>';
+const cb=document.getElementById('panelClose');
+  if(cb) cb.onclick=()=>{ box.innerHTML=blank; publishView(); };
+  const ask=document.getElementById('btnAsk');
+  if(ask && n.identityFingerprint) ask.onclick=()=>{
+    // Contract fixed by the portal; no fingerprint means no button, so no send.
+    sendContext({v:1, type:"ask", payload:{kind:"element", value:n.identityFingerprint, label:(n.displayName||'').slice(0,80)}});
+  };
+  const nb=document.getElementById('btnNeighbors');
+  if(nb) nb.onclick=()=>{
+    // fit can throw on an empty selection; swallow so the panel stays usable.
+    try{ net.fit({nodes:[id, ...net.getConnectedNodes(id)], animation:false}); }catch(e){}
+  };
 }
 net.on('click',p=>{ inspect(p.nodes.length?p.nodes[0]:null); });
 // Clearing the highlight is deliberately NOT bound to a background click: the canvas
