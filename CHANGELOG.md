@@ -30,14 +30,20 @@ refuses to display contact attributes.
 Entity and relation pagination used to copy and sort the entire type once
 per page: enumerating a fleet of 16,858 entities sorted that fleet 85
 times. Measured at one million entities, a page of 200 drops from 160 MB
-allocated to 39.7 KB, and allocation no longer depends on fleet size at
-all: 39,712 bytes and 413 allocations per page, identical at one hundred
+allocated to 33.3 KB, and allocation no longer depends on fleet size at
+all: 33,344 bytes and 14 allocations per page, identical at one hundred
 thousand and at one million. Time remains proportional to the fleet —
 30 ms at one hundred thousand, 318 ms at one million — and is not fixed
 here. GraphQL entity pagination now orders by identity fingerprint
 instead of local identifier, and a relation query filtered by endpoint
 goes through the adjacency index instead of scanning every relation, while
-`graphScope` reads its counters without copying the tenant twice.
+`graphScope` reads its counters without copying the tenant twice. The
+bounded selection is written as a typed version rather than with the
+standard heap library, whose interface boxes one allocation per proposed
+element — a pattern a performance gate measured as trading one large
+allocation for many small ones. On the path of a small page,
+`find_entities` stays at 1,019 allocations per call, unchanged from the
+1,020 before this batch.
 
 ### Fixed
 
