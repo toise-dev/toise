@@ -169,6 +169,17 @@ aside td.k{color:var(--dim);width:40%;word-break:normal;overflow-wrap:break-word
 button.retry{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:2px 10px;margin-left:6px;cursor:pointer;font:inherit}
 button.retry:hover{border-color:var(--accent);color:var(--accent)}
 button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:.2rem .5rem;font:inherit;cursor:pointer;}
+.stats{margin-left:0;}
+.segmented{display:flex;}
+.segmented button{border-radius:0;border-right-width:0;}
+.segmented button:first-child{border-radius:4px 0 0 4px;}
+.segmented button:last-child{border-radius:0 4px 4px 0;border-right-width:1px;}
+.segmented button.on{background:var(--accent);color:var(--bg);}
+.options{position:relative;margin-left:auto;}
+.options summary{list-style:none;cursor:pointer;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:.2rem .5rem;font:inherit;}
+.options summary::-webkit-details-marker{display:none;}
+.options .panel{position:absolute;top:calc(100% + .25rem);right:0;z-index:10;display:flex;flex-direction:column;gap:.25rem;background:var(--panel);border:1px solid var(--line);border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.35);padding:.5rem;}
+.options #advanced{display:flex;flex-direction:column;gap:.25rem;}
 .layers{display:inline-flex;gap:.25rem;}
 .layers[hidden]{display:none;}
 .layers button.on{border-color:var(--accent);color:var(--accent);}
@@ -216,11 +227,13 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
 </head>
 <body>
 <header>
-  <div class="stats">
+  <div class="segmented">
     <button id="vNet" title="The network: interfaces, addresses, segments, devices, endpoints">Network</button>
     <button id="vHosts" title="Machines: hosts, virtual machines, containers, pods">Machines</button>
     <button id="vApps" title="Applications: services, listening ports, databases">Applications</button>
-    <button id="fit" title="Recenter the view on the whole graph">Recenter</button>
+  </div>
+  <label class="muted" for="attr">search<input id="attr" spellcheck="false" autocomplete="off" placeholder="a name, a key, or key=value" style="background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;padding:.1rem .35rem;width:11rem;margin-left:.3rem;font-family:inherit;"></label>
+  <div class="stats">
     <span id="err" role="status" aria-live="polite"></span>
     <span><b id="nNodes">0</b> entities</span>
     <span><b id="nEdges">0</b> relations</span>
@@ -230,24 +243,25 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
     <span id="narrowStat" style="color:var(--warn)"></span>
     <span id="incompleteStat" style="color:var(--warn)"></span>
     <span id="hint" class="muted"></span>
-    <label class="muted" for="attr">search<input id="attr" spellcheck="false" autocomplete="off" placeholder="a name, a key, or key=value" style="background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;padding:.1rem .35rem;width:11rem;margin-left:.3rem;font-family:inherit;"></label>
-    <!-- The expert controls are reachable now. These four stay hidden one by one
-         because they are unverified on a real tenant, not because they are expert:
-         hiding the lot made every one of them unreachable. None is removed from
-         the document, since each is wired further down. -->
-    <div id="advanced">
-      <button id="filterMode">match: dim</button>
-      <button id="view" hidden>view: chart</button>
-      <button id="labels">labels: names</button>
-      <button id="fold">fold: on</button>
-      <span class="layers" id="layers" hidden></span>
-      <button id="edgemode">edges: on</button>
-      <button id="inferred" hidden>inferred: off</button>
-      <button id="static" hidden>layout: animated</button>
-      <button id="relayout">relayout</button>
-      <button id="resync">resync</button>
-    </div>
   </div>
+  <details class="options">
+    <summary>Options</summary>
+    <div class="panel">
+      <button id="fit" title="Recenter the view on the whole graph">Recenter</button>
+      <div id="advanced">
+        <button id="filterMode">match: dim</button>
+        <button id="view" hidden>view: chart</button>
+        <button id="labels">labels: names</button>
+        <button id="fold">fold: on</button>
+        <span class="layers" id="layers" hidden></span>
+        <button id="edgemode">edges: on</button>
+        <button id="inferred" hidden>inferred: off</button>
+        <button id="static" hidden>layout: animated</button>
+        <button id="relayout">relayout</button>
+        <button id="resync">resync</button>
+      </div>
+    </div>
+  </details>
 </header>
 <div class="legend" id="legend"></div>
 <main>
@@ -1718,7 +1732,9 @@ function applyView(btn){
   syncFoldBtn();
   for(const id of Object.keys(VIEWS)){
     const el = document.getElementById(id);   // tolerate a missing button like the rest of the page
-    if(el) el.style.color = (id===activeView) ? 'var(--accent)' : '';
+    // The class owns the segment's look: an inline colour here would beat it and
+    // paint amber on amber.
+    if(el){ el.style.color = ''; el.classList.toggle('on', id===activeView); }
   }
   // Set before the redraw, which may be deferred a turn: settle() is called from
   // inside it and must already see the request.
