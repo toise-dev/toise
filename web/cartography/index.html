@@ -174,6 +174,21 @@ aside td.k{color:var(--dim);width:40%;word-break:normal;overflow-wrap:break-word
    way: the scope yields first and ellipses. flex-shrink:0 on the scope was
    the defect -- it refused to shrink, so the legend was the one that lost. */
 .subbar>#scopeStat{margin-left:auto;flex:0 1 auto;flex-shrink:999;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:var(--dim);}
+/* Narrow screens: the bar needs 454px of content and has 390. It wraps to TWO
+   rows -- segments above, search and Options below -- and the height is pinned
+   for that breakpoint. Fixed is what matters, not single: a height that changes
+   with the view moves the canvas, a height that differs between breakpoints
+   does not. Options must stay reachable; the search can be small. */
+@media (max-width:560px){
+  header{flex-wrap:wrap;height:4.9rem;align-content:center;row-gap:.35rem;}
+  .segmented{flex:1 1 100%;}
+  .segmented button{flex:1 1 0;min-width:0;padding:.2rem .25rem;}
+  .stats{display:none;}
+  header label[for=attr]{font-size:0;flex:1 1 auto;min-width:0;}
+  header label[for=attr] input{width:100%;margin-left:0;font-size:12px;}
+  .options{margin-left:.5rem;}
+  .subbar{gap:.5rem;}
+}
 .mapstat{position:absolute;left:.8rem;bottom:.6rem;display:flex;flex-wrap:wrap;gap:.3rem 1rem;align-items:center;color:var(--dim);font-size:12px;pointer-events:none;z-index:5;}
 .muted{color:var(--dim);}
 .empty{color:var(--dim);padding:2rem;text-align:center;}
@@ -274,7 +289,7 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
 <main>
   <div id="stage">
     <div id="net" class="laying"></div>
-    <div class="mapstat">
+    <div class="mapstat" id="mapstat">
       <span><b id="nNodes">0</b> entities &middot; <b id="nEdges">0</b> relations shown &middot; fit to content</span>
       <span id="matchStat" class="muted"></span>
       <span id="capStat" style="color:var(--warn)"></span>
@@ -763,10 +778,12 @@ function fitReservingPanel() {
   try { net.fit({animation:false,maxZoomLevel:3}); } catch (e) {}
   syncLabelSize();   // vis emits 'zoom' for the reader's gestures only, never for fit()
   const panel = document.getElementById('detail');
-  if (panel && getComputedStyle(panel).visibility !== 'hidden') {
-    // Shifting by half the panel width recenters the graph in the remaining free space.
-    try { net.moveTo({offset:{x: panel.offsetWidth / 2, y: 0}}); } catch (e) {}
-  }
+  const strip = document.getElementById('mapstat');
+  // Half the width, half the height: the drawing recentres in what is left free
+  // once the card on the right and the strip at the bottom have taken their room.
+  const dx = (panel && getComputedStyle(panel).visibility !== 'hidden') ? panel.offsetWidth / 2 : 0;
+  const dy = strip ? -strip.offsetHeight / 2 : 0;
+  if (dx || dy) { try { net.moveTo({offset:{x: dx, y: dy}}); } catch (e) {} }
 }
 
 function stabilizationFor(drawnCount,firstLayout){
@@ -1585,8 +1602,15 @@ const cb=document.getElementById('panelClose');
   };
   const nb=document.getElementById('btnNeighbors');
   if(nb) nb.onclick=()=>{
+    // Opening the owner is what SHOWS the satellites: the fold machinery already
+    // draws one node per kind around an opened owner, and those nodes are real
+    // entities -- clickable, with their own detail and their own Ask. Writing a
+    // second, decorative kind of satellite would have drawn things that look
+    // like entities and are not.
+    if(folded && ENT[id] && !expanded.has(id)){ expanded.add(id); rebuild(); }
     // fit can throw on an empty selection; swallow so the panel stays usable.
-    try{ net.fit({nodes:[id, ...net.getConnectedNodes(id)], animation:false}); }catch(e){}
+    try{ net.fit({nodes:[id, ...net.getConnectedNodes(id)], animation:false, maxZoomLevel:3}); }catch(e){}
+    syncLabelSize();
   };
 }
 net.on('click',p=>{ inspect(p.nodes.length?p.nodes[0]:null); });
