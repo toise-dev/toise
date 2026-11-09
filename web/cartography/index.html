@@ -1078,11 +1078,19 @@ function readFailureMessage(status, fallback) {
   // The wording follows the instant being read: "re-read the past" names a
   // cost the live reader never paid, and a message that misnames the cause
   // teaches the reader to distrust the next one.
+  // 429 and 503 share one consequence -- wait, then retry -- and not the cause:
+  // 503 is the server saturated, 429 is this page asking too fast.
   if (status === 503) {
     if (asOfMs == null) {
       return 'The server is too busy right now — please retry.';
     }
     return 'The server is too loaded to re-read the past right now — please retry.';
+  }
+  if (status === 429) {
+    if (asOfMs == null) {
+      return 'Too many reads are in progress right now — wait a moment, then retry.';
+    }
+    return 'Too many past reads are in progress right now — wait a moment, then retry.';
   }
   return fallback;
 }
