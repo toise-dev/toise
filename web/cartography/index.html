@@ -611,6 +611,16 @@ function stateBorder(n){
   return v && Object.prototype.hasOwnProperty.call(LIFECYCLE_BORDER,v) ? LIFECYCLE_BORDER[v] : null;
 }
 
+function computeOwners(){
+  OWNER={};
+  for(const r of Object.values(REL)){
+    const side=CHILD_SIDE[r.type]; if(!side) continue;
+    const child=side==='from'?r.fromId:r.toId, owner=side==='from'?r.toId:r.fromId;
+    if(child!==owner && !OWNER[child]) OWNER[child]=owner;   // first owner wins; a second would be a modelling error, not ours to resolve
+  }
+}
+// repOf: the node actually drawn for x. Walk up while the parent is folded shut;
+// stop at the first ancestor the reader opened, or at the top.
 function repOf(id,guard){
   if(!folded) return id;
 
