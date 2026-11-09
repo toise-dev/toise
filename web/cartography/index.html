@@ -789,6 +789,18 @@ function declutterLabels() {
     return a < b ? -1 : 1;
   });
 
+  // The discs are obstacles too. Testing a name only against other NAMES let it
+  // sit squarely on a neighbour's disc -- measured, "sfh912.senhub.io" across the
+  // circle next to it. Every lit disc is an occupied box before the first name is
+  // placed; a node's own disc is excluded, since its name hangs just below it.
+  const discs = {};
+  for (const id of ids) {
+    const nd = nodes.get(id), q = pos[id];
+    if (!nd || !q) continue;
+    const r = (typeof nd.size === 'number' ? nd.size : 0) * scale;
+    discs[id] = { x1: q.x * scale - r, x2: q.x * scale + r, y1: q.y * scale - r, y2: q.y * scale + r };
+  }
+  const hits = (b, o) => b.x1 < o.x2 && b.x2 > o.x1 && b.y1 < o.y2 && b.y2 > o.y1;
   const kept = [];
   const updates = [];
 
@@ -806,9 +818,8 @@ function declutterLabels() {
     const w = label.length * 6.6 + 8;
     const box = { x1: cx - w / 2, x2: cx + w / 2, y1: top, y2: top + 16 };
     // A label survives only if its box touches no box already kept.
-    const clash = kept.some(k =>
-      box.x1 < k.x2 && box.x2 > k.x1 && box.y1 < k.y2 && box.y2 > k.y1
-    );
+    const clash = kept.some(k => hits(box, k))
+      || ids.some(other => other !== id && discs[other] && hits(box, discs[other]));
     if (!clash) kept.push(box);
     updates.push({ id, label: clash ? undefined : label });
   }
