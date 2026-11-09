@@ -442,12 +442,14 @@ net.on('beforeDrawing',ctx=>{ for(const f of FIELD){
 let freezeTimer=null;
 function freeze(){ clearTimeout(freezeTimer); freezeTimer=null; net.setOptions({physics:{enabled:false}}); }
 function settle(ms=1600){ net.setOptions({physics:{enabled:true}}); clearTimeout(freezeTimer);
-  freezeTimer=setTimeout(()=>{ freeze(); if(fitAfterSettle){ fitAfterSettle=false; try{ net.fit({animation:false,maxZoomLevel:3}); }catch(e){} syncLabelSize(); } }, ms); }
+  freezeTimer=setTimeout(()=>{ freeze(); if(fitAfterSettle){ fitAfterSettle=false; fitReservingPanel(); } }, ms); }
 net.on('zoom',()=>{ syncLabelSize(); declutterLabels(); });   // zooming spreads the boxes: names can come back   // the font is in canvas units, so it shrinks with the view
 net.on('stabilizationIterationsDone',()=>{ freeze();   // layout done -> freeze, fit, reveal
   if(!fitted) return;   // the empty-graph init pass, before any data — nothing to reveal yet
-  try{ net.fit({animation:false,maxZoomLevel:3}); }catch(_){}
-  syncLabelSize();   // same reason: a fit changes the scale without a zoom event
+  // Through fitReservingPanel, not a bare fit: this is the LAST framing the
+  // reader sees, and a bare fit here reserved nothing for the strip. The
+  // six-second full reload used to re-frame properly a moment later and hid it.
+  fitReservingPanel();
   const nv=document.getElementById('net'); if(nv) nv.classList.remove('laying');
   const err=document.getElementById('err'); if(err && err.textContent.startsWith('Drawing ')) err.textContent=''; });
 
@@ -870,8 +872,25 @@ function fitReservingPanel(onlyNodes) {
   // left one name on the drawing. A selected element's card reserves as before.
   const resting = panel && panel.classList.contains('list');
   const dx = (panel && !resting && getComputedStyle(panel).visibility !== 'hidden') ? panel.offsetWidth / 2 : 0;
-  const dy = strip ? -strip.offsetHeight / 2 : 0;
+  const stripH = strip ? strip.offsetHeight + 8 : 0;
+  // Shrink before shifting. fit() leaves the drawing filling the frame, so
+  // shifting it up to clear the strip pushes the top row out the other side --
+  // one element out of frame, which is what the portal measured. Making room
+  // first costs 7% of the height and puts nothing outside.
+  //
+  // 3% under what the arithmetic allows: the computation is exact and the
+  // renderer is not, and a margin of zero has put something out of frame every
+  // time it has been tried tonight.
+  const view = document.getElementById('net');
+  const H = view ? view.clientHeight : 0;
+  if (stripH && H) {
+    const k = ((H - stripH) / H) * 0.97;
+    if (k > 0 && k < 1) { try { net.moveTo({scale: net.getScale() * k}); } catch (e) {} }
+    syncLabelSize();
+  }
+  const dy = -stripH / 2;
   if (dx || dy) { try { net.moveTo({offset:{x: dx, y: dy}}); } catch (e) {} }
+  declutterLabels();   // the scale moved, so which names fit moved with it
 }
 
 function stabilizationFor(drawnCount,firstLayout){
@@ -1794,8 +1813,9 @@ const cb=document.getElementById('panelClose');
     // Then frames the machine and its children. maxZoomLevel is raised here on
     // purpose: a handful of nodes should fill the canvas, which is the whole
     // point of asking to see one machine's neighbours.
-    try{ net.fit({nodes:[id, ...net.getConnectedNodes(id)], animation:false, maxZoomLevel:3}); }catch(e){}
-    syncLabelSize();
+    // Through the reserving fit as well: this one runs with the detail card OPEN,
+    // so a bare fit here frames the neighbours under the card and the strip.
+    try{ fitReservingPanel([id, ...net.getConnectedNodes(id)]); }catch(e){}
   };
 }
 net.on('click',p=>{ inspect(p.nodes.length?p.nodes[0]:null); });
