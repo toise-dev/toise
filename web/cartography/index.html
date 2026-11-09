@@ -276,7 +276,8 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
         <button id="edgemode">edges: on</button>
         <button id="inferred" hidden>inferred: off</button>
         <button id="static" hidden>layout: animated</button>
-        <button id="relayout">relayout</button>
+        <button id="extras">routes: off</button>
+      <button id="relayout">relayout</button>
         <button id="resync">resync</button>
       </div>
     </div>
@@ -713,7 +714,11 @@ function syncLabelSize() {
   // Clamp at 11 so zooming in never shrinks labels below their base size.
     // Capped: past this the label is wider than the thing it names, and a fit that
   // still needs more is telling us the view draws too much, not that the font is small.
-  const size = Math.min(40, Math.max(11, Math.ceil(LABEL_MIN_PX / net.getScale())));
+  // Capped high, not low: the old 40 existed to keep a label from growing wider
+  // than its node, which is a COLLISION worry -- and collisions are now settled
+  // by dropping names outright. Holding 12 screen pixels matters more than a
+  // tidy ratio, so the cap only stops the absurd.
+  const size = Math.min(140, Math.max(11, Math.ceil(LABEL_MIN_PX / net.getScale())));
   if (size !== lastLabelSize) {
     lastLabelSize = size;
     net.setOptions({nodes:{font:{size:size}}});
@@ -757,6 +762,7 @@ function listenForHighlight() {
   });
 }
 
+const VIS_LABEL_DROP = 10.6;   // measured on the renderer, not assumed
 function declutterLabels() {
   // Labels are removed, never moved: the layout is fixed and already
   // learned by the reader, so only visibility may change between views.
@@ -791,7 +797,12 @@ function declutterLabels() {
     const p = pos[id];
     if (!p || !label) continue;
     const cx = p.x * scale;
-    const top = p.y * scale + 12;
+    const nd = nodes.get(id);
+    const r = (nd && typeof nd.size === 'number') ? nd.size : 0;
+    // Drop by the node's own radius plus the renderer's gap, both in canvas
+    // units, THEN convert: a constant drop is wrong by exactly the size of the
+    // disc, which is how this pass cleared Network and missed Machines.
+    const top = (p.y + r + VIS_LABEL_DROP) * scale;
     const w = label.length * 6.6 + 8;
     const box = { x1: cx - w / 2, x2: cx + w / 2, y1: top, y2: top + 16 };
     // A label survives only if its box touches no box already kept.
@@ -1092,6 +1103,10 @@ function rebuild(){
     // stabilize() blocks the thread, so a message written on this same task would never be painted; defer it one turn.
     setTimeout(()=>{ net.stabilize();
     setTimeout(()=>{ const nv=document.getElementById('net'); if(nv) nv.classList.remove('laying'); const e=document.getElementById('err'); if(e && e.textContent.startsWith('Drawing ')) e.textContent=''; },12000); },0); }  // safety reveal
+  // Every redraw rewrites every label from scratch, so the names dropped a moment
+  // ago all come back -- and the six-second poll calls this. The pass has to be
+  // part of a redraw, not only of a view change, or it is undone before it is seen.
+  declutterLabels();
 }
 
 // The server caps every connection page at 200 items, so a single
@@ -1801,6 +1816,11 @@ askQ.addEventListener('keydown',e=>{
 // Two things the obvious shape gets wrong: `hidden` is a const Set, so it is
 // cleared and refilled rather than reassigned; and `allTypes` is local to
 // rebuild(), so the set of known types is taken from the entities themselves.
+// Routes and remote endpoints are two thirds of the volume and are not what a
+// reader means by "the network": dim by default, switched back on from Options.
+// A view that lights everything shows nothing.
+const VIEW_EXTRAS={vNet:['network.route','network.endpoint','network.neighbor']};
+let showExtras=false;
 const VIEWS={
   vNet:['host','network.interface','network.address','network.segment','network.device','network.endpoint','network.route','network.neighbor'],
   vHosts:['host','compute.vm','container','pod'],
@@ -1826,6 +1846,7 @@ function syncLayerView(){
   // and costs nothing -- and the reader keeps the shape of the whole estate in
   // view instead of being handed three unrelated pictures.
   const keep=new Set(VIEWS[activeView]);
+  if(!showExtras) for(const t of (VIEW_EXTRAS[activeView]||[])) keep.delete(t);
   for(const n of Object.values(ENT)) if(!keep.has(n.type)) dimmed.add(n.type);
 }
 function applyView(btn){
@@ -1919,6 +1940,10 @@ function tick(){
 
 function noteLoadFailure(){ failedAt=Date.now(); }
 
+const extrasBtn=document.getElementById('extras');
+function syncExtrasBtn(){ if(extrasBtn){ extrasBtn.textContent='routes: '+(showExtras?'on':'off'); extrasBtn.style.color=showExtras?'var(--accent)':''; } }
+syncExtrasBtn();
+if(extrasBtn) extrasBtn.onclick=()=>{ showExtras=!showExtras; syncExtrasBtn(); syncLayerView(); rebuild(); fitEmphasised(); };
 const labelsBtn=document.getElementById('labels');
 function syncLabelsBtn(){ labelsBtn.textContent='labels: '+(labelMode==='name'?'names':'ids'); }
 syncLabelsBtn();
