@@ -152,6 +152,9 @@ aside{width:360px;flex:none;border-left:1px solid var(--line);background:var(--p
    absence, and the question panel inside it is wired further down. */
 #panel{display:none;}
 .resizer{display:none;}
+.litlist{display:flex;flex-direction:column;gap:.1rem;margin-top:.4rem;}
+.litrow{background:transparent;border:0;color:var(--fg);text-align:left;padding:.15rem .2rem;border-radius:4px;cursor:pointer;font:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.litrow:hover{background:var(--bg);color:var(--accent);}
 .actions{display:flex;gap:10px;border-top:1px solid var(--line);padding-top:12px;margin-top:12px}
 .actions button{cursor:pointer;font:inherit;padding:6px 12px;border-radius:6px;background:transparent}
 .actions .primary{border:1px solid var(--accent);color:var(--accent)}
@@ -550,7 +553,39 @@ function nameLabel(n){
   const nk=Object.keys(A).find(k=>/(^|\.)name$/i.test(k))||Object.keys(I).find(k=>/(^|\.)name$/i.test(k));
   return (nk&&(A[nk]||I[nk]))||idLabel(n);
 }
-function labelOf(n){ return (labelMode==='name'?nameLabel(n):idLabel(n))||n.id.slice(0,6); }
+// A drawn name is shortened to its first label -- sfh912 rather than
+// sfh912.senhub.io -- because the width of these boxes is what decides how many
+// names a map can carry at all. The full name stays in the tooltip and in the
+// detail card, so nothing is lost, it is one hover away.
+//
+// UNLESS two drawn things would then read the same. Two machines sharing a short
+// name is not a tidier map, it is a map that lies about which one you are
+// looking at, and that costs more than the width it saves.
+let shortClash=new Set();
+function recomputeShortNames(){
+  const seen=new Map();
+  for(const id in ENT){
+    const full=nameLabel(ENT[id]); if(!full) continue;
+    const short=shortOf(full);
+    if(short===full) continue;
+    if(seen.has(short) && seen.get(short)!==full) shortClash.add(short);
+    else seen.set(short,full);
+  }
+}
+function shortOf(name){
+  // Never an address: 10.90.0.3 would become "10", which is not a shorter name
+  // for that thing, it is a different thing. The first label must carry at least
+  // one letter, and no part of the name may be purely numeric.
+  if(/^[0-9.:]+$/.test(name)) return name;
+  const m=/^([A-Za-z0-9_-]*[A-Za-z][A-Za-z0-9_-]*)\.[A-Za-z0-9.-]+$/.exec(name);
+  return m ? m[1] : name;
+}
+function labelOf(n){
+  const base=(labelMode==='name'?nameLabel(n):idLabel(n))||n.id.slice(0,6);
+  if(labelMode!=='name') return base;
+  const short=shortOf(base);
+  return shortClash.has(short) ? base : short;
+}
 function titleOf(n){ const I=(n.identity||[]).map(a=>a.key+'='+a.value).join(', '); return n.type+(I?' · '+I:'')+' · '+n.id; }
 
 // --- folding: a graph of 546 entities is unreadable at any stroke weight ------
@@ -933,6 +968,7 @@ let rebuildTimer=null;
 function scheduleRebuild(){ if(rebuildTimer) return; rebuildTimer=setTimeout(()=>{rebuildTimer=null;rebuild();},250); }
 function rebuild(){
   computeOwners();
+  shortClash=new Set(); recomputeShortNames();   // two machines must never share a drawn name
   const prevNodeIds=new Set(nodes.getIds());
   const allTypes=new Set(), nodeIds=new Set(), nUp=[];
   syncLayerView();   // re-apply the chosen view to whatever types exist now
@@ -1636,6 +1672,53 @@ function applyRelation(ce){ if(historical) return; const r=ce&&ce.relation; if(!
 // The side panel is filled from an entity id, not from a click: every view of
 // the graph inspects the same way, so a second renderer cannot grow a second
 // opinion of what a node is.
+// With nothing selected the card carries the LIST of what is lit, named and
+// clickable. It is the answer to a name the map could not fit: every lit thing
+// is reachable by its name here, even when its label lost its seat on the
+// canvas. Built with DOM nodes, never innerHTML: these names come from the
+// network.
+const LIT_LIST_MAX = 60;
+function renderLitList(box){
+  box.textContent='';
+  const lit=[];
+  for(const id of nodes.getIds()){
+    const e=ENT[id];
+    if(e && !dimmed.has(e.type)) lit.push(id);
+  }
+  if(!lit.length){ const d=document.createElement('div'); d.className='empty';
+    d.textContent='Click an element to see its details.'; box.appendChild(d); return; }
+  lit.sort((a,b)=>{
+    const ea=ENT[a], eb=ENT[b];
+    const ca=CITED.has(ea.identityFingerprint)?0:1, cb=CITED.has(eb.identityFingerprint)?0:1;
+    if(ca!==cb) return ca-cb;
+    const da=degree[a]||0, db=degree[b]||0;
+    if(da!==db) return db-da;
+    const la=labelOf(ea), lb=labelOf(eb);
+    return la<lb?-1:la>lb?1:0;
+  });
+  const h=document.createElement('h2');
+  h.textContent=lit.length+' shown';
+  box.appendChild(h);
+  const ul=document.createElement('div'); ul.className='litlist';
+  for(const id of lit.slice(0,LIT_LIST_MAX)){
+    const e=ENT[id];
+    const row=document.createElement('button');
+    row.type='button'; row.className='litrow';
+    row.textContent=labelOf(e);
+    row.title=nameLabel(e)+' \u00b7 '+typeLabel(e.type);   // the FULL name, which the drawn label may have shortened
+    row.onclick=()=>{ inspect(id); try{ net.selectNodes([id]); }catch(_){} };
+    ul.appendChild(row);
+  }
+  box.appendChild(ul);
+  if(lit.length>LIT_LIST_MAX){
+    const more=document.createElement('div'); more.className='muted';
+    // Says the bound rather than ending silently: a list that simply stops is a
+    // list the reader believes is complete.
+    more.textContent='and '+fmtCount(lit.length-LIT_LIST_MAX)+' more — narrow with a view or the search';
+    box.appendChild(more);
+  }
+}
+
 function inspect(id){
   // Writes into #detail, never into the whole aside: the question panel and the
   // activity feed are siblings, and replacing the aside's contents destroyed both
@@ -1643,7 +1726,7 @@ function inspect(id){
   const box=document.getElementById('detail');
   const blank='<div class="empty">Click an element to see its details.</div>';
   const n=id&&ENT[id];
-  if(!n){ publishView(); box.innerHTML=blank; return; }   // deselection: the Dock refuses an empty selection, so fall back to the view
+  if(!n){ publishView(); renderLitList(box); return; }   // deselection: the Dock refuses an empty selection, so fall back to the view
   if(n.identityFingerprint){
     sendContext({ v:1, type:'context.selection', payload:{ kind:'element', value:n.identityFingerprint, label:(n.displayName||'').slice(0,80) } });
   } else {
@@ -1685,7 +1768,7 @@ const escKeyBreakable=s=>esc(s).replace(/([._:\-\/])/g,'$1<wbr>');
     +'<button id="btnNeighbors" class="secondary">Neighbors</button>'
     +'</div>';
 const cb=document.getElementById('panelClose');
-  if(cb) cb.onclick=()=>{ box.innerHTML=blank; publishView(); };
+  if(cb) cb.onclick=()=>{ renderLitList(box); publishView(); };
   const ask=document.getElementById('btnAsk');
   if(ask && n.identityFingerprint) ask.onclick=()=>{
     // Contract fixed by the portal; no fingerprint means no button, so no send.
