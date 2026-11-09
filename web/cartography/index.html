@@ -144,8 +144,11 @@ aside td.k{color:var(--dim);width:40%;}
 .legend i{width:10px;height:10px;border-radius:50%;display:inline-block;}
 .muted{color:var(--dim);}
 .empty{color:var(--dim);padding:2rem;text-align:center;}
+button.retry{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:2px 10px;margin-left:6px;cursor:pointer;font:inherit}
+button.retry:hover{border-color:var(--accent);color:var(--accent)}
 button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:.2rem .5rem;font:inherit;cursor:pointer;}
 .layers{display:inline-flex;gap:.25rem;}
+.layers[hidden]{display:none;}
 .layers button.on{border-color:var(--accent);color:var(--accent);}
 #feed{font-size:11px;color:var(--dim);max-height:30vh;overflow:auto;margin-top:.4rem;}
 #feed div{padding:.15rem 0;border-bottom:1px solid var(--line);}
@@ -173,7 +176,8 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
 .tlruler .lab{position:absolute;bottom:12px;transform:translateX(-50%);font-size:10px;line-height:1;color:var(--dim);white-space:nowrap;}
 /* the range input is the moving cursor over the ruler — a thin needle, no fill */
 .tlwrap input[type=range]{position:absolute;left:0;bottom:0;width:100%;height:24px;margin:0;background:transparent;-webkit-appearance:none;appearance:none;cursor:pointer;}
-.tlwrap input[type=range]:focus{outline:none;}
+.tlwrap input[type=range]:focus:not(:focus-visible){outline:none;}
+.tlwrap input[type=range]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
 .tlwrap input[type=range]::-webkit-slider-runnable-track{height:24px;background:transparent;border:none;}
 .tlwrap input[type=range]::-moz-range-track{height:24px;background:transparent;}
 .tlwrap input[type=range]::-moz-range-progress{height:24px;background:transparent;}
@@ -194,26 +198,29 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
     <button id="vHosts" title="Machines: hosts, virtual machines, containers, pods">Machines</button>
     <button id="vApps" title="Applications: services, listening ports, databases">Applications</button>
     <button id="fit" title="Recenter the view on the whole graph">Recenter</button>
-    <span id="err"></span>
+    <span id="err" role="status" aria-live="polite"></span>
     <span><b id="nNodes">0</b> entities</span>
     <span><b id="nEdges">0</b> relations</span>
     <span id="matchStat" class="muted"></span>
     <span id="scopeStat" class="muted"></span>
     <span id="capStat" style="color:var(--warn)"></span>
+    <span id="narrowStat" style="color:var(--warn)"></span>
     <span id="incompleteStat" style="color:var(--warn)"></span>
     <span id="hint" class="muted"></span>
     <label class="muted" for="attr">search<input id="attr" spellcheck="false" autocomplete="off" placeholder="a name, a key, or key=value" style="background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;padding:.1rem .35rem;width:11rem;margin-left:.3rem;font-family:inherit;"></label>
-    <!-- The expert controls stay in the DOM, hidden: every one of them is wired
-         further down, and removing the elements would break that wiring. -->
-    <div id="advanced" hidden>
+    <!-- The expert controls are reachable now. These four stay hidden one by one
+         because they are unverified on a real tenant, not because they are expert:
+         hiding the lot made every one of them unreachable. None is removed from
+         the document, since each is wired further down. -->
+    <div id="advanced">
       <button id="filterMode">match: dim</button>
-      <button id="view">view: chart</button>
+      <button id="view" hidden>view: chart</button>
       <button id="labels">labels: names</button>
       <button id="fold">fold: on</button>
-      <span class="layers" id="layers"></span>
+      <span class="layers" id="layers" hidden></span>
       <button id="edgemode">edges: on</button>
-      <button id="inferred">inferred: off</button>
-      <button id="static">layout: animated</button>
+      <button id="inferred" hidden>inferred: off</button>
+      <button id="static" hidden>layout: animated</button>
       <button id="relayout">relayout</button>
       <button id="resync">resync</button>
     </div>
@@ -338,7 +345,8 @@ function settle(ms=1600){ net.setOptions({physics:{enabled:true}}); clearTimeout
 net.on('stabilizationIterationsDone',()=>{ freeze();   // layout done -> freeze, fit, reveal
   if(!fitted) return;   // the empty-graph init pass, before any data — nothing to reveal yet
   try{ net.fit({animation:false}); }catch(_){}
-  const nv=document.getElementById('net'); if(nv) nv.classList.remove('laying'); });
+  const nv=document.getElementById('net'); if(nv) nv.classList.remove('laying');
+  const err=document.getElementById('err'); if(err && err.textContent.startsWith('Drawing ')) err.textContent=''; });
 
 // Node labels: a toggle between human-readable names and raw technical ids.
 // Identities are opaque (host.id is a UUID, a listener is <host-uuid>:port); name
@@ -462,6 +470,7 @@ function titleOf(n){ const I=(n.identity||[]).map(a=>a.key+'='+a.value).join(', 
 // relations nest; everything else is a peer link and is aggregated, never folded.
 const CHILD_SIDE={has_interface:'to',has_route:'to',has_segment:'to',runs_on:'from',bound_to:'from',listens_on:'from'};
 let folded=localStorage.getItem('toise_viz_folded')!=='0';   // ON by default: the dense case is the normal case
+let foldBeforeView = null; // null means "nothing retained", since false is a legitimate value of folded
 const expanded=new Set();                                     // owners the reader opened, by id
 const expandedKinds=new Set();                                // "<owner>\u0000<type>" the reader opened past the kind step
 
@@ -579,9 +588,48 @@ function say(msg){
 // Beyond a thousand nodes, extra iterations cost seconds of blocked main thread
 // without making the layout more readable.
 function stabilizationFor(drawnCount){ return drawnCount>1000?200:1500; }
+// `fmt` is already taken by a date formatter in another scope, so this gets its own name.
+function fmtCount(n){ return (typeof n==='number' && isFinite(n)) ? n.toLocaleString() : n; }
 
 // A reader who sees a subset after a successful load believes they see the whole
 // set, so the map must state what it omits and how to reach it.
+let narrowedOnce = false;
+
+function announceThenDefer(fn){
+  const err = document.getElementById('err');   // an existing error message outranks the drawing notice
+  if (err && err.textContent === '') err.textContent = 'Drawing the map for ' + fmtCount(Object.keys(ENT).length) + ' entities…';
+  // The redraw is synchronous: once it returns the freeze is over, so the notice
+  // is cleared here rather than from a layout event settle() may never fire.
+  setTimeout(function(){
+    try { fn(); }
+    finally { if (err && err.textContent.startsWith('Drawing ')) err.textContent = ''; }
+  }, 0);
+}
+
+function openNarrowOnLargeEstate() {
+  // Large estates freeze the tab on first paint, so we open on the machines layer only.
+  // The notice needs its own element because capStat is rewritten on every redraw.
+  // It must run once per page load, otherwise every redraw would re-narrow a view the reader just left.
+  if (narrowedOnce) return false;
+  if (activeView !== null) return false;
+  if (Object.keys(ENT).length <= 5000) return false;
+  narrowedOnce = true;
+  applyView('vHosts');
+  const cap = document.getElementById('narrowStat');
+  if (cap) {
+    cap.textContent = 'Map opened on machines only because the estate is large (' + fmtCount(Object.keys(ENT).length) + ' entities). ';
+    const btn = document.createElement('button');
+    btn.className = 'retry';
+    btn.textContent = 'Show everything';
+    // applyView announces, defers and clears this notice itself, so there is
+    // nothing to capture here and nothing to repeat.
+    btn.addEventListener('click', function(){ if (activeView) applyView(activeView); });
+    cap.appendChild(btn);
+  }
+  // applyView has already redrawn; the caller must not redraw again.
+  return true;
+}
+
 function sayCap(drawn,total,criterion){
   const el=document.getElementById('capStat'); if(!el) return;
   el.textContent = drawn>=total ? '' :
@@ -594,7 +642,7 @@ function rebuild(){
   computeOwners();
   const prevNodeIds=new Set(nodes.getIds());
   const allTypes=new Set(), nodeIds=new Set(), nUp=[];
-  syncView();   // re-apply the chosen view to whatever types exist now
+  syncLayerView();   // re-apply the chosen view to whatever types exist now
   const q=attrQuery.trim(); let matched=0;
   // Filled before the node loop below, not inside kindGroups() further down: that one
   // runs AFTER this loop, so the set would be empty on the first pass and correct on
@@ -688,8 +736,9 @@ function rebuild(){
       font:{color:'#d9e3f5',size:12},shadow:{enabled:false},
       color:{background:'#0a0e1c',border:openable?colorFor(k.type):'#e8b06a'}});
   });
-  // Only announce renders heavy enough to feel slow; below that it is noise.
-  if(nUp.length>1000) say('Drawing '+nUp.length+' entities\u2026');
+  // The heavy-render notice lives on the status line, not in the transient hint:
+  // the hint clears itself after six seconds while the layout blocks for ten or
+  // more, so it vanished while the tab was still frozen.
   net.setOptions({physics:{stabilization:{iterations:stabilizationFor(nUp.length)}}});
   nodes.update(nUp);
   // Say what is not shown. "0 match" was the lie; "0 shown, 54 inside folded nodes"
@@ -746,8 +795,11 @@ function rebuild(){
   // The count must match what is drawn. Saying only the stored edges while the
   // inferred overlay adds more to the screen is a wrong number, which is worse than
   // the jargon that was removed with it.
-  nE.textContent=showEdges?edgeIds.size:0;
+  // "0" is a true number and a false sentence: the relations are there, painted
+  // transparent. A reader cannot tell that from a zero, so say which it is.
+  nE.textContent=showEdges?edgeIds.size:'hidden';
   nE.style.color=showEdges?'':'var(--warn)';
+  nE.title=showEdges?'':edgeIds.size+' relations are loaded and drawn transparent — the edges button turns them back on';
   presentTypes=allTypes; renderLayers();
   const leg=document.getElementById('legend'); leg.innerHTML='';
   // The inferred-links legend is jargon for this audience; the overlay itself
@@ -762,8 +814,12 @@ function rebuild(){
   if(structural && fitted && !staticLayout) settle();
   // First data render: lay the graph out ONCE while the canvas is hidden, then reveal
   // it already-settled (no visible fly-in). Reveal + fit happen on stabilizationIterationsDone.
-  if(!fitted && nodeIds.size){ fitted=true; net.setOptions({physics:{enabled:true}}); net.stabilize();
-    setTimeout(()=>{ const nv=document.getElementById('net'); if(nv) nv.classList.remove('laying'); },12000); }  // safety reveal
+  if(!fitted && nodeIds.size){ fitted=true; net.setOptions({physics:{enabled:true}});
+    const err=document.getElementById('err');
+    if(nodeIds.size>1000 && err && !err.textContent) err.textContent='Drawing '+fmtCount(nodeIds.size)+' entities…';
+    // stabilize() blocks the thread, so a message written on this same task would never be painted; defer it one turn.
+    setTimeout(()=>{ net.stabilize();
+    setTimeout(()=>{ const nv=document.getElementById('net'); if(nv) nv.classList.remove('laying'); const e=document.getElementById('err'); if(e && e.textContent.startsWith('Drawing ')) e.textContent=''; },12000); },0); }  // safety reveal
 }
 
 // The server caps every connection page at 200 items, so a single
@@ -858,7 +914,10 @@ function sayScope() {
   } else if (SCOPE.entities === 0) {
     el.textContent = 'Tenant ' + t + ': 0 entities, no events yet.';
   } else {
-    el.textContent = t + ' · ' + SCOPE.entities + ' entities · ' + SCOPE.relations + ' relations';
+    // The relay is the one that filters, so it is the one that names what was
+    // removed; the page only relays its notice and never invents its own.
+    const notice = (typeof SCOPE.hiddenNotice === 'string' && SCOPE.hiddenNotice.length) ? ' · ' + SCOPE.hiddenNotice : '';
+    el.textContent = t + ' · ' + SCOPE.entities + ' entities · ' + SCOPE.relations + ' relations' + notice;
   }
 }
 
@@ -903,7 +962,10 @@ async function loadFull() {
     for (const k in ENT) delete ENT[k]; for (const k in REL) delete REL[k];
     ents.forEach(n => ENT[n.id] = n);
     rels.forEach(n => REL[n.id] = n);
-    rebuild();
+    // Before the first paint, not after: narrowing afterwards would pay the very
+    // layout cost it exists to avoid. applyView redraws on its own, so narrowing
+    // REPLACES this first rebuild rather than adding a second full node build.
+    if (!openNarrowOnLargeEstate()) rebuild();
     await refreshScope({ quiet: true });
     const second = SCOPE ? { entities: SCOPE.entities, relations: SCOPE.relations } : null;
     const bounds = [first, second].filter(Boolean);
@@ -1382,7 +1444,12 @@ function download(name,mime,text){
   document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
 }
 askBtn.addEventListener('click',ask);
-askQ.addEventListener('keydown',e=>{ if((e.ctrlKey||e.metaKey)&&e.key==='Enter'){ e.preventDefault(); ask(); } });
+askQ.addEventListener('keydown',e=>{
+  // IME composition fires keydown mid-input (keyCode 229); sending then would cut off typing
+  if(e.key!=='Enter'||e.shiftKey||e.isComposing||e.keyCode===229||askBtn.disabled)return;
+  e.preventDefault();
+  ask();
+});
 
 // Three plain-language views for a reader who does not know our type names. Each
 // one fills `hidden` so only its own layer stays drawn.
@@ -1399,19 +1466,34 @@ const VIEWS={
 // click time: the page polls every six seconds, so a type that arrives later would
 // otherwise have escaped the filter and invited itself into all three views.
 let activeView=null;
-function syncView(){
+// Renamed from syncView: that name collided with the 360-dome function declared
+// later in the same scope, and the collision was silent -- the layer views had
+// been calling the dome.
+function syncLayerView(){
   if(!activeView) return;
   const keep=new Set(VIEWS[activeView]);
   hidden.clear();
   for(const n of Object.values(ENT)) if(!keep.has(n.type)) hidden.add(n.type);
 }
 function applyView(btn){
+  const wasActive = activeView;
   activeView = (activeView===btn) ? null : btn;   // clicking the active view shows everything again
-  if(!activeView) hidden.clear(); else syncView();
-  for(const id of Object.keys(VIEWS)){
-    document.getElementById(id).style.color = (id===activeView) ? 'var(--accent)' : '';
+  const cap = document.getElementById('narrowStat');   // the notice must not outlive the narrowed map
+  if (activeView !== wasActive && cap) cap.textContent = '';
+  if(!activeView){
+    hidden.clear();
+    if(foldBeforeView !== null){ folded = foldBeforeView; foldBeforeView = null; }   // leaving the last view restores the fold state captured on entry
+  } else {
+    syncLayerView();
+    if(!wasActive){ foldBeforeView = folded; folded = false; }   // entering from "no view" stashes folded, because folding would hide the single kept layer
   }
-  rebuild();
+  syncFoldBtn();
+  for(const id of Object.keys(VIEWS)){
+    const el = document.getElementById(id);   // tolerate a missing button like the rest of the page
+    if(el) el.style.color = (id===activeView) ? 'var(--accent)' : '';
+  }
+  // Several paths redraw the whole map; guarding only one caller leaves the others frozen.
+  if (Object.keys(ENT).length >= 1000) announceThenDefer(rebuild); else rebuild();
 }
 for(const id of Object.keys(VIEWS)) document.getElementById(id).onclick=()=>applyView(id);
 
@@ -1469,9 +1551,10 @@ const attrInput=document.getElementById('attr');
 attrInput.addEventListener('input',()=>{ attrQuery=attrInput.value; rebuild(); });
 // --- fold, layers, and opening one node -------------------------------------
 const foldBtn=document.getElementById('fold');
-function syncFoldBtn(){ foldBtn.textContent='fold: '+(folded?'on':'off'); foldBtn.style.color=folded?'var(--accent)':''; }
+function syncFoldBtn(){ if(!foldBtn) return; foldBtn.textContent='fold: '+(folded?'on':'off'); foldBtn.style.color=folded?'var(--accent)':''; }
 syncFoldBtn();
-foldBtn.onclick=()=>{ folded=!folded; localStorage.setItem('toise_viz_folded',folded?'1':'0');
+foldBtn.onclick=()=>{ folded=!folded; foldBeforeView=null;   // an explicit fold wins over the stashed entry state
+  localStorage.setItem('toise_viz_folded',folded?'1':'0');
   expanded.clear(); expandedKinds.clear(); syncFoldBtn(); rebuild(); settle(2200); };
 
 // Double-click opens one owner, or closes it again. Single click already selects
