@@ -147,7 +147,7 @@ aside h2{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing
    of overflowing and getting clipped. */
 aside table{border-collapse:collapse;width:100%;table-layout:fixed;}
 aside td{padding:.25rem .4rem;border-bottom:1px solid var(--line);vertical-align:top;overflow-wrap:anywhere;word-break:break-word;}
-aside td.k{color:var(--dim);width:40%;}
+aside td.k{color:var(--dim);width:40%;word-break:normal;overflow-wrap:break-word;}
 .legend{display:flex;flex-wrap:wrap;gap:.4rem .8rem;padding:.5rem 1rem;background:var(--panel);border-bottom:1px solid var(--line);font-size:12px;}
 .legend span{display:flex;align-items:center;gap:.3rem;cursor:pointer;opacity:.85;}
 .legend span.off{opacity:.3;text-decoration:line-through;}
@@ -316,6 +316,7 @@ let presentTypes=new Set();
 const ENT={}, REL={};
 const nodes=new vis.DataSet(), edges=new vis.DataSet();
 let fitted=false;
+let fitAfterSettle = false; // requested, not automatic: auto-fit would steal the reader's manual zoom/pan
 
 const net=new vis.Network(document.getElementById('net'),{nodes,edges},{
   // The library's pre-computed layout was measured as the cause of the blank
@@ -351,7 +352,7 @@ net.on('beforeDrawing',ctx=>{ for(const f of FIELD){
 let freezeTimer=null;
 function freeze(){ clearTimeout(freezeTimer); freezeTimer=null; net.setOptions({physics:{enabled:false}}); }
 function settle(ms=1600){ net.setOptions({physics:{enabled:true}}); clearTimeout(freezeTimer);
-  freezeTimer=setTimeout(freeze, ms); }
+  freezeTimer=setTimeout(()=>{ freeze(); if(fitAfterSettle){ fitAfterSettle=false; try{ net.fit({animation:true}); }catch(e){} } }, ms); }
 net.on('stabilizationIterationsDone',()=>{ freeze();   // layout done -> freeze, fit, reveal
   if(!fitted) return;   // the empty-graph init pass, before any data — nothing to reveal yet
   try{ net.fit({animation:false}); }catch(_){}
@@ -1332,7 +1333,10 @@ function inspect(id){
   // Never surface an attribute whose key mentions a contact: the values are real
   // personal addresses, and this panel gets screen-shared.
   const visible=a=>(a||[]).filter(x=>!/contact/i.test(x.key));
-  const rows=a=>visible(a).map(x=>'<tr><td class="k">'+esc(x.key)+'</td><td>'+esc(x.value)+'</td></tr>').join('')||'<tr><td class="muted" colspan=2>\u2014</td></tr>';
+// Escape FIRST, then insert the break hints: inserting <wbr> first would let a
+// hostile key inject markup, and escaping afterwards would print "&lt;wbr&gt;".
+const escKeyBreakable=s=>esc(s).replace(/([._:\-\/])/g,'$1<wbr>');
+  const rows=a=>visible(a).map(x=>'<tr><td class="k">'+escKeyBreakable(x.key)+'</td><td>'+esc(x.value)+'</td></tr>').join('')||'<tr><td class="muted" colspan=2>\u2014</td></tr>';
   const attr=k=>{ const hit=(n.attributes||[]).find(x=>x.key===k); return hit?hit.value:null; };
   const version=attr('service.version')||attr('db.system.version')||attr('os.version');
   // REL is an object keyed by relation id, not an array: Object.values first.
@@ -1519,6 +1523,9 @@ function applyView(btn){
     const el = document.getElementById(id);   // tolerate a missing button like the rest of the page
     if(el) el.style.color = (id===activeView) ? 'var(--accent)' : '';
   }
+  // Set before the redraw, which may be deferred a turn: settle() is called from
+  // inside it and must already see the request.
+  fitAfterSettle = true;
   // Several paths redraw the whole map; guarding only one caller leaves the others frozen.
   if (Object.keys(ENT).length >= 1000) announceThenDefer(rebuild); else rebuild();
 }
@@ -1581,7 +1588,7 @@ syncEmBtn();
 emBtn.onclick=()=>{ if(showEdges&&!edgeLabels){ edgeLabels=true; } else if(showEdges&&edgeLabels){ edgeLabels=false; showEdges=false; } else { showEdges=true; edgeLabels=false; }
   localStorage.setItem('toise_viz_edges', !showEdges?'off':(edgeLabels?'labels':'on')); syncEmBtn(); rebuild(); };
 const attrInput=document.getElementById('attr');
-attrInput.addEventListener('input',()=>{ attrQuery=attrInput.value; rebuild(); });
+attrInput.addEventListener('input',()=>{ attrQuery=attrInput.value; fitAfterSettle = true; rebuild(); }); // safe on every keystroke: settle only runs when the node set actually changed
 // --- fold, layers, and opening one node -------------------------------------
 const foldBtn=document.getElementById('fold');
 function syncFoldBtn(){ if(!foldBtn) return; foldBtn.textContent='fold: '+(folded?'on':'off'); foldBtn.style.color=folded?'var(--accent)':''; }
