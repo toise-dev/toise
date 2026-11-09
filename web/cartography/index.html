@@ -152,9 +152,6 @@ aside{width:360px;flex:none;border-left:1px solid var(--line);background:var(--p
    absence, and the question panel inside it is wired further down. */
 #panel{display:none;}
 .resizer{display:none;}
-.litlist{display:flex;flex-direction:column;gap:.1rem;margin-top:.4rem;}
-.litrow{background:transparent;border:0;color:var(--fg);text-align:left;padding:.15rem .2rem;border-radius:4px;cursor:pointer;font:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.litrow:hover{background:var(--bg);color:var(--accent);}
 .actions{display:flex;gap:10px;border-top:1px solid var(--line);padding-top:12px;margin-top:12px}
 .actions button{cursor:pointer;font:inherit;padding:6px 12px;border-radius:6px;background:transparent}
 .actions .primary{border:1px solid var(--accent);color:var(--accent)}
@@ -166,6 +163,9 @@ aside{width:360px;flex:none;border-left:1px solid var(--line);background:var(--p
 #detail.list{width:auto;max-width:15rem;max-height:45%;}
 #detail.list summary{cursor:pointer;list-style:none;font-weight:600;}
 #detail.list summary::-webkit-details-marker{display:none;}
+.litlist{display:flex;flex-direction:column;gap:.1rem;margin-top:.4rem;}
+.litrow{background:transparent;border:0;color:var(--fg);text-align:left;padding:.15rem .2rem;border-radius:4px;cursor:pointer;font:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.litrow:hover{background:var(--bg);color:var(--accent);}
 #detail{position:absolute;top:1rem;right:1rem;width:21rem;max-width:calc(100% - 2rem);max-height:calc(100% - 2rem);overflow-y:auto;overflow-x:hidden;background:var(--panel);border:1px solid var(--line);border-radius:.5rem;box-shadow:0 .25rem 1rem rgba(0,0,0,.35);padding:.8rem;z-index:10;}
 #detail:has(.empty){visibility:hidden;pointer-events:none;}
 aside h2{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;margin:.2rem 0 .6rem;}
@@ -559,39 +559,7 @@ function nameLabel(n){
   const nk=Object.keys(A).find(k=>/(^|\.)name$/i.test(k))||Object.keys(I).find(k=>/(^|\.)name$/i.test(k));
   return (nk&&(A[nk]||I[nk]))||idLabel(n);
 }
-// A drawn name is shortened to its first label -- sfh912 rather than
-// sfh912.senhub.io -- because the width of these boxes is what decides how many
-// names a map can carry at all. The full name stays in the tooltip and in the
-// detail card, so nothing is lost, it is one hover away.
-//
-// UNLESS two drawn things would then read the same. Two machines sharing a short
-// name is not a tidier map, it is a map that lies about which one you are
-// looking at, and that costs more than the width it saves.
-let shortClash=new Set();
-function recomputeShortNames(){
-  const seen=new Map();
-  for(const id in ENT){
-    const full=nameLabel(ENT[id]); if(!full) continue;
-    const short=shortOf(full);
-    if(short===full) continue;
-    if(seen.has(short) && seen.get(short)!==full) shortClash.add(short);
-    else seen.set(short,full);
-  }
-}
-function shortOf(name){
-  // Never an address: 10.90.0.3 would become "10", which is not a shorter name
-  // for that thing, it is a different thing. The first label must carry at least
-  // one letter, and no part of the name may be purely numeric.
-  if(/^[0-9.:]+$/.test(name)) return name;
-  const m=/^([A-Za-z0-9_-]*[A-Za-z][A-Za-z0-9_-]*)\.[A-Za-z0-9.-]+$/.exec(name);
-  return m ? m[1] : name;
-}
-function labelOf(n){
-  const base=(labelMode==='name'?nameLabel(n):idLabel(n))||n.id.slice(0,6);
-  if(labelMode!=='name') return base;
-  const short=shortOf(base);
-  return shortClash.has(short) ? base : short;
-}
+function labelOf(n){ return (labelMode==='name'?nameLabel(n):idLabel(n))||n.id.slice(0,6); }
 function titleOf(n){ const I=(n.identity||[]).map(a=>a.key+'='+a.value).join(', '); return n.type+(I?' · '+I:'')+' · '+n.id; }
 
 // --- folding: a graph of 546 entities is unreadable at any stroke weight ------
@@ -834,33 +802,16 @@ function declutterLabels() {
   // sit squarely on a neighbour's disc -- measured, "sfh912.senhub.io" across the
   // circle next to it. Every lit disc is an occupied box before the first name is
   // placed; a node's own disc is excluded, since its name hangs just below it.
-  const allIds = nodes.getIds();
-  const allPos = net.getPositions(allIds);
   const discs = {};
-  for (const id of allIds) {
-    const nd = nodes.get(id), q = allPos[id];
+  for (const id of ids) {
+    const nd = nodes.get(id), q = pos[id];
     if (!nd || !q) continue;
     const r = (typeof nd.size === 'number' ? nd.size : 0) * scale;
     discs[id] = { x1: q.x * scale - r, x2: q.x * scale + r, y1: q.y * scale - r, y2: q.y * scale + r };
   }
-  // The strip at the bottom is occupied too: a name under it is a name nobody
-  // reads. Converted into the same frame as the nodes through the canvas, since
-  // one is placed in DOM pixels and the others in drawing units.
-  const canvasEl = document.getElementById('net'), stripEl = document.getElementById('mapstat');
-  if (canvasEl && stripEl) {
-    const cb = canvasEl.getBoundingClientRect(), sb = stripEl.getBoundingClientRect();
-    if (sb.width && sb.height && typeof net.DOMtoCanvas === 'function') {
-      try {
-        const tl = net.DOMtoCanvas({ x: sb.left - cb.left, y: sb.top - cb.top });
-        const br = net.DOMtoCanvas({ x: sb.right - cb.left, y: sb.bottom - cb.top });
-        discs['\u0000strip'] = { x1: tl.x * scale, x2: br.x * scale, y1: tl.y * scale, y2: br.y * scale };
-      } catch (e) {}
-    }
-  }
   const hits = (b, o) => b.x1 < o.x2 && b.x2 > o.x1 && b.y1 < o.y2 && b.y2 > o.y1;
   const kept = [];
   const updates = [];
-  let unnamed = 0;
 
   for (const id of sorted) {
     const label = labelOf(ENT[id]);
@@ -869,31 +820,21 @@ function declutterLabels() {
     const cx = p.x * scale;
     const nd = nodes.get(id);
     const r = (nd && typeof nd.size === 'number') ? nd.size : 0;
+    // Drop by the node's own radius plus the renderer's gap, both in canvas
+    // units, THEN convert: a constant drop is wrong by exactly the size of the
+    // disc, which is how this pass cleared Network and missed Machines.
+    const top = (p.y + r + VIS_LABEL_DROP) * scale;
     const w = label.length * 6.6 + 8;
-    // Seats below, then above, stepping further out each time. The renderer only
-    // shifts a label vertically, so left and right are not on offer: a name that
-    // cannot sit under its disc moves up, or further down, rather than vanishing.
-    // A lit thing with no name is a thing the reader cannot ask about.
-    const seats = [];
-    for (let step = 0; step < 6; step++) {
-      const out = step * 22;
-      seats.push({ drop: out, top: (p.y + r + VIS_LABEL_DROP + out) * scale });
-      seats.push({ drop: -(2 * r + VIS_LABEL_DROP + 18 + out), top: (p.y - r - VIS_LABEL_DROP - 18 - out) * scale });
-    }
-    let placed = null;
-    for (const seat of seats) {
-      const box = { x1: cx - w / 2, x2: cx + w / 2, y1: seat.top, y2: seat.top + 16 };
-      const clash = kept.some(k => hits(box, k))
-        || Object.keys(discs).some(other => other !== id && hits(box, discs[other]));
-      if (!clash) { placed = { box, drop: seat.drop }; break; }
-    }
-    if (placed) kept.push(placed.box); else unnamed++;
-    updates.push(placed ? { id, label, font: { vadjust: placed.drop } } : { id, label: undefined });
+    const box = { x1: cx - w / 2, x2: cx + w / 2, y1: top, y2: top + 16 };
+    // A label survives only if its box touches no box already kept.
+    const clash = kept.some(k => hits(box, k))
+      || ids.some(other => other !== id && discs[other] && hits(box, discs[other]));
+    if (!clash) kept.push(box);
+    updates.push({ id, label: clash ? undefined : label });
   }
 
   // One single update so the map is not redrawn once per node.
   nodes.update(updates);
-  return unnamed;
 }
 
 function fitEmphasised() {
@@ -916,36 +857,21 @@ function fitEmphasised() {
   fitReservingPanel(lit.length ? lit : null);
   declutterLabels();
 }
-// The zoom escalation that used to live here is gone. Measured on the real sky:
-// naming all twenty machines took a scale of 0.84 and pushed NINETEEN of them
-// out of the frame -- it honoured "everything named" by making almost nothing
-// visible, which is a worse answer than a missing name. Three names still
-// overlapped on top of that.
 
 function fitReservingPanel(onlyNodes) {
   try { net.fit(onlyNodes ? {nodes:onlyNodes,animation:false,maxZoomLevel:3} : {animation:false,maxZoomLevel:3}); } catch (e) {}
   syncLabelSize();   // vis emits 'zoom' for the reader's gestures only, never for fit()
+  const panel = document.getElementById('detail');
   const strip = document.getElementById('mapstat');
-  const canvas = document.getElementById('net');
-  const W = canvas ? canvas.clientWidth : 0, H = canvas ? canvas.clientHeight : 0;
-  // The card reserves NOTHING any more. Reserving its width meant zooming out by
-  // as much, and at 360 of 816 pixels that left the drawing 56% of the canvas
-  // and one name on it. It floats over the map instead, narrow and foldable,
-  // and the names it covers are the ones it lists. The strip still reserves its
-  // height: it is thin, and it had been sitting on the last row of names.
-  const cardW = 0;
-  const stripH = strip ? strip.offsetHeight + 8 : 0;
-  if (!W || !H || !stripH) return;
-  // Shrink BEFORE shifting. A fit already touches the edges, so sliding the view
-  // sideways to clear the card necessarily pushes that edge out of frame -- six
-  // machines of twenty, measured, the moment the card became permanent. Zooming
-  // out by exactly what is reserved keeps everything inside the free area.
-  const k = Math.min((W - cardW) / W, (H - stripH) / H);
-  try {
-    if (k > 0 && k < 1) net.moveTo({ scale: net.getScale() * k });
-    net.moveTo({ offset: { x: cardW / 2, y: -stripH / 2 } });
-  } catch (e) {}
-  syncLabelSize();   // the scale just changed, so the counter-scaled font must follow
+  // Half the width, half the height: the drawing recentres in what is left free
+  // once the card on the right and the strip at the bottom have taken their room.
+  // The RESTING card reserves nothing: it floats over the map and the names it
+  // covers are the ones it lists. Reserving for it cost 56% of the canvas and
+  // left one name on the drawing. A selected element's card reserves as before.
+  const resting = panel && panel.classList.contains('list');
+  const dx = (panel && !resting && getComputedStyle(panel).visibility !== 'hidden') ? panel.offsetWidth / 2 : 0;
+  const dy = strip ? -strip.offsetHeight / 2 : 0;
+  if (dx || dy) { try { net.moveTo({offset:{x: dx, y: dy}}); } catch (e) {} }
 }
 
 function stabilizationFor(drawnCount,firstLayout){
@@ -1004,7 +930,6 @@ let rebuildTimer=null;
 function scheduleRebuild(){ if(rebuildTimer) return; rebuildTimer=setTimeout(()=>{rebuildTimer=null;rebuild();},250); }
 function rebuild(){
   computeOwners();
-  shortClash=new Set(); recomputeShortNames();   // two machines must never share a drawn name
   const prevNodeIds=new Set(nodes.getIds());
   const allTypes=new Set(), nodeIds=new Set(), nUp=[];
   syncLayerView();   // re-apply the chosen view to whatever types exist now
@@ -1193,6 +1118,8 @@ function rebuild(){
   // away), then freeze — never on a plain attribute/heartbeat update.
   let structural = nodeIds.size!==prevNodeIds.size;
   if(!structural){ for(const id of nodeIds){ if(!prevNodeIds.has(id)){ structural=true; break; } } }
+  const card=document.getElementById('detail');
+  if(card && !card.querySelector('.actions')) renderLitList(card);   // resting state, or nothing ever asks for the list
   if(structural && fitted && !staticLayout) settle();
   // First data render: lay the graph out ONCE while the canvas is hidden, then reveal
   // it already-settled (no visible fly-in). Reveal + fit happen on stabilizationIterationsDone.
@@ -1206,12 +1133,6 @@ function rebuild(){
   // ago all come back -- and the six-second poll calls this. The pass has to be
   // part of a redraw, not only of a view change, or it is undone before it is seen.
   declutterLabels();
-  // And the card shows the list whenever nothing is selected. Nothing used to ask
-  // for it: inspect(null) is only reached by a click, so the card sat on its
-  // initial markup and the empty-state rule kept it hidden -- the half of the
-  // decision that says every lit thing is named SOMEWHERE was never on screen.
-  const card = document.getElementById('detail');
-  if (card && !card.querySelector('.actions')) renderLitList(card);
 }
 
 // The server caps every connection page at 200 items, so a single
@@ -1320,24 +1241,24 @@ function sayIncomplete(loadedE, loadedR, bounds) {
   // Callers invoke this directly with their own bounds, so the guard must live
   // here: a check placed at the call site only protects callers that remember it.
   if (!scopeDescribesInstant) { el.textContent = ''; return; }
-  // What the relay removed ON PURPOSE is not missing. It says how many it took
-  // out, so that count comes off the announced total before anything is claimed:
-  // otherwise the page reports a shortfall that is simply the filter working.
-  const onPurpose = (SCOPE && typeof SCOPE.hiddenEntities === 'number' && SCOPE.hiddenEntities > 0) ? SCOPE.hiddenEntities : 0;
   // Comparing against every scope reading tolerates a creation or deletion that
   // happened during the load, without inventing an arbitrary tolerance threshold.
-  const expectedE = bounds && bounds.length ? Math.min(...bounds.map(b => b.entities)) : (SCOPE ? SCOPE.entities : null);
-  const expectedR = bounds && bounds.length ? Math.min(...bounds.map(b => b.relations)) : (SCOPE ? SCOPE.relations : null);
-  if (expectedE === null) { el.textContent = ''; return; }   // without a total, any claimed gap would be invented
-  const wantE = Math.max(0, expectedE - onPurpose), wantR = expectedR;
-  const shortE = Math.max(0, wantE - loadedE), shortR = Math.max(0, wantR - loadedR);
-  if (!shortE && !shortR) { el.textContent = ''; return; }
-  // Says WHAT is missing and HOW MANY, because "1088 of 2332" asked the reader to
-  // work out the difference and then guess whether it mattered.
-  const parts = [];
-  if (shortE) parts.push(fmtCount(shortE) + ' entities');
-  if (shortR) parts.push(fmtCount(shortR) + ' relations');
-  el.textContent = parts.join(' and ') + ' the map should show are missing from this read.';
+  if (bounds && bounds.length) {
+    const minE = Math.min(...bounds.map(b => b.entities));
+    const minR = Math.min(...bounds.map(b => b.relations));
+    if (loadedE < minE || loadedR < minR) {
+      el.textContent = 'Incomplete: entities ' + loadedE + ' of ' + minE + ', relations ' + loadedR + ' of ' + minR + ' loaded.';
+    } else {
+      el.textContent = '';
+    }
+    return;
+  }
+  if (!SCOPE) { el.textContent = ''; return; } // without a total, any claimed gap would be invented
+  if (loadedE < SCOPE.entities || loadedR < SCOPE.relations) {
+    el.textContent = 'Incomplete: entities ' + loadedE + ' of ' + SCOPE.entities + ', relations ' + loadedR + ' of ' + SCOPE.relations + ' loaded.';
+  } else {
+    el.textContent = '';
+  }
 }
 
 async function loadFull() {
