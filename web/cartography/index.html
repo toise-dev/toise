@@ -197,6 +197,9 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
     <span><b id="nNodes">0</b> entities</span>
     <span><b id="nEdges">0</b> relations</span>
     <span id="matchStat" class="muted"></span>
+    <span id="scopeStat" class="muted"></span>
+    <span id="capStat" style="color:var(--warn)"></span>
+    <span id="incompleteStat" style="color:var(--warn)"></span>
     <span id="hint" class="muted"></span>
     <label class="muted" for="attr">search<input id="attr" spellcheck="false" autocomplete="off" placeholder="a name, a key, or key=value" style="background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;padding:.1rem .35rem;width:11rem;margin-left:.3rem;font-family:inherit;"></label>
     <!-- The expert controls stay in the DOM, hidden: every one of them is wired
@@ -293,6 +296,9 @@ const nodes=new vis.DataSet(), edges=new vis.DataSet();
 let fitted=false;
 
 const net=new vis.Network(document.getElementById('net'),{nodes,edges},{
+  // The library's pre-computed layout was measured as the cause of the blank
+  // white canvas on a large fleet, so it is disabled here.
+  layout:{improvedLayout:false},
   nodes:{shape:'dot',size:14,font:{color:'#c3d1ea',face:"'Geist Sans', system-ui, sans-serif",size:11,strokeWidth:0,vadjust:4},borderWidth:0},
   edges:{color:{color:'rgba(150,178,235,0.26)',highlight:'#cfe0ff',hover:'#cfe0ff'},
          font:{color:'#6f80a0',size:10,strokeWidth:3,strokeColor:'#05070f',align:'middle'},
@@ -477,6 +483,9 @@ function kindParts(id){ const a=id.slice(KIND.length).split('\u0000'); return {o
 // reader is handed to the attribute filter instead. 60 is above any real port or
 // interface count (the cases where opening everything is right) and far below the
 // densities that produced this issue.
+// Above a few thousand drawn nodes the main thread stays blocked for tens of
+// seconds, so the drawing is capped and the cap is stated on screen.
+const MAX_DRAWN=2500;
 const KIND_OPEN_MAX=60;
 
 // ownerOf maps a child to its owner, rebuilt whenever relations change.
@@ -562,6 +571,18 @@ function say(msg){
   hintTimer=setTimeout(()=>{ h.textContent=''; h.style.color=''; },6000);
 }
 
+// Beyond a thousand nodes, extra iterations cost seconds of blocked main thread
+// without making the layout more readable.
+function stabilizationFor(drawnCount){ return drawnCount>1000?200:1500; }
+
+// A reader who sees a subset after a successful load believes they see the whole
+// set, so the map must state what it omits and how to reach it.
+function sayCap(drawn,total,criterion){
+  const el=document.getElementById('capStat'); if(!el) return;
+  el.textContent = drawn>=total ? '' :
+    'Showing the '+drawn+' '+criterion+' of '+total+' entities. Search or filter to see the others.';
+}
+
 let rebuildTimer=null;
 function scheduleRebuild(){ if(rebuildTimer) return; rebuildTimer=setTimeout(()=>{rebuildTimer=null;rebuild();},250); }
 function rebuild(){
@@ -602,11 +623,33 @@ function rebuild(){
   const degree={};
   Object.values(REL).forEach(r=>{ const a=repOf(r.fromId), b=repOf(r.toId);
     if(a!==b){ degree[a]=(degree[a]||0)+1; degree[b]=(degree[b]||0)+1; } });
+  // Phase 1: census every candidate with the exact same exclusions, in the same order.
+  const candidates=[];
   Object.values(ENT).forEach(n=>{ allTypes.add(n.type); if(hidden.has(n.type)) return;
     if(repOf(n.id)!==n.id){ hiddenByFold++; return; }            // folded into an owner
     const ok=attrMatch(n); if(q && !ok && !MATCH_OWNERS.has(n.id) && filterOnly) return;   // "only" mode hides non-matching, but not an owner hiding a match
+    candidates.push({n, d:degree[n.id]||0}); });
+
+  // Priority: what the reader explicitly asked for (filter, then citations) comes
+  // before what the algorithm deems important (degree); id breaks ties so the map
+  // stays identical from one render to the next.
+  let cappedTotal=candidates.length, cappedOut=0;
+  candidates.sort((a,b)=>{
+    const am=q&&(attrMatch(a.n)||MATCH_OWNERS.has(a.n.id)), bm=q&&(attrMatch(b.n)||MATCH_OWNERS.has(b.n.id));
+    if(am!==bm) return am?-1:1;
+    const ac=CITED.size&&(CITED.has(a.n.identityFingerprint)||CITED_OWNERS.has(a.n.id)),
+          bc=CITED.size&&(CITED.has(b.n.identityFingerprint)||CITED_OWNERS.has(b.n.id));
+    if(ac!==bc) return ac?-1:1;
+    if(a.d!==b.d) return b.d-a.d;
+    return a.n.id<b.n.id?-1:(a.n.id>b.n.id?1:0);
+  });
+  const kept=candidates.slice(0,MAX_DRAWN); cappedOut=candidates.length-kept.length;
+  sayCap(kept.length,cappedTotal,'most connected');
+
+  // Phase 2: build exactly what the old loop built, for the retained candidates only.
+  kept.forEach(({n,d})=>{ const ok=attrMatch(n);
     nodeIds.add(n.id); if(q&&ok) matched++;
-    const by=inside[n.id], k=badgeTotal(by), d=degree[n.id]||0;
+    const by=inside[n.id], k=badgeTotal(by);
     const node={id:n.id,label:labelOf(n)+badge(by),
               title:titleOf(n)+(k?('\nfolded inside: '+badgeFull(by)+'  \u2014 double-click to open'):''),
               opacity:n.deleted?0.45:((q&&!ok&&!MATCH_OWNERS.has(n.id))||(CITED.size&&!CITED.has(n.identityFingerprint)&&!CITED_OWNERS.has(n.id))?0.12:1),
@@ -636,6 +679,8 @@ function rebuild(){
       font:{color:'#d9e3f5',size:12},shadow:{enabled:false},
       color:{background:'#0a0e1c',border:openable?colorFor(k.type):'#e8b06a'}});
   });
+  say('Drawing '+nUp.length+' entities\u2026');
+  net.setOptions({physics:{stabilization:{iterations:stabilizationFor(nUp.length)}}});
   nodes.update(nUp);
   // Say what is not shown. "0 match" was the lie; "0 shown, 54 inside folded nodes"
   // is the same number with its bound declared.
@@ -722,15 +767,69 @@ async function fetchAll(id){
   }while(after && ++guard<1000);
   return nodes;
 }
-async function loadFull(){
-  const err=document.getElementById('err'); err.textContent='';
-  try{
-    const [ents,rels]=await Promise.all([fetchAll('entities'),fetchAll('relations')]);
-    for(const k in ENT) delete ENT[k]; for(const k in REL) delete REL[k];
-    ents.forEach(n=>ENT[n.id]=n);
-    rels.forEach(n=>REL[n.id]=n);
+let SCOPE = null;
+
+// Reads the served perimeter so the page can tell which park it is drawing and whether the load was truncated.
+async function refreshScope() {
+  // The page sends persisted-document ids only, never a query: that is the
+  // security property of this build, and the relay refuses anything else.
+  try {
+    const res = await fetch(API, {
+      method: 'POST',
+      headers: gqlHeaders(),
+      credentials: 'same-origin',
+      body: JSON.stringify({ id: 'graphScope' })
+    });
+    const json = await res.json();
+    SCOPE = json && json.data && json.data.graphScope ? json.data.graphScope : null;
+  } catch (e) {
+    SCOPE = null;
+  }
+  sayScope();
+}
+
+// Renders the scope line; no relative age from newestEvent because the page has no trustworthy clock.
+function sayScope() {
+  const el = document.getElementById('scopeStat');
+  if (!el) return;
+  if (!SCOPE) { el.textContent = 'scope unavailable'; return; }
+  const t = (SCOPE.tenantName && SCOPE.tenantName.length) ? SCOPE.tenantName : 'tenant ' + SCOPE.tenant;
+  if (SCOPE.entities === 0) {
+    el.textContent = 'Tenant ' + t + ': 0 entities, no events yet.';
+  } else {
+    el.textContent = t + ' · ' + SCOPE.entities + ' entities · ' + SCOPE.relations + ' relations';
+  }
+}
+
+// Warns only on a deficit; a surplus is ignored because the graph is live and a creation mid-read is not a truncation.
+function sayIncomplete(loadedE, loadedR) {
+  const el = document.getElementById('incompleteStat');
+  if (!el) return;
+  if (!SCOPE) { el.textContent = ''; return; } // without a total, any claimed gap would be invented
+  if (loadedE < SCOPE.entities || loadedR < SCOPE.relations) {
+    el.textContent = 'Incomplete: entities ' + loadedE + ' of ' + SCOPE.entities + ', relations ' + loadedR + ' of ' + SCOPE.relations + ' loaded.';
+  } else {
+    el.textContent = '';
+  }
+}
+
+async function loadFull() {
+  loading = true;
+  const err = document.getElementById('err'); err.textContent = '';
+  try {
+    await refreshScope();
+    const [ents, rels] = await Promise.all([fetchAll('entities'), fetchAll('relations')]);
+    for (const k in ENT) delete ENT[k]; for (const k in REL) delete REL[k];
+    ents.forEach(n => ENT[n.id] = n);
+    rels.forEach(n => REL[n.id] = n);
     rebuild();
-  }catch(e){ err.textContent='⚠ '+e.message; }
+    sayIncomplete(Object.keys(ENT).length, Object.keys(REL).length);
+  } catch (e) {
+    err.textContent = '⚠ ' + e.message;
+    noteLoadFailure();
+  } finally {
+    loading = false;
+  }
 }
 
 // --- timeline: HIDDEN in this build ---------------------------------------------
@@ -1098,7 +1197,7 @@ function setStatus(cls,txt){
   const s=document.getElementById('status'); if(!s) return;
   s.className=cls; const t=document.getElementById('statusTxt'); if(t) t.textContent=txt;
 }
-function startPolling(){ if(!pollTimer) pollTimer=setInterval(loadFull,6000); }
+function startPolling(){ if(!pollTimer) pollTimer=setInterval(tick,6000); }
 function stopPolling(){ if(pollTimer){ clearInterval(pollTimer); pollTimer=null; } }
 function fallback(){ setStatus('poll','polling'); startPolling(); }
 // A portal tab stays open for hours. Polling a full reload every 6s while nobody
@@ -1106,6 +1205,25 @@ function fallback(){ setStatus('poll','polling'); startPolling(); }
 // caller when the websocket acknowledgement went away.
 document.addEventListener('visibilitychange',()=>{
   if(document.hidden){ stopPolling(); } else { startPolling(); loadFull(); } });
+
+let loading=false;   // one in-flight load at a time: overlapping full reloads pile up on a big park
+let failedAt=0;      // after a definitive failure, wait before retrying: hammering a broken endpoint every 6s turns an outage into load
+let lastScopeAt=0;   // above the entity threshold, refresh only the scope, and at most once a minute
+
+function tick(){
+  if(loading) return;                                  // never start a load while one is running
+  if(Date.now()-failedAt < 60000) return;              // no retry within 60s of a definitive failure
+  if(Object.keys(ENT).length > 2000){
+    if(Date.now()-lastScopeAt < 60000) return;         // scope-only refresh, throttled to 1/min
+    lastScopeAt=Date.now();
+    refreshScope();
+  } else {
+    loadFull();
+  }
+}
+
+function noteLoadFailure(){ failedAt=Date.now(); }
+
 const labelsBtn=document.getElementById('labels');
 function syncLabelsBtn(){ labelsBtn.textContent='labels: '+(labelMode==='name'?'names':'ids'); }
 syncLabelsBtn();
