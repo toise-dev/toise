@@ -357,7 +357,7 @@ const net=new vis.Network(document.getElementById('net'),{nodes,edges},{
   // The library's pre-computed layout was measured as the cause of the blank
   // white canvas on a large fleet, so it is disabled here.
   layout:{improvedLayout:false},
-  nodes:{shape:'dot',size:14,font:{color:'#c3d1ea',face:"'Geist Sans', system-ui, sans-serif",size:11,strokeWidth:0,vadjust:4},borderWidth:0},
+  nodes:{shape:'dot',size:14,font:{color:'#c3d1ea',face:"'Geist Sans', system-ui, sans-serif",size:11,strokeWidth:0,vadjust:0},borderWidth:0},
   edges:{color:{color:'rgba(150,178,235,0.26)',highlight:'#cfe0ff',hover:'#cfe0ff'},
          font:{color:'#6f80a0',size:10,strokeWidth:3,strokeColor:'#05070f',align:'middle'},
          arrows:{to:{enabled:true,scaleFactor:.3}},smooth:false,width:0.9,selectionWidth:1.6},
@@ -589,9 +589,22 @@ function layOutOnGrid(nUp) {
   const canvas = document.getElementById('net');
   const w = canvas.clientWidth || 1200;
   const h = canvas.clientHeight || 700;
-  let cols = Math.max(1, Math.min(sorted.length, Math.floor(w / labelPx)));
+  // Two bounds, and the tighter one wins. The label sets how many columns can
+  // FIT; the canvas shape sets how many SHOULD be used, or twenty nodes come out
+  // as a 12x2 band with a quarter of the screen between two rows.
+  const maxCols = Math.max(1, Math.floor(w / labelPx));
+  const wantCols = Math.max(1, Math.ceil(Math.sqrt(sorted.length * (w / h))));
+  let cols = Math.max(1, Math.min(sorted.length, maxCols, wantCols));
   let rows = Math.ceil(sorted.length / cols);
-  const rowPx = h / rows; // use the space actually available per row
+  // The fit frames the DRAWN box, not the centres: half a disc above the first
+  // row and a label below the last hang outside it, which is why the scale came
+  // back at 0.876 and shrank every reservation with it. Reserve that overflow.
+  const OVERFLOW = LABEL_H + 2 * MAX_RADIUS;
+  // Capped at what a row NEEDS: spreading rows over the whole height is how a
+  // small graph ends up with an empty band between two lines of discs. Beyond
+  // the cap the grid stays compact and the fit simply zooms into it.
+  const MAX_ROW = 2 * MAX_RADIUS + TEXT_SPACE;
+  const rowPx = Math.min(MAX_ROW, Math.max(0, h - OVERFLOW) / rows);
   const radiusRaw = (rowPx - TEXT_SPACE) / 2;
   const labelsFit = radiusRaw >= MIN_RADIUS; // smaller would make disks invisible
   let cellW = labelPx, cellH = rowPx, radius = MAX_RADIUS;
