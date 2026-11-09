@@ -160,6 +160,12 @@ aside{width:360px;flex:none;border-left:1px solid var(--line);background:var(--p
 .actions .primary{border:1px solid var(--accent);color:var(--accent)}
 .actions .secondary{border:1px solid transparent;color:var(--dim)}
 .actions .secondary:hover{color:var(--fg)}
+/* Resting state: a narrow column that fits its content, and folds to its title.
+   The reservation is measured from this element, so its width is literally how
+   many names the map can afford -- at 360px the drawing kept 56% and drew one. */
+#detail.list{width:auto;max-width:15rem;max-height:45%;}
+#detail.list summary{cursor:pointer;list-style:none;font-weight:600;}
+#detail.list summary::-webkit-details-marker{display:none;}
 #detail{position:absolute;top:1rem;right:1rem;width:21rem;max-width:calc(100% - 2rem);max-height:calc(100% - 2rem);overflow-y:auto;overflow-x:hidden;background:var(--panel);border:1px solid var(--line);border-radius:.5rem;box-shadow:0 .25rem 1rem rgba(0,0,0,.35);padding:.8rem;z-index:10;}
 #detail:has(.empty){visibility:hidden;pointer-events:none;}
 aside h2{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;margin:.2rem 0 .6rem;}
@@ -919,13 +925,17 @@ function fitEmphasised() {
 function fitReservingPanel(onlyNodes) {
   try { net.fit(onlyNodes ? {nodes:onlyNodes,animation:false,maxZoomLevel:3} : {animation:false,maxZoomLevel:3}); } catch (e) {}
   syncLabelSize();   // vis emits 'zoom' for the reader's gestures only, never for fit()
-  const panel = document.getElementById('detail');
   const strip = document.getElementById('mapstat');
   const canvas = document.getElementById('net');
   const W = canvas ? canvas.clientWidth : 0, H = canvas ? canvas.clientHeight : 0;
-  const cardW = (panel && getComputedStyle(panel).visibility !== 'hidden') ? panel.offsetWidth + 24 : 0;
+  // The card reserves NOTHING any more. Reserving its width meant zooming out by
+  // as much, and at 360 of 816 pixels that left the drawing 56% of the canvas
+  // and one name on it. It floats over the map instead, narrow and foldable,
+  // and the names it covers are the ones it lists. The strip still reserves its
+  // height: it is thin, and it had been sitting on the last row of names.
+  const cardW = 0;
   const stripH = strip ? strip.offsetHeight + 8 : 0;
-  if (!W || !H || (!cardW && !stripH)) return;
+  if (!W || !H || !stripH) return;
   // Shrink BEFORE shifting. A fit already touches the edges, so sliding the view
   // sideways to clear the card necessarily pushes that edge out of frame -- six
   // machines of twenty, measured, the moment the card became permanent. Zooming
@@ -1712,6 +1722,7 @@ function applyRelation(ce){ if(historical) return; const r=ce&&ce.relation; if(!
 const LIT_LIST_MAX = 60;
 function renderLitList(box){
   box.textContent='';
+  box.classList.remove('list');
   const lit=[];
   for(const id of nodes.getIds()){
     const e=ENT[id];
@@ -1728,9 +1739,14 @@ function renderLitList(box){
     const la=labelOf(ea), lb=labelOf(eb);
     return la<lb?-1:la>lb?1:0;
   });
-  const h=document.createElement('h2');
-  h.textContent=lit.length+' shown';
-  box.appendChild(h);
+  box.classList.add('list');
+  // A <details>: it folds to its own title with no script, and a folded card
+  // reserves almost nothing, which is the whole point of the exercise.
+  const det=document.createElement('details'); det.open=true;
+  const sum=document.createElement('summary');
+  sum.textContent=lit.length+' shown';
+  det.appendChild(sum);
+  box.appendChild(det);
   const ul=document.createElement('div'); ul.className='litlist';
   for(const id of lit.slice(0,LIT_LIST_MAX)){
     const e=ENT[id];
@@ -1738,16 +1754,22 @@ function renderLitList(box){
     row.type='button'; row.className='litrow';
     row.textContent=labelOf(e);
     row.title=nameLabel(e)+' \u00b7 '+typeLabel(e.type);   // the FULL name, which the drawn label may have shortened
+    // Hover points at it on the map, click opens its card. Pointing costs
+    // nothing and undoes itself; opening is the reader's decision.
+    row.onmouseenter=()=>{ try{ net.selectNodes([id]); }catch(_){} };
+    row.onmouseleave=()=>{ try{ net.unselectAll(); }catch(_){} };
+    row.onfocus=row.onmouseenter; row.onblur=row.onmouseleave;   // the keyboard points too
     row.onclick=()=>{ inspect(id); try{ net.selectNodes([id]); }catch(_){} };
     ul.appendChild(row);
   }
-  box.appendChild(ul);
+  det.appendChild(ul);
+  det.addEventListener('toggle',()=>fitEmphasised());   // folding gives pixels back to the map
   if(lit.length>LIT_LIST_MAX){
     const more=document.createElement('div'); more.className='muted';
     // Says the bound rather than ending silently: a list that simply stops is a
     // list the reader believes is complete.
     more.textContent='and '+fmtCount(lit.length-LIT_LIST_MAX)+' more — narrow with a view or the search';
-    box.appendChild(more);
+    det.appendChild(more);
   }
 }
 
@@ -1757,6 +1779,7 @@ function inspect(id){
   // on the first click -- the ask box could not be used again without a reload.
   const box=document.getElementById('detail');
   const blank='<div class="empty">Click an element to see its details.</div>';
+  box.classList.remove('list');
   const n=id&&ENT[id];
   if(!n){ publishView(); renderLitList(box); return; }   // deselection: the Dock refuses an empty selection, so fall back to the view
   if(n.identityFingerprint){
