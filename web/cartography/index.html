@@ -581,17 +581,24 @@ function layOutOnGrid(nUp) {
   const sorted = [...nUp].sort((a, b) => a.label < b.label ? -1 : a.label > b.label ? 1 : 0);
   const longest = sorted.reduce((m, nd) => Math.max(m, (nd.label || '').length), 0);
   const labelPx = Math.max(60, longest * 6.6 + 24);
-  const ROW_PX = 34;   // one 12px label, its padding, and the disc above it
+  const LABEL_H = 14;
+  const GAP = 5;
+  const TEXT_SPACE = LABEL_H + 2 * GAP; // reserve label plus breathing room
+  const MIN_RADIUS = 4;
+  const MAX_RADIUS = 13;
   const canvas = document.getElementById('net');
   const w = canvas.clientWidth || 1200;
   const h = canvas.clientHeight || 700;
   let cols = Math.max(1, Math.min(sorted.length, Math.floor(w / labelPx)));
   let rows = Math.ceil(sorted.length / cols);
-  const labelsFit = rows * ROW_PX <= h;
-  let cellW = labelPx, cellH = ROW_PX;
-  if (!labelsFit) {
-    // No label to keep clear, so spread over the canvas instead of leaving a
-    // ribbon: the cell only has to hold a disc now.
+  const rowPx = h / rows; // use the space actually available per row
+  const radiusRaw = (rowPx - TEXT_SPACE) / 2;
+  const labelsFit = radiusRaw >= MIN_RADIUS; // smaller would make disks invisible
+  let cellW = labelPx, cellH = rowPx, radius = MAX_RADIUS;
+  if (labelsFit) {
+    radius = Math.max(MIN_RADIUS, Math.min(MAX_RADIUS, radiusRaw));
+  } else {
+    // too many rows: widen the grid, labels will be dropped by the caller
     cols = Math.max(1, Math.min(sorted.length, Math.round(Math.sqrt(sorted.length * (w / h)))));
     rows = Math.ceil(sorted.length / cols);
     cellW = 100; cellH = 100 * (h / w);
@@ -602,7 +609,7 @@ function layOutOnGrid(nUp) {
     nd.x = x0 + (i % cols) * cellW;
     nd.y = y0 + Math.floor(i / cols) * cellH;
   });
-  return labelsFit;
+  return { labelsFit, radius };
 }
 
 let gridded=false;   // a laid-out grid must not be handed back to the physics that would scatter it
@@ -880,10 +887,12 @@ if (gridded) {
   net.setOptions({ physics: { enabled: false } });
   // The return value says whether the labels FIT, which is not the same thing as
   // whether a grid was placed: conflating the two let the physics scatter a grid.
-  // A disc taller than its row would swallow the name underneath it.
-  nUp.forEach(nd => { if (typeof nd.size === 'number') nd.size = Math.min(nd.size, 13); });
-  if (!layOutOnGrid(nUp)) {
-    // Unreadable overlapping labels are worse than none; the tooltip keeps the name.
+  // The disc is sized from the room the row actually has, not from a guessed
+  // constant: a disc that shrinks to let the name be read beats a disc that
+  // covers the name of the row above it. Measured, 178 such collisions at 190.
+  const layout = layOutOnGrid(nUp);
+  nUp.forEach(nd => { if (typeof nd.size === 'number') nd.size = Math.min(nd.size, layout.labelsFit ? layout.radius : 13); });
+  if (!layout.labelsFit) {
     nUp.forEach(nd => { nd.label = undefined; });
   }
 } else {
