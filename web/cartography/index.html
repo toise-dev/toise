@@ -778,6 +778,7 @@ async function fetchAll(id){
       ? { first: 200, after, ...(asOf ? { asOf } : {}) }
       : { first: 200, ...(asOf ? { asOf } : {}) };
     const r=await fetch(API,{method:'POST',headers:gqlHeaders(),credentials:'same-origin',body:JSON.stringify({id,variables})});
+    if(!r.ok) throw new Error(readFailureMessage(r.status,'read failed with status '+r.status));
     const j=await r.json(); if(j.errors) throw new Error(j.errors[0].message);
     const c=j.data[id];
     c.edges.forEach(e=>nodes.push(e.node));
@@ -864,6 +865,14 @@ function snapToGrid(ms) {
   return Math.floor(ms / GRID_MS) * GRID_MS;
 }
 
+// Rounding down at the lower bound would push the value outside the window.
+function snapWithin(ms, lo, hi) {
+  let v = snapToGrid(ms);
+  if (v < lo) v += GRID_MS;
+  if (v > hi) v -= GRID_MS;
+  return v;
+}
+
 function asOfISO() {
   if (asOfMs === null) return null;
   return new Date(asOfMs).toISOString().replace(/\.\d{3}Z$/, 'Z');
@@ -890,8 +899,14 @@ async function goToInstant(ms) {
     say('A past read is already in flight…');
     return;
   }
-  if (ms !== null && !withinHorizon(ms)) {
-    const h = horizonMs();
+  if (ms === 'unknown-horizon') {
+    say('The readable window is not known for that instant.');
+    return;
+  }
+  const now = Date.now();
+  const h = horizonMs();
+  const aligned = ms === null ? null : snapWithin(ms, h == null ? -Infinity : h, now);
+  if (aligned !== null && !withinHorizon(aligned)) {
     say('That instant is outside the readable window (oldest answerable: ' +
         (h === null ? 'unknown' : new Date(h).toISOString()) + ').');
     return;
@@ -901,10 +916,9 @@ async function goToInstant(ms) {
     return;
   }
   const prevAsOf = asOfMs;
-  asOfMs = ms === null ? null : snapToGrid(ms);
+  asOfMs = aligned;
   replaying = true;
   try {
-    // Restore the previous instant on failure: otherwise the page would claim to show an instant it did not load.
     const ok = await loadFull();
     if (!ok) {
       asOfMs = prevAsOf;
@@ -926,23 +940,25 @@ function readFailureMessage(status, fallback) {
 function sliderToMs(v) {
   if (v === 1000) return null;
   const h = horizonMs();
-  if (h == null) return null;
+  if (h == null) return 'unknown-horizon';
   const now = Date.now();
-  return snapToGrid(h + (v / 1000) * (now - h));
+  return snapWithin(h + (v / 1000) * (now - h), h, now);
 }
 
 function sayInstant() {
   const el = document.getElementById('tlAtLabel');
   if (!el) return;
   const fmt = ms => new Date(ms).toLocaleString();
-  if (asOfMs == null) {
+  // Show what was served, not what was requested.
+  const served = (SCOPE && SCOPE.asOf != null) ? SCOPE.asOf : asOfMs;
+  if (served == null) {
     el.textContent = 'live';
     return;
   }
   const h = horizonMs();
   el.textContent = h == null
-    ? `as of ${fmt(asOfMs)}`
-    : `as of ${fmt(asOfMs)} · readable back to ${fmt(h)}`;
+    ? `as of ${fmt(served)}`
+    : `as of ${fmt(served)} · readable back to ${fmt(h)}`;
 }
 
 // --- timeline: PRESENT in this build --------------------------------------------
@@ -1029,6 +1045,7 @@ async function loadProfile(){
         ? { ...windowVars, first: 200, after }
         : { ...windowVars, first: 200 };
       const r=await fetch(API,{method:'POST',headers:gqlHeaders(),credentials:'same-origin',body:JSON.stringify({id:'recentChanges',variables})});
+      if(!r.ok) throw new Error(readFailureMessage(r.status,'read failed with status '+r.status));
       const j=await r.json(); if(j.errors) throw new Error(j.errors[0].message);
       if(gen!==profileGen) return;   // a newer load started; drop this one
       const c=j.data.recentChanges;
@@ -1447,6 +1464,18 @@ tlWin.onchange=()=>{ tlWindow=tlWin.value; localStorage.setItem('toise_viz_windo
   spanEnd=null; spanMs=WINDOWS[tlWindow]||WINDOWS['24h']; renderRuler(); loadProfile();
   tlLabelEl.textContent=tlWindow; };
 renderRuler(); loadProfile();
+function syncSlider() {
+  if (!tlAt) return;
+  const h = horizonMs();
+  if (asOfMs === null || asOfMs === undefined) {
+    tlAt.value = '1000';
+  } else if (typeof h === 'number' && h > 0) {
+    const now = Date.now();
+    const pos = Math.round(((asOfMs - h) / (now - h)) * 1000);
+    tlAt.value = String(Math.max(0, Math.min(1000, pos)));
+  }
+}
+
 const tlAt = document.getElementById('tlAt');
 const tlLive = document.getElementById('tlLive');
 if (tlAt) {
@@ -1456,6 +1485,7 @@ if (tlAt) {
     // Wait for the load to settle so the label never claims a moment that failed to load.
     await goToInstant(sliderToMs(Number(tlAt.value)));
     sayInstant();
+    syncSlider();
   });
 }
 if (tlLive) {
@@ -1464,6 +1494,7 @@ if (tlLive) {
     // Wait for the live restore so the label reflects the instant actually loaded.
     await goToInstant(null);
     sayInstant();
+    syncSlider();
   });
 }
 sayInstant();
