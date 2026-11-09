@@ -582,8 +582,12 @@ function layOutOnGrid(nUp) {
   const longest = sorted.reduce((m, nd) => Math.max(m, (nd.label || '').length), 0);
   const labelPx = Math.max(60, longest * 6.6 + 24);
   const LABEL_H = 14;
-  const GAP = 5;
-  const TEXT_SPACE = LABEL_H + 2 * GAP; // reserve label plus breathing room
+  // Measured on the renderer, not assumed: it puts the TOP of the label 10.6
+  // units below the disc's edge, not against it. The row must carry that gap,
+  // the box, and the next disc's radius -- the missing term that left 36 discs
+  // touching the name above them by half a unit.
+  const VIS_LABEL_GAP = 10.6;
+  const TEXT_SPACE = LABEL_H + VIS_LABEL_GAP;
   const MIN_RADIUS = 4;
   const MAX_RADIUS = 13;
   const canvas = document.getElementById('net');
