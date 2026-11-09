@@ -1675,12 +1675,9 @@ const cb=document.getElementById('panelClose');
         return;
       }
     }
-    // Reframes too. Opening it used to go to the kind level,
-    // which draws a group node carrying no fingerprint -- so no Ask about it --
-    // and it took the whole map out of the grid and back into physics. Measured
-    // on 190 machines: a cloud of 6px labels. Showing children properly means
-    // placing them around their owner without disturbing the other 189, which is
-    // its own piece of work and not a line in this one.
+    // Then frames the machine and its children. maxZoomLevel is raised here on
+    // purpose: a handful of nodes should fill the canvas, which is the whole
+    // point of asking to see one machine's neighbours.
     try{ net.fit({nodes:[id, ...net.getConnectedNodes(id)], animation:false, maxZoomLevel:3}); }catch(e){}
     syncLabelSize();
   };
