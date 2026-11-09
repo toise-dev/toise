@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-11-09
+
+### Added
+
+**The portal gains a Cartography page served by a relay (#594).** The page
+lives in `web/cartography/`, derived from the `examples/graph-viz` example
+but kept separate. It only queries named persisted queries with typed
+variables: no arbitrary document, no configurable endpoint, no tenant
+passed by the page, and the rendering library is served same-origin. It
+offers no `asOf` and no subscriptions: the page does not travel through
+time, it keeps a heat map of changes. Elements cited by a response are
+highlighted by `identity_fingerprint`, never by the local identifier, which
+differs between replicas and is regenerated after a silence (ADR 0035).
+A questions panel with a table and two browser-side exports protects
+textual values against spreadsheet formula injection, and the detail panel
+refuses to display contact attributes.
+
+### Changed
+
+**Reading a page no longer materializes or sorts the whole fleet (#598).**
+Entity and relation pagination used to copy and sort the entire type once
+per page: enumerating a fleet of 16,858 entities sorted that fleet 85
+times. Measured at one million entities, a page of 200 drops from 160 MB
+allocated to 39.7 KB, and allocation no longer depends on fleet size at
+all: 39,712 bytes and 413 allocations per page, identical at one hundred
+thousand and at one million. Time remains proportional to the fleet —
+30 ms at one hundred thousand, 318 ms at one million — and is not fixed
+here. GraphQL entity pagination now orders by identity fingerprint
+instead of local identifier, and a relation query filtered by endpoint
+goes through the adjacency index instead of scanning every relation, while
+`graphScope` reads its counters without copying the tenant twice.
+
+### Fixed
+
+**A cursor pointing at a vanished entity no longer returns an empty page
+claiming to be the last one (#598).** The old cursor was resolved by exact
+equality on the local identifier, so when the entity designated by the
+cursor disappeared between two pages, the response was an empty page
+declaring itself final. A consumer enumerating a live graph over several
+seconds saw the list stop early and read it as complete. Ordering by
+identity fingerprint closes this hole.
+
+**A `first: 0` request no longer claims to have a next page.** A page of
+zero elements has no cursor, so announcing a continuation would loop a
+consumer forever; the real size of the set is carried by `totalCount` in
+the same response.
+
+### Upgrade notes
+
+**An entity cursor emitted before the key switch is rejected.** An `after`
+cursor obtained from an earlier version still decodes without error, and
+since a local identifier starts with a digit where a fingerprint starts
+with its type name, every entity sorts after it: the response would
+silently restart from the first page, and a loader paging in a loop
+would re-read the fleet indefinitely without anything telling it. The
+cursor shape is now verified, and an unknown cursor is refused while
+naming the remedy — restart the enumeration without `after`. Relation
+cursors are unchanged and keep working.
+
 ## [0.23.0] - 2026-11-05
 
 ### Added
