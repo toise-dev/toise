@@ -137,6 +137,31 @@ celui qui déclare. Un acteur qui retire quelque chose d'une réponse est
 le seul à pouvoir nommer ce qu'il a retiré, donc l'obligation suit le
 filtrage et ne se délègue pas en aval.
 
+#### La variable `asOf`
+
+| variable | type | validation attendue |
+|----------|------|---------------------|
+| `asOf` | `String`, RFC 3339 à la seconde, **optionnel** | dans la fenêtre annoncée par `graphScope` (`oldestAnswerable` à maintenant), et issue d'une liste fermée ou d'une grille |
+| `from` | `String`, instant RFC 3339 | uniquement sur `recentChanges` ; doit être ≤ `to` |
+| `to` | `String`, instant RFC 3339 | uniquement sur `recentChanges` ; doit être ≥ `from` |
+
+`asOf` est accepté sur `entities`, `relations` et `graphScope`. Il n'est
+**envoyé que s'il est non nul** : un `asOf: null` explicite n'est pas
+équivalent à une absence pour un validateur strict.
+
+Pourquoi ces bornes : sans elles, un glisser de curseur fabriquerait des
+centaines d'instants distincts et autant de rejouements. Et pour
+`recentChanges`, `from` et `to` sont des instants absolus — lors d'une
+relecture du passé, une fenêtre **relative** compterait depuis maintenant et
+afficherait la mauvaise période.
+
+Deux pièges de filtrage à retenir : le relais doit écarter les mêmes types
+**dans le passé**, et calculer le compte net **au même `asOf`** — sinon
+l'avertissement d'incomplétude retentirait en permanence dès qu'un lecteur
+remonte dans le temps.
+
+## Ce que le relais doit faire en plus
+
 ## Ce que le relais doit faire en plus
 
 1. **imposer le tenant** depuis la session du portail, et **retirer** `?tenant=` et
