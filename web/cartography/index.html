@@ -561,6 +561,47 @@ function computeOwners(){
 }
 // repOf: the node actually drawn for x. Walk up while the parent is folded shut;
 // stop at the first ancestor the reader opened, or at the top.
+function drawnEdgeCount(nodeIds) {
+  let n = 0;
+  for (const id in REL) {
+    const a = repOf(REL[id].fromId);
+    const b = repOf(REL[id].toId);
+    if (a !== b && nodeIds.has(a) && nodeIds.has(b)) n++;
+  }
+  return n;
+}
+
+// Columns come from the SCREEN width, not from an aspect ratio: the scale depends
+// on the tile, the tile on the cell, and the cell would depend on the scale. Fixing
+// the column count on a width we already know breaks that circle.
+function layOutOnGrid(nUp) {
+  const sorted = [...nUp].sort((a, b) => a.label < b.label ? -1 : a.label > b.label ? 1 : 0);
+  const longest = sorted.reduce((m, nd) => Math.max(m, nd.label.length), 0);
+  const labelPx = Math.max(60, longest * 6.6 + 24);
+  const canvas = document.getElementById('net');
+  const w = canvas.clientWidth || 1200;
+  const h = canvas.clientHeight || 700;
+  let cols = Math.max(1, Math.min(sorted.length, Math.floor(w / labelPx)));
+  let rows = Math.ceil(sorted.length / cols);
+  const cellW = 100;
+  const cellH = 70;
+  // If the tile is height-bound the labels will not fit and are dropped by the
+  // caller; with no label to clear, columns sized for one only waste the canvas.
+  if (w / (cols * cellW) > h / (rows * cellH)) {
+    cols = Math.max(1, Math.min(sorted.length, Math.round(Math.sqrt(sorted.length * (w / h) * (cellH / cellW)))));
+    rows = Math.ceil(sorted.length / cols);
+  }
+  const x0 = -((cols - 1) * cellW) / 2;
+  const y0 = -((rows - 1) * cellH) / 2;
+  sorted.forEach((nd, i) => {
+    nd.x = x0 + (i % cols) * cellW;
+    nd.y = y0 + Math.floor(i / cols) * cellH;
+  });
+  return w / (cols * cellW) <= h / (rows * cellH);
+}
+
+let gridded=false;   // a laid-out grid must not be handed back to the physics that would scatter it
+
 function repOf(id,guard){
   if(!folded) return id;
   const seen=guard||new Set();
@@ -790,10 +831,13 @@ function rebuild(){
   kept.forEach(({n,d})=>{ const ok=attrMatch(n);
     nodeIds.add(n.id); if(q&&ok) matched++;
     const by=inside[n.id], k=badgeTotal(by);
-    const node={id:n.id,label:labelOf(n)+badge(by),
+    // The count is NOT in the label: measured, "sha018 (6 Container, 3 Service, +1)"
+    // is ~250px wide and eighty of them overlap. It lives in the tooltip and in
+    // the disc's size, both of which cost no horizontal room.
+    const node={id:n.id,label:labelOf(n),
               title:titleOf(n)+(k?('\nfolded inside: '+badgeFull(by)+'  \u2014 double-click to open'):''),
               opacity:n.deleted?0.45:((q&&!ok&&!MATCH_OWNERS.has(n.id))||(CITED.size&&!CITED.has(n.identityFingerprint)&&!CITED_OWNERS.has(n.id))?0.12:1),
-              size:Math.min(30,5+Math.sqrt(d)*4.4)+(k?3:0),
+              size:Math.min(34,5+Math.sqrt(d)*4.4)+(k?Math.min(12,Math.sqrt(k)*2.6):0),
               borderWidth:(n.deleted||k)?2:0,
               // the halo IS the star: a glow sized on the node, in its own colour,
               // so degree reads as brightness before any label is legible
@@ -823,6 +867,16 @@ function rebuild(){
   // the hint clears itself after six seconds while the layout blocks for ten or
   // more, so it vanished while the tab was still frozen.
   net.setOptions({physics:{stabilization:{iterations:stabilizationFor(nUp.length,!fitted)}}});
+// Threshold is a ratio because a sparse graph is sparse relative to its size: 19 edges among 80 nodes is noise, but 19 among 20 nodes is structure.
+gridded = false;
+if (nodeIds.size > 12 && drawnEdgeCount(nodeIds) < nodeIds.size / 4) {
+  net.setOptions({ physics: { enabled: false } });
+  gridded = layOutOnGrid(nUp);
+  if (!gridded) {
+    // Unreadable overlapping labels are worse than none; the tooltip still shows the name.
+    nUp.forEach(nd => { nd.label = undefined; });
+  }
+}
   nodes.update(nUp);
   // Say what is not shown. "0 match" was the lie; "0 shown, 54 inside folded nodes"
   // is the same number with its bound declared.
@@ -894,10 +948,13 @@ function rebuild(){
   // away), then freeze — never on a plain attribute/heartbeat update.
   let structural = nodeIds.size!==prevNodeIds.size;
   if(!structural){ for(const id of nodeIds){ if(!prevNodeIds.has(id)){ structural=true; break; } } }
-  if(structural && fitted && !staticLayout) settle();
+  if(structural && fitted && !staticLayout && !gridded) settle();   // settling would scatter a deterministic grid
   // First data render: lay the graph out ONCE while the canvas is hidden, then reveal
   // it already-settled (no visible fly-in). Reveal + fit happen on stabilizationIterationsDone.
-  if(!fitted && nodeIds.size){ fitted=true; net.setOptions({physics:{enabled:true}});
+  if(!fitted && nodeIds.size && gridded){ fitted=true;   // placed, not simulated: nothing to stabilise
+    const nv=document.getElementById('net'); if(nv) nv.classList.remove('laying');
+    fitReservingPanel();
+  } else if(!fitted && nodeIds.size){ fitted=true; net.setOptions({physics:{enabled:true}});
     const err=document.getElementById('err');
     if(nodeIds.size>1000 && err && !err.textContent) err.textContent='Drawing '+fmtCount(nodeIds.size)+' entities…';
     // stabilize() blocks the thread, so a message written on this same task would never be painted; defer it one turn.
@@ -1174,7 +1231,10 @@ function sayInstant() {
   if (!el) return;
   const fmt = ms => new Date(ms).toLocaleString();
   // Show what was served, not what was requested.
-  const served = (SCOPE && SCOPE.asOf != null) ? SCOPE.asOf : asOfMs;
+  // An unreadable echo is not a date: fall back to what the page asked for, which
+  // is what it already trusts for the counters.
+  const echoed = (SCOPE && SCOPE.asOf != null) ? Date.parse(SCOPE.asOf) : NaN;
+  const served = Number.isNaN(echoed) ? asOfMs : echoed;
   if (served == null) {
     el.textContent = 'live';
     return;
