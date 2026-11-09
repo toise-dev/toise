@@ -721,7 +721,46 @@ function syncLabelSize() {
 // Frames the LIT nodes only. A view no longer moves anything, so the camera is
 // the only thing that follows it: everything stays where the reader learnt it,
 // and a view decides where to look rather than what exists.
+function listenForHighlight() {
+  // Any page embedding this one can post here, so every field is checked
+  // before use; a malformed message must never reach the UI or the state.
+  window.addEventListener('message', (event) => {
+    if (event.origin !== location.origin) return;
+    if (event.source !== window.parent) return;
+    const data = event.data;
+    if (data === null || typeof data !== 'object') return;
+    if (data.v !== 1 || data.type !== 'highlight') return;
+    const fingerprints = data.payload && data.payload.fingerprints;
+    if (!Array.isArray(fingerprints)) return;
+    if (fingerprints.length > 500) return;
+    const valid = [];
+    for (const fp of fingerprints) {
+      if (typeof fp === 'string' && fp.length >= 1 && fp.length <= 128 && /^[A-Za-z0-9:._-]+$/.test(fp)) {
+        valid.push(fp);
+      }
+    }
+    if (fingerprints.length > 0 && valid.length === 0) {
+      say('The highlight carried no usable reference; nothing was changed.');
+      return;
+    }
+    CITED.clear();
+    for (const fp of valid) CITED.add(fp);
+    rebuild();
+    fitEmphasised();
+  });
+}
+
 function fitEmphasised() {
+  if (CITED.size) {
+    // A highlight frames what was highlighted. Framing the whole lit layer
+    // instead would bury the handful of things the Dock asked to look at.
+    const cited = [];
+    for (const id of nodes.getIds()) {
+      const n = ENT[id];
+      if ((n && CITED.has(n.identityFingerprint)) || CITED_OWNERS.has(id)) cited.push(id);
+    }
+    if (cited.length) { fitReservingPanel(cited); return; }
+  }
   if (!dimmed.size) { fitReservingPanel(); return; }
   const lit = [];
   for (const id of nodes.getIds()) {
@@ -2249,6 +2288,7 @@ syncView();
     document.body.style.userSelect=''; localStorage.setItem('toise_viz_aside', String(Math.round(aside.getBoundingClientRect().width))); redraw(); }); })();
 watchCanvasSize();   // a grid computed from a height must notice the height changing
 if (EMBEDDED) {
+  listenForHighlight();   // the Dock can ask this map to light a set of entities
   // Hidden, not removed: the question panel's controls are wired further down.
   const askPanel = document.getElementById('ask');
   if (askPanel) askPanel.hidden = true;
