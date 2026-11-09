@@ -571,25 +571,30 @@ function drawnEdgeCount(nodeIds) {
   return n;
 }
 
-// Columns come from the SCREEN width, not from an aspect ratio: the scale depends
-// on the tile, the tile on the cell, and the cell would depend on the scale. Fixing
-// the column count on a width we already know breaks that circle.
+// The whole grid is computed in SCREEN PIXELS, which is the only unit that
+// decides whether a name is readable. Canvas units are then just those pixels:
+// the fit scales them, and a tile that fits at scale 1 cannot overlap.
+// An earlier version tested "is the tile bound by its width", which was a proxy,
+// and it answered on the WIDENED tile -- so it reported that labels fit right
+// after widening had made them not fit. Measured: 96 overlaps out of 260.
 function layOutOnGrid(nUp) {
   const sorted = [...nUp].sort((a, b) => a.label < b.label ? -1 : a.label > b.label ? 1 : 0);
-  const longest = sorted.reduce((m, nd) => Math.max(m, nd.label.length), 0);
+  const longest = sorted.reduce((m, nd) => Math.max(m, (nd.label || '').length), 0);
   const labelPx = Math.max(60, longest * 6.6 + 24);
+  const ROW_PX = 34;   // one 12px label, its padding, and the disc above it
   const canvas = document.getElementById('net');
   const w = canvas.clientWidth || 1200;
   const h = canvas.clientHeight || 700;
   let cols = Math.max(1, Math.min(sorted.length, Math.floor(w / labelPx)));
   let rows = Math.ceil(sorted.length / cols);
-  const cellW = 100;
-  const cellH = 50;   // flatter cells keep the tile width-bound, which is what lets labels show
-  // If the tile is height-bound the labels will not fit and are dropped by the
-  // caller; with no label to clear, columns sized for one only waste the canvas.
-  if (w / (cols * cellW) > h / (rows * cellH)) {
-    cols = Math.max(1, Math.min(sorted.length, Math.round(Math.sqrt(sorted.length * (w / h) * (cellH / cellW)))));
+  const labelsFit = rows * ROW_PX <= h;
+  let cellW = labelPx, cellH = ROW_PX;
+  if (!labelsFit) {
+    // No label to keep clear, so spread over the canvas instead of leaving a
+    // ribbon: the cell only has to hold a disc now.
+    cols = Math.max(1, Math.min(sorted.length, Math.round(Math.sqrt(sorted.length * (w / h)))));
     rows = Math.ceil(sorted.length / cols);
+    cellW = 100; cellH = 100 * (h / w);
   }
   const x0 = -((cols - 1) * cellW) / 2;
   const y0 = -((rows - 1) * cellH) / 2;
@@ -597,7 +602,7 @@ function layOutOnGrid(nUp) {
     nd.x = x0 + (i % cols) * cellW;
     nd.y = y0 + Math.floor(i / cols) * cellH;
   });
-  return w / (cols * cellW) <= h / (rows * cellH);
+  return labelsFit;
 }
 
 let gridded=false;   // a laid-out grid must not be handed back to the physics that would scatter it
@@ -875,6 +880,8 @@ if (gridded) {
   net.setOptions({ physics: { enabled: false } });
   // The return value says whether the labels FIT, which is not the same thing as
   // whether a grid was placed: conflating the two let the physics scatter a grid.
+  // A disc taller than its row would swallow the name underneath it.
+  nUp.forEach(nd => { if (typeof nd.size === 'number') nd.size = Math.min(nd.size, 13); });
   if (!layOutOnGrid(nUp)) {
     // Unreadable overlapping labels are worse than none; the tooltip keeps the name.
     nUp.forEach(nd => { nd.label = undefined; });
