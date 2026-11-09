@@ -250,6 +250,7 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
       <div class="tlgutter" id="tlGutter"></div>
       <div class="tlprofile" id="tlProfile" title="Change density per entity type over the selected window — coloured cells are changes, faint cells are none."></div>
     </div>
+    <div id="tlErr" class="muted"></div>
     <div class="tlaxisrow">
       <div class="tlspacer"></div>
       <div class="tlaxis">
@@ -941,6 +942,9 @@ async function goToInstant(ms) {
       asOfMs = prevAsOf;
       say('That instant could not be read; the view remains at the previous instant.');
     }
+    // The strip reads the instant too, and nothing else reloads it on a move:
+    // left alone it would describe another moment than the map beside it.
+    loadProfile();
   } finally {
     replaying = false;
   }
@@ -948,7 +952,13 @@ async function goToInstant(ms) {
 
 function readFailureMessage(status, fallback) {
   // 503 means "too loaded, retry" — it must never be readable as an empty park.
+  // The wording follows the instant being read: "re-read the past" names a
+  // cost the live reader never paid, and a message that misnames the cause
+  // teaches the reader to distrust the next one.
   if (status === 503) {
+    if (asOfMs == null) {
+      return 'The server is too busy right now — please retry.';
+    }
     return 'The server is too loaded to re-read the past right now — please retry.';
   }
   return fallback;
@@ -1033,6 +1043,7 @@ let profileGen=0;
 async function loadProfile(){
   const el=document.getElementById('tlProfile'); if(!el) return;
   const gen=++profileGen;   // supersede any in-flight profile load
+  const errEl=document.getElementById('tlErr'); if(errEl) errEl.textContent='';
   const [s,e]=spanBounds();
   // Derived from the window, never from a second clock read: spanBounds() already
   // took the time, and reading it again makes the span one millisecond longer, so
@@ -1073,7 +1084,19 @@ async function loadProfile(){
       if((guard&3)===0) renderProfile(data,s,e);   // progressive fill (every 4 pages)
     }while(after && ++guard<40);
     if(gen===profileGen) renderProfile(data,s,e);
-  }catch(_){ /* the profile is a hint, not critical */ }
+  }catch(err){
+    // A partial read must not look like a complete one: the strip only shows
+    // what arrived before the failure, so the message has to say so.
+    if(gen===profileGen){
+      const e2=document.getElementById('tlErr');
+      if(e2){
+        const reason=(err&&typeof err.message==='string'&&err.message)?err.message:(err!=null?String(err):'unknown cause');
+        e2.textContent=data.size===0
+          ?'⚠ change history unavailable: '+reason
+          :'⚠ change history incomplete, reading stopped partway: '+reason;
+      }
+    }
+  }
 }
 function renderProfile(data,s,e){
   const el=document.getElementById('tlProfile'), gut=document.getElementById('tlGutter');
