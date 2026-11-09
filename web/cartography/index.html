@@ -3,6 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+
+<!-- Provenance of this page, for the question "which version is live?".
+
+     A served copy must substitute __TOISE_COMMIT__ with the commit it was
+
+     taken from. Left unsubstituted it reads as unknown, which is the honest
+
+     answer: the source cannot know the hash of the commit that contains it. -->
+
+<meta name="senhub-page-source" content="toise@__TOISE_COMMIT__">
 <title>Toise — Graph</title>
 <!--
   Example consumer of the Toise GraphQL API — NOT part of toise-server.
@@ -587,7 +597,14 @@ function say(msg){
 
 // Beyond a thousand nodes, extra iterations cost seconds of blocked main thread
 // without making the layout more readable.
-function stabilizationFor(drawnCount){ return drawnCount>1000?200:1500; }
+// The size decides only at the FIRST layout. Every later one just relaxes nodes
+// that are already placed, so it has to be fast rather than pretty: measured in
+// production, a view change paid 1500 iterations and froze the tab for 19 s on a
+// park of 2 330 entities, where 150 iterations bring it to 0.8 s.
+function stabilizationFor(drawnCount,firstLayout){
+  if(!firstLayout) return 150;
+  return drawnCount>1000?200:1500;
+}
 // `fmt` is already taken by a date formatter in another scope, so this gets its own name.
 function fmtCount(n){ return (typeof n==='number' && isFinite(n)) ? n.toLocaleString() : n; }
 
@@ -739,7 +756,7 @@ function rebuild(){
   // The heavy-render notice lives on the status line, not in the transient hint:
   // the hint clears itself after six seconds while the layout blocks for ten or
   // more, so it vanished while the tab was still frozen.
-  net.setOptions({physics:{stabilization:{iterations:stabilizationFor(nUp.length)}}});
+  net.setOptions({physics:{stabilization:{iterations:stabilizationFor(nUp.length,!fitted)}}});
   nodes.update(nUp);
   // Say what is not shown. "0 match" was the lie; "0 shown, 54 inside folded nodes"
   // is the same number with its bound declared.
@@ -1167,10 +1184,12 @@ async function loadProfile(){
       let windowVars;
       if (asOf) {
         const [fromMs, toMs] = spanBounds();
+        // Absolute bounds, and NO asOf: recentChanges has no such argument, and a
+        // relay that refuses unknown variables answers 400. The window already
+        // says which period to read; asOf would be a second way to say it.
         windowVars = {
           from: new Date(fromMs).toISOString().replace(/\.\d{3}Z$/, 'Z'),
-          to: new Date(toMs).toISOString().replace(/\.\d{3}Z$/, 'Z'),
-          asOf
+          to: new Date(toMs).toISOString().replace(/\.\d{3}Z$/, 'Z')
         };
       } else {
         windowVars = { window: durS + 's' };
@@ -1523,6 +1542,12 @@ let lastScopeAt=0;   // above the entity threshold, refresh only the scope, and 
 function tick(){
   if(loading) return;                                  // never start a load while one is running
   if(Date.now()-failedAt < 60000) return;              // no retry within 60s of a definitive failure
+  // A failure is a reason to reload, and the size rule exists only to avoid
+  // reloading a big fleet for no reason, so it must not swallow this case.
+  if(failedAt !== 0){
+    loadFull().then(ok => { if(ok) failedAt = 0; });  // retry the full load once the cooldown passed; reset only on success
+    return;
+  }
   if(Object.keys(ENT).length > 2000){
     if(Date.now()-lastScopeAt < 60000) return;         // scope-only refresh, throttled to 1/min
     lastScopeAt=Date.now();
