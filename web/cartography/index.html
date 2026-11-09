@@ -175,8 +175,9 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
 #feed{font-size:11px;color:var(--dim);max-height:30vh;overflow:auto;margin-top:.4rem;}
 #feed div{padding:.15rem 0;border-bottom:1px solid var(--line);}
 #err{color:var(--warn);font-size:12px;}
-.timeline{display:flex;align-items:center;gap:.7rem;padding:.35rem 1rem .45rem;background:var(--panel);border-top:1px solid var(--line);font-size:12px;}
-.tlwrap{flex:1;min-width:260px;display:flex;flex-direction:column;gap:3px;}
+.tlside{display:flex;flex-direction:column;align-items:flex-end;gap:2px;width:9rem;flex-shrink:0;}
+.timeline{display:flex;align-items:flex-start;gap:.7rem;padding:.35rem 1rem .45rem;background:var(--panel);border-top:1px solid var(--line);font-size:12px;}
+.tlwrap{flex:1 1 0;min-width:0;display:flex;flex-direction:column;gap:3px;}
 /* change-density heatmap: one row per entity type, a grid of cells (empty = faint
    grey), colour = the type's colour, intensity = change count. Type names sit in a
    left gutter so they never overlap the grid; drag the grid to zoom. */
@@ -210,7 +211,7 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
 #tlLive.hist{color:var(--warn);border-color:var(--warn);}
 #tlPlay{width:2rem;text-align:center;}
 #tlPlay.on{color:var(--accent);border-color:var(--accent);}
-#tlLabel{min-width:12.5rem;text-align:right;color:var(--fg);font-variant-numeric:tabular-nums;}
+#tlLabel{width:100%;text-align:right;color:var(--fg);font-variant-numeric:tabular-nums;}
 </style>
 </head>
 <body>
@@ -287,13 +288,15 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
       </div>
     </div>
   </div>
-  <label class="muted">window <select id="tlWin">
-    <option value="1h">1h</option><option value="6h">6h</option>
-    <option value="24h">24h</option><option value="7d">7d</option></select></label>
-  <span id="tlLabel">24h</span>
-<input type="range" id="tlAt" min="0" max="1000" value="1000" step="1" title="The handle picks the moment to revisit; playback starts on release" style="width:12rem">
-  <button id="tlLive">live</button>
-  <span id="tlAtLabel" class="muted"></span>
+  <div class="tlside">
+    <label class="muted">Window <select id="tlWin">
+      <option value="1h">1h</option><option value="6h">6h</option>
+      <option value="24h">24h</option><option value="7d">7d</option></select></label>
+    <span id="tlLabel">24h</span>
+    <input type="range" id="tlAt" min="0" max="1000" value="1000" step="1" title="The handle picks the moment to revisit; playback starts on release" style="width:100%">
+    <button id="tlLive">live</button>
+    <span id="tlAtLabel" class="muted"></span>
+  </div>
 </footer>
 <script>
 // Fixed endpoint: the portal relay owns the GraphQL documents and only accepts
@@ -385,6 +388,7 @@ let freezeTimer=null;
 function freeze(){ clearTimeout(freezeTimer); freezeTimer=null; net.setOptions({physics:{enabled:false}}); }
 function settle(ms=1600){ net.setOptions({physics:{enabled:true}}); clearTimeout(freezeTimer);
   freezeTimer=setTimeout(()=>{ freeze(); if(fitAfterSettle){ fitAfterSettle=false; try{ net.fit({animation:false}); }catch(e){} } }, ms); }
+net.on('zoom',()=>syncLabelSize());   // the font is in canvas units, so it shrinks with the view
 net.on('stabilizationIterationsDone',()=>{ freeze();   // layout done -> freeze, fit, reveal
   if(!fitted) return;   // the empty-graph init pass, before any data — nothing to reveal yet
   try{ net.fit({animation:false}); }catch(_){}
@@ -513,7 +517,6 @@ function titleOf(n){ const I=(n.identity||[]).map(a=>a.key+'='+a.value).join(', 
 // relations nest; everything else is a peer link and is aggregated, never folded.
 const CHILD_SIDE={has_interface:'to',has_route:'to',has_segment:'to',runs_on:'from',bound_to:'from',listens_on:'from'};
 let folded=localStorage.getItem('toise_viz_folded')!=='0';   // ON by default: the dense case is the normal case
-let foldBeforeView = null; // null means "nothing retained", since false is a legitimate value of folded
 const expanded=new Set();                                     // owners the reader opened, by id
 const expandedKinds=new Set();                                // "<owner>\u0000<type>" the reader opened past the kind step
 
@@ -634,6 +637,29 @@ function say(msg){
 // that are already placed, so it has to be fast rather than pretty: measured in
 // production, a view change paid 1500 iterations and froze the tab for 19 s on a
 // park of 2 330 entities, where 150 iterations bring it to 0.8 s.
+const LABEL_MIN_PX = 12;
+let lastLabelSize = null;
+function syncLabelSize() {
+  // Screen size = font size * scale, so dividing by scale keeps it constant on screen.
+  // Clamp at 11 so zooming in never shrinks labels below their base size.
+    // Capped: past this the label is wider than the thing it names, and a fit that
+  // still needs more is telling us the view draws too much, not that the font is small.
+  const size = Math.min(40, Math.max(11, LABEL_MIN_PX / net.getScale()));
+  if (size !== lastLabelSize) {
+    lastLabelSize = size;
+    net.setOptions({nodes:{font:{size:size}}});
+  }
+}
+
+function fitReservingPanel() {
+  try { net.fit({animation:false}); } catch (e) {}
+  const panel = document.getElementById('detail');
+  if (panel && getComputedStyle(panel).visibility !== 'hidden') {
+    // Shifting by half the panel width recenters the graph in the remaining free space.
+    try { net.moveTo({offset:{x: panel.offsetWidth / 2, y: 0}}); } catch (e) {}
+  }
+}
+
 function stabilizationFor(drawnCount,firstLayout){
   if(!firstLayout) return 150;
   return drawnCount>1000?200:1500;
@@ -1575,10 +1601,12 @@ function applyView(btn){
   if (activeView !== wasActive && cap) cap.textContent = '';
   if(!activeView){
     hidden.clear();
-    if(foldBeforeView !== null){ folded = foldBeforeView; foldBeforeView = null; }   // leaving the last view restores the fold state captured on entry
   } else {
     syncLayerView();
-    if(!wasActive){ foldBeforeView = folded; folded = false; }   // entering from "no view" stashes folded, because folding would hide the single kept layer
+    // The fold STAYS ON in a view. Undoing it was this page's own doing, and it is
+    // what made Machines unreadable: measured on a real tenant, 400 drawn nodes,
+    // a fit scale of 0.05 and labels half a pixel tall. Folded, the same view is
+    // twenty machines carrying their children as satellites and counts.
   }
   syncFoldBtn();
   for(const id of Object.keys(VIEWS)){
@@ -1656,8 +1684,7 @@ attrInput.addEventListener('input',()=>{ attrQuery=attrInput.value; fitAfterSett
 const foldBtn=document.getElementById('fold');
 function syncFoldBtn(){ if(!foldBtn) return; foldBtn.textContent='fold: '+(folded?'on':'off'); foldBtn.style.color=folded?'var(--accent)':''; }
 syncFoldBtn();
-foldBtn.onclick=()=>{ folded=!folded; foldBeforeView=null;   // an explicit fold wins over the stashed entry state
-  localStorage.setItem('toise_viz_folded',folded?'1':'0');
+foldBtn.onclick=()=>{ folded=!folded; localStorage.setItem('toise_viz_folded',folded?'1':'0');
   expanded.clear(); expandedKinds.clear(); syncFoldBtn(); rebuild(); settle(2200); };
 
 // Double-click opens one owner, or closes it again. Single click already selects
@@ -1723,7 +1750,7 @@ syncStaticBtn();
 stBtn.onclick=()=>{ staticLayout=!staticLayout; localStorage.setItem('toise_viz_static',staticLayout?'1':'0');
   syncStaticBtn(); if(staticLayout) freeze(); };
 document.getElementById('resync').onclick=()=>{ loadProfile(); loadFull(); };
-document.getElementById('fit').onclick=()=>net.fit({animation:true});
+document.getElementById('fit').onclick=()=>fitReservingPanel();
 document.getElementById('relayout').onclick=()=>settle(2600);
 // The heatmap and the ruler stay: they are fed by recentChanges, which reads the
 // PRESENT. The controls that travel in time are wired to the asOf documents the
