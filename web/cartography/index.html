@@ -793,23 +793,56 @@ let SCOPE = null;
 async function refreshScope(opts) {
   // The page sends persisted-document ids only, never a query: that is the
   // security property of this build, and the relay refuses anything else.
+  //
+  // Reading the scope in the present while the page shows a past instant
+  // manufactures a gap that does not exist, so the read must follow the page.
+  const asOf = asOfISO();
   try {
+    const body = asOf !== null
+      ? { id: 'graphScope', variables: { asOf } }
+      : { id: 'graphScope' };
     const res = await fetch(API, {
       method: 'POST',
       headers: gqlHeaders(),
       credentials: 'same-origin',
-      body: JSON.stringify({ id: 'graphScope' })
+      body: JSON.stringify(body)
     });
     const json = await res.json();
     // A known scope is better than none: only overwrite on a real payload.
-    if (json && json.data && json.data.graphScope) SCOPE = json.data.graphScope;
+    if (json && json.data && json.data.graphScope) {
+      SCOPE = json.data.graphScope;
+      scopeAsOf = asOf;
+    }
   } catch (e) {
     // Keep the previous SCOPE on transient failure.
   }
+  // The page trusts the instant it asked for, not the one the server echoes:
+  // an omitted asOf would otherwise be read as "the present" and mask a stale scope.
+  const serverMentionsAsOf = SCOPE != null && 'asOf' in SCOPE;
+  // Compared as moments, not as text: the server reformats the instant it was
+  // sent, so the same moment can come back spelled differently.
+  let serverAgrees;
+  if (!serverMentionsAsOf) {
+    serverAgrees = true;
+  } else if (SCOPE.asOf == null) {
+    serverAgrees = asOf == null;
+  } else {
+    const echoed = Date.parse(SCOPE.asOf);
+    // An unreadable echo is not a contradiction: the page's own record is the
+    // authority here, and treating an unparsable stamp as a disagreement would
+    // silently suppress detection without ever surfacing the mismatch.
+    serverAgrees = Number.isNaN(echoed) ? true : echoed === Date.parse(asOf);
+  }
+  scopeDescribesInstant = SCOPE == null || (scopeAsOf === asOf && serverAgrees);
   sayScope();
-  // The comparison must follow the scope, not only the data reload.
-  // In a full load the intermediate read would warn on not-yet-loaded data, so quiet skips it.
-  if (!(opts && opts.quiet)) sayIncomplete(Object.keys(ENT).length, Object.keys(REL).length);
+  // Retention bounds do not depend on the read instant, but the scope counters do:
+  // keep the scope for the timeline, refuse only the comparison inside sayIncomplete.
+  // Quiet means "do not warn about data that has not landed yet", never "leave a
+  // false claim standing", so a scope that cannot describe the instant still
+  // reaches sayIncomplete — where it can only clear.
+  if (!(opts && opts.quiet) || !scopeDescribesInstant) {
+    sayIncomplete(Object.keys(ENT).length, Object.keys(REL).length);
+  }
 }
 
 // Renders the scope line; no relative age from newestEvent because the page has no trustworthy clock.
@@ -818,7 +851,11 @@ function sayScope() {
   if (!el) return;
   if (!SCOPE) { el.textContent = 'scope unavailable'; return; }
   const t = (SCOPE.tenantName && SCOPE.tenantName.length) ? SCOPE.tenantName : 'tenant ' + SCOPE.tenant;
-  if (SCOPE.entities === 0) {
+  // The tenant name does not depend on the instant, so it survives; the counters
+  // were read at another moment and would misstate this one.
+  if (!scopeDescribesInstant) {
+    el.textContent = t + ' · scope for this instant is not known';
+  } else if (SCOPE.entities === 0) {
     el.textContent = 'Tenant ' + t + ': 0 entities, no events yet.';
   } else {
     el.textContent = t + ' · ' + SCOPE.entities + ' entities · ' + SCOPE.relations + ' relations';
@@ -829,6 +866,9 @@ function sayScope() {
 function sayIncomplete(loadedE, loadedR, bounds) {
   const el = document.getElementById('incompleteStat');
   if (!el) return;
+  // Callers invoke this directly with their own bounds, so the guard must live
+  // here: a check placed at the call site only protects callers that remember it.
+  if (!scopeDescribesInstant) { el.textContent = ''; return; }
   // Comparing against every scope reading tolerates a creation or deletion that
   // happened during the load, without inventing an arbitrary tolerance threshold.
   if (bounds && bounds.length) {
@@ -855,7 +895,9 @@ async function loadFull() {
   loading = true;
   const err = document.getElementById('err'); err.textContent = '';
   try {
-    await refreshScope();
+    // Quiet on the way in too: at this point the maps are empty, so comparing
+    // would claim "0 of N" until the data lands.
+    await refreshScope({ quiet: true });
     const first = SCOPE ? { entities: SCOPE.entities, relations: SCOPE.relations } : null;
     const [ents, rels] = await Promise.all([fetchAll('entities'), fetchAll('relations')]);
     for (const k in ENT) delete ENT[k]; for (const k in REL) delete REL[k];
@@ -878,6 +920,8 @@ async function loadFull() {
 
 const GRID_MS = 300000; // Producers observe in ticks of a few minutes; a finer grid would offer precision the data does not have.
 let asOfMs = null; // null means "the present"
+let scopeDescribesInstant = true; // Scope counters are only valid for the instant the scope itself describes.
+let scopeAsOf = null; // The page remembers the instant it asked for, because an absent field in the response is indistinguishable from the present.
 
 function snapToGrid(ms) {
   return Math.floor(ms / GRID_MS) * GRID_MS;
