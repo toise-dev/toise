@@ -1602,13 +1602,12 @@ const cb=document.getElementById('panelClose');
   };
   const nb=document.getElementById('btnNeighbors');
   if(nb) nb.onclick=()=>{
-    // Opening the owner is what SHOWS the satellites: the fold machinery already
-    // draws one node per kind around an opened owner, and those nodes are real
-    // entities -- clickable, with their own detail and their own Ask. Writing a
-    // second, decorative kind of satellite would have drawn things that look
-    // like entities and are not.
-    if(folded && ENT[id] && !expanded.has(id)){ expanded.add(id); rebuild(); }
-    // fit can throw on an empty selection; swallow so the panel stays usable.
+    // Reframes, and does NOT open the owner. Opening it went to the kind level,
+    // which draws a group node carrying no fingerprint -- so no Ask about it --
+    // and it took the whole map out of the grid and back into physics. Measured
+    // on 190 machines: a cloud of 6px labels. Showing children properly means
+    // placing them around their owner without disturbing the other 189, which is
+    // its own piece of work and not a line in this one.
     try{ net.fit({nodes:[id, ...net.getConnectedNodes(id)], animation:false, maxZoomLevel:3}); }catch(e){}
     syncLabelSize();
   };
