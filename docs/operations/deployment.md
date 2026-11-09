@@ -79,3 +79,52 @@ the server replays from the latest snapshot plus the event tail.
 - Run with `--production` to disable introspection, the playground, and the debug UI.
 - Set `retention_max_age` to bound disk, and scrape `/metrics`.
 - Point liveness/readiness probes at `/healthz` and `/readyz`.
+
+## Rolling a version change across replicas
+
+A routine production deployment places two replicas behind a DNS
+round-robin. During a rolling upgrade both versions answer at the same
+time, so two consecutive pages of one paginated enumeration can be
+served by two different versions.
+
+When a version changes the ORDER KEY of a pagination, this window has an
+asymmetric effect. With the 0.24.0 change, where entity pagination switches
+from the local identifier to the identity fingerprint:
+
+- an OLD cursor presented to a NEW binary is rejected explicitly, with
+  the remedy named. It is loud, so the reader can react;
+- a NEW cursor presented to an OLD binary matches nothing, because the
+  old code resolves the cursor by exact equality on the local
+  identifier. The response is then an empty page declaring itself the
+  last one: the enumeration ends early and reads as complete. It is
+  silent, and no fix is possible on the old binary.
+
+During the window, a map or an inventory can read as complete while it is
+truncated.
+
+1. Identify the paginating readers before the cutover. Today: the relay
+   that serves the portal's Cartography page, and the reading agent
+   that queries the API. They are the ones enumerating page by page.
+2. Shrink the window to its smallest duration: bring the replicas up
+   one after the other without waiting between the two, not one
+   replica today and the other tomorrow. The mixed window must count
+   in seconds.
+3. Start no full enumeration during the window. If a reader has one in
+   progress, let it finish before bringing up the second replica, or
+   stop it and restart it afterwards.
+4. After the cutover, restart without `after` every enumeration that
+   began before it. A cursor obtained before the cutover must not be
+   reused.
+5. Check afterwards, on each replica, that the served version is the
+   expected one — a deployment that missed one leaves the window open
+   indefinitely.
+
+The real protection does not depend on this procedure. A reader that
+enumerates must compare the number of elements it loaded in total
+against the total the response reports, and declare its reading
+incomplete on any mismatch instead of returning it. The total is in the
+same response, on `totalCount` of each connection and on the
+`graphScope` counters. This defense covers any truncated read, not only
+the cutover window — a failed page, a reached limit, an expired cursor
+— and it is the only one that does not rely on the operator having
+followed a procedure.
