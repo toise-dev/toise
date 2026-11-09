@@ -928,6 +928,25 @@ function sayCap(drawn,total,criterion){
 
 let rebuildTimer=null;
 function scheduleRebuild(){ if(rebuildTimer) return; rebuildTimer=setTimeout(()=>{rebuildTimer=null;rebuild();},250); }
+// The sky was seeded at RANDOM on every first load, so the same estate came out
+// differently each time: a reader who learns where their machines are would find
+// them moved on the next visit, and the names that survive the decluttering pass
+// changed with them -- eleven one load, five the next.
+//
+// Seeded from the entity's own FINGERPRINT instead, which every replica computes
+// identically and which survives a reload: the same machine lands in the same
+// place, today and tomorrow, here and on the other replica. The id would not do,
+// it is local to the replica that answered.
+function seededPos(key){
+  let h = 2166136261 >>> 0;                       // FNV-1a, enough for a scatter
+  const k = String(key || '');
+  for (let i = 0; i < k.length; i++) { h ^= k.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+  const a = h / 4294967296;
+  const h2 = Math.imul(h ^ 0x9e3779b9, 2654435761) >>> 0;
+  const b = h2 / 4294967296;
+  return { x: a * 1600 - 800, y: b * 1600 - 800 };
+}
+
 function rebuild(){
   computeOwners();
   const prevNodeIds=new Set(nodes.getIds());
@@ -1014,7 +1033,7 @@ function rebuild(){
               shadow:{enabled:true,color:colorFor(n.type),
                       size:Math.min(30,5+Math.sqrt(d)*4.4)*2.1,x:0,y:0},
               color:{background:colorFor(n.type),border:n.deleted?'#e8b06a':(stateBorder(n)||(k?'#6f80a0':'#05070f'))}};
-    if(firstLoad){ node.x=Math.random()*1600-800; node.y=Math.random()*1600-800; }
+    if(firstLoad){ const sp=seededPos(n.identityFingerprint||n.id); node.x=sp.x; node.y=sp.y; }
     nUp.push(node); });
   // One node per kind under an opened owner. Drawn as a labelled count rather
   // than a thing, because that is what it is: "357 service.instance" is an
