@@ -4,7 +4,7 @@ Pour le relais `sh-onboard` (session `sop`). Le navigateur n'envoie **jamais** d
 GraphQL : il poste `{"id":"<nom>","variables":{…}}` sur `/cartography/graphql`, et le
 relais détient les textes ci-dessous.
 
-## Les trois documents
+## Les quatre documents
 
 ### `entities`
 
@@ -67,6 +67,62 @@ query RecentChanges($window: String, $first: Int, $after: String) {
 
 `includeHeartbeats` est **écrit en dur à `false`** dans le document : un battement n'est pas
 un changement et il noierait le signal.
+
+### `graphScope`
+
+```graphql
+query GraphScope {
+  graphScope { tenant tenantName entities relations newestEvent }
+}
+```
+
+Ce document est lu **en premier**, avant les données, et son périmètre est
+affiché en permanence. Un parc vide s'affiche « 0 entities, no events yet »
+au lieu d'une toile blanche. La page compare ensuite ce qu'elle a chargé à
+ces compteurs : en dessous, elle dessine quand même et affiche
+« Incomplete: entities X of Y ». C'est cette comparaison qui permet de
+détecter **toute** lecture tronquée — une page en échec, une limite
+atteinte, un curseur périmé, ou une page vide se déclarant la dernière —
+et pas seulement les cas qu'on a su prévoir.
+
+#### Les compteurs doivent être NETS de ce que le relais retire
+
+Le relais retire des entités des réponses `entities` — aujourd'hui les
+`host.service`, pour les deux raisons déjà écrites plus haut dans ce
+manifeste. Or `graphScope` est servi par le serveur, qui ne sait rien de ce
+filtrage : ses compteurs portent sur **tout** le parc.
+
+Mesuré en production sur un tenant réel : 2 328 entités annoncées par
+`graphScope`, dont 1 244 `host.service`, et 1 084 reçues par l'énumération.
+L'écart vaut exactement les entités retirées. **Une comparaison naïve
+afficherait donc un « Incomplete » permanent et faux**, sur un parc
+entièrement chargé.
+
+Le relais doit donc rendre des compteurs **nets** : il soustrait, pour
+chaque type qu'il retire, le `totalCount` d'une requête comptée en interne
+et jamais exposée au navigateur :
+
+```graphql
+query CountOfType($type: String!) {
+  entities(filter: {type: $type}, first: 0) { totalCount }
+}
+```
+
+`first: 0` est délibéré : `totalCount` est le compte complet du filtre,
+indépendant de la page, donc demander zéro arête évite de transférer
+cinquante nœuds inutiles à chaque rafraîchissement de périmètre. La valeur
+est la même avant et après la 0.24.0, bien qu'elle soit calculée par deux
+chemins différents — vérifié en recette, la somme des `totalCount` par
+type égale les compteurs de `graphScope` à l'unité sur une connexion
+directe.
+
+#### Le filtrage doit être déclaré en clair
+
+Un compteur net rend la détection honnête, mais il rend le filtrage
+invisible. La page doit donc aussi **déclarer** ce qui est retiré, en
+clair et en permanence, par exemple « System units are left out ». Les deux
+sont nécessaires : le compteur net sans la phrase donne un périmètre muet,
+la phrase sans le compteur net donne un faux écart.
 
 ## Ce que le relais doit faire en plus
 
