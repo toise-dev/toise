@@ -340,6 +340,7 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
     <input type="range" id="tlAt" min="0" max="1000" value="1000" step="1" title="The handle picks the moment to revisit; playback starts on release" style="width:100%">
     <button id="tlLive">live</button>
     <span id="tlAtLabel" class="muted"></span>
+    <span id="tlEvents" class="muted"></span>
   </div>
 </footer>
 <script>
@@ -1442,6 +1443,12 @@ async function loadProfile(){
   }
 }
 function renderProfile(data,s,e){
+  // The count comes from the same pass that draws the strip, so it can never
+  // disagree with it: a number computed separately would drift from the picture
+  // it labels, and the picture is the thing the reader trusts.
+  const ev=document.getElementById('tlEvents');
+  if(ev){ let n=0; for(const arr of data.values()) n+=arr.length;
+    ev.textContent = n ? fmtCount(n)+' events' : ''; }
   const el=document.getElementById('tlProfile'), gut=document.getElementById('tlGutter');
   if(!el||!gut) return;
   el.querySelectorAll('.cell').forEach(x=>x.remove()); gut.innerHTML='';
