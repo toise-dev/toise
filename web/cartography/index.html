@@ -185,7 +185,7 @@ aside td.k{color:var(--dim);width:40%;word-break:normal;overflow-wrap:break-word
   .segmented button{flex:1 1 0;min-width:0;padding:.2rem .25rem;}
   .stats{display:none;}
   header label[for=attr]{font-size:0;flex:1 1 auto;min-width:0;}
-  header label[for=attr] input{width:100%;margin-left:0;font-size:12px;line-height:1.4;padding:.25rem .4rem;box-sizing:border-box;}
+  header label[for=attr] input{width:100%;margin-left:0;font-size:12px;line-height:normal;padding:.25rem .4rem;height:1.8rem;box-sizing:border-box;}
   .options{margin-left:.5rem;}
   .subbar{gap:.5rem;}
 }
@@ -1668,6 +1668,12 @@ const cb=document.getElementById('panelClose');
         for(const k in ENT){ if(OWNER[k]===id) expandedKinds.add(id+'\u0000'+ENT[k].type); }
       }
       rebuild();
+      if(!expanded.has(id)){
+        // Closing frames the WHOLE map again. Keeping the zoom of the opening
+        // brought 190 machines back at scale 3, with 478 discs on their names.
+        fitReservingPanel();
+        return;
+      }
     }
     // Reframes too. Opening it used to go to the kind level,
     // which draws a group node carrying no fingerprint -- so no Ask about it --
