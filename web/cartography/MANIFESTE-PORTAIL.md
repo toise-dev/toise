@@ -71,10 +71,22 @@ un changement et il noierait le signal.
 ### `graphScope`
 
 ```graphql
-query GraphScope {
-  graphScope { tenant tenantName entities relations newestEvent }
+query GraphScope($asOf: String) {
+  graphScope(asOf: $asOf) {
+    tenant tenantName entities relations newestEvent oldestAnswerable asOf
+  }
 }
 ```
+
+**Les sept champs sont tous lus par la page, et trois d'entre eux la
+gouvernent** : `oldestAnswerable` est la borne basse de la frise — sans lui la
+page ne connaît aucun horizon et **refuse toute position du curseur** ;
+`asOf` est l'instant que le serveur dit avoir servi, et c'est lui que
+l'étiquette affiche plutôt que l'instant demandé ; `entities` et `relations`
+sont les compteurs de la détection d'incomplétude. Un document qui en omet un
+ne casse rien visiblement : il rend un champ absent, que la page lit comme un
+horizon inconnu ou un périmètre muet. **Le document est le contrat : ce qui
+n'est pas sélectionné n'est pas rendu.**
 
 Ce document est lu **en premier**, avant les données, et son périmètre est
 affiché en permanence. Un parc vide s'affiche « 0 entities, no events yet »
@@ -159,6 +171,14 @@ Deux pièges de filtrage à retenir : le relais doit écarter les mêmes types
 **dans le passé**, et calculer le compte net **au même `asOf`** — sinon
 l'avertissement d'incomplétude retentirait en permanence dès qu'un lecteur
 remonte dans le temps.
+
+**Et `graphScope` lui-même doit être relu AVEC l'`asOf`**, pas seulement les
+données. Mesuré en recette : un périmètre lu au présent et comparé à un chargé
+du passé donne « Incomplete: entities 168 of 240 » en permanence sur tout
+instant passé, sur un parc entièrement chargé. L'écart ne vient pas d'une
+troncature, il vient de deux instants comparés l'un à l'autre. C'est le même
+défaut que le compteur brut face à un relais qui filtre : **une comparaison
+n'a de sens qu'entre deux lectures du même monde.**
 
 #### Un 503 ne doit jamais devenir une réponse vide
 
