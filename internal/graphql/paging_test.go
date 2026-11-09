@@ -1,7 +1,9 @@
 package graphql_test
 
 import (
+	"encoding/base64"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -163,5 +165,25 @@ func TestEntitiesPagingEnumeratesEveryEntityOnce(t *testing.T) {
 	}
 	if len(seen) != totalCount {
 		t.Fatalf("got %d distinct fingerprints, totalCount = %d", len(seen), totalCount)
+	}
+}
+
+// accepting a cursor from an older version does not produce a visible error
+// but a first page that pretends to be a continuation
+func TestEntitiesPagingRefusesACursorFromAnOlderVersion(t *testing.T) {
+	s := newStack(t)
+	createHosts(t, s, 3)
+	c := s.client(t)
+	oldCursor := base64.StdEncoding.EncodeToString([]byte("01M1PA3JMFX0V897HMA7VWFCA9"))
+	var resp entitiesResponse
+	err := c.Post(entitiesPageQuery, &resp, client.Var("first", 2), client.Var("after", oldCursor))
+	if err == nil {
+		t.Fatalf("server accepted a cursor from another version and could silently restart enumeration")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "cursor") {
+		t.Fatalf("expected error to mention cursor, got: %v", err)
+	}
+	if len(resp.Entities.Edges) != 0 {
+		t.Fatalf("expected no edges to be returned, got %d", len(resp.Entities.Edges))
 	}
 }

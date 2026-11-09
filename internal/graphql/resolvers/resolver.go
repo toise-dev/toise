@@ -135,6 +135,36 @@ func (r *queryResolver) Entity(ctx context.Context, id string, asOf *string) (*g
 	return entityToGQL(e, deleted), nil
 }
 
+// A cursor from an older version still base64-decodes cleanly and, starting
+// with a digit, sorts before every identity fingerprint, so accepting it
+// would silently restart the enumeration from the first page.
+func decodeEntityCursor(after *string) (string, error) {
+	if after == nil || *after == "" {
+		return "", nil
+	}
+	decoded, err := decodeCursor(*after)
+	if err != nil {
+		return "", fmt.Errorf("invalid after cursor: %w", err)
+	}
+	sep := -1
+	for i := 0; i < len(decoded); i++ {
+		if decoded[i] == ':' {
+			sep = i
+			break
+		}
+	}
+	if sep <= 0 || sep == len(decoded)-1 {
+		return "", fmt.Errorf("this cursor is not from this version: entity pagination now uses identity fingerprints, please restart the enumeration without the after parameter")
+	}
+	for i := sep + 1; i < len(decoded); i++ {
+		c := decoded[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return "", fmt.Errorf("this cursor is not from this version: entity pagination now uses identity fingerprints, please restart the enumeration without the after parameter")
+		}
+	}
+	return decoded, nil
+}
+
 func pageSize(first *int) (int, error) {
 	n := 50
 	if first != nil {
@@ -163,12 +193,10 @@ func (r *queryResolver) Entities(ctx context.Context, filter *generated.EntityFi
 		typ = *filter.Type
 	}
 	if filter == nil || len(filter.Match) == 0 {
-		afterFP := ""
-		if after != nil && *after != "" {
-			afterFP, err = decodeCursor(*after)
-			if err != nil {
-				return nil, fmt.Errorf("invalid after cursor: %w", err)
-			}
+		var afterFP string
+		afterFP, err = decodeEntityCursor(after)
+		if err != nil {
+			return nil, err
 		}
 		page, next, total := g.PageEntitiesByFingerprint(typ, afterFP, n)
 		edges := make([]generated.EntityEdge, len(page))
