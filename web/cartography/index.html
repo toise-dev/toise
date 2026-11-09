@@ -625,9 +625,10 @@ function rebuild(){
     if(a!==b){ degree[a]=(degree[a]||0)+1; degree[b]=(degree[b]||0)+1; } });
   // Phase 1: census every candidate with the exact same exclusions, in the same order.
   const candidates=[];
+  let matchCandidates=0;
   Object.values(ENT).forEach(n=>{ allTypes.add(n.type); if(hidden.has(n.type)) return;
     if(repOf(n.id)!==n.id){ hiddenByFold++; return; }            // folded into an owner
-    const ok=attrMatch(n); if(q && !ok && !MATCH_OWNERS.has(n.id) && filterOnly) return;   // "only" mode hides non-matching, but not an owner hiding a match
+    const ok=attrMatch(n); if(q && ok) matchCandidates++; if(q && !ok && !MATCH_OWNERS.has(n.id) && filterOnly) return;   // "only" mode hides non-matching, but not an owner hiding a match
     candidates.push({n, d:degree[n.id]||0}); });
 
   // Priority: what the reader explicitly asked for (filter, then citations) comes
@@ -644,7 +645,10 @@ function rebuild(){
     return a.n.id<b.n.id?-1:(a.n.id>b.n.id?1:0);
   });
   const kept=candidates.slice(0,MAX_DRAWN); cappedOut=candidates.length-kept.length;
-  sayCap(kept.length,cappedTotal,'most connected');
+  let capCriterion='most connected';
+  if(q) capCriterion='matching your search first, then the most connected';
+  else if(CITED.size) capCriterion='cited first, then the most connected';
+  sayCap(kept.length,cappedTotal,capCriterion);
 
   // Phase 2: build exactly what the old loop built, for the retained candidates only.
   kept.forEach(({n,d})=>{ const ok=attrMatch(n);
@@ -679,13 +683,20 @@ function rebuild(){
       font:{color:'#d9e3f5',size:12},shadow:{enabled:false},
       color:{background:'#0a0e1c',border:openable?colorFor(k.type):'#e8b06a'}});
   });
-  say('Drawing '+nUp.length+' entities\u2026');
+  // Only announce renders heavy enough to feel slow; below that it is noise.
+  if(nUp.length>1000) say('Drawing '+nUp.length+' entities\u2026');
   net.setOptions({physics:{stabilization:{iterations:stabilizationFor(nUp.length)}}});
   nodes.update(nUp);
   // Say what is not shown. "0 match" was the lie; "0 shown, 54 inside folded nodes"
   // is the same number with its bound declared.
   const ms=document.getElementById('matchStat');
-  ms.textContent=q?('· '+matched+' shown'+(foldedMatches?(', '+foldedMatches+' inside folded nodes'):'')):'';
+  if(!q){ ms.textContent=''; }
+  else{
+    const parts=['· '+matched+' shown'];
+    if(foldedMatches>0) parts.push(foldedMatches+' inside folded nodes');
+    if(matchCandidates-matched>0) parts.push((matchCandidates-matched)+' not drawn (cap)');
+    ms.textContent=parts.join(', ');
+  }
   const ai=document.getElementById('attr'); if(ai) ai.style.color=(q&&matched===0)?'var(--warn)':'var(--fg)';
   nodes.getIds().forEach(id=>{ if(!nodeIds.has(id)) nodes.remove(id); });
   const edgeIds=new Set(), eUp=[];
@@ -781,11 +792,14 @@ async function refreshScope() {
       body: JSON.stringify({ id: 'graphScope' })
     });
     const json = await res.json();
-    SCOPE = json && json.data && json.data.graphScope ? json.data.graphScope : null;
+    // A known scope is better than none: only overwrite on a real payload.
+    if (json && json.data && json.data.graphScope) SCOPE = json.data.graphScope;
   } catch (e) {
-    SCOPE = null;
+    // Keep the previous SCOPE on transient failure.
   }
   sayScope();
+  // The comparison must follow the scope, not only the data reload.
+  sayIncomplete(Object.keys(ENT).length, Object.keys(REL).length);
 }
 
 // Renders the scope line; no relative age from newestEvent because the page has no trustworthy clock.
@@ -814,6 +828,8 @@ function sayIncomplete(loadedE, loadedR) {
 }
 
 async function loadFull() {
+  // Callers invoke this directly without checking the flag, so the guard belongs here.
+  if (loading) return;
   loading = true;
   const err = document.getElementById('err'); err.textContent = '';
   try {
