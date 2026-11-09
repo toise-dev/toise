@@ -387,11 +387,11 @@ net.on('beforeDrawing',ctx=>{ for(const f of FIELD){
 let freezeTimer=null;
 function freeze(){ clearTimeout(freezeTimer); freezeTimer=null; net.setOptions({physics:{enabled:false}}); }
 function settle(ms=1600){ net.setOptions({physics:{enabled:true}}); clearTimeout(freezeTimer);
-  freezeTimer=setTimeout(()=>{ freeze(); if(fitAfterSettle){ fitAfterSettle=false; try{ net.fit({animation:false}); }catch(e){} syncLabelSize(); } }, ms); }
+  freezeTimer=setTimeout(()=>{ freeze(); if(fitAfterSettle){ fitAfterSettle=false; try{ net.fit({animation:false,maxZoomLevel:3}); }catch(e){} syncLabelSize(); } }, ms); }
 net.on('zoom',()=>syncLabelSize());   // the font is in canvas units, so it shrinks with the view
 net.on('stabilizationIterationsDone',()=>{ freeze();   // layout done -> freeze, fit, reveal
   if(!fitted) return;   // the empty-graph init pass, before any data — nothing to reveal yet
-  try{ net.fit({animation:false}); }catch(_){}
+  try{ net.fit({animation:false,maxZoomLevel:3}); }catch(_){}
   syncLabelSize();   // same reason: a fit changes the scale without a zoom event
   const nv=document.getElementById('net'); if(nv) nv.classList.remove('laying');
   const err=document.getElementById('err'); if(err && err.textContent.startsWith('Drawing ')) err.textContent=''; });
@@ -724,7 +724,7 @@ function syncLabelSize() {
 }
 
 function fitReservingPanel() {
-  try { net.fit({animation:false}); } catch (e) {}
+  try { net.fit({animation:false,maxZoomLevel:3}); } catch (e) {}
   syncLabelSize();   // vis emits 'zoom' for the reader's gestures only, never for fit()
   const panel = document.getElementById('detail');
   if (panel && getComputedStyle(panel).visibility !== 'hidden') {
