@@ -613,7 +613,6 @@ function stateBorder(n){
 
 function repOf(id,guard){
   if(!folded) return id;
-  if(activeView && VIEW_FOLDS[activeView]===false) return id;   // this view's subject IS the children
 
   const seen=guard||new Set();
   let cur=id;
@@ -1695,11 +1694,11 @@ const VIEWS={
   vHosts:['host','compute.vm','container','pod'],
   vApps:['host','service.instance','service.listener','db','cloud.resource'],
 };
-// Machines folds -- that is what makes twenty machines out of four hundred nodes.
-// Network and Applications do NOT: their subject is exactly what the fold hides,
-// and the host is there as the anchor that NAMES each cluster. A cluster label
-// belonging to no entity would be a claim nobody could click, cite or check.
-const VIEW_FOLDS={vHosts:true,vNet:false,vApps:false};
+// The host is listed in all three views because it ANCHORS them: in Network it
+// carries the interfaces, in Applications it carries the services, and a view
+// that lit the children while turning their machine off would show a set of
+// orphans. The fold is global and identical in every view -- a view changes what
+// is lit, never what is drawn.
 // The chosen view is remembered and re-applied on every redraw, not filled once at
 // click time: the page polls every six seconds, so a type that arrives later would
 // otherwise have escaped the filter and invited itself into all three views.
