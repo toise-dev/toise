@@ -584,7 +584,7 @@ function layOutOnGrid(nUp) {
   let cols = Math.max(1, Math.min(sorted.length, Math.floor(w / labelPx)));
   let rows = Math.ceil(sorted.length / cols);
   const cellW = 100;
-  const cellH = 70;
+  const cellH = 50;   // flatter cells keep the tile width-bound, which is what lets labels show
   // If the tile is height-bound the labels will not fit and are dropped by the
   // caller; with no label to clear, columns sized for one only waste the canvas.
   if (w / (cols * cellW) > h / (rows * cellH)) {
@@ -868,14 +868,21 @@ function rebuild(){
   // more, so it vanished while the tab was still frozen.
   net.setOptions({physics:{stabilization:{iterations:stabilizationFor(nUp.length,!fitted)}}});
 // Threshold is a ratio because a sparse graph is sparse relative to its size: 19 edges among 80 nodes is noise, but 19 among 20 nodes is structure.
-gridded = false;
-if (nodeIds.size > 12 && drawnEdgeCount(nodeIds) < nodeIds.size / 4) {
+// Threshold is a ratio because a sparse graph is sparse relative to its size:
+// 19 edges among 80 nodes is noise, but 19 among 20 nodes is structure.
+gridded = nodeIds.size > 12 && drawnEdgeCount(nodeIds) < nodeIds.size / 4;
+if (gridded) {
   net.setOptions({ physics: { enabled: false } });
-  gridded = layOutOnGrid(nUp);
-  if (!gridded) {
-    // Unreadable overlapping labels are worse than none; the tooltip still shows the name.
+  // The return value says whether the labels FIT, which is not the same thing as
+  // whether a grid was placed: conflating the two let the physics scatter a grid.
+  if (!layOutOnGrid(nUp)) {
+    // Unreadable overlapping labels are worse than none; the tooltip keeps the name.
     nUp.forEach(nd => { nd.label = undefined; });
   }
+} else {
+  // Switch it back ON: a grid turned it off, and nothing else ever turned it on
+  // again, so the next view inherited frozen positions and a nonsense scale.
+  net.setOptions({ physics: { enabled: true } });
 }
   nodes.update(nUp);
   // Say what is not shown. "0 match" was the lie; "0 shown, 54 inside folded nodes"
