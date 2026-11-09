@@ -1324,7 +1324,13 @@ async function loadFull() {
     if (SCOPE) loadedCounts = SCOPE.entities+'/'+SCOPE.relations;
     // Date.now() as the floor when the probe cannot answer: it makes the next tick
     // compare against now rather than against zero, which would reload forever.
-    newestMeaningfulChange().then(t=>{ loadedChangeAt = (t === null || t === 0) ? Date.now() : t; });
+    // Set NOW, synchronously, before the probe is even sent: the probe answers a
+    // round trip later and the first tick arrives five seconds in, so a stamp left
+    // at zero made that tick re-read the graph it had just read -- a megabyte on
+    // every page open. The probe then refines this downward to the real instant,
+    // and anything newer than that still triggers a reload.
+    loadedChangeAt = Date.now();
+    newestMeaningfulChange().then(t=>{ if(t) loadedChangeAt = t; });
     const bounds = [first, second].filter(Boolean);
     sayIncomplete(Object.keys(ENT).length, Object.keys(REL).length, bounds.length ? bounds : undefined);
   } catch (e) {
