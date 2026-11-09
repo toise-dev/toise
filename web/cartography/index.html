@@ -921,11 +921,21 @@ function fitReservingPanel(onlyNodes) {
   syncLabelSize();   // vis emits 'zoom' for the reader's gestures only, never for fit()
   const panel = document.getElementById('detail');
   const strip = document.getElementById('mapstat');
-  // Half the width, half the height: the drawing recentres in what is left free
-  // once the card on the right and the strip at the bottom have taken their room.
-  const dx = (panel && getComputedStyle(panel).visibility !== 'hidden') ? panel.offsetWidth / 2 : 0;
-  const dy = strip ? -strip.offsetHeight / 2 : 0;
-  if (dx || dy) { try { net.moveTo({offset:{x: dx, y: dy}}); } catch (e) {} }
+  const canvas = document.getElementById('net');
+  const W = canvas ? canvas.clientWidth : 0, H = canvas ? canvas.clientHeight : 0;
+  const cardW = (panel && getComputedStyle(panel).visibility !== 'hidden') ? panel.offsetWidth + 24 : 0;
+  const stripH = strip ? strip.offsetHeight + 8 : 0;
+  if (!W || !H || (!cardW && !stripH)) return;
+  // Shrink BEFORE shifting. A fit already touches the edges, so sliding the view
+  // sideways to clear the card necessarily pushes that edge out of frame -- six
+  // machines of twenty, measured, the moment the card became permanent. Zooming
+  // out by exactly what is reserved keeps everything inside the free area.
+  const k = Math.min((W - cardW) / W, (H - stripH) / H);
+  try {
+    if (k > 0 && k < 1) net.moveTo({ scale: net.getScale() * k });
+    net.moveTo({ offset: { x: cardW / 2, y: -stripH / 2 } });
+  } catch (e) {}
+  syncLabelSize();   // the scale just changed, so the counter-scaled font must follow
 }
 
 function stabilizationFor(drawnCount,firstLayout){
