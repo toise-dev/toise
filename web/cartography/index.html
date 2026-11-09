@@ -361,7 +361,7 @@ const net=new vis.Network(document.getElementById('net'),{nodes,edges},{
   edges:{color:{color:'rgba(150,178,235,0.26)',highlight:'#cfe0ff',hover:'#cfe0ff'},
          font:{color:'#6f80a0',size:10,strokeWidth:3,strokeColor:'#05070f',align:'middle'},
          arrows:{to:{enabled:true,scaleFactor:.3}},smooth:false,width:0.9,selectionWidth:1.6},
-  physics:{barnesHut:{gravitationalConstant:-26000,centralGravity:0.12,springLength:200,springConstant:.03,damping:.6,avoidOverlap:0.2},stabilization:{iterations:1500}},
+  physics:{barnesHut:{gravitationalConstant:-12000,centralGravity:0.25,springLength:110,springConstant:.045,damping:.6,avoidOverlap:0.2},stabilization:{iterations:1500}},
   interaction:{hover:true,tooltipDelay:120,multiselect:true}
 });
 
@@ -387,11 +387,12 @@ net.on('beforeDrawing',ctx=>{ for(const f of FIELD){
 let freezeTimer=null;
 function freeze(){ clearTimeout(freezeTimer); freezeTimer=null; net.setOptions({physics:{enabled:false}}); }
 function settle(ms=1600){ net.setOptions({physics:{enabled:true}}); clearTimeout(freezeTimer);
-  freezeTimer=setTimeout(()=>{ freeze(); if(fitAfterSettle){ fitAfterSettle=false; try{ net.fit({animation:false}); }catch(e){} } }, ms); }
+  freezeTimer=setTimeout(()=>{ freeze(); if(fitAfterSettle){ fitAfterSettle=false; try{ net.fit({animation:false}); }catch(e){} syncLabelSize(); } }, ms); }
 net.on('zoom',()=>syncLabelSize());   // the font is in canvas units, so it shrinks with the view
 net.on('stabilizationIterationsDone',()=>{ freeze();   // layout done -> freeze, fit, reveal
   if(!fitted) return;   // the empty-graph init pass, before any data — nothing to reveal yet
   try{ net.fit({animation:false}); }catch(_){}
+  syncLabelSize();   // same reason: a fit changes the scale without a zoom event
   const nv=document.getElementById('net'); if(nv) nv.classList.remove('laying');
   const err=document.getElementById('err'); if(err && err.textContent.startsWith('Drawing ')) err.textContent=''; });
 
@@ -569,6 +570,11 @@ function repOf(id,guard){
     seen.add(cur);
     const up=OWNER[cur];
     if(!up || !ENT[up]) return cur;
+    // Fold into an owner only when that owner is DRAWN in the current view.
+    // Otherwise Applications folded its services into hosts it does not draw,
+    // and the view came out empty: measured, zero nodes on Network and on
+    // Applications. A child whose parent is absent represents itself.
+    if(hidden.has(ENT[up].type)) return cur;
     if(expanded.has(up)){
       // The owner is open. Its children are represented by one node per KIND
       // until the reader opens that kind too — the middle of the three levels.
@@ -653,6 +659,7 @@ function syncLabelSize() {
 
 function fitReservingPanel() {
   try { net.fit({animation:false}); } catch (e) {}
+  syncLabelSize();   // vis emits 'zoom' for the reader's gestures only, never for fit()
   const panel = document.getElementById('detail');
   if (panel && getComputedStyle(panel).visibility !== 'hidden') {
     // Shifting by half the panel width recenters the graph in the remaining free space.
