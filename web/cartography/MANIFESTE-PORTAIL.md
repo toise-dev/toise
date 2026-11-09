@@ -74,9 +74,24 @@ un changement et il noierait le signal.
 query GraphScope($asOf: String) {
   graphScope(asOf: $asOf) {
     tenant tenantName entities relations newestEvent oldestAnswerable asOf
+    hiddenEntities hiddenNotice
   }
 }
 ```
+
+**Les deux derniers champs ne viennent pas de Toise, ils viennent du relais.**
+`hiddenEntities` est le nombre d'entités que le relais a retirées, et
+`hiddenNotice` la phrase qui les nomme, par exemple « System units are left
+out ». Le serveur ne les connaît pas : une requête qui les sélectionne contre
+Toise en direct est refusée, et c'est normal. Ils figurent ici parce que ce
+document est le contrat du RELAIS, pas celui du serveur.
+
+La page affiche `hiddenNotice` telle quelle et **n'écrit jamais de phrase à la
+place**. C'est la règle « celui qui filtre est celui qui déclare » appliquée
+jusqu'au bout : si la page composait la phrase, le jour où le relais retire un
+autre type elle continuerait à nommer l'ancien. C'est la présence de la phrase
+qui décide de son affichage, jamais le compte — un compte sans phrase laisserait
+le filtrage muet, et c'est exactement ce que cette règle interdit.
 
 **Les sept champs sont tous lus par la page, et trois d'entre eux la
 gouvernent** : `oldestAnswerable` est la borne basse de la frise — sans lui la
