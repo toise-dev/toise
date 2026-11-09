@@ -185,7 +185,7 @@ aside td.k{color:var(--dim);width:40%;word-break:normal;overflow-wrap:break-word
   .segmented button{flex:1 1 0;min-width:0;padding:.2rem .25rem;}
   .stats{display:none;}
   header label[for=attr]{font-size:0;flex:1 1 auto;min-width:0;}
-  header label[for=attr] input{width:100%;margin-left:0;font-size:12px;}
+  header label[for=attr] input{width:100%;margin-left:0;font-size:12px;line-height:1.4;padding:.25rem .4rem;box-sizing:border-box;}
   .options{margin-left:.5rem;}
   .subbar{gap:.5rem;}
 }
@@ -622,7 +622,37 @@ function drawnEdgeCount(nodeIds) {
 // and it answered on the WIDENED tile -- so it reported that labels fit right
 // after widening had made them not fit. Measured: 96 overlaps out of 260.
 function layOutOnGrid(nUp) {
-  const sorted = [...nUp].sort((a, b) => a.label < b.label ? -1 : a.label > b.label ? 1 : 0);
+  // Children follow their parent in the sequence rather than being ringed around
+  // it: the grid is packed so labels fit, which leaves 1.4 units free above a
+  // disc where a satellite needs 7 -- a ring would land in the row above's name.
+  // The next cells are free by construction.
+  const byLabel = (a, b) => (a.label < b.label ? -1 : a.label > b.label ? 1 : 0);
+  const drawnIds = new Set(nUp.map(nd => nd.id));
+  const childrenOf = new Map();
+  for (const nd of nUp) {
+    const parent = OWNER[nd.id];
+    if (parent !== undefined && parent !== nd.id && drawnIds.has(parent)) {
+      if (!childrenOf.has(parent)) childrenOf.set(parent, []);
+      childrenOf.get(parent).push(nd);
+    }
+  }
+  for (const list of childrenOf.values()) list.sort(byLabel);
+  const roots = nUp.filter(nd => {
+    const parent = OWNER[nd.id];
+    return parent === undefined || parent === nd.id || !drawnIds.has(parent);
+  }).sort(byLabel);
+  const seen = new Set();
+  const ordered = [];
+  const emit = nd => {                       // depth-first: a child may own children too
+    if (seen.has(nd.id)) return;             // a malformed graph must not loop here
+    seen.add(nd.id);
+    ordered.push(nd);
+    (childrenOf.get(nd.id) || []).forEach(emit);
+  };
+  roots.forEach(emit);
+  // If anything was left out -- a cycle, an owner pointing at itself through a
+  // chain -- fall back to the flat order rather than dropping a node from the map.
+  const sorted = ordered.length === nUp.length ? ordered : [...nUp].sort(byLabel);
   const longest = sorted.reduce((m, nd) => Math.max(m, (nd.label || '').length), 0);
   const labelPx = Math.max(60, longest * 6.6 + 24);
   const LABEL_H = 14;
@@ -948,7 +978,10 @@ function rebuild(){
 // Threshold is a ratio because a sparse graph is sparse relative to its size: 19 edges among 80 nodes is noise, but 19 among 20 nodes is structure.
 // Threshold is a ratio because a sparse graph is sparse relative to its size:
 // 19 edges among 80 nodes is noise, but 19 among 20 nodes is structure.
-gridded = nodeIds.size > 12 && drawnEdgeCount(nodeIds) < nodeIds.size / 4;
+const sparse = nodeIds.size > 12 && drawnEdgeCount(nodeIds) < nodeIds.size / 4;
+// Sticky while a machine is open: opening one adds nodes and edges, and the
+// test would read that local change as a change of nature for the whole view.
+gridded = sparse || (gridded && expanded.size > 0);
 if (gridded) {
   net.setOptions({ physics: { enabled: false } });
   // The return value says whether the labels FIT, which is not the same thing as
@@ -1602,7 +1635,18 @@ const cb=document.getElementById('panelClose');
   };
   const nb=document.getElementById('btnNeighbors');
   if(nb) nb.onclick=()=>{
-    // Reframes, and does NOT open the owner. Opening it went to the kind level,
+    // Opens the machine down to its CHILDREN, never stopping at the kind level:
+    // a kind node carries no fingerprint, so it has no detail and no Ask about
+    // it, which is the opposite of what this button offers.
+    if(folded && ENT[id]){
+      if(expanded.has(id)){ expanded.delete(id); }
+      else {
+        expanded.add(id);
+        for(const k in ENT){ if(OWNER[k]===id) expandedKinds.add(id+'\u0000'+ENT[k].type); }
+      }
+      rebuild();
+    }
+    // Reframes too. Opening it used to go to the kind level,
     // which draws a group node carrying no fingerprint -- so no Ask about it --
     // and it took the whole map out of the grid and back into physics. Measured
     // on 190 machines: a cloud of 6px labels. Showing children properly means
