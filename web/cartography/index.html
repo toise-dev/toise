@@ -691,7 +691,7 @@ function syncLabelSize() {
   // Clamp at 11 so zooming in never shrinks labels below their base size.
     // Capped: past this the label is wider than the thing it names, and a fit that
   // still needs more is telling us the view draws too much, not that the font is small.
-  const size = Math.min(40, Math.max(11, LABEL_MIN_PX / net.getScale()));
+  const size = Math.min(40, Math.max(11, Math.ceil(LABEL_MIN_PX / net.getScale())));
   if (size !== lastLabelSize) {
     lastLabelSize = size;
     net.setOptions({nodes:{font:{size:size}}});
