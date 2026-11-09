@@ -562,6 +562,7 @@ function titleOf(n){ const I=(n.identity||[]).map(a=>a.key+'='+a.value).join(', 
 // relations nest; everything else is a peer link and is aggregated, never folded.
 const CHILD_SIDE={has_interface:'to',has_route:'to',has_segment:'to',runs_on:'from',bound_to:'from',listens_on:'from'};
 let folded=localStorage.getItem('toise_viz_folded')!=='0';   // ON by default: the dense case is the normal case
+const dimmed=new Set();                                       // types a view turns down; NOT hidden -- the legend owns hiding
 const expanded=new Set();                                     // owners the reader opened, by id
 const expandedKinds=new Set();                                // "<owner>\u0000<type>" the reader opened past the kind step
 
@@ -593,28 +594,6 @@ function kindParts(id){ const a=id.slice(KIND.length).split('\u0000'); return {o
 const MAX_DRAWN=2500;
 const KIND_OPEN_MAX=60;
 
-// ownerOf maps a child to its owner, rebuilt whenever relations change.
-let OWNER={};
-function computeOwners(){
-  OWNER={};
-  for(const r of Object.values(REL)){
-    const side=CHILD_SIDE[r.type]; if(!side) continue;
-    const child=side==='from'?r.fromId:r.toId, owner=side==='from'?r.toId:r.fromId;
-    if(child!==owner && !OWNER[child]) OWNER[child]=owner;   // first owner wins; a second would be a modelling error, not ours to resolve
-  }
-}
-// repOf: the node actually drawn for x. Walk up while the parent is folded shut;
-// stop at the first ancestor the reader opened, or at the top.
-function drawnEdgeCount(nodeIds) {
-  let n = 0;
-  for (const id in REL) {
-    const a = repOf(REL[id].fromId);
-    const b = repOf(REL[id].toId);
-    if (a !== b && nodeIds.has(a) && nodeIds.has(b)) n++;
-  }
-  return n;
-}
-
 // The whole grid is computed in SCREEN PIXELS, which is the only unit that
 // decides whether a name is readable. Canvas units are then just those pixels:
 // the fit scales them, and a tile that fits at scale 1 cannot overlap.
@@ -632,95 +611,10 @@ function stateBorder(n){
   return v && Object.prototype.hasOwnProperty.call(LIFECYCLE_BORDER,v) ? LIFECYCLE_BORDER[v] : null;
 }
 
-function layOutOnGrid(nUp) {
-  // Children follow their parent in the sequence rather than being ringed around
-  // it: the grid is packed so labels fit, which leaves 1.4 units free above a
-  // disc where a satellite needs 7 -- a ring would land in the row above's name.
-  // The next cells are free by construction.
-  const byLabel = (a, b) => (a.label < b.label ? -1 : a.label > b.label ? 1 : 0);
-  const drawnIds = new Set(nUp.map(nd => nd.id));
-  const childrenOf = new Map();
-  for (const nd of nUp) {
-    const parent = OWNER[nd.id];
-    if (parent !== undefined && parent !== nd.id && drawnIds.has(parent)) {
-      if (!childrenOf.has(parent)) childrenOf.set(parent, []);
-      childrenOf.get(parent).push(nd);
-    }
-  }
-  for (const list of childrenOf.values()) list.sort(byLabel);
-  const roots = nUp.filter(nd => {
-    const parent = OWNER[nd.id];
-    return parent === undefined || parent === nd.id || !drawnIds.has(parent);
-  }).sort(byLabel);
-  const seen = new Set();
-  const ordered = [];
-  const emit = nd => {                       // depth-first: a child may own children too
-    if (seen.has(nd.id)) return;             // a malformed graph must not loop here
-    seen.add(nd.id);
-    ordered.push(nd);
-    (childrenOf.get(nd.id) || []).forEach(emit);
-  };
-  roots.forEach(emit);
-  // If anything was left out -- a cycle, an owner pointing at itself through a
-  // chain -- fall back to the flat order rather than dropping a node from the map.
-  const sorted = ordered.length === nUp.length ? ordered : [...nUp].sort(byLabel);
-  const longest = sorted.reduce((m, nd) => Math.max(m, (nd.label || '').length), 0);
-  const labelPx = Math.max(60, longest * 6.6 + 24);
-  const LABEL_H = 14;
-  // Measured on the renderer, not assumed: it puts the TOP of the label 10.6
-  // units below the disc's edge, not against it. The row must carry that gap,
-  // the box, and the next disc's radius -- the missing term that left 36 discs
-  // touching the name above them by half a unit.
-  const VIS_LABEL_GAP = 10.6;
-  const TEXT_SPACE = LABEL_H + VIS_LABEL_GAP;
-  const MIN_RADIUS = 4;
-  const MAX_RADIUS = 13;
-  const canvas = document.getElementById('net');
-  const w = canvas.clientWidth || 1200;
-  const h = canvas.clientHeight || 700;
-  // Two bounds, and the tighter one wins. The label sets how many columns can
-  // FIT; the canvas shape sets how many SHOULD be used, or twenty nodes come out
-  // as a 12x2 band with a quarter of the screen between two rows.
-  const maxCols = Math.max(1, Math.floor(w / labelPx));
-  const wantCols = Math.max(1, Math.ceil(Math.sqrt(sorted.length * (w / h))));
-  let cols = Math.max(1, Math.min(sorted.length, maxCols, wantCols));
-  let rows = Math.ceil(sorted.length / cols);
-  // The fit frames the DRAWN box, not the centres: half a disc above the first
-  // row and a label below the last hang outside it, which is why the scale came
-  // back at 0.876 and shrank every reservation with it. Reserve that overflow.
-  const OVERFLOW = LABEL_H + 2 * MAX_RADIUS;
-  // Capped at what a row NEEDS: spreading rows over the whole height is how a
-  // small graph ends up with an empty band between two lines of discs. Beyond
-  // the cap the grid stays compact and the fit simply zooms into it.
-  const MAX_ROW = 2 * MAX_RADIUS + TEXT_SPACE;
-  // Whole units, and the radius floored: the row then holds strictly MORE than
-  // it needs, so rounding a position can no longer eat the margin. The previous
-  // margin was nil by construction, which is not a margin at all.
-  const rowPx = Math.floor(Math.min(MAX_ROW, Math.max(0, h - OVERFLOW) / rows));
-  const radiusRaw = Math.floor((rowPx - TEXT_SPACE) / 2);
-  const labelsFit = radiusRaw >= MIN_RADIUS; // smaller would make disks invisible
-  let cellW = labelPx, cellH = rowPx, radius = MAX_RADIUS;
-  if (labelsFit) {
-    radius = Math.max(MIN_RADIUS, Math.min(MAX_RADIUS, radiusRaw));
-  } else {
-    // too many rows: widen the grid, labels will be dropped by the caller
-    cols = Math.max(1, Math.min(sorted.length, Math.round(Math.sqrt(sorted.length * (w / h)))));
-    rows = Math.ceil(sorted.length / cols);
-    cellW = 100; cellH = 100 * (h / w);
-  }
-  const x0 = -((cols - 1) * cellW) / 2;
-  const y0 = -((rows - 1) * cellH) / 2;
-  sorted.forEach((nd, i) => {
-    nd.x = x0 + (i % cols) * cellW;
-    nd.y = y0 + Math.floor(i / cols) * cellH;
-  });
-  return { labelsFit, radius };
-}
-
-let gridded=false;   // a laid-out grid must not be handed back to the physics that would scatter it
-
 function repOf(id,guard){
   if(!folded) return id;
+  if(activeView && VIEW_FOLDS[activeView]===false) return id;   // this view's subject IS the children
+
   const seen=guard||new Set();
   let cur=id;
   for(;;){
@@ -815,8 +709,21 @@ function syncLabelSize() {
   }
 }
 
-function fitReservingPanel() {
-  try { net.fit({animation:false,maxZoomLevel:3}); } catch (e) {}
+// Frames the LIT nodes only. A view no longer moves anything, so the camera is
+// the only thing that follows it: everything stays where the reader learnt it,
+// and a view decides where to look rather than what exists.
+function fitEmphasised() {
+  if (!dimmed.size) { fitReservingPanel(); return; }
+  const lit = [];
+  for (const id of nodes.getIds()) {
+    const n = ENT[id];
+    if (!n || !dimmed.has(n.type)) lit.push(id);   // kind nodes keep the frame too
+  }
+  fitReservingPanel(lit.length ? lit : null);
+}
+
+function fitReservingPanel(onlyNodes) {
+  try { net.fit(onlyNodes ? {nodes:onlyNodes,animation:false,maxZoomLevel:3} : {animation:false,maxZoomLevel:3}); } catch (e) {}
   syncLabelSize();   // vis emits 'zoom' for the reader's gestures only, never for fit()
   const panel = document.getElementById('detail');
   const strip = document.getElementById('mapstat');
@@ -953,10 +860,13 @@ function rebuild(){
     // The count is NOT in the label: measured, "sha018 (6 Container, 3 Service, +1)"
     // is ~250px wide and eighty of them overlap. It lives in the tooltip and in
     // the disc's size, both of which cost no horizontal room.
-    const node={id:n.id,label:labelOf(n),
+    const node={id:n.id,label:dimmed.has(n.type)?undefined:labelOf(n),
               childCount:k,   // the REAL number folded inside, which the grid sizes the disc from
               title:titleOf(n)+(k?('\nfolded inside: '+badgeFull(by)+'  \u2014 double-click to open'):''),
-              opacity:n.deleted?0.45:((q&&!ok&&!MATCH_OWNERS.has(n.id))||(CITED.size&&!CITED.has(n.identityFingerprint)&&!CITED_OWNERS.has(n.id))?0.12:1),
+              // A view turns a type almost off rather than removing it: the reader
+              // keeps the shape of the whole estate and sees what the view is about
+              // inside it. Almost off, never off -- a thing at zero reads as absent.
+              opacity:n.deleted?0.45:(dimmed.has(n.type)?0.08:((q&&!ok&&!MATCH_OWNERS.has(n.id))||(CITED.size&&!CITED.has(n.identityFingerprint)&&!CITED_OWNERS.has(n.id))?0.12:1)),
               size:Math.min(34,5+Math.sqrt(d)*4.4)+(k?Math.min(12,Math.sqrt(k)*2.6):0),
               borderWidth:(n.deleted||k)?2:0,
               // the halo IS the star: a glow sized on the node, in its own colour,
@@ -990,38 +900,9 @@ function rebuild(){
 // Threshold is a ratio because a sparse graph is sparse relative to its size: 19 edges among 80 nodes is noise, but 19 among 20 nodes is structure.
 // Threshold is a ratio because a sparse graph is sparse relative to its size:
 // 19 edges among 80 nodes is noise, but 19 among 20 nodes is structure.
-const sparse = nodeIds.size > 12 && drawnEdgeCount(nodeIds) < nodeIds.size / 4;
-// Sticky while a machine is open: opening one adds nodes and edges, and the
-// test would read that local change as a change of nature for the whole view.
-gridded = sparse || (gridded && expanded.size > 0);
-if (gridded) {
-  net.setOptions({ physics: { enabled: false } });
-  // The return value says whether the labels FIT, which is not the same thing as
-  // whether a grid was placed: conflating the two let the physics scatter a grid.
-  // The disc is sized from the room the row actually has, not from a guessed
-  // constant: a disc that shrinks to let the name be read beats a disc that
-  // covers the name of the row above it. Measured, 178 such collisions at 190.
-  const layout = layOutOnGrid(nUp);
-  // Proportional to what a machine really carries, between a floor and the
-  // maximum the ROW allows. Never above that maximum: the row's budget is what
-  // keeps a disc off the name below it. Square root, so one machine with sixty
-  // children does not flatten all the others onto the floor.
-  const capR = layout.labelsFit ? layout.radius : 13;
-  const maxChild = nUp.reduce((m, nd) => Math.max(m, nd.childCount || 0), 0);
-  const floorR = Math.min(4, capR);
-  nUp.forEach(nd => {
-    if (typeof nd.size !== 'number') return;
-    const share = maxChild > 0 ? Math.sqrt((nd.childCount || 0) / maxChild) : 0;
-    nd.size = Math.min(nd.size, Math.round(floorR + (capR - floorR) * share));
-  });
-  if (!layout.labelsFit) {
-    nUp.forEach(nd => { nd.label = undefined; });
-  }
-} else {
-  // Switch it back ON: a grid turned it off, and nothing else ever turned it on
-  // again, so the next view inherited frozen positions and a nonsense scale.
-  net.setOptions({ physics: { enabled: true } });
-}
+// No grid and no clusters: the map keeps ONE stable layout for everything, and a
+// view only changes what is lit. Rejected by Matthieu on the real estate -- a
+// square of discs says nothing about how an infrastructure is actually shaped.
   nodes.update(nUp);
   // Say what is not shown. "0 match" was the lie; "0 shown, 54 inside folded nodes"
   // is the same number with its bound declared.
@@ -1052,6 +933,10 @@ if (gridded) {
   // them invisible, so hiding them can't fling the nodes apart.
   const vis=showEdges?{color:{color:'rgba(150,178,235,0.26)',highlight:'#cfe0ff',hover:'#cfe0ff'},arrows:{to:{enabled:true,scaleFactor:.3}}}
                      :{color:{color:'rgba(0,0,0,0)',highlight:'rgba(0,0,0,0)',hover:'rgba(0,0,0,0)'},arrows:{to:{enabled:false}}};
+  // An edge is only as lit as its dimmest end: a bright line into a turned-down
+  // node would point at something the view is not about.
+  const dimVis={color:{color:'rgba(150,178,235,0.05)',highlight:'rgba(150,178,235,0.05)',hover:'rgba(150,178,235,0.05)'},arrows:{to:{enabled:false}}};
+  const edgeVis=(a,b)=>(showEdges && !(dimmed.size && ((ENT[a]&&dimmed.has(ENT[a].type))||(ENT[b]&&dimmed.has(ENT[b].type))))) ? vis : (showEdges?dimVis:vis);
   if(folded){
     Object.values(agg).forEach(a=>{ const id='agg:'+a.from+'|'+a.to+'|'+a.type; edgeIds.add(id);
       eUp.push({id,from:a.from,to:a.to,
@@ -1060,7 +945,7 @@ if (gridded) {
         width:showEdges?Math.min(6,1.4+Math.log2(a.n)*1.1):0.7, ...vis}); });
   } else {
     Object.values(REL).forEach(r=>{ if(nodeIds.has(r.fromId)&&nodeIds.has(r.toId)){ edgeIds.add(r.id);
-      eUp.push({id:r.id,from:r.fromId,to:r.toId,title:r.type,label:(showEdges&&edgeLabels)?r.type:undefined,...vis}); } });
+      eUp.push({id:r.id,from:r.fromId,to:r.toId,title:r.type,label:(showEdges&&edgeLabels)?r.type:undefined,...edgeVis(r.fromId,r.toId)}); } });
   }
   if(showEdges && inferred) inferredEdges(nodeIds).forEach(e=>{ if(!edgeIds.has(e.id)){ edgeIds.add(e.id); eUp.push(e); } });
   edges.update(eUp);
@@ -1093,13 +978,10 @@ if (gridded) {
   // away), then freeze — never on a plain attribute/heartbeat update.
   let structural = nodeIds.size!==prevNodeIds.size;
   if(!structural){ for(const id of nodeIds){ if(!prevNodeIds.has(id)){ structural=true; break; } } }
-  if(structural && fitted && !staticLayout && !gridded) settle();   // settling would scatter a deterministic grid
+  if(structural && fitted && !staticLayout) settle();
   // First data render: lay the graph out ONCE while the canvas is hidden, then reveal
   // it already-settled (no visible fly-in). Reveal + fit happen on stabilizationIterationsDone.
-  if(!fitted && nodeIds.size && gridded){ fitted=true;   // placed, not simulated: nothing to stabilise
-    const nv=document.getElementById('net'); if(nv) nv.classList.remove('laying');
-    fitReservingPanel();
-  } else if(!fitted && nodeIds.size){ fitted=true; net.setOptions({physics:{enabled:true}});
+  if(!fitted && nodeIds.size){ fitted=true; net.setOptions({physics:{enabled:true}});
     const err=document.getElementById('err');
     if(nodeIds.size>1000 && err && !err.textContent) err.textContent='Drawing '+fmtCount(nodeIds.size)+' entities…';
     // stabilize() blocks the thread, so a message written on this same task would never be painted; defer it one turn.
@@ -1809,10 +1691,15 @@ askQ.addEventListener('keydown',e=>{
 // cleared and refilled rather than reassigned; and `allTypes` is local to
 // rebuild(), so the set of known types is taken from the entities themselves.
 const VIEWS={
-  vNet:['network.interface','network.address','network.segment','network.device','network.endpoint','network.route','network.neighbor'],
+  vNet:['host','network.interface','network.address','network.segment','network.device','network.endpoint','network.route','network.neighbor'],
   vHosts:['host','compute.vm','container','pod'],
-  vApps:['service.instance','service.listener','db','cloud.resource'],
+  vApps:['host','service.instance','service.listener','db','cloud.resource'],
 };
+// Machines folds -- that is what makes twenty machines out of four hundred nodes.
+// Network and Applications do NOT: their subject is exactly what the fold hides,
+// and the host is there as the anchor that NAMES each cluster. A cluster label
+// belonging to no entity would be a claim nobody could click, cite or check.
+const VIEW_FOLDS={vHosts:true,vNet:false,vApps:false};
 // The chosen view is remembered and re-applied on every redraw, not filled once at
 // click time: the page polls every six seconds, so a type that arrives later would
 // otherwise have escaped the filter and invited itself into all three views.
@@ -1821,10 +1708,14 @@ let activeView=null;
 // later in the same scope, and the collision was silent -- the layer views had
 // been calling the dome.
 function syncLayerView(){
+  dimmed.clear();
   if(!activeView) return;
+  // A view no longer REMOVES anything: it lights its subject and turns the rest
+  // almost off. The map keeps one stable layout, so changing view moves nothing
+  // and costs nothing -- and the reader keeps the shape of the whole estate in
+  // view instead of being handed three unrelated pictures.
   const keep=new Set(VIEWS[activeView]);
-  hidden.clear();
-  for(const n of Object.values(ENT)) if(!keep.has(n.type)) hidden.add(n.type);
+  for(const n of Object.values(ENT)) if(!keep.has(n.type)) dimmed.add(n.type);
 }
 function applyView(btn){
   const wasActive = activeView;
@@ -1832,7 +1723,7 @@ function applyView(btn){
   const cap = document.getElementById('narrowStat');   // the notice must not outlive the narrowed map
   if (activeView !== wasActive && cap) cap.textContent = '';
   if(!activeView){
-    hidden.clear();
+    dimmed.clear();
   } else {
     syncLayerView();
     // The fold STAYS ON in a view. Undoing it was this page's own doing, and it is
@@ -1847,12 +1738,12 @@ function applyView(btn){
     // paint amber on amber.
     if(el){ el.style.color = ''; el.classList.toggle('on', id===activeView); }
   }
-  // Set before the redraw, which may be deferred a turn: settle() is called from
-  // inside it and must already see the request.
   publishView();   // the Dock shows the view as a context token; it learns it from here
-  fitAfterSettle = true;
-  // Several paths redraw the whole map; guarding only one caller leaves the others frozen.
-  if (Object.keys(ENT).length >= 1000) announceThenDefer(rebuild); else rebuild();
+  // Nothing is re-laid out any more, so there is nothing to settle: the redraw
+  // only repaints opacities and labels, and the camera does the rest. That is
+  // why changing view is now nearly free.
+  if (Object.keys(ENT).length >= 1000) announceThenDefer(() => { rebuild(); fitEmphasised(); });
+  else { rebuild(); fitEmphasised(); }
 }
 for(const id of Object.keys(VIEWS)) document.getElementById(id).onclick=()=>applyView(id);
 
@@ -1893,7 +1784,7 @@ function watchCanvasSize() {
     // would otherwise be recorded and then never applied, since the observer
     // does not fire twice for the same size.
     if (timer !== null) clearTimeout(timer);
-    timer = setTimeout(function () { if (gridded && !loading) rebuild(); }, 150);
+    timer = setTimeout(function () { if (!loading) fitEmphasised(); }, 150);   // the layout is stable; only the framing follows the canvas
   }).observe(el);
 }
 
