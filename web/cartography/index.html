@@ -1300,6 +1300,9 @@ async function loadFull() {
     if (!openNarrowOnLargeEstate()) rebuild();
     await refreshScope({ quiet: true });
     const second = SCOPE ? { entities: SCOPE.entities, relations: SCOPE.relations } : null;
+    // Remember what the scope said at the moment this graph was read, so the
+    // poll can tell "nothing happened" from "we have not looked".
+    if (SCOPE) loadedStamp = String(SCOPE.newestEvent||'')+'/'+SCOPE.entities+'/'+SCOPE.relations;
     const bounds = [first, second].filter(Boolean);
     sayIncomplete(Object.keys(ENT).length, Object.keys(REL).length, bounds.length ? bounds : undefined);
   } catch (e) {
@@ -2005,7 +2008,8 @@ document.addEventListener('visibilitychange',()=>{
 
 let loading=false;   // one in-flight load at a time: overlapping full reloads pile up on a big park
 let failedAt=0;      // after a definitive failure, wait before retrying: hammering a broken endpoint every 6s turns an outage into load
-let lastScopeAt=0;   // above the entity threshold, refresh only the scope, and at most once a minute
+let lastScopeAt=0;
+let loadedStamp='';   // what the scope said when the graph we hold was read   // above the entity threshold, refresh only the scope, and at most once a minute
 
 // The grid is computed from the container height, and that height can change after layout settles.
 function watchCanvasSize() {
@@ -2034,13 +2038,23 @@ function tick(){
     loadFull().then(ok => { if(ok) failedAt = 0; });  // retry the full load once the cooldown passed; reset only on success
     return;
   }
-  if(Object.keys(ENT).length > 2000){
-    if(Date.now()-lastScopeAt < 60000) return;         // scope-only refresh, throttled to 1/min
-    lastScopeAt=Date.now();
-    refreshScope();
-  } else {
+  // Re-read the SCOPE, which is one small answer, and reload the graph only when
+  // it says something actually happened. Measured by the portal: a full re-read
+  // every six seconds is 1.1 MB a burst, about 180 kB/s per open tab, and on a
+  // quiet fleet every byte of it re-fetches what the page already holds.
+  //
+  // The old guard keyed on how many entities were LOADED, over two thousand. The
+  // relay strips half the fleet before the page sees it, so a 2332-entity tenant
+  // arrives as 1088 and never reached the guard -- a threshold defeated by a
+  // filter upstream of it.
+  if(Date.now()-lastScopeAt < 5000) return;
+  lastScopeAt=Date.now();
+  refreshScope({quiet:true}).then(()=>{
+    if(!SCOPE) return;
+    const stamp = String(SCOPE.newestEvent||'')+'/'+SCOPE.entities+'/'+SCOPE.relations;
+    if(stamp === loadedStamp) return;   // nothing new: the map we hold IS the map
     loadFull();
-  }
+  });
 }
 
 function noteLoadFailure(){ failedAt=Date.now(); }
