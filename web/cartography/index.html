@@ -165,10 +165,13 @@ aside h2{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing
 aside table{border-collapse:collapse;width:100%;table-layout:fixed;}
 aside td{padding:.25rem .4rem;border-bottom:1px solid var(--line);vertical-align:top;overflow-wrap:anywhere;word-break:break-word;}
 aside td.k{color:var(--dim);width:40%;word-break:normal;overflow-wrap:break-word;}
-.legend{display:flex;flex-wrap:wrap;gap:.4rem .8rem;padding:.5rem 1rem;background:var(--panel);border-bottom:1px solid var(--line);font-size:12px;}
-.legend span{display:flex;align-items:center;gap:.3rem;cursor:pointer;opacity:.85;}
+.legend{display:flex;flex-wrap:nowrap;gap:.4rem .8rem;overflow-x:auto;overflow-y:hidden;font-size:12px;scrollbar-width:thin;}
+.legend span{display:flex;align-items:center;gap:.3rem;cursor:pointer;opacity:.85;background:var(--bg);border:1px solid var(--line);border-radius:999px;padding:.15rem .55rem;white-space:nowrap;flex-shrink:0;}
 .legend span.off{opacity:.3;text-decoration:line-through;}
 .legend i{width:10px;height:10px;border-radius:50%;display:inline-block;}
+.subbar{display:flex;align-items:center;gap:1rem;padding:.5rem 1rem;background:var(--panel);border-bottom:1px solid var(--line);font-size:12px;flex-wrap:nowrap;overflow:hidden;white-space:nowrap;}
+.subbar>#scopeStat{margin-left:auto;flex-shrink:0;}
+.mapstat{position:absolute;left:.8rem;bottom:.6rem;display:flex;flex-wrap:wrap;gap:.3rem 1rem;align-items:center;color:var(--dim);font-size:12px;pointer-events:none;z-index:5;}
 .muted{color:var(--dim);}
 .empty{color:var(--dim);padding:2rem;text-align:center;}
 button.retry{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:2px 10px;margin-left:6px;cursor:pointer;font:inherit}
@@ -241,14 +244,6 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
   <label class="muted" for="attr">search<input id="attr" spellcheck="false" autocomplete="off" placeholder="a name, a key, or key=value" style="background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;padding:.1rem .35rem;width:11rem;margin-left:.3rem;font-family:inherit;"></label>
   <div class="stats">
     <span id="err" role="status" aria-live="polite"></span>
-    <span><b id="nNodes">0</b> entities</span>
-    <span><b id="nEdges">0</b> relations</span>
-    <span id="matchStat" class="muted"></span>
-    <span id="scopeStat" class="muted"></span>
-    <span id="capStat" style="color:var(--warn)"></span>
-    <span id="narrowStat" style="color:var(--warn)"></span>
-    <span id="incompleteStat" style="color:var(--warn)"></span>
-    <span id="hint" class="muted"></span>
   </div>
   <details class="options">
     <summary>Options</summary>
@@ -269,10 +264,21 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
     </div>
   </details>
 </header>
-<div class="legend" id="legend"></div>
+<div class="subbar">
+  <div class="legend" id="legend"></div>
+  <span id="scopeStat" class="muted"></span>
+</div>
 <main>
   <div id="stage">
     <div id="net" class="laying"></div>
+    <div class="mapstat">
+      <span><b id="nNodes">0</b> entities &middot; <b id="nEdges">0</b> relations shown &middot; fit to content</span>
+      <span id="matchStat" class="muted"></span>
+      <span id="capStat" style="color:var(--warn)"></span>
+      <span id="narrowStat" style="color:var(--warn)"></span>
+      <span id="incompleteStat" style="color:var(--warn)"></span>
+      <span id="hint" class="muted"></span>
+    </div>
     <canvas id="dome" hidden></canvas>
     <div class="domebar" id="domebar" hidden>
       <button id="recentre" title="Point back at the centre of the graph and reset the field of view">recentre</button>
