@@ -564,6 +564,7 @@ function titleOf(n){ const I=(n.identity||[]).map(a=>a.key+'='+a.value).join(', 
 const CHILD_SIDE={has_interface:'to',has_route:'to',has_segment:'to',runs_on:'from',bound_to:'from',listens_on:'from'};
 let folded=localStorage.getItem('toise_viz_folded')!=='0';   // ON by default: the dense case is the normal case
 const dimmed=new Set();                                       // types a view turns down; NOT hidden -- the legend owns hiding
+let degree={};                                                // filled by each redraw; the label pass reads it afterwards
 const expanded=new Set();                                     // owners the reader opened, by id
 const expandedKinds=new Set();                                // "<owner>\u0000<type>" the reader opened past the kind step
 
@@ -927,7 +928,7 @@ function rebuild(){
   let hiddenByFold=0;
   // Degree drives node size: dist1 with eight links must read as bigger than acc3
   // with one, so the shape of the network is legible before a single label is.
-  const degree={};
+  degree={};
   Object.values(REL).forEach(r=>{ const a=repOf(r.fromId), b=repOf(r.toId);
     if(a!==b){ degree[a]=(degree[a]||0)+1; degree[b]=(degree[b]||0)+1; } });
   // Phase 1: census every candidate with the exact same exclusions, in the same order.
