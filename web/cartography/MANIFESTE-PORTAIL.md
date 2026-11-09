@@ -119,10 +119,23 @@ directe.
 #### Le filtrage doit être déclaré en clair
 
 Un compteur net rend la détection honnête, mais il rend le filtrage
-invisible. La page doit donc aussi **déclarer** ce qui est retiré, en
-clair et en permanence, par exemple « System units are left out ». Les deux
-sont nécessaires : le compteur net sans la phrase donne un périmètre muet,
-la phrase sans le compteur net donne un faux écart.
+invisible : rien ne dit quels types ont été écartés. La phrase qui les
+nomme rend le filtrage visible, mais sans le compteur net elle donne un
+faux écart. Les deux sont donc nécessaires : le compteur net sans la
+phrase donne un périmètre muet, la phrase sans le compteur net donne un
+faux écart.
+
+C'est le relais qui porte cette obligation, car il est le seul à savoir
+ce qu'il retire : le filtrage est appliqué par lui, après la réponse du
+serveur, et rien dans ce que la page reçoit ne lui indique quels types
+ont été écartés. Le relais rend donc la phrase avec la page qu'il sert,
+par exemple « System units are left out ». La page, elle, se contente de
+l'afficher là où le relais la place.
+
+La règle générale derrière ce cas est simple : celui qui filtre est
+celui qui déclare. Un acteur qui retire quelque chose d'une réponse est
+le seul à pouvoir nommer ce qu'il a retiré, donc l'obligation suit le
+filtrage et ne se délègue pas en aval.
 
 ## Ce que le relais doit faire en plus
 
