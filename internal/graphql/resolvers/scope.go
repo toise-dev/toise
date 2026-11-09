@@ -36,7 +36,7 @@ func (r *queryResolver) GraphScope(ctx context.Context, asOf *string) (*generate
 	// this query is asked occasionally, by a client orienting itself, and
 	// widening the Graph interface for it would make every fake implement two
 	// methods none of them needs.
-	entities, relations := len(r.Graph.ListEntities("")), len(r.Graph.ListRelations("", "", ""))
+	entities, relations := r.Graph.EntityCount(), r.Graph.RelationCount()
 	var asOfOut *string
 	if asOf != nil && *asOf != "" {
 		t, perr := time.Parse(time.RFC3339, *asOf)

@@ -1,6 +1,7 @@
 package projection
 
 import (
+	"cmp"
 	"sort"
 	"strings"
 	"sync"
@@ -458,15 +459,76 @@ func (g *Graph) visitNeighbor(nb model.EntityID, relType, edgeType string, visit
 // total counts the WHOLE matching set, independent of the cursor: a page that
 // reported its own size as the total would be the lying answer this surface
 // exists to remove.
+// boundedTop keeps the limit smallest keys seen so far in a max-heap: the root
+// is the largest of the kept set and is replaced whenever a smaller key arrives.
+type boundedTop[T cmp.Ordered] struct {
+	items []T
+	limit int
+}
+
+func newBoundedTop[T cmp.Ordered](limit int) *boundedTop[T] {
+	return &boundedTop[T]{limit: limit}
+}
+
+func (t *boundedTop[T]) offer(x T) {
+	if t.limit <= 0 {
+		return
+	}
+	if len(t.items) < t.limit {
+		t.items = append(t.items, x)
+		t.siftUp(len(t.items) - 1)
+		return
+	}
+	if x < t.items[0] {
+		t.items[0] = x
+		t.siftDown(0)
+	}
+}
+
+func (t *boundedTop[T]) sorted() []T {
+	out := make([]T, len(t.items))
+	copy(out, t.items)
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+func (t *boundedTop[T]) siftUp(i int) {
+	for i > 0 {
+		parent := (i - 1) / 2
+		if t.items[parent] >= t.items[i] {
+			break
+		}
+		t.items[parent], t.items[i] = t.items[i], t.items[parent]
+		i = parent
+	}
+}
+
+func (t *boundedTop[T]) siftDown(i int) {
+	n := len(t.items)
+	for {
+		left := 2*i + 1
+		right := 2*i + 2
+		largest := i
+		if left < n && t.items[left] > t.items[largest] {
+			largest = left
+		}
+		if right < n && t.items[right] > t.items[largest] {
+			largest = right
+		}
+		if largest == i {
+			break
+		}
+		t.items[i], t.items[largest] = t.items[largest], t.items[i]
+		i = largest
+	}
+}
+
 func (g *Graph) PageEntitiesByFingerprint(typ, after string, limit int) (page []model.Entity, next string, total int) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
-	type keyed struct {
-		fp string
-		id model.EntityID
-	}
-	keys := make([]keyed, 0, limit*2)
+	top := newBoundedTop[string](limit)
+	seen := 0
 	for fp, id := range g.byHash {
 		if g.deleted[id] {
 			continue
@@ -479,17 +541,94 @@ func (g *Graph) PageEntitiesByFingerprint(typ, after string, limit int) (page []
 		if after != "" && fp <= after {
 			continue
 		}
-		keys = append(keys, keyed{fp: fp, id: id})
+		seen++
+		if limit > 0 {
+			top.offer(fp)
+		}
 	}
-	sort.Slice(keys, func(i, j int) bool { return keys[i].fp < keys[j].fp })
 
-	if len(keys) > limit {
-		keys = keys[:limit]
-		next = keys[len(keys)-1].fp
-	}
+	keys := top.sorted()
+
 	page = make([]model.Entity, 0, len(keys))
-	for _, k := range keys {
-		page = append(page, g.entities[k.id])
+	for _, fp := range keys {
+		page = append(page, g.entities[g.byHash[fp]])
+	}
+	if seen > limit && limit > 0 {
+		next = keys[len(keys)-1]
+	}
+	return page, next, total
+}
+
+func (g *Graph) PageRelations(typ string, from, to model.EntityID, after string, limit int) (page []model.Relation, next string, total int) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	match := func(r model.Relation) bool {
+		if typ != "" && r.Type != typ {
+			return false
+		}
+		if from != "" && r.From != from {
+			return false
+		}
+		if to != "" && r.To != to {
+			return false
+		}
+		return true
+	}
+
+	top := newBoundedTop[string](limit)
+	seen := 0
+
+	offer := func(rid model.RelationID) {
+		if after != "" && string(rid) <= after {
+			return
+		}
+		seen++
+		if limit > 0 {
+			top.offer(string(rid))
+		}
+	}
+
+	if from != "" || to != "" {
+		var ids map[model.RelationID]struct{}
+		// Choose the smaller adjacency set when both ends are known: the other
+		// end is filtered later anyway.
+		switch {
+		case from != "" && to != "" && len(g.out[from]) <= len(g.in[to]):
+			ids = g.out[from]
+		case from != "" && to != "":
+			ids = g.in[to]
+		case from != "":
+			ids = g.out[from]
+		default:
+			ids = g.in[to]
+		}
+		for rid := range ids {
+			r, ok := g.relations[rid]
+			if !ok || !match(r) {
+				continue
+			}
+			total++
+			offer(rid)
+		}
+	} else {
+		for rid, r := range g.relations {
+			if !match(r) {
+				continue
+			}
+			total++
+			offer(rid)
+		}
+	}
+
+	keys := top.sorted()
+
+	page = make([]model.Relation, 0, len(keys))
+	for _, key := range keys {
+		page = append(page, g.relations[model.RelationID(key)])
+	}
+	if seen > limit && limit > 0 {
+		next = keys[len(keys)-1]
 	}
 	return page, next, total
 }
