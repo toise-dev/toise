@@ -290,6 +290,26 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
 const API='/cartography/graphql';
 function gqlHeaders(){ return {'Content-Type':'application/json'}; }
 
+const EMBEDDED = window.parent !== window;
+
+function sendContext(msg) {
+  if (!EMBEDDED) return;
+  try {
+    // Explicit origin only: '*' would leak context to any embedding page.
+    // A refusing parent must never break the embedded page.
+    window.parent.postMessage(msg, location.origin);
+  } catch (e) {}
+}
+
+function publishView() {
+  let value, label;
+  if (activeView === 'vNet')       { value = 'network';      label = 'Network'; }
+  else if (activeView === 'vHosts') { value = 'machines';     label = 'Machines'; }
+  else if (activeView === 'vApps')  { value = 'applications'; label = 'Applications'; }
+  else                              { value = 'all';          label = 'Whole map'; }
+  sendContext({ v: 1, type: 'context.view', payload: { kind: 'view', value: value, label: label } });
+}
+
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 // Stellar colour runs blue-white through white and yellow to orange and red.
 // Types take a class in order of first sight — the same stable-by-arrival rule
@@ -352,7 +372,7 @@ net.on('beforeDrawing',ctx=>{ for(const f of FIELD){
 let freezeTimer=null;
 function freeze(){ clearTimeout(freezeTimer); freezeTimer=null; net.setOptions({physics:{enabled:false}}); }
 function settle(ms=1600){ net.setOptions({physics:{enabled:true}}); clearTimeout(freezeTimer);
-  freezeTimer=setTimeout(()=>{ freeze(); if(fitAfterSettle){ fitAfterSettle=false; try{ net.fit({animation:true}); }catch(e){} } }, ms); }
+  freezeTimer=setTimeout(()=>{ freeze(); if(fitAfterSettle){ fitAfterSettle=false; try{ net.fit({animation:false}); }catch(e){} } }, ms); }
 net.on('stabilizationIterationsDone',()=>{ freeze();   // layout done -> freeze, fit, reveal
   if(!fitted) return;   // the empty-graph init pass, before any data — nothing to reveal yet
   try{ net.fit({animation:false}); }catch(_){}
@@ -1329,7 +1349,14 @@ function inspect(id){
   const box=document.getElementById('detail');
   const blank='<div class="empty">Click an element to see its details.</div>';
   const n=id&&ENT[id];
-  if(!n){ box.innerHTML=blank; return; }
+  if(!n){ publishView(); box.innerHTML=blank; return; }   // deselection: the Dock refuses an empty selection, so fall back to the view
+  if(n.identityFingerprint){
+    sendContext({ v:1, type:'context.selection', payload:{ kind:'element', value:n.identityFingerprint, label:(n.displayName||'').slice(0,80) } });
+  } else {
+    // A selection without a fingerprint designates nothing quotable, and the id is
+    // local to the replica that answered it.
+    publishView();
+  }
   // Never surface an attribute whose key mentions a contact: the values are real
   // personal addresses, and this panel gets screen-shared.
   const visible=a=>(a||[]).filter(x=>!/contact/i.test(x.key));
@@ -1525,6 +1552,7 @@ function applyView(btn){
   }
   // Set before the redraw, which may be deferred a turn: settle() is called from
   // inside it and must already see the request.
+  publishView();   // the Dock shows the view as a context token; it learns it from here
   fitAfterSettle = true;
   // Several paths redraw the whole map; guarding only one caller leaves the others frozen.
   if (Object.keys(ENT).length >= 1000) announceThenDefer(rebuild); else rebuild();
@@ -2005,6 +2033,12 @@ syncView();
     aside.style.width=Math.max(280,Math.min(900, w0+(x0-ev.clientX)))+'px'; redraw(); });
   window.addEventListener('mouseup',()=>{ if(!dragging) return; dragging=false; rz.classList.remove('drag');
     document.body.style.userSelect=''; localStorage.setItem('toise_viz_aside', String(Math.round(aside.getBoundingClientRect().width))); redraw(); }); })();
+if (EMBEDDED) {
+  // Hidden, not removed: the question panel's controls are wired further down.
+  const askPanel = document.getElementById('ask');
+  if (askPanel) askPanel.hidden = true;
+  publishView();   // the Dock must have a context before the reader clicks anything
+}
 loadFull().then(fallback);
 </script>
 </body>
