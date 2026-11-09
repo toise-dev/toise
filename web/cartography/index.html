@@ -828,12 +828,28 @@ function declutterLabels() {
   // sit squarely on a neighbour's disc -- measured, "sfh912.senhub.io" across the
   // circle next to it. Every lit disc is an occupied box before the first name is
   // placed; a node's own disc is excluded, since its name hangs just below it.
+  const allIds = nodes.getIds();
+  const allPos = net.getPositions(allIds);
   const discs = {};
-  for (const id of ids) {
-    const nd = nodes.get(id), q = pos[id];
+  for (const id of allIds) {
+    const nd = nodes.get(id), q = allPos[id];
     if (!nd || !q) continue;
     const r = (typeof nd.size === 'number' ? nd.size : 0) * scale;
     discs[id] = { x1: q.x * scale - r, x2: q.x * scale + r, y1: q.y * scale - r, y2: q.y * scale + r };
+  }
+  // The strip at the bottom is occupied too: a name under it is a name nobody
+  // reads. Converted into the same frame as the nodes through the canvas, since
+  // one is placed in DOM pixels and the others in drawing units.
+  const canvasEl = document.getElementById('net'), stripEl = document.getElementById('mapstat');
+  if (canvasEl && stripEl) {
+    const cb = canvasEl.getBoundingClientRect(), sb = stripEl.getBoundingClientRect();
+    if (sb.width && sb.height && typeof net.DOMtoCanvas === 'function') {
+      try {
+        const tl = net.DOMtoCanvas({ x: sb.left - cb.left, y: sb.top - cb.top });
+        const br = net.DOMtoCanvas({ x: sb.right - cb.left, y: sb.bottom - cb.top });
+        discs['\u0000strip'] = { x1: tl.x * scale, x2: br.x * scale, y1: tl.y * scale, y2: br.y * scale };
+      } catch (e) {}
+    }
   }
   const hits = (b, o) => b.x1 < o.x2 && b.x2 > o.x1 && b.y1 < o.y2 && b.y2 > o.y1;
   const kept = [];
@@ -862,7 +878,7 @@ function declutterLabels() {
     for (const seat of seats) {
       const box = { x1: cx - w / 2, x2: cx + w / 2, y1: seat.top, y2: seat.top + 16 };
       const clash = kept.some(k => hits(box, k))
-        || ids.some(other => other !== id && discs[other] && hits(box, discs[other]));
+        || Object.keys(discs).some(other => other !== id && hits(box, discs[other]));
       if (!clash) { placed = { box, drop: seat.drop }; break; }
     }
     if (placed) kept.push(placed.box); else unnamed++;
@@ -1170,6 +1186,12 @@ function rebuild(){
   // ago all come back -- and the six-second poll calls this. The pass has to be
   // part of a redraw, not only of a view change, or it is undone before it is seen.
   declutterLabels();
+  // And the card shows the list whenever nothing is selected. Nothing used to ask
+  // for it: inspect(null) is only reached by a click, so the card sat on its
+  // initial markup and the empty-state rule kept it hidden -- the half of the
+  // decision that says every lit thing is named SOMEWHERE was never on screen.
+  const card = document.getElementById('detail');
+  if (card && !card.querySelector('.actions')) renderLitList(card);
 }
 
 // The server caps every connection page at 200 items, so a single
