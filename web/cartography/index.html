@@ -433,7 +433,7 @@ let freezeTimer=null;
 function freeze(){ clearTimeout(freezeTimer); freezeTimer=null; net.setOptions({physics:{enabled:false}}); }
 function settle(ms=1600){ net.setOptions({physics:{enabled:true}}); clearTimeout(freezeTimer);
   freezeTimer=setTimeout(()=>{ freeze(); if(fitAfterSettle){ fitAfterSettle=false; try{ net.fit({animation:false,maxZoomLevel:3}); }catch(e){} syncLabelSize(); } }, ms); }
-net.on('zoom',()=>syncLabelSize());   // the font is in canvas units, so it shrinks with the view
+net.on('zoom',()=>{ syncLabelSize(); declutterLabels(); });   // zooming spreads the boxes: names can come back   // the font is in canvas units, so it shrinks with the view
 net.on('stabilizationIterationsDone',()=>{ freeze();   // layout done -> freeze, fit, reveal
   if(!fitted) return;   // the empty-graph init pass, before any data — nothing to reveal yet
   try{ net.fit({animation:false,maxZoomLevel:3}); }catch(_){}
@@ -731,7 +731,12 @@ function listenForHighlight() {
     const data = event.data;
     if (data === null || typeof data !== 'object') return;
     if (data.v !== 1 || data.type !== 'highlight') return;
-    const fingerprints = data.payload && data.payload.fingerprints;
+    // Two envelope shapes accepted on purpose: the published contract nests the
+    // list under `fingerprints`, and the Dock sends the bare array. Strict on
+    // every entry, tolerant on the wrapper -- rejecting a message over the shape
+    // of its box would have been a silent refusal nobody could see.
+    const payload = data.payload;
+    const fingerprints = Array.isArray(payload) ? payload : (payload && payload.fingerprints);
     if (!Array.isArray(fingerprints)) return;
     if (fingerprints.length > 500) return;
     const valid = [];
@@ -751,6 +756,55 @@ function listenForHighlight() {
   });
 }
 
+function declutterLabels() {
+  // Labels are removed, never moved: the layout is fixed and already
+  // learned by the reader, so only visibility may change between views.
+  // Priority keeps cited entities first, then the most connected nodes,
+  // then id order so identical views always resolve identically.
+  // A kind node is a count, not an entity: it has no type to dim and no
+  // fingerprint to cite, so it is left alone rather than guessed about.
+  const ids = nodes.getIds().filter(id => {
+    const e = ENT[id];
+    return e && !dimmed.has(e.type);
+  });
+  if (ids.length < 2) return;
+
+  const scale = net.getScale();
+  const pos = net.getPositions(ids);
+
+  const sorted = ids.slice().sort((a, b) => {
+    const ea = ENT[a], eb = ENT[b];
+    const ca = CITED.has(ea.identityFingerprint) ? 0 : 1;
+    const cb = CITED.has(eb.identityFingerprint) ? 0 : 1;
+    if (ca !== cb) return ca - cb;
+    const da = degree[a] || 0, db = degree[b] || 0;
+    if (da !== db) return db - da;
+    return a < b ? -1 : 1;
+  });
+
+  const kept = [];
+  const updates = [];
+
+  for (const id of sorted) {
+    const label = labelOf(ENT[id]);
+    const p = pos[id];
+    if (!p || !label) continue;
+    const cx = p.x * scale;
+    const top = p.y * scale + 12;
+    const w = label.length * 6.6 + 8;
+    const box = { x1: cx - w / 2, x2: cx + w / 2, y1: top, y2: top + 16 };
+    // A label survives only if its box touches no box already kept.
+    const clash = kept.some(k =>
+      box.x1 < k.x2 && box.x2 > k.x1 && box.y1 < k.y2 && box.y2 > k.y1
+    );
+    if (!clash) kept.push(box);
+    updates.push({ id, label: clash ? undefined : label });
+  }
+
+  // One single update so the map is not redrawn once per node.
+  nodes.update(updates);
+}
+
 function fitEmphasised() {
   if (CITED.size) {
     // A highlight frames what was highlighted. Framing the whole lit layer
@@ -760,15 +814,16 @@ function fitEmphasised() {
       const n = ENT[id];
       if ((n && CITED.has(n.identityFingerprint)) || CITED_OWNERS.has(id)) cited.push(id);
     }
-    if (cited.length) { fitReservingPanel(cited); return; }
+    if (cited.length) { fitReservingPanel(cited); declutterLabels(); return; }
   }
-  if (!dimmed.size) { fitReservingPanel(); return; }
+  if (!dimmed.size) { fitReservingPanel(); declutterLabels(); return; }
   const lit = [];
   for (const id of nodes.getIds()) {
     const n = ENT[id];
     if (!n || !dimmed.has(n.type)) lit.push(id);   // kind nodes keep the frame too
   }
   fitReservingPanel(lit.length ? lit : null);
+  declutterLabels();
 }
 
 function fitReservingPanel(onlyNodes) {
