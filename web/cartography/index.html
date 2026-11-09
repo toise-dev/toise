@@ -789,7 +789,7 @@ async function fetchAll(id){
 let SCOPE = null;
 
 // Reads the served perimeter so the page can tell which park it is drawing and whether the load was truncated.
-async function refreshScope() {
+async function refreshScope(opts) {
   // The page sends persisted-document ids only, never a query: that is the
   // security property of this build, and the relay refuses anything else.
   try {
@@ -807,7 +807,8 @@ async function refreshScope() {
   }
   sayScope();
   // The comparison must follow the scope, not only the data reload.
-  sayIncomplete(Object.keys(ENT).length, Object.keys(REL).length);
+  // In a full load the intermediate read would warn on not-yet-loaded data, so quiet skips it.
+  if (!(opts && opts.quiet)) sayIncomplete(Object.keys(ENT).length, Object.keys(REL).length);
 }
 
 // Renders the scope line; no relative age from newestEvent because the page has no trustworthy clock.
@@ -824,9 +825,21 @@ function sayScope() {
 }
 
 // Warns only on a deficit; a surplus is ignored because the graph is live and a creation mid-read is not a truncation.
-function sayIncomplete(loadedE, loadedR) {
+function sayIncomplete(loadedE, loadedR, bounds) {
   const el = document.getElementById('incompleteStat');
   if (!el) return;
+  // Comparing against every scope reading tolerates a creation or deletion that
+  // happened during the load, without inventing an arbitrary tolerance threshold.
+  if (bounds && bounds.length) {
+    const minE = Math.min(...bounds.map(b => b.entities));
+    const minR = Math.min(...bounds.map(b => b.relations));
+    if (loadedE < minE || loadedR < minR) {
+      el.textContent = 'Incomplete: entities ' + loadedE + ' of ' + minE + ', relations ' + loadedR + ' of ' + minR + ' loaded.';
+    } else {
+      el.textContent = '';
+    }
+    return;
+  }
   if (!SCOPE) { el.textContent = ''; return; } // without a total, any claimed gap would be invented
   if (loadedE < SCOPE.entities || loadedR < SCOPE.relations) {
     el.textContent = 'Incomplete: entities ' + loadedE + ' of ' + SCOPE.entities + ', relations ' + loadedR + ' of ' + SCOPE.relations + ' loaded.';
@@ -842,12 +855,16 @@ async function loadFull() {
   const err = document.getElementById('err'); err.textContent = '';
   try {
     await refreshScope();
+    const first = SCOPE ? { entities: SCOPE.entities, relations: SCOPE.relations } : null;
     const [ents, rels] = await Promise.all([fetchAll('entities'), fetchAll('relations')]);
     for (const k in ENT) delete ENT[k]; for (const k in REL) delete REL[k];
     ents.forEach(n => ENT[n.id] = n);
     rels.forEach(n => REL[n.id] = n);
     rebuild();
-    sayIncomplete(Object.keys(ENT).length, Object.keys(REL).length);
+    await refreshScope({ quiet: true });
+    const second = SCOPE ? { entities: SCOPE.entities, relations: SCOPE.relations } : null;
+    const bounds = [first, second].filter(Boolean);
+    sayIncomplete(Object.keys(ENT).length, Object.keys(REL).length, bounds.length ? bounds : undefined);
   } catch (e) {
     err.textContent = '⚠ ' + e.message;
     noteLoadFailure();
