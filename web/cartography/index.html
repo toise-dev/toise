@@ -803,6 +803,7 @@ function declutterLabels() {
   const hits = (b, o) => b.x1 < o.x2 && b.x2 > o.x1 && b.y1 < o.y2 && b.y2 > o.y1;
   const kept = [];
   const updates = [];
+  let unnamed = 0;
 
   for (const id of sorted) {
     const label = labelOf(ENT[id]);
@@ -811,21 +812,31 @@ function declutterLabels() {
     const cx = p.x * scale;
     const nd = nodes.get(id);
     const r = (nd && typeof nd.size === 'number') ? nd.size : 0;
-    // Drop by the node's own radius plus the renderer's gap, both in canvas
-    // units, THEN convert: a constant drop is wrong by exactly the size of the
-    // disc, which is how this pass cleared Network and missed Machines.
-    const top = (p.y + r + VIS_LABEL_DROP) * scale;
     const w = label.length * 6.6 + 8;
-    const box = { x1: cx - w / 2, x2: cx + w / 2, y1: top, y2: top + 16 };
-    // A label survives only if its box touches no box already kept.
-    const clash = kept.some(k => hits(box, k))
-      || ids.some(other => other !== id && discs[other] && hits(box, discs[other]));
-    if (!clash) kept.push(box);
-    updates.push({ id, label: clash ? undefined : label });
+    // Seats below, then above, stepping further out each time. The renderer only
+    // shifts a label vertically, so left and right are not on offer: a name that
+    // cannot sit under its disc moves up, or further down, rather than vanishing.
+    // A lit thing with no name is a thing the reader cannot ask about.
+    const seats = [];
+    for (let step = 0; step < 6; step++) {
+      const out = step * 22;
+      seats.push({ drop: out, top: (p.y + r + VIS_LABEL_DROP + out) * scale });
+      seats.push({ drop: -(2 * r + VIS_LABEL_DROP + 18 + out), top: (p.y - r - VIS_LABEL_DROP - 18 - out) * scale });
+    }
+    let placed = null;
+    for (const seat of seats) {
+      const box = { x1: cx - w / 2, x2: cx + w / 2, y1: seat.top, y2: seat.top + 16 };
+      const clash = kept.some(k => hits(box, k))
+        || ids.some(other => other !== id && discs[other] && hits(box, discs[other]));
+      if (!clash) { placed = { box, drop: seat.drop }; break; }
+    }
+    if (placed) kept.push(placed.box); else unnamed++;
+    updates.push(placed ? { id, label, font: { vadjust: placed.drop } } : { id, label: undefined });
   }
 
   // One single update so the map is not redrawn once per node.
   nodes.update(updates);
+  return unnamed;
 }
 
 function fitEmphasised() {
@@ -846,6 +857,21 @@ function fitEmphasised() {
     if (!n || !dimmed.has(n.type)) lit.push(id);   // kind nodes keep the frame too
   }
   fitReservingPanel(lit.length ? lit : null);
+  nameThemAll();
+}
+
+// Zoom until every lit thing has a name. In sky mode nothing moves, so the only
+// way to put room between two names is to put more pixels between their nodes.
+// Bounded: past a point the frame holds so little that the zoom costs more than
+// the names are worth, and the rest is reached by zooming or hovering.
+function nameThemAll() {
+  for (let tries = 0; tries < 6; tries++) {
+    if (declutterLabels() === 0) return;
+    const sc = net.getScale();
+    if (sc >= 3) break;
+    try { net.moveTo({ scale: Math.min(3, sc * 1.25) }); } catch (e) { break; }
+    syncLabelSize();
+  }
   declutterLabels();
 }
 
@@ -1226,24 +1252,24 @@ function sayIncomplete(loadedE, loadedR, bounds) {
   // Callers invoke this directly with their own bounds, so the guard must live
   // here: a check placed at the call site only protects callers that remember it.
   if (!scopeDescribesInstant) { el.textContent = ''; return; }
+  // What the relay removed ON PURPOSE is not missing. It says how many it took
+  // out, so that count comes off the announced total before anything is claimed:
+  // otherwise the page reports a shortfall that is simply the filter working.
+  const onPurpose = (SCOPE && typeof SCOPE.hiddenEntities === 'number' && SCOPE.hiddenEntities > 0) ? SCOPE.hiddenEntities : 0;
   // Comparing against every scope reading tolerates a creation or deletion that
   // happened during the load, without inventing an arbitrary tolerance threshold.
-  if (bounds && bounds.length) {
-    const minE = Math.min(...bounds.map(b => b.entities));
-    const minR = Math.min(...bounds.map(b => b.relations));
-    if (loadedE < minE || loadedR < minR) {
-      el.textContent = 'Incomplete: entities ' + loadedE + ' of ' + minE + ', relations ' + loadedR + ' of ' + minR + ' loaded.';
-    } else {
-      el.textContent = '';
-    }
-    return;
-  }
-  if (!SCOPE) { el.textContent = ''; return; } // without a total, any claimed gap would be invented
-  if (loadedE < SCOPE.entities || loadedR < SCOPE.relations) {
-    el.textContent = 'Incomplete: entities ' + loadedE + ' of ' + SCOPE.entities + ', relations ' + loadedR + ' of ' + SCOPE.relations + ' loaded.';
-  } else {
-    el.textContent = '';
-  }
+  const expectedE = bounds && bounds.length ? Math.min(...bounds.map(b => b.entities)) : (SCOPE ? SCOPE.entities : null);
+  const expectedR = bounds && bounds.length ? Math.min(...bounds.map(b => b.relations)) : (SCOPE ? SCOPE.relations : null);
+  if (expectedE === null) { el.textContent = ''; return; }   // without a total, any claimed gap would be invented
+  const wantE = Math.max(0, expectedE - onPurpose), wantR = expectedR;
+  const shortE = Math.max(0, wantE - loadedE), shortR = Math.max(0, wantR - loadedR);
+  if (!shortE && !shortR) { el.textContent = ''; return; }
+  // Says WHAT is missing and HOW MANY, because "1088 of 2332" asked the reader to
+  // work out the difference and then guess whether it mattered.
+  const parts = [];
+  if (shortE) parts.push(fmtCount(shortE) + ' entities');
+  if (shortR) parts.push(fmtCount(shortR) + ' relations');
+  el.textContent = parts.join(' and ') + ' the map should show are missing from this read.';
 }
 
 async function loadFull() {
