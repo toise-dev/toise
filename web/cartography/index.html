@@ -82,7 +82,7 @@
 <link rel="stylesheet" href="/static/sh-ui/components.css">
 <link rel="stylesheet" href="/static/sh-ui/list.css">
 <style>
-:root{--bg:#05070f;--panel:#0a0e1c;--line:#1b2440;--fg:#d9e3f5;--dim:#6f80a0;--accent:#8fb4ff;--warn:#e8b06a;--ok:#7fd4a8;}
+:root{--bg:#05070f;--panel:#0a0e1c;--line:#1b2440;--fg:#d9e3f5;--dim:#6f80a0;--accent:#8fb4ff;--amber:#fcbe36;--warn:#e8b06a;--ok:#7fd4a8;}
 *{box-sizing:border-box;}
 html,body{height:100%;margin:0;}
 @font-face{font-family:'Geist Sans';font-style:normal;font-weight:400;font-display:swap;src:url('/static/sh-ui/fonts/geist-sans-latin-400-normal.woff2') format('woff2');}
@@ -178,7 +178,7 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
 .segmented button{border-radius:0;border-right-width:0;}
 .segmented button:first-child{border-radius:4px 0 0 4px;}
 .segmented button:last-child{border-radius:0 4px 4px 0;border-right-width:1px;}
-.segmented button.on{background:var(--accent);color:var(--bg);}
+.segmented button.on{background:var(--amber);color:#05070f;border-color:var(--amber);}
 .segmented button{min-width:6.5rem;text-align:center;font-weight:inherit;}
 .options{position:relative;margin-left:auto;}
 .options summary{list-style:none;cursor:pointer;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:.2rem .5rem;font:inherit;}
@@ -187,6 +187,7 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
 .options #advanced{display:flex;flex-direction:column;gap:.25rem;}
 .layers{display:inline-flex;gap:.25rem;}
 .layers[hidden]{display:none;}
+#layers{display:none;}   /* the layer buttons duplicate the view segments; wired, never shown */
 .layers button.on{border-color:var(--accent);color:var(--accent);}
 #feed{font-size:11px;color:var(--dim);max-height:30vh;overflow:auto;margin-top:.4rem;}
 #feed div{padding:.15rem 0;border-bottom:1px solid var(--line);}
@@ -627,8 +628,11 @@ function layOutOnGrid(nUp) {
   // small graph ends up with an empty band between two lines of discs. Beyond
   // the cap the grid stays compact and the fit simply zooms into it.
   const MAX_ROW = 2 * MAX_RADIUS + TEXT_SPACE;
-  const rowPx = Math.min(MAX_ROW, Math.max(0, h - OVERFLOW) / rows);
-  const radiusRaw = (rowPx - TEXT_SPACE) / 2;
+  // Whole units, and the radius floored: the row then holds strictly MORE than
+  // it needs, so rounding a position can no longer eat the margin. The previous
+  // margin was nil by construction, which is not a margin at all.
+  const rowPx = Math.floor(Math.min(MAX_ROW, Math.max(0, h - OVERFLOW) / rows));
+  const radiusRaw = Math.floor((rowPx - TEXT_SPACE) / 2);
   const labelsFit = radiusRaw >= MIN_RADIUS; // smaller would make disks invisible
   let cellW = labelPx, cellH = rowPx, radius = MAX_RADIUS;
   if (labelsFit) {
