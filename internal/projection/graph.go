@@ -1,6 +1,7 @@
 package projection
 
 import (
+	"container/heap"
 	"sort"
 	"strings"
 	"sync"
@@ -458,15 +459,29 @@ func (g *Graph) visitNeighbor(nb model.EntityID, relType, edgeType string, visit
 // total counts the WHOLE matching set, independent of the cursor: a page that
 // reported its own size as the total would be the lying answer this surface
 // exists to remove.
+type fpHeap []string
+
+func (h fpHeap) Len() int           { return len(h) }
+func (h fpHeap) Less(i, j int) bool { return h[i] > h[j] }
+func (h fpHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *fpHeap) Push(x any)        { *h = append(*h, x.(string)) }
+func (h *fpHeap) Pop() any          { old := *h; n := len(old); x := old[n-1]; *h = old[:n-1]; return x }
+
+type relIDHeap []model.RelationID
+
+func (h relIDHeap) Len() int           { return len(h) }
+func (h relIDHeap) Less(i, j int) bool { return h[i] > h[j] }
+func (h relIDHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *relIDHeap) Push(x any)        { *h = append(*h, x.(model.RelationID)) }
+func (h *relIDHeap) Pop() any          { old := *h; n := len(old); x := old[n-1]; *h = old[:n-1]; return x }
+
 func (g *Graph) PageEntitiesByFingerprint(typ, after string, limit int) (page []model.Entity, next string, total int) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
-	type keyed struct {
-		fp string
-		id model.EntityID
-	}
-	keys := make([]keyed, 0, limit*2)
+	h := &fpHeap{}
+	heap.Init(h)
+	seen := 0
 	for fp, id := range g.byHash {
 		if g.deleted[id] {
 			continue
@@ -479,17 +494,111 @@ func (g *Graph) PageEntitiesByFingerprint(typ, after string, limit int) (page []
 		if after != "" && fp <= after {
 			continue
 		}
-		keys = append(keys, keyed{fp: fp, id: id})
+		seen++
+		if limit > 0 {
+			if h.Len() < limit {
+				heap.Push(h, fp)
+			} else if fp < (*h)[0] {
+				(*h)[0] = fp
+				heap.Fix(h, 0)
+			}
+		}
 	}
-	sort.Slice(keys, func(i, j int) bool { return keys[i].fp < keys[j].fp })
 
-	if len(keys) > limit {
-		keys = keys[:limit]
-		next = keys[len(keys)-1].fp
+	fps := make([]string, h.Len())
+	for i := len(fps) - 1; i >= 0; i-- {
+		fps[i] = heap.Pop(h).(string)
 	}
-	page = make([]model.Entity, 0, len(keys))
-	for _, k := range keys {
-		page = append(page, g.entities[k.id])
+
+	page = make([]model.Entity, 0, len(fps))
+	for _, fp := range fps {
+		page = append(page, g.entities[g.byHash[fp]])
+	}
+	if seen > limit && limit > 0 {
+		next = fps[len(fps)-1]
+	}
+	return page, next, total
+}
+
+func (g *Graph) PageRelations(typ string, from, to model.EntityID, after string, limit int) (page []model.Relation, next string, total int) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	match := func(r model.Relation) bool {
+		if typ != "" && r.Type != typ {
+			return false
+		}
+		if from != "" && r.From != from {
+			return false
+		}
+		if to != "" && r.To != to {
+			return false
+		}
+		return true
+	}
+
+	h := &relIDHeap{}
+	heap.Init(h)
+	seen := 0
+
+	offer := func(rid model.RelationID) {
+		if after != "" && string(rid) <= after {
+			return
+		}
+		seen++
+		if limit > 0 {
+			if h.Len() < limit {
+				heap.Push(h, rid)
+			} else if rid < (*h)[0] {
+				(*h)[0] = rid
+				heap.Fix(h, 0)
+			}
+		}
+	}
+
+	if from != "" || to != "" {
+		var ids map[model.RelationID]struct{}
+		// Choose the smaller adjacency set when both ends are known: the other
+		// end is filtered later anyway.
+		switch {
+		case from != "" && to != "" && len(g.out[from]) <= len(g.in[to]):
+			ids = g.out[from]
+		case from != "" && to != "":
+			ids = g.in[to]
+		case from != "":
+			ids = g.out[from]
+		default:
+			ids = g.in[to]
+		}
+		for rid := range ids {
+			r, ok := g.relations[rid]
+			if !ok || !match(r) {
+				continue
+			}
+			total++
+			offer(rid)
+		}
+	} else {
+		for rid, r := range g.relations {
+			if !match(r) {
+				continue
+			}
+			total++
+			offer(rid)
+		}
+	}
+
+	ids := make([]model.RelationID, h.Len())
+	for i := len(ids) - 1; i >= 0; i-- {
+		ids[i] = heap.Pop(h).(model.RelationID)
+	}
+
+	page = make([]model.Relation, 0, len(ids))
+	for _, rid := range ids {
+		page = append(page, g.relations[rid])
+	}
+	if seen > limit && limit > 0 {
+		next = string(ids[len(ids)-1])
 	}
 	return page, next, total
 }

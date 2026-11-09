@@ -51,6 +51,12 @@ type Graph interface {
 	ListEntities(typ string) []model.Entity
 	ListRelations(typ string, from, to model.EntityID) []model.Relation
 	RelationsTouching(id model.EntityID, relType string) []model.Relation
+	// The paging methods materialize only the requested page, whereas the List*
+	// methods copy and sort the entire type on every call.
+	PageEntitiesByFingerprint(typ, after string, limit int) (page []model.Entity, next string, total int)
+	PageRelations(typ string, from, to model.EntityID, after string, limit int) (page []model.Relation, next string, total int)
+	EntityCount() int
+	RelationCount() int
 }
 
 // Resolver wires the GraphQL API to the projection, the log, and the change
@@ -129,8 +135,26 @@ func (r *queryResolver) Entity(ctx context.Context, id string, asOf *string) (*g
 	return entityToGQL(e, deleted), nil
 }
 
+func pageSize(first *int) (int, error) {
+	n := 50
+	if first != nil {
+		n = *first
+	}
+	if n < 0 {
+		n = 0
+	}
+	if n > MaxPageSize {
+		return 0, fmt.Errorf("first: %d exceeds the maximum page size of %d; ask for at most %d and page with `after`, or narrow the query — serving fewer than requested without saying so is how a partial answer gets read as a complete one", n, MaxPageSize, MaxPageSize)
+	}
+	return n, nil
+}
+
 func (r *queryResolver) Entities(ctx context.Context, filter *generated.EntityFilter, first *int, after, asOf *string) (*generated.EntityConnection, error) {
 	g, err := r.graphAt(ctx, asOf)
+	if err != nil {
+		return nil, err
+	}
+	n, err := pageSize(first)
 	if err != nil {
 		return nil, err
 	}
@@ -138,37 +162,69 @@ func (r *queryResolver) Entities(ctx context.Context, filter *generated.EntityFi
 	if filter != nil && filter.Type != nil {
 		typ = *filter.Type
 	}
-	all := g.ListEntities(typ)
-	if filter != nil && len(filter.Match) > 0 {
-		want := make(map[string]string, len(filter.Match))
-		for _, m := range filter.Match {
-			want[m.Key] = m.Value
-		}
-		kept := make([]model.Entity, 0, len(all))
-		for _, e := range all {
-			if e.MatchAll(want) {
-				kept = append(kept, e)
+	if filter == nil || len(filter.Match) == 0 {
+		afterFP := ""
+		if after != nil && *after != "" {
+			afterFP, err = decodeCursor(*after)
+			if err != nil {
+				return nil, fmt.Errorf("invalid after cursor: %w", err)
 			}
 		}
-		all = kept
+		page, next, total := g.PageEntitiesByFingerprint(typ, afterFP, n)
+		edges := make([]generated.EntityEdge, len(page))
+		for i, e := range page {
+			edges[i] = generated.EntityEdge{Cursor: encodeCursor(e.IdentityHash()), Node: entityToGQL(e, false)}
+		}
+		// endCursor names the last rendered edge, not the existence of a next
+		// page; clearing it on the last page would make a consumer that
+		// persists it lose its position.
+		// A zero-item page has no cursor, so claiming a next page there would
+		// loop forever; the real set size is carried by totalCount in this
+		// response.
+		pageInfo := &generated.PageInfo{HasNextPage: next != ""}
+		if len(edges) > 0 {
+			end := edges[len(edges)-1].Cursor
+			pageInfo.EndCursor = &end
+		}
+		return &generated.EntityConnection{
+			Edges:      edges,
+			PageInfo:   pageInfo,
+			TotalCount: total,
+		}, nil
 	}
-	page, end, hasNext, err := paginate(all, func(e model.Entity) string { return string(e.ID) }, first, after)
+	all := g.ListEntities(typ)
+	want := make(map[string]string, len(filter.Match))
+	for _, m := range filter.Match {
+		want[m.Key] = m.Value
+	}
+	kept := make([]model.Entity, 0, len(all))
+	for _, e := range all {
+		if e.MatchAll(want) {
+			kept = append(kept, e)
+		}
+	}
+	sort.Slice(kept, func(i, j int) bool { return kept[i].IdentityHash() < kept[j].IdentityHash() })
+	page, end, hasNext, err := paginate(kept, func(e model.Entity) string { return e.IdentityHash() }, first, after)
 	if err != nil {
 		return nil, err
 	}
 	edges := make([]generated.EntityEdge, len(page))
 	for i, e := range page {
-		edges[i] = generated.EntityEdge{Cursor: encodeCursor(string(e.ID)), Node: entityToGQL(e, false)}
+		edges[i] = generated.EntityEdge{Cursor: encodeCursor(e.IdentityHash()), Node: entityToGQL(e, false)}
 	}
 	return &generated.EntityConnection{
 		Edges:      edges,
 		PageInfo:   &generated.PageInfo{HasNextPage: hasNext, EndCursor: end},
-		TotalCount: len(all),
+		TotalCount: len(kept),
 	}, nil
 }
 
 func (r *queryResolver) Relations(ctx context.Context, filter *generated.RelationFilter, first *int, after, asOf *string) (*generated.RelationConnection, error) {
 	g, err := r.graphAt(ctx, asOf)
+	if err != nil {
+		return nil, err
+	}
+	n, err := pageSize(first)
 	if err != nil {
 		return nil, err
 	}
@@ -198,19 +254,27 @@ func (r *queryResolver) Relations(ctx context.Context, filter *generated.Relatio
 			to = id
 		}
 	}
-	all := g.ListRelations(typ, from, to)
-	page, end, hasNext, err := paginate(all, func(rel model.Relation) string { return string(rel.ID) }, first, after)
-	if err != nil {
-		return nil, err
+	afterKey := ""
+	if after != nil && *after != "" {
+		afterKey, err = decodeCursor(*after)
+		if err != nil {
+			return nil, fmt.Errorf("invalid after cursor: %w", err)
+		}
 	}
+	page, next, total := g.PageRelations(typ, from, to, afterKey, n)
 	edges := make([]generated.RelationEdge, len(page))
 	for i, rel := range page {
 		edges[i] = generated.RelationEdge{Cursor: encodeCursor(string(rel.ID)), Node: relationToGQL(rel)}
 	}
+	pageInfo := &generated.PageInfo{HasNextPage: next != ""}
+	if len(edges) > 0 {
+		end := edges[len(edges)-1].Cursor
+		pageInfo.EndCursor = &end
+	}
 	return &generated.RelationConnection{
 		Edges:      edges,
-		PageInfo:   &generated.PageInfo{HasNextPage: hasNext, EndCursor: end},
-		TotalCount: len(all),
+		PageInfo:   pageInfo,
+		TotalCount: total,
 	}, nil
 }
 
