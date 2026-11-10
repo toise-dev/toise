@@ -1411,6 +1411,7 @@ let spreadFallback = false;
 // did not ask for, three times per poll, took their zoom and pan away.
 let spreadKey = '';
 let spreadPos = {};
+let spreadFallbackCached = false;   // the footer's spiral notice must survive a cached redraw
 function applySpread(){
   const ids = onMapIds().filter(id => ENT[id] || isKind(id));
   spreadFallback = false;
@@ -1434,6 +1435,7 @@ function applySpread(){
   const W = (view && view.clientWidth) || 800, H = (view && view.clientHeight) || 530;
   const key = activeView + '|' + W + 'x' + H + '|' + ids.slice().sort().join(',') + '|' + ids.map(id => SKY_POS[id] ? (SKY_POS[id].x | 0) + ':' + (SKY_POS[id].y | 0) : '').join(';');
   if(key === spreadKey && spreadApplied){
+    spreadFallback = spreadFallbackCached;
     nodes.update(ids.filter(id => spreadPos[id]).map(id => ({ id, x: spreadPos[id].x, y: spreadPos[id].y })));
     return;
   }
@@ -1579,6 +1581,7 @@ function applySpread(){
     nodes.update(up);
   }
   spreadKey = key;
+  spreadFallbackCached = spreadFallback;
   spreadApplied = true;
 }
 
