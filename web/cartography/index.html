@@ -211,7 +211,18 @@ aside td.k{color:var(--dim);width:40%;word-break:normal;overflow-wrap:break-word
    with the view moves the canvas, a height that differs between breakpoints
    does not. Options must stay reachable; the search can be small. */
 @media (max-width:560px){
-  header{flex-wrap:wrap;height:4.9rem;align-content:center;row-gap:.35rem;}
+  /* THREE rows here, pinned: segments, then the two fields, then Show all. Two
+     rows was the old content; "go to" and Show all made a third that spilled out
+     of the pinned height onto the legend -- and since the bar no longer clips,
+     the spill was clickable and a legend chip won the click.
+     Pinned, not auto: a height that grows when Show all appears would move the
+     canvas under the reader's finger every time they enter a view. The row costs
+     ~1.6rem of map on a phone and is empty whenever nothing is withheld; a stable
+     canvas is worth more than those pixels. */
+  header{flex-wrap:wrap;height:6.6rem;align-content:center;row-gap:.35rem;}
+  #showall{flex:1 1 100%;order:3;}
+  header label[for=goto]{font-size:0;flex:1 1 auto;min-width:0;}
+  header label[for=goto] input{width:100%;margin-left:0;font-size:12px;line-height:normal;padding:.25rem .4rem;height:1.8rem;box-sizing:border-box;}
   .segmented{flex:1 1 100%;}
   .segmented button{flex:1 1 0;min-width:0;padding:.2rem .25rem;}
   .stats{display:none;}
@@ -1000,11 +1011,23 @@ function sayOrphaned(byType){
   // This element also carries the narrowing notice. Never speak over a message
   // that is not ours: a reader loses the one explanation they were given.
   if(el.textContent && el.dataset.orphan!=='1') return;
-  let total=0, worst='', worstN=-1;
-  for(const [t,n] of byType){ total+=n; if(n>worstN){ worstN=n; worst=t; } }
+  // One type: name it with ITS OWN count. Several: give the total and name them
+  // all. The first version summed every withheld type and pinned the total on
+  // whichever had the most -- "4 elements hang from Service" over a map still
+  // drawing twenty, with the four actually spread across two types.
   el.dataset.orphan='1';
-  el.textContent = fmtCount(total)+' elements hang from '+typeLabel(worst)+
-    ', which is switched off in the legend. Switch it back on to see them.';
+  const rows=[...byType.entries()].sort((a,b)=>b[1]-a[1]);
+  let total=0;
+  for(const [,n] of rows) total+=n;
+  if(rows.length===1){
+    const [t,n]=rows[0];
+    el.textContent = fmtCount(n)+' element'+(n===1?'':'s')+' folded inside '+typeLabel(t)+
+      ' '+(n===1?'is':'are')+' not shown. Switch '+typeLabel(t)+' back on in the legend to see '+(n===1?'it':'them')+'.';
+  } else {
+    el.textContent = fmtCount(total)+' elements are not shown: they are folded inside '+
+      rows.map(([t,n])=>typeLabel(t)+' ('+fmtCount(n)+')').join(', ')+
+      ', switched off in the legend.';
+  }
 }
 
 function sayCap(drawn,total,criterion){
@@ -1249,10 +1272,18 @@ function rebuild(){
   const ms=document.getElementById('matchStat');
   if(!q){ ms.textContent=''; }
   else{
-    const parts=['· '+matched+' shown'];
-    if(foldedMatches>0) parts.push(foldedMatches+' inside folded nodes');
-    if(matchCandidates-matched>0) parts.push((matchCandidates-matched)+' not drawn (cap)');
-    ms.textContent=parts.join(', ');
+    // "shown" was this number's own word until nothing matching meant the whole
+    // map got drawn instead: "0 shown" then sat under 185 visible discs. It
+    // counts MATCHES, so it says match, and the no-match case says what the map
+    // did about it in the same breath.
+    if(matched===0){
+      ms.textContent='· no match — the whole map is shown';
+    } else {
+      const parts=['· '+matched+' match'];
+      if(foldedMatches>0) parts.push(foldedMatches+' inside folded nodes');
+      if(matchCandidates-matched>0) parts.push((matchCandidates-matched)+' not drawn (cap)');
+      ms.textContent=parts.join(', ');
+    }
   }
   const ai=document.getElementById('attr'); if(ai) ai.style.color=(q&&matched===0)?'var(--warn)':'var(--fg)';
   nodes.getIds().forEach(id=>{ if(!nodeIds.has(id)) nodes.remove(id); });
