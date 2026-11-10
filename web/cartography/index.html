@@ -1462,7 +1462,9 @@ function applySpread(){
   // screen pixels up to a scale of 12/11 and eleven canvas units times the
   // scale beyond, so a tiny view fitted at the maximum zoom draws names nearly
   // three times wider than a measure taken at the current zoom would say.
-  const fontAt = (sc) => Math.max(12, 11 * sc);
+  // syncLabelSize's own formula, so the two cannot drift: size is clamped to
+  // [11, 140] canvas units around 12/scale, and the screen font is size × scale.
+  const fontAt = (sc) => Math.min(140, Math.max(11, Math.ceil(12 / sc))) * sc;
   const nameWidthsAt = (sc) => {
     const px = fontAt(sc), out = {};
     for(const id of hosts){
@@ -1603,7 +1605,9 @@ function applySpread(){
     // The objective itself, measured here -- and it IS the verdict: a pair judged
     // short at the estimated scale, then found clear at the real one, must not
     // leave "hosts settled" false and send sixty nodes to a spiral.
-    const dReal = aim / realScale, nW = nameWidthsAt(realScale), nPx = fontAt(realScale) + 4;
+    // The check asks for the TARGET, as the centre test does; asking for the
+    // aim here made a conformant pair relaunch the easing for nothing.
+    const dReal = target / realScale, nW = nameWidthsAt(realScale), nPx = fontAt(realScale) + 4;
     let minPx = Infinity, namesClear = true;
     for(let i = 0; i < hosts.length; i++) for(let j = i + 1; j < hosts.length; j++){
       const { dist, need } = pairNeed(i, j, realScale, dReal, nW, nPx);
