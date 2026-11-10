@@ -2234,7 +2234,13 @@ function applyView(btn){
   // An exemption was granted against ONE view. Carrying it into the next one
   // would leave an element the new view withholds sitting on the map with no
   // control on screen to explain it.
-  if(activeView !== wasActive) REVEALED.clear();
+  if(activeView !== wasActive && REVEALED.size){
+    REVEALED.clear();
+    // The card was opened BY the reveal, on the revealed element. Leaving it up
+    // over a map that no longer draws that element describes something the
+    // reader cannot see.
+    inspect(null);
+  }
   if(!activeView){
     dimmed.clear();
   } else {
