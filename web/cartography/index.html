@@ -1627,7 +1627,11 @@ function applySpread(){
       if(dist < need * 0.98) namesClear = false;
     }
     if(minPx >= target * 1.01 && namesClear){ hostsSettled = true; break; }
-    if(!namesOff && prevMinPx > 0 && minPx < prevMinPx - 0.5){ namesOff = true; }   // receding: the names' rule is pushing past the frame
+    // Receding by more than a convergence step -- a round that pushes pairs to
+    // the aim widens the picture a little and the next fit takes one to three
+    // percent back; the phone case measured minus eight -- means the names'
+    // rule is pushing past the frame.
+    if(!namesOff && prevMinPx > 0 && minPx < prevMinPx - target * 0.03){ namesOff = true; }
     prevMinPx = minPx;
     ({ eased, hostsSettled } = ease(realScale));
   }
