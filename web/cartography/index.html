@@ -263,6 +263,7 @@ aside td.k{color:var(--dim);width:40%;word-break:normal;overflow-wrap:break-word
   .subbar{gap:.5rem;}
 }
 .mapstat{position:absolute;left:.8rem;bottom:.6rem;display:flex;flex-wrap:wrap;gap:.3rem 1rem;align-items:center;color:var(--dim);font-size:12px;pointer-events:none;z-index:5;}
+.mapstat.dome{bottom:2.7rem;}   /* above the sky's bar, which sits at .7rem and is one line tall */
 .muted{color:var(--dim);}
 .empty{color:var(--dim);padding:2rem;text-align:center;}
 button.retry{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:2px 10px;margin-left:6px;cursor:pointer;font:inherit}
@@ -1399,7 +1400,8 @@ function rememberSky(){
 // cannot reach 60 pixels within the bound does the view fall back to a
 // sunflower spiral, and then the footer says so.
 const SPREAD_MAX = 60;
-const SPREAD_TARGET_PX = 60;
+const SPREAD_TARGET_PX = 60;          // and 40 on a phone: measured at 390px, eighteen
+const SPREAD_TARGET_PHONE_PX = 40;    // hosts on a hundred pixels, thirty-five overlaps
 const SPREAD_PASSES = 120;
 let spreadFallback = false;
 function applySpread(){
@@ -1442,7 +1444,7 @@ function applySpread(){
     for(const id of ids){ const q = base[id]; if(!q) continue; if(q.x < x1) x1 = q.x; if(q.x > x2) x2 = q.x; if(q.y < y1) y1 = q.y; if(q.y > y2) y2 = q.y; }
     const bw = Math.max(x2 - x1, 1), bh = Math.max(y2 - y1, 1);
     const scale = Math.min(W / bw, H / bh) * 0.9;   // what the fit will give, with its margins
-    const d = SPREAD_TARGET_PX / scale;              // 60 screen pixels, in canvas units
+    const d = (W < 560 ? SPREAD_TARGET_PHONE_PX : SPREAD_TARGET_PX) / scale;   // screen pixels, in canvas units
     let moved = false;
     for(let i = 0; i < hosts.length; i++){
       for(let j = i + 1; j < hosts.length; j++){
@@ -3382,7 +3384,12 @@ function drawDome(){
     const raw = ENT[it.n.id] ? labelOf(ENT[it.n.id]) : it.n.label;
     if(!raw) continue;
     const text=String(raw).split('\n')[0];
-    const w=g2.measureText(text).width, x=it.p.x-w/2, y=it.p.y+it.rad+4;
+    const w=g2.measureText(text).width;
+    // Inside the canvas, always: three host names ran off the right edge at
+    // 1440 and six at 390. Pushed back in sideways; flipped above the disc when
+    // the line below would leave the bottom.
+    let x=Math.min(Math.max(it.p.x-w/2, 2), cvW-w-2), y=it.p.y+it.rad+4;
+    if(y+12>cvH-2) y=it.p.y-it.rad-14;
     const box={x0:x-2,y0:y-1,x1:x+w+2,y1:y+12};
     let clash=false;
     if(!isHost(it) && !isKind(it.n.id)) for(const q of placed){
@@ -3393,7 +3400,7 @@ function drawDome(){
     ledger.push(Object.freeze({id:it.n.id, kind:isHost(it)?'host':(isKind(it.n.id)?'kind':'other'), text, box:Object.freeze({...box})}));
     g2.globalAlpha=it.alpha;
     g2.fillStyle='rgba(195,209,234,0.92)';
-    g2.fillText(text, it.p.x, y);
+    g2.fillText(text, x+w/2, y);   // at the clamped centre, not the disc's
     g2.globalAlpha=1;
   }
   try{
@@ -3451,6 +3458,11 @@ function syncView(){
   viewBtn.textContent='view: '+(domeMode?'dome 360':'chart');
   viewBtn.style.color=domeMode?'var(--accent)':'';
   cv.hidden=!domeMode; domeBar.hidden=!domeMode;
+  // The footer and the sky's bar share the bottom edge. With the footer grown
+  // by "withheld by the portal" it ran under the bar's buttons -- measured at
+  // 1440. The footer precedes the bar in the DOM, so no sibling selector can
+  // see the bar's state: a class on the footer does.
+  const strip=document.getElementById('mapstat'); if(strip) strip.classList.toggle('dome', domeMode);
   if(domeMode){ sizeCanvas(); kick(); }
   else if(raf!==null){ cancelAnimationFrame(raf); raf=null; }
 }
