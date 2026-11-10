@@ -1454,6 +1454,13 @@ function applySpread(){
   const base = {};
   for(const id of ids){ const q = SKY_POS[id] || cur[id]; if(q) base[id] = { x: q.x, y: q.y }; }
   const hosts = ids.filter(id => ENT[id] && ENT[id].type === 'host' && base[id]);
+  // Each host's name width on screen: two hosts side by side need room for
+  // both names below their discs, which sixty pixels between centres does not
+  // give a long name -- measured in Network, "preprod-sensorfactory-shop" on
+  // its neighbour's, stable over three loads, with every vertical seat taken.
+  const nameW = {};
+  for(const id of hosts) nameW[id] = labelWidthPx(labelOf(ENT[id]) || '') + 8;
+  const namePx = labelScreenPx() + 4;
   // The non-hosts a host must not land on: they keep the sky's places, but a
   // host pushed off another host must not come to rest on one of them -- in
   // Network, an address or an endpoint. Their discs' real radii, from the nodes.
@@ -1480,7 +1487,7 @@ function applySpread(){
   // measured, 59 where 60 were asked and 38 where 40 were. So the loop aims
   // three percent above the target, and the real-scale check demands the target
   // itself, not its neighbourhood.
-  const aim = target * 1.03;
+  const aim = target * 1.06;   // measured: 1.03 left 39.7px where 40 were asked at 390px
   // The scale the fit will really give. Estimating it from the bounding box
   // came out 13% too generous -- measured: 52px where 60 were asked -- because
   // vis fits node extents, not centres, and the strip then takes its share. So
@@ -1503,9 +1510,17 @@ function applySpread(){
       for(let j = i + 1; j < hosts.length; j++){
         const a = base[hosts[i]], b = base[hosts[j]];
         let dx = b.x - a.x, dy = b.y - a.y, dist = Math.hypot(dx, dy);
-        if(dist >= d * 0.98) continue;                  // within two percent of the target is there
         if(dist < 1e-6){ dx = 1; dy = 0; dist = 1; }    // the same spot: part them along x
-        const push = (d - dist) / 2;
+        // The distance this pair needs along ITS OWN line: the target, or more if
+        // their names would still touch -- names separate once the horizontal gap
+        // exceeds half the two widths, or the vertical gap exceeds a line.
+        const ux = Math.abs(dx) / dist, uy = Math.abs(dy) / dist;
+        const X = ((nameW[hosts[i]] + nameW[hosts[j]]) / 2 + 6) / scale;
+        const Y = (namePx + 4) / scale + Math.abs(radius[hosts[i]] - radius[hosts[j]]);
+        const byNames = Math.min(ux > 1e-6 ? X / ux : Infinity, uy > 1e-6 ? Y / uy : Infinity);
+        const need = Math.max(d, Math.min(byNames, d * 3));   // never more than three targets: a pathological line is not a reason to scatter
+        if(dist >= need * 0.98) continue;                // within two percent is there
+        const push = (need - dist) / 2;
         a.x -= dx / dist * push; a.y -= dy / dist * push;
         b.x += dx / dist * push; b.y += dy / dist * push;
         moved = true;
@@ -1543,6 +1558,8 @@ function applySpread(){
         const a = base[hosts[i]], b = base[hosts[j]];
         if(Math.hypot(b.x - a.x, b.y - a.y) < d * 0.98){ hostsSettled = false; break; }
       }
+    // Hosts clear of each other by centres is the objective; names are the
+    // easing's second concern and do not fail the verdict on their own.
   }
   return { eased, hostsSettled };
   };
@@ -1552,7 +1569,7 @@ function applySpread(){
   let savedView = null;
   try{ savedView = { pos: net.getViewPosition(), scale: net.getScale() }; }catch(_){ }
   let { eased, hostsSettled } = ease(0);
-  for(let round = 0; round < 3 && hosts.length > 1; round++){
+  for(let round = 0; round < 5 && hosts.length > 1; round++){
     nodes.update(ids.filter(id => base[id]).map(id => ({ id, x: base[id].x, y: base[id].y })));
     try{ net.fit({ nodes: ids, animation: false, maxZoomLevel: 3 }); realScale = net.getScale() * 0.97 * stripShare; }catch(_){ realScale = 0; }
     if(!realScale) break;
@@ -1564,7 +1581,7 @@ function applySpread(){
     // The objective itself, measured at the real scale -- and it IS the verdict:
     // a pair judged short at the estimated scale, then found clear at the real
     // one, must not leave "hosts settled" false and send sixty nodes to a spiral.
-    if(minPx >= target){ hostsSettled = true; break; }
+    if(minPx >= target * 1.01){ hostsSettled = true; break; }   // one percent clear of the objective, at the real scale
     ({ eased, hostsSettled } = ease(realScale));
   }
   // At the bound, the positions reached are the best effort and they are kept
