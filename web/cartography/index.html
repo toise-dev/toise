@@ -642,9 +642,8 @@ function recomputeShortNames(){
   const counts = new Map();
   const hosts = Object.values(ENT).filter(n => n.type === 'host');
   for(const n of hosts){
-    const name = nameLabel(n) || '';
-    const m = /^([A-Za-z0-9_-]*[A-Za-z][A-Za-z0-9_-]*)\.([A-Za-z0-9.-]+)$/.exec(name);
-    if(m) counts.set(m[2], (counts.get(m[2]) || 0) + 1);
+    const suf = fqdnSuffix(nameLabel(n) || '');
+    if(suf) counts.set(suf, (counts.get(suf) || 0) + 1);
   }
   let best = null, bestN = 1;
   for(const [suf, n] of counts) if(n > bestN){ best = suf; bestN = n; }
@@ -656,6 +655,19 @@ function recomputeShortNames(){
     seen.set(short, (seen.get(short) || 0) + 1);
   }
   for(const [short, n] of seen) if(n > 1) AMBIGUOUS_SHORT.add(short);
+}
+// The suffix of a name that reads as a qualified host name, or ''. Split at the
+// first dot and tested with linear patterns: the one-regex version had an
+// ambiguous group and would have backtracked quadratically on a long dotless
+// name, and names come from producers. Capped at the DNS maximum first.
+function fqdnSuffix(name){
+  if(!name || name.length > 253) return '';
+  const i = name.indexOf('.');
+  if(i <= 0 || i === name.length - 1) return '';
+  const head = name.slice(0, i), tail = name.slice(i + 1);
+  if(!/^[A-Za-z0-9_-]+$/.test(head) || !/[A-Za-z]/.test(head)) return '';
+  if(!/^[A-Za-z0-9.-]+$/.test(tail)) return '';
+  return tail;
 }
 function shortOf(name, raw){
   if(!COMMON_SUFFIX || !name) return name;
