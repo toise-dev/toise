@@ -1553,7 +1553,10 @@ function applySpread(){
       const a = base[hosts[i]], b = base[hosts[j]];
       minPx = Math.min(minPx, Math.hypot(b.x - a.x, b.y - a.y) * realScale);
     }
-    if(minPx >= target) break;   // the objective itself, measured at the real scale
+    // The objective itself, measured at the real scale -- and it IS the verdict:
+    // a pair judged short at the estimated scale, then found clear at the real
+    // one, must not leave "hosts settled" false and send sixty nodes to a spiral.
+    if(minPx >= target){ hostsSettled = true; break; }
     ({ eased, hostsSettled } = ease(realScale));
   }
   // At the bound, the positions reached are the best effort and they are kept
