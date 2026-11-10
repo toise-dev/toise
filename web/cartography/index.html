@@ -650,6 +650,12 @@ function stateBorder(n){
   return v && Object.prototype.hasOwnProperty.call(LIFECYCLE_BORDER,v) ? LIFECYCLE_BORDER[v] : null;
 }
 
+// Is this type what the active view is about? Read by the fold: a view's subject
+// stands for itself even when the reader has switched its parent off.
+function viewWants(t){
+  return !!(t && activeView && VIEWS[activeView] && VIEWS[activeView].indexOf(t) !== -1);
+}
+
 function computeOwners(){
   OWNER={};
   for(const r of Object.values(REL)){
@@ -670,11 +676,22 @@ function repOf(id,guard){
     seen.add(cur);
     const up=OWNER[cur];
     if(!up || !ENT[up]) return cur;
-    // Fold into an owner only when that owner is DRAWN in the current view.
-    // Otherwise Applications folded its services into hosts it does not draw,
-    // and the view came out empty: measured, zero nodes on Network and on
-    // Applications. A child whose parent is absent represents itself.
-    if(hidden.has(ENT[up].type)) return cur;
+    // An owner the READER unchecked takes its folded children with it. Stopping
+    // here instead made each child represent itself, so unchecking "Interface"
+    // surfaced the 92 addresses and listeners folded inside it: measured, 185
+    // drawn became 277, and unchecking a type ADDED elements to the map. The
+    // children now fold on up to the first ancestor still drawn -- counted
+    // inside it rather than revealed beside it.
+    //
+    // This line used to return here, to stop Applications folding its services
+    // into hosts it did not draw and coming out empty. That reason is gone: a
+    // view fills `dimmed`, never `hidden`, and `hidden` is now only ever the
+    // reader's own legend and layer buttons.
+    //
+    // The exception is a child whose own type is what the active view is ABOUT:
+    // a view must never lose its subject to a parent the reader switched off.
+    if(hidden.has(ENT[up].type) && viewWants(ENT[cur] && ENT[cur].type)) return cur;
+    if(hidden.has(ENT[up].type)){ cur=up; continue; }
     if(expanded.has(up)){
       // The owner is open. Its children are represented by one node per KIND
       // until the reader opens that kind too — the middle of the three levels.
