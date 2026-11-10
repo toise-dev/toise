@@ -1404,6 +1404,13 @@ const SPREAD_TARGET_PX = 60;          // and 40 on a phone: measured at 390px, e
 const SPREAD_TARGET_PHONE_PX = 40;    // hosts on a hundred pixels, thirty-five overlaps
 const SPREAD_PASSES = 120;
 let spreadFallback = false;
+// What the last easing was computed FROM and what it produced: a redraw whose
+// inputs are unchanged -- the six-second poll, a legend click, a live arrival
+// that touched nothing drawn -- re-applies the same positions and never
+// measures again. Measuring means fitting the camera, and a fit the reader
+// did not ask for, three times per poll, took their zoom and pan away.
+let spreadKey = '';
+let spreadPos = {};
 function applySpread(){
   const ids = onMapIds().filter(id => ENT[id] || isKind(id));
   spreadFallback = false;
@@ -1412,7 +1419,7 @@ function applySpread(){
       // EVERY node the sky knows, not only the visible ones: a node spread and
       // then hidden by a search would otherwise keep a view's coordinates and
       // reappear there in the sky.
-      spreadApplied = false;
+      spreadApplied = false; spreadKey = ''; spreadPos = {};
       const present = new Set(nodes.getIds());
       const back = Object.keys(SKY_POS).filter(id => present.has(id)).map(id => ({ id, x: SKY_POS[id].x, y: SKY_POS[id].y }));
       if(back.length) nodes.update(back);
@@ -1425,6 +1432,11 @@ function applySpread(){
   freeze();
   const view = document.getElementById('net');
   const W = (view && view.clientWidth) || 800, H = (view && view.clientHeight) || 530;
+  const key = activeView + '|' + W + 'x' + H + '|' + ids.slice().sort().join(',') + '|' + ids.map(id => SKY_POS[id] ? (SKY_POS[id].x | 0) + ':' + (SKY_POS[id].y | 0) : '').join(';');
+  if(key === spreadKey && spreadApplied){
+    nodes.update(ids.filter(id => spreadPos[id]).map(id => ({ id, x: spreadPos[id].x, y: spreadPos[id].y })));
+    return;
+  }
   // Start from the sky's positions, which is the picture the reader knows; the
   // current ones only for a node the sky never settled.
   let cur = {};
@@ -1519,6 +1531,11 @@ function applySpread(){
   }
   return { eased, hostsSettled };
   };
+  // The camera is the reader's: whatever the measuring fits below do to it is
+  // undone before this returns, and the framing that follows a view change is
+  // fitEmphasised's, as before.
+  let savedView = null;
+  try{ savedView = { pos: net.getViewPosition(), scale: net.getScale() }; }catch(_){ }
   let { eased, hostsSettled } = ease(0);
   for(let round = 0; round < 3 && hosts.length > 1; round++){
     nodes.update(ids.filter(id => base[id]).map(id => ({ id, x: base[id].x, y: base[id].y })));
@@ -1536,7 +1553,10 @@ function applySpread(){
   // -- a single host wedged between two fixed discs, bounced from one into the
   // other every pass, must not throw sixty nodes onto a spiral. The spiral is
   // for the one failure that defeats the objective: hosts still on each other.
+  if(savedView){ try{ net.moveTo({ position: savedView.pos, scale: savedView.scale, animation: false }); }catch(_){ } }
+  spreadPos = {};
   if(eased || hostsSettled){
+    for(const id of ids) if(base[id]) spreadPos[id] = { x: base[id].x, y: base[id].y };
     nodes.update(ids.filter(id => base[id]).map(id => ({ id, x: base[id].x, y: base[id].y })));
   } else {
     // Fallback, and the footer says so: a spiral filling the frame's ellipse,
@@ -1551,11 +1571,14 @@ function applySpread(){
       return na < nb ? -1 : na > nb ? 1 : (a < b ? -1 : 1);
     });
     const ax = 400, ay = 400 * (H / W), phi = Math.PI * (3 - Math.sqrt(5)), N = order.length;
-    nodes.update(order.map((id, i) => {
+    const up = order.map((id, i) => {
       const r = Math.sqrt((i + 0.5) / N), t = i * phi;
       return { id, x: ax * r * Math.cos(t), y: ay * r * Math.sin(t) };
-    }));
+    });
+    for(const u of up) spreadPos[u.id] = { x: u.x, y: u.y };
+    nodes.update(up);
   }
+  spreadKey = key;
   spreadApplied = true;
 }
 
@@ -3167,7 +3190,7 @@ if(tlEarlier) tlEarlier.onclick=()=>shiftWindow(-1);
 if(tlLater) tlLater.onclick=()=>shiftWindow(+1);
 tlWin.onchange=()=>{ tlWindow=tlWin.value; localStorage.setItem('toise_viz_window',tlWindow);
   spanEnd=null; spanMs=WINDOWS[tlWindow]||WINDOWS['24h']; renderRuler(); loadProfile();
-  tlLabelEl.textContent=tlWindow; };
+  tlLabelEl.textContent=tlWindow; tlLabelEl.title=''; };
 renderRuler(); loadProfile();
 function syncSlider() {
   if (!tlAt) return;
@@ -3471,7 +3494,9 @@ function drawDome(){
   }
   try{
     window.toiseDomeLabels=Object.freeze({
-      drawn:Object.freeze({hosts:drawn.filter(isHost).length, kinds:drawn.filter(it=>isKind(it.n.id)).length, others:drawn.filter(it=>!isKind(it.n.id)&&!isHost(it)).length}),
+      // Inside the canvas only, as the naming is: a half disc at the edge is
+      // drawn but not named, and the measure compares the two.
+      drawn:Object.freeze((()=>{ const ins=drawn.filter(it=>!(it.p.x<0||it.p.x>cvW||it.p.y<0||it.p.y>cvH)); return {hosts:ins.filter(isHost).length, kinds:ins.filter(it=>isKind(it.n.id)).length, others:ins.filter(it=>!isKind(it.n.id)&&!isHost(it)).length}; })()),
       labels:Object.freeze(ledger)
     });
   }catch(_){ }
