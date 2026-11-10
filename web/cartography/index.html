@@ -629,7 +629,49 @@ function nameLabel(n){
   const nk=Object.keys(A).find(k=>/(^|\.)name$/i.test(k))||Object.keys(I).find(k=>/(^|\.)name$/i.test(k));
   return (nk&&(A[nk]||I[nk]))||idLabel(n);
 }
-function labelOf(n){ return (labelMode==='name'?nameLabel(n):idLabel(n))||n.id.slice(0,6); }
+// The domain suffix the tenant's hosts share is noise on a map of that tenant:
+// twenty names ending in the same ".senhub.io" are twenty labels a third wider
+// than they need to be, and width is what the names collide on. Computed from
+// the hosts themselves, never from a list, and only when at least two share it,
+// so a lone fully qualified name keeps its full form. The full name stays in
+// the tooltip and the card.
+let COMMON_SUFFIX = null;
+const AMBIGUOUS_SHORT = new Set();   // short forms two hosts would share: both keep their full name
+function recomputeShortNames(){
+  COMMON_SUFFIX = null; AMBIGUOUS_SHORT.clear();
+  const counts = new Map();
+  const hosts = Object.values(ENT).filter(n => n.type === 'host');
+  for(const n of hosts){
+    const name = nameLabel(n) || '';
+    const m = /^([A-Za-z0-9_-]*[A-Za-z][A-Za-z0-9_-]*)\.([A-Za-z0-9.-]+)$/.exec(name);
+    if(m) counts.set(m[2], (counts.get(m[2]) || 0) + 1);
+  }
+  let best = null, bestN = 1;
+  for(const [suf, n] of counts) if(n > bestN){ best = suf; bestN = n; }
+  COMMON_SUFFIX = best;
+  if(!COMMON_SUFFIX) return;
+  const seen = new Map();
+  for(const n of hosts){
+    const short = shortOf(nameLabel(n) || '', true);
+    seen.set(short, (seen.get(short) || 0) + 1);
+  }
+  for(const [short, n] of seen) if(n > 1) AMBIGUOUS_SHORT.add(short);
+}
+function shortOf(name, raw){
+  if(!COMMON_SUFFIX || !name) return name;
+  // Never an address: 10.90.0.3 would become "10", which is not a shorter name
+  // for that thing, it is a different thing.
+  if(/^[0-9.:]+$/.test(name)) return name;
+  if(!name.endsWith('.' + COMMON_SUFFIX)) return name;
+  const short = name.slice(0, name.length - COMMON_SUFFIX.length - 1);
+  if(!short || /^[0-9]+$/.test(short)) return name;
+  if(!raw && AMBIGUOUS_SHORT.has(short)) return name;
+  return short;
+}
+function labelOf(n){
+  const full = (labelMode==='name'?nameLabel(n):idLabel(n))||n.id.slice(0,6);
+  return (labelMode==='name' && n.type==='host') ? shortOf(full) : full;
+}
 function titleOf(n){ const I=(n.identity||[]).map(a=>a.key+'='+a.value).join(', '); return n.type+(I?' · '+I:'')+' · '+n.id; }
 
 // --- folding: a graph of 546 entities is unreadable at any stroke weight ------
@@ -914,6 +956,7 @@ function declutterLabels() {
   const kept = [];
   const updates = [];
 
+  const labelH = 16 / scale;   // the label's height in canvas units
   for (const id of sorted) {
     const label = labelOf(ENT[id]);
     const p = pos[id];
@@ -921,20 +964,36 @@ function declutterLabels() {
     const cx = p.x * scale;
     const nd = nodes.get(id);
     const r = (nd && typeof nd.size === 'number') ? nd.size : 0;
+    const w = label.length * 6.6 + 8;
     // Drop by the node's own radius plus the renderer's gap, both in canvas
     // units, THEN convert: a constant drop is wrong by exactly the size of the
     // disc, which is how this pass cleared Network and missed Machines.
-    const top = (p.y + r + VIS_LABEL_DROP) * scale;
-    const w = label.length * 6.6 + 8;
-    const box = { x1: cx - w / 2, x2: cx + w / 2, y1: top, y2: top + 16 };
-    // A host's label is never dropped: it goes on the board regardless, and
-    // becomes an obstacle for the rest. Any other label survives only if its
-    // box touches no box already kept and no disc.
+    const boxAt = (dy) => {
+      const top = (p.y + r + VIS_LABEL_DROP + dy) * scale;
+      return { x1: cx - w / 2, x2: cx + w / 2, y1: top, y2: top + 16 };
+    };
+    const blocked = (b) => kept.some(k => hits(b, k))
+      || ids.some(other => other !== id && discs[other] && hits(b, discs[other]));
     const unconditional = ENT[id].type === 'host';
-    const clash = !unconditional && (kept.some(k => hits(box, k))
-      || ids.some(other => other !== id && discs[other] && hits(box, discs[other])));
+    if (unconditional) {
+      // A host's name is never dropped. When its default seat would land on a
+      // name already kept, it is MOVED -- above the disc, then further below --
+      // and only when every seat is taken does it go on its default seat
+      // regardless. vis only shifts a label vertically, so seats are vertical.
+      const seats = [0, -(2 * r + 2 * VIS_LABEL_DROP + labelH), labelH + 2, -(2 * r + 2 * VIS_LABEL_DROP + 2 * labelH + 2), 2 * labelH + 4];
+      let chosen = seats[0], box = boxAt(seats[0]);
+      for (const dy of seats) { const b = boxAt(dy); if (!blocked(b)) { chosen = dy; box = b; break; } }
+      kept.push(box);
+      updates.push({ id, label, font: { vadjust: chosen } });
+      continue;
+    }
+    // Any other label survives only if its box touches no box already kept and
+    // no disc; it is never moved, since the room it would move into belongs to
+    // the names placed before it.
+    const box = boxAt(0);
+    const clash = blocked(box);
     if (!clash) kept.push(box);
-    updates.push({ id, label: clash ? undefined : label });
+    updates.push({ id, label: clash ? undefined : label, font: { vadjust: 0 } });
   }
 
   // One single update so the map is not redrawn once per node.
@@ -1649,6 +1708,7 @@ async function loadFull() {
     for (const k in ENT) delete ENT[k]; for (const k in REL) delete REL[k];
     ents.forEach(n => ENT[n.id] = n);
     rels.forEach(n => REL[n.id] = n);
+    recomputeShortNames();
     // Before the first paint, not after: narrowing afterwards would pay the very
     // layout cost it exists to avoid. applyView redraws on its own, so narrowing
     // REPLACES this first rebuild rather than adding a second full node build.
@@ -2677,7 +2737,8 @@ function wireGoto(){
     for(const id in ENT){
       if(hosts.length >= 8 && others.length >= 8) break;
       const e = ENT[id];
-      const lab = labelOf(e);
+      // Matched on the full name, so a typed domain still finds its host; shown short.
+      const lab = (nameLabel(e) || labelOf(e));
       if(!lab || lab.toLowerCase().indexOf(want) !== 0) continue;
       if(e.type === 'host'){ if(hosts.length < 8) hosts.push({id, e}); }
       else if(others.length < 8) others.push({id, e});
