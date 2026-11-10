@@ -1166,6 +1166,15 @@ function syncShowAll(keptCount, totalCount){
   // totalCount excludes the legend's own choices, so the button never offers to
   // undo something it leaves alone.
   const n = document.getElementById('showallN');
+  // A reveal with nothing else withheld leaves kept === total, yet it is a state
+  // the reader must be able to leave, and the message offers this button for
+  // it: so it shows, with an empty badge, because nothing is being withheld.
+  if(keptCount >= totalCount && REVEALED.size){
+    b.classList.remove('off');
+    if(n) n.textContent = '';
+    b.title = 'Put the revealed element back where it was folded';
+    return;
+  }
   if(keptCount < totalCount){
     b.classList.remove('off');
     // The badge counts what this button will PUT BACK, which is the drawn set, not
@@ -1232,7 +1241,10 @@ function rebuild(){
       if(rep && hidden.has(rep.type)) orphanedBy.set(rep.type,(orphanedBy.get(rep.type)||0)+1);
       return;
     }
-    const ok=attrMatch(n); if(q && ok) matchCandidates++; if(q && !ok && !MATCH_OWNERS.has(n.id) && filterOnly) return;   // "only" mode hides non-matching, but not an owner hiding a match
+    const ok=attrMatch(n); if(q && ok) matchCandidates++;
+    // "only" mode hides non-matching, but not an owner hiding a match -- and not
+    // an element named by hand, which withheldBy promises the search yields to.
+    if(q && !ok && !MATCH_OWNERS.has(n.id) && filterOnly && !REVEALED.has(n.id)) return;
     candidates.push({n, d:degree[n.id]||0}); });
 
   // Priority: what the reader explicitly asked for (filter, then citations) comes
@@ -1240,6 +1252,9 @@ function rebuild(){
   // stays identical from one render to the next.
   let cappedTotal=candidates.length, cappedOut=0;
   candidates.sort((a,b)=>{
+    // An element named by hand is never the one the cap cuts.
+    const ar=REVEALED.has(a.n.id), br=REVEALED.has(b.n.id);
+    if(ar!==br) return ar?-1:1;
     const am=q&&(attrMatch(a.n)||MATCH_OWNERS.has(a.n.id)), bm=q&&(attrMatch(b.n)||MATCH_OWNERS.has(b.n.id));
     if(am!==bm) return am?-1:1;
     const ac=CITED.size&&(CITED.has(a.n.identityFingerprint)||CITED_OWNERS.has(a.n.id)),
@@ -2249,7 +2264,8 @@ function applyView(btn){
     REVEALED.clear();
     // The card was opened BY the reveal, on the revealed element. Leaving it up
     // over a map that no longer draws that element describes something the
-    // reader cannot see.
+    // reader cannot see -- and so would a selection left on it.
+    try{ net.unselectAll(); }catch(_){}
     inspect(null);
   }
   if(!activeView){
@@ -2460,6 +2476,11 @@ function reveal(id){
       say('This element could not be shown.');
       return;
     }
+    // Leave the field. With the focus still in it, Escape went to the field's own
+    // handler and never reached showAll, so the sentence below was false on the
+    // main path -- Enter -- and only true after a mouse click on a suggestion.
+    const g = document.getElementById('goto');
+    if(g && document.activeElement === g) g.blur();
     const names = {view:'the current view', search:'the search', highlight:"the Dock's highlight"};
     const outside = [...why].filter(w => names[w]).map(w => names[w]);
     say(outside.length
