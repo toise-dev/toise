@@ -3094,7 +3094,10 @@ function drawDome(){
   // A label that lands on another is worse than no label: two names overprinted
   // read as a third, wrong one. Brightest first, and a name whose box collides
   // with one already placed is dropped rather than drawn over it -- unless it
-  // is a host's, which goes on regardless and is an obstacle for the rest.
+  // is a host's or a kind box's. A host's name goes on regardless; a kind box's
+  // label IS the box, so dropping it leaves an empty rectangle, which was the
+  // one thing the old rule guaranteed never to draw. Both are obstacles for the
+  // rest, and may overprint each other, which is the lesser evil of the two.
   const placed=[];
   for(const it of named){
     if(!it.n.label) continue;
@@ -3102,7 +3105,7 @@ function drawDome(){
     const w=g2.measureText(text).width, x=it.p.x-w/2, y=it.p.y+it.rad+4;
     const box={x0:x-2,y0:y-1,x1:x+w+2,y1:y+12};
     let clash=false;
-    if(!isHost(it)) for(const q of placed){
+    if(!isHost(it) && !isKind(it.n.id)) for(const q of placed){
       if(box.x0<q.x1 && box.x1>q.x0 && box.y0<q.y1 && box.y1>q.y0){ clash=true; break; }
     }
     if(clash) continue;
