@@ -1884,33 +1884,27 @@ function sayIncomplete(loadedE, loadedR, bounds) {
   if (!scopeDescribesInstant) { el.textContent = ''; return; }
   // Comparing against every scope reading tolerates a creation or deletion that
   // happened during the load, without inventing an arbitrary tolerance threshold.
-  // The portal withholds whole types by construction and says how many in
-  // hiddenEntities. Those were never asked for, so they are not "not loaded":
-  // measured in production, "entities 1088 of 2332 loaded" on a complete read,
-  // 1244 of them withheld on purpose. A complete read presented as incomplete
-  // teaches the reader to ignore the one line that should alarm them.
-  //
-  // Relations touching a withheld entity are withheld too, and the portal gives
-  // no count for those, so with anything withheld the relation bound is unknown
-  // and no claim is made about relations: a claim needs a known bound.
-  const say = (lE, totalE, lR, totalR, hidden) => {
-    const askedE = totalE - hidden;
-    const gapE = lE < askedE;
-    const gapR = !hidden && lR < totalR;
+  // ONE convention, written in the manifest: the scope's totals are what the
+  // relay will DELIVER, after whatever it withholds. hiddenEntities is how many
+  // it withheld, said apart in the footer, and never subtracted here. The page
+  // had subtracted it from a total that already excluded it -- two relays, two
+  // conventions -- so the expected count went negative and "Incomplete" could
+  // never fire again, even on 1,038 delivered of 1,088. Measured by lab.
+  const say = (lE, totalE, lR, totalR) => {
+    const gapE = lE < totalE, gapR = lR < totalR;
     el.textContent = (gapE || gapR)
-      ? 'Incomplete: entities ' + fmtCount(lE) + ' of ' + fmtCount(askedE) +
-        (hidden ? '' : ', relations ' + fmtCount(lR) + ' of ' + fmtCount(totalR)) + ' loaded.'
+      ? 'Incomplete: entities ' + fmtCount(lE) + ' of ' + fmtCount(totalE) +
+        ', relations ' + fmtCount(lR) + ' of ' + fmtCount(totalR) + ' loaded.'
       : '';
   };
   if (bounds && bounds.length) {
-    const minE = Math.min(...bounds.map(b => b.entities));
-    const minR = Math.min(...bounds.map(b => b.relations));
-    const hidden = Math.max(...bounds.map(b => b.hidden || 0));
-    say(loadedE, minE, loadedR, minR, hidden);
+    // The smaller of the two scope readings: a creation during the load must
+    // not read as a gap.
+    say(loadedE, Math.min(...bounds.map(b => b.entities)), loadedR, Math.min(...bounds.map(b => b.relations)));
     return;
   }
   if (!SCOPE) { el.textContent = ''; return; } // without a total, any claimed gap would be invented
-  say(loadedE, SCOPE.entities, loadedR, SCOPE.relations, SCOPE.hiddenEntities || 0);
+  say(loadedE, SCOPE.entities, loadedR, SCOPE.relations);
 }
 
 async function loadFull() {
@@ -1922,7 +1916,7 @@ async function loadFull() {
     // Quiet on the way in too: at this point the maps are empty, so comparing
     // would claim "0 of N" until the data lands.
     await refreshScope({ quiet: true });
-    const first = SCOPE ? { entities: SCOPE.entities, relations: SCOPE.relations, hidden: SCOPE.hiddenEntities || 0 } : null;
+    const first = SCOPE ? { entities: SCOPE.entities, relations: SCOPE.relations } : null;
     const [ents, rels] = await Promise.all([fetchAll('entities'), fetchAll('relations')]);
     for (const k in ENT) delete ENT[k]; for (const k in REL) delete REL[k];
     ents.forEach(n => ENT[n.id] = n);
@@ -1932,7 +1926,7 @@ async function loadFull() {
     // REPLACES this first rebuild rather than adding a second full node build.
     if (!openNarrowOnLargeEstate()) rebuild();
     await refreshScope({ quiet: true });
-    const second = SCOPE ? { entities: SCOPE.entities, relations: SCOPE.relations, hidden: SCOPE.hiddenEntities || 0 } : null;
+    const second = SCOPE ? { entities: SCOPE.entities, relations: SCOPE.relations } : null;
     // Remember what the scope said at the moment this graph was read, so the
     // poll can tell "nothing happened" from "we have not looked".
     if (SCOPE) loadedCounts = SCOPE.entities+'/'+SCOPE.relations;
