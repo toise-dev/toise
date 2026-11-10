@@ -2151,8 +2151,9 @@ function sliderToMs(v) {
 function sayInstant() {
   const el = document.getElementById('tlAtLabel');
   if (!el) return;
-  // Compact on the line -- "11/10 13:00" -- so the instant is readable whole in a
-  // nine-rem column: the full form ended in an ellipse. The full form, with
+  // Compact on the line -- month and day in the reader's own order, then the
+  // time -- so the instant is readable whole in a nine-rem column: the full form
+  // ended in an ellipse. The full form, with
   // seconds, goes to the tooltip with the horizon.
   const fmt = ms => { const d = new Date(ms); return d.toLocaleDateString([], { month: '2-digit', day: '2-digit' }) + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); };
   const full = ms => new Date(ms).toLocaleString();
@@ -3181,11 +3182,15 @@ const tlLabelEl=document.getElementById('tlLabel'); tlLabelEl.textContent=tlWind
 // now and by the live button -- that button used to return the MAP to the
 // present and leave the window where Earlier had put it, so a live map sat over
 // a ruler reading "07:00 → 13:00" at seven in the evening.
-function windowLive(){
+function windowLive(opts){
   const lbl=document.getElementById('tlLabel');
   spanEnd=null; spanMs=WINDOWS[tlWindow]||WINDOWS['24h'];
   if(lbl){ lbl.textContent=tlWindow; lbl.title=''; }
-  renderRuler(); loadProfile(); syncSlider(); sayInstant();
+  renderRuler();
+  // The live button reads the profile itself, at the end of its map read: a
+  // second read here, for the same window, was up to forty pages thrown away.
+  if(!(opts && opts.noProfile)) loadProfile();
+  syncSlider(); sayInstant();
 }
 function shiftWindow(dir){
   const [s,e]=spanBounds();
@@ -3260,9 +3265,12 @@ if (tlAt) {
 if (tlLive) {
   tlLive.addEventListener('click', async () => {
     if (tlAt) tlAt.value = '1000';
+    // The window first, so the map read that follows reads the profile for the
+    // live window once. If that read fails, the map stays where it was and says
+    // so; the window being live over it is the accepted case.
+    if (!isLiveSpan()) windowLive({ noProfile: true });
     // Wait for the live restore so the label reflects the instant actually loaded.
     await goToInstant(null);
-    if (!isLiveSpan()) windowLive();   // the window comes back too, not only the map
     sayInstant();
     syncSlider();
   });
