@@ -87,6 +87,8 @@ Toise en direct est refusée, et c'est normal. Ils figurent ici parce que ce
 document est le contrat du RELAIS, pas celui du serveur.
 
 La page affiche `hiddenNotice` telle quelle et **n'écrit jamais de phrase à la
+
+**Invariant dont la page dépend** : `entities` et `relations` restent les **totaux bruts du serveur**, jamais nettoyés par le relais ; `hiddenEntities` est le nombre d'entités que le relais a retirées de ce total. La page mesure la complétude d'une lecture contre `entities − hiddenEntities`. Le relais ne donne pas de compte des relations retirées : avec `hiddenEntities > 0`, la page ne fait aucune affirmation sur les relations.
 place**. C'est la règle « celui qui filtre est celui qui déclare » appliquée
 jusqu'au bout : si la page composait la phrase, le jour où le relais retire un
 autre type elle continuerait à nommer l'ancien. C'est la présence de la phrase
