@@ -1780,7 +1780,11 @@ function sayInstant() {
   // Show what was served, not what was requested.
   // An unreadable echo is not a date: fall back to what the page asked for, which
   // is what it already trusts for the counters.
-  const echoed = (SCOPE && SCOPE.asOf != null) ? Date.parse(SCOPE.asOf) : NaN;
+  // Prefer what the scope echoes only while the scope describes THIS instant.
+  // After a failed read and a failed re-read of the scope, the echo is of an
+  // instant the map never reached; scopeDescribesInstant already knows that, so
+  // the label falls back to the instant the map is actually at.
+  const echoed = (SCOPE && SCOPE.asOf != null && scopeDescribesInstant) ? Date.parse(SCOPE.asOf) : NaN;
   const served = Number.isNaN(echoed) ? asOfMs : echoed;
   // The "historical" mark on the live button is about the MAP's instant, so it
   // is set here, where that instant is known, and nowhere else. The window
