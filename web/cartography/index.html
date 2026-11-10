@@ -864,8 +864,11 @@ const VIS_LABEL_DROP = 10.6;   // measured on the renderer, not assumed
 function declutterLabels() {
   // Labels are removed, never moved: the layout is fixed and already
   // learned by the reader, so only visibility may change between views.
-  // Priority keeps cited entities first, then the most connected nodes,
-  // then id order so identical views always resolve identically.
+  // A HOST always carries its name -- Matthieu's ruling: twenty names is the
+  // reason the Machines view exists, and the same holds for a host drawn in
+  // any view. Hosts are placed first and never dropped; everything else shares
+  // what room is left, cited entities first, then the most connected, then id
+  // order so identical views always resolve identically.
   // A kind node is a count, not an entity: it has no type to dim and no
   // fingerprint to cite, so it is left alone rather than guessed about.
   const ids = nodes.getIds().filter(id => {
@@ -879,14 +882,13 @@ function declutterLabels() {
 
   const sorted = ids.slice().sort((a, b) => {
     const ea = ENT[a], eb = ENT[b];
+    // Hosts first, before even the cited: a host's name is unconditional, so it
+    // must be on the board before anything that could be dropped for it.
+    const ha = ea.type === 'host', hb = eb.type === 'host';
+    if (ha !== hb) return ha ? -1 : 1;
     const ca = CITED.has(ea.identityFingerprint) ? 0 : 1;
     const cb = CITED.has(eb.identityFingerprint) ? 0 : 1;
     if (ca !== cb) return ca - cb;
-    // Hosts before anything else. Degree alone handed the names to the most
-    // connected things, which in Network are addresses and endpoints: the biggest
-    // discs read "127.0.0.1:9471" while eleven of twenty hosts went unnamed.
-    const ha = ENT[a] && ENT[a].type === 'host', hb = ENT[b] && ENT[b].type === 'host';
-    if (ha !== hb) return ha ? -1 : 1;
     const da = degree[a] || 0, db = degree[b] || 0;
     if (da !== db) return db - da;
     return a < b ? -1 : 1;
@@ -920,9 +922,12 @@ function declutterLabels() {
     const top = (p.y + r + VIS_LABEL_DROP) * scale;
     const w = label.length * 6.6 + 8;
     const box = { x1: cx - w / 2, x2: cx + w / 2, y1: top, y2: top + 16 };
-    // A label survives only if its box touches no box already kept.
-    const clash = kept.some(k => hits(box, k))
-      || ids.some(other => other !== id && discs[other] && hits(box, discs[other]));
+    // A host's label is never dropped: it goes on the board regardless, and
+    // becomes an obstacle for the rest. Any other label survives only if its
+    // box touches no box already kept and no disc.
+    const unconditional = ENT[id].type === 'host';
+    const clash = !unconditional && (kept.some(k => hits(box, k))
+      || ids.some(other => other !== id && discs[other] && hits(box, discs[other])));
     if (!clash) kept.push(box);
     updates.push({ id, label: clash ? undefined : label });
   }
