@@ -1430,7 +1430,13 @@ function applySpread(){
   const base = {};
   for(const id of ids){ const q = SKY_POS[id] || cur[id]; if(q) base[id] = { x: q.x, y: q.y }; }
   const hosts = ids.filter(id => ENT[id] && ENT[id].type === 'host' && base[id]);
-  let eased = hosts.length < 2;
+  // The non-hosts a host must not land on: they keep the sky's places, but a
+  // host pushed off another host must not come to rest on one of them -- in
+  // Network, an address or an endpoint. Their discs' real radii, from the nodes.
+  const others = ids.filter(id => base[id] && !(ENT[id] && ENT[id].type === 'host'));
+  const radius = {};
+  for(const id of ids){ const nd = nodes.get(id); radius[id] = (nd && typeof nd.size === 'number') ? nd.size : 14; }
+  let eased = hosts.length === 0 || (hosts.length < 2 && others.length === 0);
   for(let pass = 0; pass < SPREAD_PASSES && !eased; pass++){
     let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
     for(const id of ids){ const q = base[id]; if(!q) continue; if(q.x < x1) x1 = q.x; if(q.x > x2) x2 = q.x; if(q.y < y1) y1 = q.y; if(q.y > y2) y2 = q.y; }
@@ -1447,6 +1453,22 @@ function applySpread(){
         const push = (d - dist) / 2;
         a.x -= dx / dist * push; a.y -= dy / dist * push;
         b.x += dx / dist * push; b.y += dy / dist * push;
+        moved = true;
+      }
+    }
+    // Then off anything that is not a host: the host alone moves, by the whole
+    // deficit, so the non-host stays exactly where the sky put it. The clearance
+    // is the two discs' radii plus a few screen pixels of daylight.
+    const daylight = 6 / scale;
+    for(const h of hosts){
+      for(const o of others){
+        const a = base[h], b = base[o];
+        let dx = a.x - b.x, dy = a.y - b.y, dist = Math.hypot(dx, dy);
+        const need = radius[h] + radius[o] + daylight;
+        if(dist >= need * 0.98) continue;
+        if(dist < 1e-6){ dx = 1; dy = 0; dist = 1; }
+        const push = need - dist;
+        a.x += dx / dist * push; a.y += dy / dist * push;
         moved = true;
       }
     }
@@ -1716,7 +1738,7 @@ function rebuild(){
   if(!structural){ for(const id of nodeIds){ if(!prevNodeIds.has(id)){ structural=true; break; } } }
   const card=document.getElementById('detail');
   if(card && !card.querySelector('.actions')) renderLitList(card);   // resting state, or nothing ever asks for the list
-  if(structural && fitted && !staticLayout && !spreadApplied) settle();
+  if(structural && fitted && !staticLayout) settle();   // settle() stands down over a spread itself, and still honours the fit it was asked for
   // First data render: lay the graph out ONCE while the canvas is hidden, then reveal
   // it already-settled (no visible fly-in). Reveal + fit happen on stabilizationIterationsDone.
   if(!fitted && nodeIds.size){ fitted=true; net.setOptions({physics:{enabled:true}});
