@@ -176,8 +176,9 @@ header label input{font:inherit;}
 /* Large means large: 18px, which a 12px footer barely distinguishes, was not. */
 /* One line, always. During a past read the label wrapped to five lines and the
    footer grew from 144 to 216px, taking 72px of map for the length of the read.
-   The horizon moves to the tooltip; the line keeps its height in every state. */
-#tlAtLabel{display:block;max-width:100%;height:1.35em;line-height:1.35em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+   The horizon moves to the tooltip; the line's height is fixed in rem, sized for
+   the large dragging state, so neither the read nor the drag moves the map. */
+#tlAtLabel{display:block;max-width:100%;height:1.9rem;line-height:1.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 #tlAtLabel.dragging{font-size:1.4rem;font-weight:600;color:var(--fg);}
 .badge{display:inline-block;margin-left:.35rem;padding:0 .3rem;border-radius:999px;
   background:var(--line);font-size:10px;line-height:1.5;vertical-align:middle;opacity:.9;}
@@ -1416,6 +1417,10 @@ function applySpread(){
     }
     return;
   }
+  // A settle may still be running -- one starts on every structural redraw, a
+  // live arrival included -- and would go on moving what is placed here until
+  // its timer fires. Freeze first; the sky it was settling has been remembered.
+  freeze();
   const view = document.getElementById('net');
   const W = (view && view.clientWidth) || 800, H = (view && view.clientHeight) || 530;
   // Start from the sky's positions, which is the picture the reader knows; the
@@ -2045,6 +2050,7 @@ function sayInstant() {
   if (liveBtn) liveBtn.classList.toggle('hist', served != null);
   if (served == null) {
     el.textContent = 'live';
+    el.title = '';
     return;
   }
   const h = horizonMs();
