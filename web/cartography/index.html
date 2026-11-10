@@ -2446,6 +2446,12 @@ function withheldBy(id){
   if(activeView && dimmed.has(e.type)) why.add('view');
   if(CITED.size && !CITED.has(e.identityFingerprint) && !CITED_OWNERS.has(e.id)) why.add('highlight');
   if(attrQuery.trim() && !attrMatch(e) && !MATCH_OWNERS.has(e.id)) why.add('search');
+  // Its carrier switched off in the legend is not a reason to refuse -- the rule
+  // "switching a type off never puts more on the map" holds, since nothing
+  // appeared at the moment of switching, and the reader asked for this element
+  // by name -- but it is a reason the message must give.
+  const up = OWNER[e.id];
+  if(up && ENT[up] && hidden.has(ENT[up].type)) why.add('carrier');
   return why;
 }
 
@@ -2487,9 +2493,13 @@ function reveal(id){
     if(g && document.activeElement === g) g.blur();
     const names = {view:'the current view', search:'the search', highlight:"the Dock's highlight"};
     const outside = [...why].filter(w => names[w]).map(w => names[w]);
-    say(outside.length
-      ? 'Showing this element outside '+outside.join(' and ')+' \u2014 Esc or Show all puts everything back.'
-      : 'Showing this element on its own, out of the carrier it was folded into \u2014 Esc or Show all puts everything back.');
+    const up = OWNER[id];
+    const carrierOff = why.has('carrier') && up && ENT[up]
+      ? ' Its '+typeLabel(ENT[up].type)+' is switched off in the legend.' : '';
+    say((outside.length
+      ? 'Showing this element outside '+outside.join(' and ')+'.'
+      : 'Showing this element on its own, out of the carrier it was folded into.')
+      + carrierOff + ' Esc or Show all puts everything back.');
   }
   try{ net.selectNodes([id]); net.focus(id,{scale:net.getScale(),animation:false}); }catch(_){}
   syncLabelSize();
