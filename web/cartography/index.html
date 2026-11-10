@@ -1437,8 +1437,24 @@ function applySpread(){
   // Network, an address or an endpoint. Their discs' real radii, from the nodes.
   const others = ids.filter(id => base[id] && !(ENT[id] && ENT[id].type === 'host'));
   const radius = {};
-  for(const id of ids){ const nd = nodes.get(id); radius[id] = (nd && typeof nd.size === 'number') ? nd.size : 14; }
+  for(const id of ids){
+    const nd = nodes.get(id);
+    if(isKind(id)){
+      // A kind box is sized by vis on its text, not on `size`: "357
+      // service.instance" is a hundred units wide. Half its text width, at the
+      // 12 canvas units its label is set in, plus the box's own padding.
+      let half = 24;
+      try{
+        if(!measureCtx){ const c = document.createElement('canvas'); measureCtx = c.getContext('2d'); }
+        if(measureCtx){ measureCtx.font = "12px 'Geist Sans', system-ui, sans-serif"; half = (measureCtx.measureText(String((nd && nd.label) || '')).width + 16) / 2; }
+      }catch(_){ }
+      radius[id] = Math.max(half, 12);
+    } else {
+      radius[id] = (nd && typeof nd.size === 'number') ? nd.size : 14;
+    }
+  }
   let eased = hosts.length === 0 || (hosts.length < 2 && others.length === 0);
+  let hostsSettled = eased;   // the objective: hosts clear of each other
   for(let pass = 0; pass < SPREAD_PASSES && !eased; pass++){
     let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
     for(const id of ids){ const q = base[id]; if(!q) continue; if(q.x < x1) x1 = q.x; if(q.x > x2) x2 = q.x; if(q.y < y1) y1 = q.y; if(q.y > y2) y2 = q.y; }
@@ -1458,6 +1474,7 @@ function applySpread(){
         moved = true;
       }
     }
+    hostsSettled = !moved;   // before the non-host pass: did the hosts themselves need moving?
     // Then off anything that is not a host: the host alone moves, by the whole
     // deficit, so the non-host stays exactly where the sky put it. The clearance
     // is the two discs' radii plus a few screen pixels of daylight.
@@ -1476,7 +1493,11 @@ function applySpread(){
     }
     if(!moved) eased = true;
   }
-  if(eased){
+  // At the bound, the positions reached are the best effort and they are kept
+  // -- a single host wedged between two fixed discs, bounced from one into the
+  // other every pass, must not throw sixty nodes onto a spiral. The spiral is
+  // for the one failure that defeats the objective: hosts still on each other.
+  if(eased || hostsSettled){
     nodes.update(ids.filter(id => base[id]).map(id => ({ id, x: base[id].x, y: base[id].y })));
   } else {
     // Fallback, and the footer says so: a spiral filling the frame's ellipse,
