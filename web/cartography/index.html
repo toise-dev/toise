@@ -1458,9 +1458,37 @@ function applySpread(){
   // both names below their discs, which sixty pixels between centres does not
   // give a long name -- measured in Network, "preprod-sensorfactory-shop" on
   // its neighbour's, stable over three loads, with every vertical seat taken.
-  const nameW = {};
-  for(const id of hosts) nameW[id] = labelWidthPx(labelOf(ENT[id]) || '') + 8;
-  const namePx = labelScreenPx() + 4;
+  // At the font the fit WILL give, not the current zoom: the label font is 12
+  // screen pixels up to a scale of 12/11 and eleven canvas units times the
+  // scale beyond, so a tiny view fitted at the maximum zoom draws names nearly
+  // three times wider than a measure taken at the current zoom would say.
+  const fontAt = (sc) => Math.max(12, 11 * sc);
+  const nameWidthsAt = (sc) => {
+    const px = fontAt(sc), out = {};
+    for(const id of hosts){
+      const text = labelOf(ENT[id]) || '';
+      let w = text.length * px * 0.55;
+      try{
+        if(!measureCtx){ const c = document.createElement('canvas'); measureCtx = c.getContext('2d'); }
+        if(measureCtx){ measureCtx.font = px + "px 'Geist Sans', system-ui, sans-serif"; w = measureCtx.measureText(text).width; }
+      }catch(_){ }
+      out[id] = w + 8;
+    }
+    return out;
+  };
+  // The distance a pair needs along its own line at a given scale: the target,
+  // or more if the names would still touch. Shared by the passes and by the
+  // check at the real scale, so the two cannot disagree.
+  const pairNeed = (i, j, sc, d, nameW, namePx) => {
+    const a = base[hosts[i]], b = base[hosts[j]];
+    let dx = b.x - a.x, dy = b.y - a.y, dist = Math.hypot(dx, dy);
+    if(dist < 1e-6){ dx = 1; dy = 0; dist = 1; }
+    const ux = Math.abs(dx) / dist, uy = Math.abs(dy) / dist;
+    const X = ((nameW[hosts[i]] + nameW[hosts[j]]) / 2 + 6) / sc;
+    const Y = (namePx + 4) / sc + Math.abs(radius[hosts[i]] - radius[hosts[j]]);
+    const byNames = Math.min(ux > 1e-6 ? X / ux : Infinity, uy > 1e-6 ? Y / uy : Infinity);
+    return { dx, dy, dist, need: Math.max(d, Math.min(byNames, d * 3)) };   // never more than three targets: a pathological line is not a reason to scatter
+  };
   // The non-hosts a host must not land on: they keep the sky's places, but a
   // host pushed off another host must not come to rest on one of them -- in
   // Network, an address or an endpoint. Their discs' real radii, from the nodes.
@@ -1499,26 +1527,19 @@ function applySpread(){
   const ease = (scaleOverride) => {
   let eased = hosts.length === 0 || (hosts.length < 2 && others.length === 0);
   let hostsSettled = eased;   // the objective: hosts clear of each other
+  let nameW = null, namePx = 0, nameScale = 0;
   for(let pass = 0; pass < SPREAD_PASSES && !eased; pass++){
     let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
     for(const id of ids){ const q = base[id]; if(!q) continue; if(q.x < x1) x1 = q.x; if(q.x > x2) x2 = q.x; if(q.y < y1) y1 = q.y; if(q.y > y2) y2 = q.y; }
     const bw = Math.max(x2 - x1, 1), bh = Math.max(y2 - y1, 1);
     const scale = scaleOverride || (Math.min(W / bw, H / bh) * 0.9);
     const d = aim / scale;   // screen pixels, in canvas units
+    if(!nameW || Math.abs(scale - nameScale) > nameScale * 0.05){ nameW = nameWidthsAt(scale); namePx = fontAt(scale) + 4; nameScale = scale; }
     let moved = false;
     for(let i = 0; i < hosts.length; i++){
       for(let j = i + 1; j < hosts.length; j++){
         const a = base[hosts[i]], b = base[hosts[j]];
-        let dx = b.x - a.x, dy = b.y - a.y, dist = Math.hypot(dx, dy);
-        if(dist < 1e-6){ dx = 1; dy = 0; dist = 1; }    // the same spot: part them along x
-        // The distance this pair needs along ITS OWN line: the target, or more if
-        // their names would still touch -- names separate once the horizontal gap
-        // exceeds half the two widths, or the vertical gap exceeds a line.
-        const ux = Math.abs(dx) / dist, uy = Math.abs(dy) / dist;
-        const X = ((nameW[hosts[i]] + nameW[hosts[j]]) / 2 + 6) / scale;
-        const Y = (namePx + 4) / scale + Math.abs(radius[hosts[i]] - radius[hosts[j]]);
-        const byNames = Math.min(ux > 1e-6 ? X / ux : Infinity, uy > 1e-6 ? Y / uy : Infinity);
-        const need = Math.max(d, Math.min(byNames, d * 3));   // never more than three targets: a pathological line is not a reason to scatter
+        const { dx, dy, dist, need } = pairNeed(i, j, scale, d, nameW, namePx);
         if(dist >= need * 0.98) continue;                // within two percent is there
         const push = (need - dist) / 2;
         a.x -= dx / dist * push; a.y -= dy / dist * push;
@@ -1573,15 +1594,23 @@ function applySpread(){
     nodes.update(ids.filter(id => base[id]).map(id => ({ id, x: base[id].x, y: base[id].y })));
     try{ net.fit({ nodes: ids, animation: false, maxZoomLevel: 3 }); realScale = net.getScale() * 0.97 * stripShare; }catch(_){ realScale = 0; }
     if(!realScale) break;
-    let minPx = Infinity;
+    // Always one easing against the real scale before anything is accepted: the
+    // estimate had been thirteen percent generous, and names eased against it
+    // were converted to canvas with a scale too large, so their room was short.
+    if(round === 0){ ({ eased, hostsSettled } = ease(realScale)); continue; }
+    // Then the check, at the real scale, on both concerns: centres clear of the
+    // objective by one percent, and names clear by the same rule the passes use.
+    // The objective itself, measured here -- and it IS the verdict: a pair judged
+    // short at the estimated scale, then found clear at the real one, must not
+    // leave "hosts settled" false and send sixty nodes to a spiral.
+    const dReal = aim / realScale, nW = nameWidthsAt(realScale), nPx = fontAt(realScale) + 4;
+    let minPx = Infinity, namesClear = true;
     for(let i = 0; i < hosts.length; i++) for(let j = i + 1; j < hosts.length; j++){
-      const a = base[hosts[i]], b = base[hosts[j]];
-      minPx = Math.min(minPx, Math.hypot(b.x - a.x, b.y - a.y) * realScale);
+      const { dist, need } = pairNeed(i, j, realScale, dReal, nW, nPx);
+      minPx = Math.min(minPx, dist * realScale);
+      if(dist < need * 0.98) namesClear = false;
     }
-    // The objective itself, measured at the real scale -- and it IS the verdict:
-    // a pair judged short at the estimated scale, then found clear at the real
-    // one, must not leave "hosts settled" false and send sixty nodes to a spiral.
-    if(minPx >= target * 1.01){ hostsSettled = true; break; }   // one percent clear of the objective, at the real scale
+    if(minPx >= target * 1.01 && namesClear){ hostsSettled = true; break; }
     ({ eased, hostsSettled } = ease(realScale));
   }
   // At the bound, the positions reached are the best effort and they are kept
