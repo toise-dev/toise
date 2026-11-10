@@ -1481,6 +1481,11 @@ function applySpread(){
   // The distance a pair needs along its own line at a given scale: the target,
   // or more if the names would still touch. Shared by the passes and by the
   // check at the real scale, so the two cannot disagree.
+  // The names' rule switches itself off the moment it hurts: if a round measures
+  // the hosts' centres CLOSER than the round before, the picture is being pushed
+  // past what the frame can hold -- the phone case, attenuated, on any width --
+  // and the easing goes back to centres alone. Names are then the seats' job.
+  let namesOff = false;
   const pairNeed = (i, j, sc, d, nameW, namePx) => {
     const a = base[hosts[i]], b = base[hosts[j]];
     let dx = b.x - a.x, dy = b.y - a.y, dist = Math.hypot(dx, dy);
@@ -1493,7 +1498,7 @@ function applySpread(){
     // past the frame, the fit shrinks, and the centres end up CLOSER -- measured
     // at 390px: 36 and 31 pixels where the centre rule alone had given 39. The
     // vertical seats handle names there, and measured zero overlaps doing it.
-    const byNames = (W < 560) ? d
+    const byNames = (W < 560 || namesOff) ? d
       : Math.min(ux > 1e-6 ? X / ux : Infinity, uy > 1e-6 ? Y / uy : Infinity);
     return { dx, dy, dist, need: Math.max(d, Math.min(byNames, d * 3)) };   // never more than three targets: a pathological line is not a reason to scatter
   };
@@ -1598,6 +1603,7 @@ function applySpread(){
   let savedView = null;
   try{ savedView = { pos: net.getViewPosition(), scale: net.getScale() }; }catch(_){ }
   let { eased, hostsSettled } = ease(0);
+  let prevMinPx = 0;
   for(let round = 0; round < 5 && hosts.length > 1; round++){
     nodes.update(ids.filter(id => base[id]).map(id => ({ id, x: base[id].x, y: base[id].y })));
     try{ net.fit({ nodes: ids, animation: false, maxZoomLevel: 3 }); realScale = net.getScale() * 0.97 * stripShare; }catch(_){ realScale = 0; }
@@ -1621,6 +1627,8 @@ function applySpread(){
       if(dist < need * 0.98) namesClear = false;
     }
     if(minPx >= target * 1.01 && namesClear){ hostsSettled = true; break; }
+    if(!namesOff && prevMinPx > 0 && minPx < prevMinPx - 0.5){ namesOff = true; }   // receding: the names' rule is pushing past the frame
+    prevMinPx = minPx;
     ({ eased, hostsSettled } = ease(realScale));
   }
   // At the bound, the positions reached are the best effort and they are kept
