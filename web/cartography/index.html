@@ -2450,9 +2450,26 @@ function withheldBy(id){
   // "switching a type off never puts more on the map" holds, since nothing
   // appeared at the moment of switching, and the reader asked for this element
   // by name -- but it is a reason the message must give.
-  const up = OWNER[e.id];
-  if(up && ENT[up] && hidden.has(ENT[up].type)) why.add('carrier');
+  if(hiddenAncestorType(e.id)) why.add('carrier');
   return why;
+}
+
+// The type of the first carrier up the chain that the reader switched off, or
+// '' when none is. The whole chain, not the direct owner: a service folded in a
+// container folded in a host is held back by the host, and the direct owner is
+// the container, which is on. Walked before any exemption is granted, so the
+// climb is the one the fold would have made.
+function hiddenAncestorType(id){
+  const seen = new Set();
+  let cur = id;
+  for(;;){
+    if(seen.has(cur)) return '';
+    seen.add(cur);
+    const up = OWNER[cur];
+    if(!up || !ENT[up]) return '';
+    if(hidden.has(ENT[up].type)) return ENT[up].type;
+    cur = up;
+  }
 }
 
 function reveal(id){
@@ -2493,9 +2510,8 @@ function reveal(id){
     if(g && document.activeElement === g) g.blur();
     const names = {view:'the current view', search:'the search', highlight:"the Dock's highlight"};
     const outside = [...why].filter(w => names[w]).map(w => names[w]);
-    const up = OWNER[id];
-    const carrierOff = why.has('carrier') && up && ENT[up]
-      ? ' Its '+typeLabel(ENT[up].type)+' is switched off in the legend.' : '';
+    const offType = why.has('carrier') ? hiddenAncestorType(id) : '';
+    const carrierOff = offType ? ' Its '+typeLabel(offType)+' is switched off in the legend.' : '';
     say((outside.length
       ? 'Showing this element outside '+outside.join(' and ')+'.'
       : 'Showing this element on its own, out of the carrier it was folded into.')
