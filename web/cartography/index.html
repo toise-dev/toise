@@ -166,6 +166,7 @@ aside{width:360px;flex:none;border-left:1px solid var(--line);background:var(--p
    shrink the canvas on every keystroke. */
 /* The count rides as a badge rather than inside the label: "Show all (20 of 185)"
    is three times the width of "Show all" and it was the string that overflowed. */
+#showall.off{display:none;}
 .badge{display:inline-block;margin-left:.35rem;padding:0 .3rem;border-radius:999px;
   background:var(--line);font-size:10px;line-height:1.5;vertical-align:middle;opacity:.9;}
 .goto-list{position:absolute;top:100%;left:0;z-index:30;min-width:14rem;max-width:22rem;
@@ -211,16 +212,23 @@ aside td.k{color:var(--dim);width:40%;word-break:normal;overflow-wrap:break-word
    with the view moves the canvas, a height that differs between breakpoints
    does not. Options must stay reachable; the search can be small. */
 @media (max-width:560px){
-  /* THREE rows here, pinned: segments, then the two fields, then Show all. Two
-     rows was the old content; "go to" and Show all made a third that spilled out
-     of the pinned height onto the legend -- and since the bar no longer clips,
-     the spill was clickable and a legend chip won the click.
-     Pinned, not auto: a height that grows when Show all appears would move the
-     canvas under the reader's finger every time they enter a view. The row costs
-     ~1.6rem of map on a phone and is empty whenever nothing is withheld; a stable
-     canvas is worth more than those pixels. */
-  header{flex-wrap:wrap;height:6.6rem;align-content:center;row-gap:.35rem;}
+  /* THREE rows here: segments, the two fields, then Show all on its own.
+     The height is NOT a number any more. I pinned 6.6rem by adding up rows and
+     was 13px short: measured at 390px, Show all ran from y=90 to y=119 while the
+     legend chips started at y=110, so they bit 9px into it and a finger landing
+     low hit Container. The segments were clipped at the top by the same shortfall.
+     An arithmetic height is a sum I can get wrong; a reserved row cannot be.
+     So the height follows the content, and the content is CONSTANT because the
+     button's row is always there -- merely invisible when nothing is withheld.
+     That is what keeps the canvas from moving under the reader's finger, which
+     was the only reason to pin a number in the first place. */
+  header{flex-wrap:wrap;height:auto;row-gap:.35rem;}
+  .segmented{order:1;}
+  header label[for=attr],header label[for=goto],.options{order:2;}
   #showall{flex:1 1 100%;order:3;}
+  /* Laid out but not drawn: the row stays reserved, so showing the button adds
+     nothing to the bar's height and takes nothing from the map. */
+  #showall.off{display:block;visibility:hidden;}
   header label[for=goto]{font-size:0;flex:1 1 auto;min-width:0;}
   header label[for=goto] input{width:100%;margin-left:0;font-size:12px;line-height:normal;padding:.25rem .4rem;height:1.8rem;box-sizing:border-box;}
   .segmented{flex:1 1 100%;}
@@ -303,7 +311,7 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
   </div>
   <label class="muted" for="attr">search<input id="attr" spellcheck="false" autocomplete="off" placeholder="a name, a key, or key=value" style="background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;padding:.1rem .35rem;width:11rem;margin-left:.3rem;font-family:inherit;"></label>
   <label class="muted" for="goto" style="position:relative">go to<input id="goto" spellcheck="false" autocomplete="off" placeholder="a machine, a service…" style="background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;padding:.1rem .35rem;width:11rem;margin-left:.3rem;font-family:inherit;"></label>
-  <button id="showall" style="display:none;white-space:nowrap" title="Put back everything a view, a highlight or the search is withholding">Show all<span id="showallN" class="badge"></span></button>
+  <button id="showall" class="off" style="white-space:nowrap" title="Put back everything a view, a highlight or the search is withholding">Show all<span id="showallN" class="badge"></span></button>
   <div class="stats">
     <span id="err" role="status" aria-live="polite"></span>
   </div>
@@ -1126,7 +1134,7 @@ function syncShowAll(keptCount, totalCount){
   // undo something it leaves alone.
   const n = document.getElementById('showallN');
   if(keptCount < totalCount){
-    b.style.display = '';
+    b.classList.remove('off');
     // The badge counts what this button will PUT BACK, which is the drawn set, not
     // the estate: the strip at the bottom is what states the estate's size, and two
     // different totals in two places would each make the other look wrong.
@@ -1134,7 +1142,7 @@ function syncShowAll(keptCount, totalCount){
     b.title = 'Put back the ' + fmtCount(totalCount - keptCount) +
               ' elements a view, a highlight or the search is withholding';
   } else {
-    b.style.display = 'none';
+    b.classList.add('off');
     if(n) n.textContent = '';
   }
 }
