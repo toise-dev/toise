@@ -1493,6 +1493,20 @@ function applySpread(){
     }
     if(!moved) eased = true;
   }
+  // Judged on the FINAL state: the last pass's non-host push can land a host on
+  // another after the host-host pass has already been counted as clean.
+  if(!eased){
+    let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+    for(const id of ids){ const q = base[id]; if(!q) continue; if(q.x < x1) x1 = q.x; if(q.x > x2) x2 = q.x; if(q.y < y1) y1 = q.y; if(q.y > y2) y2 = q.y; }
+    const scale = Math.min(W / Math.max(x2 - x1, 1), H / Math.max(y2 - y1, 1)) * 0.9;
+    const d = (W < 560 ? SPREAD_TARGET_PHONE_PX : SPREAD_TARGET_PX) / scale;
+    hostsSettled = true;
+    for(let i = 0; i < hosts.length && hostsSettled; i++)
+      for(let j = i + 1; j < hosts.length; j++){
+        const a = base[hosts[i]], b = base[hosts[j]];
+        if(Math.hypot(b.x - a.x, b.y - a.y) < d * 0.98){ hostsSettled = false; break; }
+      }
+  }
   // At the bound, the positions reached are the best effort and they are kept
   // -- a single host wedged between two fixed discs, bounced from one into the
   // other every pass, must not throw sixty nodes onto a spiral. The spiral is
@@ -2702,6 +2716,10 @@ function watchCanvasSize() {
   if (!el || typeof ResizeObserver === 'undefined') return;
   var lastW = -1, lastH = -1, timer = null;
   new ResizeObserver(function (entries) {
+    // The sky's canvas was sized at switch-on and on window resize only; the
+    // panel's drag handle resizes #net without either, and the bounds that
+    // keep labels inside the canvas were then read against a stale width.
+    try{ if(typeof domeMode !== 'undefined' && domeMode) sizeCanvas(); }catch(_){ }
     var r = entries[entries.length - 1].contentRect;
     if (r.width === lastW && r.height === lastH) return; // same size: never react to our own redraw
     lastW = r.width;
@@ -3403,7 +3421,7 @@ function drawDome(){
     // Inside the canvas, always: three host names ran off the right edge at
     // 1440 and six at 390. Pushed back in sideways; flipped above the disc when
     // the line below would leave the bottom.
-    let x=Math.min(Math.max(it.p.x-w/2, 2), cvW-w-2), y=it.p.y+it.rad+4;
+    let x=Math.max(Math.min(it.p.x-w/2, cvW-w-2), 2), y=it.p.y+it.rad+4;   // max last: a name wider than the canvas keeps its head
     if(y+12>cvH-2) y=it.p.y-it.rad-14;
     const box={x0:x-2,y0:y-1,x1:x+w+2,y1:y+12};
     let clash=false;
