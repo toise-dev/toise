@@ -1721,6 +1721,11 @@ async function goToInstant(ms) {
     const ok = await loadFull();
     if (!ok) {
       asOfMs = prevAsOf;
+      // The scope was read BEFORE the entities failed, so SCOPE.asOf carries the
+      // instant that was not served while the map stays at the previous one --
+      // and the label prefers what the scope echoes. Read the scope again at the
+      // instant the map is actually at, so label, button and map agree.
+      await refreshScope({ quiet: true });
       say('That instant could not be read; the view remains at the previous instant.');
     }
     // The strip reads the instant too, and nothing else reloads it on a move:
