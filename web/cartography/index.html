@@ -326,7 +326,7 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
 #tlLive.hist{color:var(--warn);border-color:var(--warn);}
 #tlPlay{width:2rem;text-align:center;}
 #tlPlay.on{color:var(--accent);border-color:var(--accent);}
-#tlLabel{width:100%;text-align:right;color:var(--fg);font-variant-numeric:tabular-nums;}
+#tlLabel{width:100%;text-align:right;color:var(--fg);font-variant-numeric:tabular-nums;display:block;height:1.35em;line-height:1.35em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}   /* one fixed line: a date range wrapped to two and moved the footer by 18px */
 </style>
 </head>
 <body>
@@ -1453,14 +1453,24 @@ function applySpread(){
       radius[id] = (nd && typeof nd.size === 'number') ? nd.size : 14;
     }
   }
+  const target = (W < 560 ? SPREAD_TARGET_PHONE_PX : SPREAD_TARGET_PX);
+  // The scale the fit will really give. Estimating it from the bounding box
+  // came out 13% too generous -- measured: 52px where 60 were asked -- because
+  // vis fits node extents, not centres, and the strip then takes its share. So
+  // the easing runs, the real fit is read, and if the hosts are still short the
+  // easing runs again against that real scale, a few rounds at most.
+  const strip = document.getElementById('mapstat');
+  const stripShare = strip ? Math.max(0.1, (H - (strip.offsetHeight + 8)) / H) : 1;
+  let realScale = 0;
+  const ease = (scaleOverride) => {
   let eased = hosts.length === 0 || (hosts.length < 2 && others.length === 0);
   let hostsSettled = eased;   // the objective: hosts clear of each other
   for(let pass = 0; pass < SPREAD_PASSES && !eased; pass++){
     let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
     for(const id of ids){ const q = base[id]; if(!q) continue; if(q.x < x1) x1 = q.x; if(q.x > x2) x2 = q.x; if(q.y < y1) y1 = q.y; if(q.y > y2) y2 = q.y; }
     const bw = Math.max(x2 - x1, 1), bh = Math.max(y2 - y1, 1);
-    const scale = Math.min(W / bw, H / bh) * 0.9;   // what the fit will give, with its margins
-    const d = (W < 560 ? SPREAD_TARGET_PHONE_PX : SPREAD_TARGET_PX) / scale;   // screen pixels, in canvas units
+    const scale = scaleOverride || (Math.min(W / bw, H / bh) * 0.9);
+    const d = target / scale;   // screen pixels, in canvas units
     let moved = false;
     for(let i = 0; i < hosts.length; i++){
       for(let j = i + 1; j < hosts.length; j++){
@@ -1498,14 +1508,29 @@ function applySpread(){
   if(!eased){
     let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
     for(const id of ids){ const q = base[id]; if(!q) continue; if(q.x < x1) x1 = q.x; if(q.x > x2) x2 = q.x; if(q.y < y1) y1 = q.y; if(q.y > y2) y2 = q.y; }
-    const scale = Math.min(W / Math.max(x2 - x1, 1), H / Math.max(y2 - y1, 1)) * 0.9;
-    const d = (W < 560 ? SPREAD_TARGET_PHONE_PX : SPREAD_TARGET_PX) / scale;
+    const scale = scaleOverride || (Math.min(W / Math.max(x2 - x1, 1), H / Math.max(y2 - y1, 1)) * 0.9);
+    const d = target / scale;
     hostsSettled = true;
     for(let i = 0; i < hosts.length && hostsSettled; i++)
       for(let j = i + 1; j < hosts.length; j++){
         const a = base[hosts[i]], b = base[hosts[j]];
         if(Math.hypot(b.x - a.x, b.y - a.y) < d * 0.98){ hostsSettled = false; break; }
       }
+  }
+  return { eased, hostsSettled };
+  };
+  let { eased, hostsSettled } = ease(0);
+  for(let round = 0; round < 3 && hosts.length > 1; round++){
+    nodes.update(ids.filter(id => base[id]).map(id => ({ id, x: base[id].x, y: base[id].y })));
+    try{ net.fit({ nodes: ids, animation: false, maxZoomLevel: 3 }); realScale = net.getScale() * 0.97 * stripShare; }catch(_){ realScale = 0; }
+    if(!realScale) break;
+    let minPx = Infinity;
+    for(let i = 0; i < hosts.length; i++) for(let j = i + 1; j < hosts.length; j++){
+      const a = base[hosts[i]], b = base[hosts[j]];
+      minPx = Math.min(minPx, Math.hypot(b.x - a.x, b.y - a.y) * realScale);
+    }
+    if(minPx >= target * 0.98) break;
+    ({ eased, hostsSettled } = ease(realScale));
   }
   // At the bound, the positions reached are the best effort and they are kept
   // -- a single host wedged between two fixed discs, bounced from one into the
@@ -3124,7 +3149,7 @@ function shiftWindow(dir){
       // this page and throws. And the map's own instant is not touched -- the
       // window is the ruler's, `historical` and asOfMs are the map's.
       spanEnd=null; spanMs=WINDOWS[tlWindow]||WINDOWS['24h'];
-      if(lbl) lbl.textContent=tlWindow;
+      if(lbl){ lbl.textContent=tlWindow; lbl.title=''; }
       renderRuler(); loadProfile(); syncSlider(); sayInstant();
       return;
     }
@@ -3132,7 +3157,10 @@ function shiftWindow(dir){
   }
   renderRuler(); loadProfile(); syncSlider(); sayInstant();
   const [ns,ne2]=spanBounds();
-  if(lbl) lbl.textContent=new Date(ns).toLocaleString()+' \u2192 '+new Date(ne2).toLocaleString();
+  // Times on the line, the full dates in the tooltip: the full range wrapped
+  // the 9rem column to two lines and moved the footer.
+  const hm=ms=>new Date(ms).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+  if(lbl){ lbl.textContent=hm(ns)+' \u2192 '+hm(ne2); lbl.title=new Date(ns).toLocaleString()+' \u2192 '+new Date(ne2).toLocaleString(); }
 }
 const tlEarlier=document.getElementById('tlEarlier'), tlLater=document.getElementById('tlLater');
 if(tlEarlier) tlEarlier.onclick=()=>shiftWindow(-1);
@@ -3421,8 +3449,13 @@ function drawDome(){
     // Inside the canvas, always: three host names ran off the right edge at
     // 1440 and six at 390. Pushed back in sideways; flipped above the disc when
     // the line below would leave the bottom.
+    // A node outside the canvas -- drawn within the 80px tolerance so a half
+    // disc still shows -- gets no name: a clamped name for an unseen disc is a
+    // name on nothing, and three of them sat at the edges at 1440.
+    if(it.p.x<0||it.p.x>cvW||it.p.y<0||it.p.y>cvH) continue;
     let x=Math.max(Math.min(it.p.x-w/2, cvW-w-2), 2), y=it.p.y+it.rad+4;   // max last: a name wider than the canvas keeps its head
     if(y+12>cvH-2) y=it.p.y-it.rad-14;
+    y=Math.max(2, Math.min(y, cvH-14));   // and never off the top either
     const box={x0:x-2,y0:y-1,x1:x+w+2,y1:y+12};
     let clash=false;
     if(!isHost(it) && !isKind(it.n.id)) for(const q of placed){
