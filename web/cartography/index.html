@@ -3078,17 +3078,23 @@ function drawDome(){
     hitBoxes.push({id:n.id,x:it.p.x,y:it.p.y,r:Math.max(9,it.rad*1.6)});
   }
 
-  // Only the brightest carry a name. A sky with every label on is a page of
-  // text, and the plate is the view for reading every name. A kind box is the
-  // exception and always keeps its label: the label is what it holds, so an
-  // unlabelled one is an empty rectangle rather than a quieter star.
+  // A HOST always carries its name -- Matthieu's ruling, the sky being the
+  // default view he validated: hosts first and unconditional, then the kind
+  // boxes (the label is what a kind box holds, so an unlabelled one is an
+  // empty rectangle rather than a quieter star), then only the brightest of
+  // everything else, because a sky with every label on is a page of text and
+  // the plate is the view for reading every name. The budget of 26 and the
+  // drop on collision apply to that last group alone.
   g2.font='10.5px ui-monospace, SFMono-Regular, Menlo, monospace';
   g2.textAlign='center'; g2.textBaseline='top';
-  const named=drawn.filter(it=>isKind(it.n.id))
-    .concat(drawn.filter(it=>!isKind(it.n.id)).sort((a,b)=>b.size-a.size).slice(0,26));
+  const isHost=it=>!isKind(it.n.id) && !!ENT[it.n.id] && ENT[it.n.id].type==='host';
+  const named=drawn.filter(isHost)
+    .concat(drawn.filter(it=>isKind(it.n.id)))
+    .concat(drawn.filter(it=>!isKind(it.n.id) && !isHost(it)).sort((a,b)=>b.size-a.size).slice(0,26));
   // A label that lands on another is worse than no label: two names overprinted
   // read as a third, wrong one. Brightest first, and a name whose box collides
-  // with one already placed is dropped rather than drawn over it.
+  // with one already placed is dropped rather than drawn over it -- unless it
+  // is a host's, which goes on regardless and is an obstacle for the rest.
   const placed=[];
   for(const it of named){
     if(!it.n.label) continue;
@@ -3096,7 +3102,7 @@ function drawDome(){
     const w=g2.measureText(text).width, x=it.p.x-w/2, y=it.p.y+it.rad+4;
     const box={x0:x-2,y0:y-1,x1:x+w+2,y1:y+12};
     let clash=false;
-    for(const q of placed){
+    if(!isHost(it)) for(const q of placed){
       if(box.x0<q.x1 && box.x1>q.x0 && box.y0<q.y1 && box.y1>q.y0){ clash=true; break; }
     }
     if(clash) continue;
