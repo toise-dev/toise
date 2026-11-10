@@ -1777,6 +1777,11 @@ function sayInstant() {
   // is what it already trusts for the counters.
   const echoed = (SCOPE && SCOPE.asOf != null) ? Date.parse(SCOPE.asOf) : NaN;
   const served = Number.isNaN(echoed) ? asOfMs : echoed;
+  // The "historical" mark on the live button is about the MAP's instant, so it
+  // is set here, where that instant is known, and nowhere else. The window
+  // shift used to set it, and a map at the present then wore it after Earlier.
+  const liveBtn = document.getElementById('tlLive');
+  if (liveBtn) liveBtn.classList.toggle('hist', served != null);
   if (served == null) {
     el.textContent = 'live';
     return;
@@ -2778,7 +2783,7 @@ const tlLabelEl=document.getElementById('tlLabel'); tlLabelEl.textContent=tlWind
 // ruler one window back, Later one forward, and forward past now is live again.
 function shiftWindow(dir){
   const [s,e]=spanBounds();
-  const lbl=document.getElementById('tlLabel'), liveBtn=document.getElementById('tlLive');
+  const lbl=document.getElementById('tlLabel');
   if(dir<0){
     const h=horizonMs();
     const ne=e-spanMs;
@@ -2793,7 +2798,6 @@ function shiftWindow(dir){
       // window is the ruler's, `historical` and asOfMs are the map's.
       spanEnd=null; spanMs=WINDOWS[tlWindow]||WINDOWS['24h'];
       if(lbl) lbl.textContent=tlWindow;
-      if(liveBtn) liveBtn.classList.remove('hist');
       renderRuler(); loadProfile(); syncSlider(); sayInstant();
       return;
     }
@@ -2802,7 +2806,6 @@ function shiftWindow(dir){
   renderRuler(); loadProfile(); syncSlider(); sayInstant();
   const [ns,ne2]=spanBounds();
   if(lbl) lbl.textContent=new Date(ns).toLocaleString()+' \u2192 '+new Date(ne2).toLocaleString();
-  if(liveBtn) liveBtn.classList.add('hist');
 }
 const tlEarlier=document.getElementById('tlEarlier'), tlLater=document.getElementById('tlLater');
 if(tlEarlier) tlEarlier.onclick=()=>shiftWindow(-1);
