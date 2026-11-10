@@ -871,7 +871,12 @@ function declutterLabels() {
   // order so identical views always resolve identically.
   // A kind node is a count, not an entity: it has no type to dim and no
   // fingerprint to cite, so it is left alone rather than guessed about.
-  const ids = nodes.getIds().filter(id => {
+  // Drawn entities only. A node withheld by the search, the highlight or the
+  // "only" mode is still in the dataset, hidden, with a position -- and once a
+  // host's name became unconditional, a hidden host's name went on the board
+  // and cost a visible neighbour its label against a box nobody could see.
+  // (Its disc had been an obstacle before, too, which was never right either.)
+  const ids = onMapIds().filter(id => {
     const e = ENT[id];
     return e && !dimmed.has(e.type);
   });
