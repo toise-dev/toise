@@ -986,6 +986,14 @@ function declutterLabels() {
     };
     const blocked = (b) => kept.some(k => hits(b, k))
       || ids.some(other => other !== id && discs[other] && hits(b, discs[other]));
+    // The camera frames discs, not labels, so a seat above a disc at the top
+    // edge can lie outside the canvas. A seat is only a seat inside the frame.
+    const frameH = (document.getElementById('net') || {}).clientHeight || 0;
+    const inFrame = (dy) => {
+      if (!frameH) return true;
+      const top = net.canvasToDOM({ x: 0, y: p.y + r + VIS_LABEL_DROP + dy }).y;
+      return top >= 0 && top + 16 <= frameH;
+    };
     const unconditional = ENT[id].type === 'host';
     if (unconditional) {
       // A host's name is never dropped. When its default seat would land on a
@@ -994,7 +1002,7 @@ function declutterLabels() {
       // regardless. vis only shifts a label vertically, so seats are vertical.
       const seats = [0, -(2 * r + 2 * VIS_LABEL_DROP + labelH), labelH + 2, -(2 * r + 2 * VIS_LABEL_DROP + 2 * labelH + 2), 2 * labelH + 4];
       let chosen = seats[0], box = boxAt(seats[0]);
-      for (const dy of seats) { const b = boxAt(dy); if (!blocked(b)) { chosen = dy; box = b; break; } }
+      for (const dy of seats) { const b = boxAt(dy); if (!blocked(b) && inFrame(dy)) { chosen = dy; box = b; break; } }
       kept.push(box);
       updates.push({ id, label, font: { vadjust: chosen } });
       continue;
@@ -1353,6 +1361,11 @@ function rebuild(){
   // between two polls; left in place it kept the Show all button up for an
   // element that no longer existed.
   for(const id of REVEALED) if(!ENT[id]) REVEALED.delete(id);
+  // Here, not only after a full load: a host that arrives or is renamed through
+  // the live feed would otherwise be shortened against the suffix and the
+  // ambiguity set of the last full load, and two discs could read the same
+  // until the next one. Hosts only, so it is cheap.
+  recomputeShortNames();
   const firstLoad=!fitted;   // scatter new nodes on the very first layout so stabilisation spreads them
   const inside=foldedInside();
   let hiddenByFold=0, loopbackHidden=0;
@@ -1720,7 +1733,6 @@ async function loadFull() {
     for (const k in ENT) delete ENT[k]; for (const k in REL) delete REL[k];
     ents.forEach(n => ENT[n.id] = n);
     rels.forEach(n => REL[n.id] = n);
-    recomputeShortNames();
     // Before the first paint, not after: narrowing afterwards would pay the very
     // layout cost it exists to avoid. applyView redraws on its own, so narrowing
     // REPLACES this first rebuild rather than adding a second full node build.
