@@ -179,6 +179,10 @@ header label input{font:inherit;}
    The horizon moves to the tooltip; the line's height is fixed in rem, sized for
    the large dragging state, so neither the read nor the drag moves the map. */
 #tlAtLabel{display:block;max-width:100%;height:1.9rem;line-height:1.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+/* The events line keeps its height whether it has text or not: it is written
+   in the live state and emptied once a window is chosen, and an empty inline
+   span is 0px tall -- the 18px the whole footer moved by, measured by sop. */
+#tlEvents{display:block;max-width:100%;height:1.35em;line-height:1.35em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 #tlAtLabel.dragging{font-size:1.4rem;font-weight:600;color:var(--fg);}
 .badge{display:inline-block;margin-left:.35rem;padding:0 .3rem;border-radius:999px;
   background:var(--line);font-size:10px;line-height:1.5;vertical-align:middle;opacity:.9;}
