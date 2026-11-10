@@ -157,10 +157,24 @@ aside{width:360px;flex:none;border-left:1px solid var(--line);background:var(--p
 .actions .primary{border:1px solid var(--accent);color:var(--accent)}
 .actions .secondary{border:1px solid transparent;color:var(--dim)}
 .actions .secondary:hover{color:var(--fg)}
+/* The suggestions hang under the "go to" field, over the map, and take no room
+   in the layout: the toolbar height is pinned and a list that pushed it would
+   shrink the canvas on every keystroke. */
+.goto-list{position:absolute;top:100%;left:0;z-index:30;min-width:14rem;max-width:22rem;
+  max-height:16rem;overflow-y:auto;background:var(--bg);border:1px solid var(--line);
+  border-radius:6px;box-shadow:0 6px 18px rgba(0,0,0,.45);padding:.15rem;}
+.goto-item{display:block;width:100%;text-align:left;cursor:pointer;background:none;border:0;
+  color:var(--fg);font:inherit;padding:.25rem .45rem;border-radius:4px;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;}
+.goto-item:hover,.goto-item:focus{background:var(--line);outline:none;}
+.goto-none{padding:.25rem .45rem;opacity:.65;font-style:italic;}
 /* Resting state: a narrow column that fits its content, and folds to its title.
    The reservation is measured from this element, so its width is literally how
    many names the map can afford -- at 360px the drawing kept 56% and drew one. */
-#detail.list{width:auto;max-width:15rem;max-height:45%;}
+#detail.list{width:auto;max-width:15rem;max-height:none;}
+#detail.list details[open]{max-height:40vh;overflow-y:auto;display:block;}
+#detail.list summary{white-space:nowrap;}
+#detail.list .chev{font-size:.8em;opacity:.7;margin-left:.1rem;}
 #detail.list summary{cursor:pointer;list-style:none;font-weight:600;}
 #detail.list summary::-webkit-details-marker{display:none;}
 .litlist{display:flex;flex-direction:column;gap:.1rem;margin-top:.4rem;}
@@ -269,6 +283,8 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
     <button id="vApps" title="Applications: services, listening ports, databases">Applications</button>
   </div>
   <label class="muted" for="attr">search<input id="attr" spellcheck="false" autocomplete="off" placeholder="a name, a key, or key=value" style="background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;padding:.1rem .35rem;width:11rem;margin-left:.3rem;font-family:inherit;"></label>
+  <label class="muted" for="goto" style="position:relative">go to<input id="goto" spellcheck="false" autocomplete="off" placeholder="a machine, a service…" style="background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;padding:.1rem .35rem;width:11rem;margin-left:.3rem;font-family:inherit;"></label>
+  <button id="showall" style="display:none" title="Put back everything a view, a highlight or the search is withholding">Show all</button>
   <div class="stats">
     <span id="err" role="status" aria-live="polite"></span>
   </div>
@@ -442,14 +458,15 @@ net.on('beforeDrawing',ctx=>{ for(const f of FIELD){
 let freezeTimer=null;
 function freeze(){ clearTimeout(freezeTimer); freezeTimer=null; net.setOptions({physics:{enabled:false}}); }
 function settle(ms=1600){ net.setOptions({physics:{enabled:true}}); clearTimeout(freezeTimer);
-  freezeTimer=setTimeout(()=>{ freeze(); if(fitAfterSettle){ fitAfterSettle=false; fitReservingPanel(); } }, ms); }
+  freezeTimer=setTimeout(()=>{ freeze(); if(fitAfterSettle){ fitAfterSettle=false; fitEmphasised(); } }, ms); }
 net.on('zoom',()=>{ syncLabelSize(); declutterLabels(); });   // zooming spreads the boxes: names can come back   // the font is in canvas units, so it shrinks with the view
 net.on('stabilizationIterationsDone',()=>{ freeze();   // layout done -> freeze, fit, reveal
   if(!fitted) return;   // the empty-graph init pass, before any data — nothing to reveal yet
-  // Through fitReservingPanel, not a bare fit: this is the LAST framing the
-  // reader sees, and a bare fit here reserved nothing for the strip. The
-  // six-second full reload used to re-frame properly a moment later and hid it.
-  fitReservingPanel();
+  // Through fitEmphasised, not a bare fit: this is the LAST framing the reader
+  // sees. A bare fit reserved nothing for the strip -- the six-second reload used
+  // to re-frame a moment later and hid that -- and it would now frame the
+  // positions of the nodes that were REMOVED, leaving the camera on empty sky.
+  fitEmphasised();
   const nv=document.getElementById('net'); if(nv) nv.classList.remove('laying');
   const err=document.getElementById('err'); if(err && err.textContent.startsWith('Drawing ')) err.textContent=''; });
 
@@ -839,24 +856,36 @@ function declutterLabels() {
   nodes.update(updates);
 }
 
+// Frames what is DRAWN, read from the nodes themselves rather than recomputed
+// from whichever rule withheld the rest. Since what is not kept is now removed
+// instead of dimmed, a bare fit would frame the hidden nodes' positions too and
+// leave the camera staring at empty sky; and there are four ways to withhold
+// something -- a view, the legend, the search, a highlight -- which a rule-based
+// target would have to enumerate correctly every time. The drawn node knows.
+function onMapIds() {
+  const out = [];
+  for (const id of nodes.getIds()) {
+    const nd = nodes.get(id);
+    if (nd && nd.hidden !== true) out.push(id);
+  }
+  return out;
+}
+
 function fitEmphasised() {
+  const shown = onMapIds();
   if (CITED.size) {
-    // A highlight frames what was highlighted. Framing the whole lit layer
-    // instead would bury the handful of things the Dock asked to look at.
+    // A highlight frames what was highlighted. Framing everything drawn instead
+    // would bury the handful of things the Dock asked to look at.
     const cited = [];
-    for (const id of nodes.getIds()) {
+    for (const id of shown) {
       const n = ENT[id];
       if ((n && CITED.has(n.identityFingerprint)) || CITED_OWNERS.has(id)) cited.push(id);
     }
     if (cited.length) { fitReservingPanel(cited); declutterLabels(); return; }
   }
-  if (!dimmed.size) { fitReservingPanel(); declutterLabels(); return; }
-  const lit = [];
-  for (const id of nodes.getIds()) {
-    const n = ENT[id];
-    if (!n || !dimmed.has(n.type)) lit.push(id);   // kind nodes keep the frame too
-  }
-  fitReservingPanel(lit.length ? lit : null);
+  // null rather than an empty list: fitting "no nodes" is not a frame, and an
+  // empty map should still be framed as a whole rather than left wherever it was.
+  fitReservingPanel(shown.length ? shown : null);
   declutterLabels();
 }
 
@@ -966,6 +995,69 @@ function seededPos(key){
   return { x: a * 1600 - 800, y: b * 1600 - 800 };
 }
 
+// What is NOT kept is REMOVED from the map rather than turned down. The owner of
+// the product chose this over the dimming it replaces: a reader looking for ten
+// machines among sixteen thousand ghosts was reading the ghosts.
+//
+// `hidden` on a vis node, never a delete: a hidden node keeps its entry and so
+// keeps its POSITION, and vis hides every edge touching a hidden end on its own,
+// which is exactly "the links between what is kept stay visible". Deleting and
+// re-adding would lose the positions and restart the physics.
+function keptOnMap(n, q, ok){
+  if(dimmed.has(n.type)) return false;                       // the view's subject
+  if(hidden.has(n.type)) return false;                       // the legend's own checkbox
+  if(CITED.size && !CITED.has(n.identityFingerprint) && !CITED_OWNERS.has(n.id)) return false;
+  if(q && !ok && !MATCH_OWNERS.has(n.id)) return false;
+  return true;
+}
+
+// If the rule would remove EVERYTHING, remove nothing instead and say so. An
+// empty canvas reads as "there is nothing here", which is a different statement
+// from "nothing matched" and the one the reader will believe.
+function applyHiding(nodeList){
+  // A type the reader unchecked in the legend is NOT withheld by a view: it must
+  // survive the rescue below, and it must not make the "Show all" button offer to
+  // put back something that button does not touch.
+  let kept = 0, offerable = 0;
+  for(const nd of nodeList){
+    if(!nd._legend) offerable++;
+    if(!nd.hidden) kept++;
+  }
+  if(kept === 0 && offerable > 0){
+    for(const nd of nodeList) nd.hidden = !!nd._legend;
+    say('Nothing matched what you asked for, so the whole map is shown.');
+    kept = offerable;
+  }
+  return {kept, offerable};
+}
+
+// Clears what a VIEW withholds, not what the reader unchecked in the legend:
+// `hidden` is an explicit choice of theirs and silently undoing it would be
+// taking a decision back.
+function showAll(){
+  dimmed.clear(); CITED.clear(); CITED_OWNERS.clear();
+  attrQuery = '';                       // the real state; `q` is derived from it inside rebuild
+  const attr = document.getElementById('attr');
+  if(attr) attr.value = '';
+  rebuild();
+  fitEmphasised();
+}
+
+// Visible only when something really is withheld, and it says how much: with the
+// dimmed ghosts gone, nothing else on the canvas hints that there is more.
+function syncShowAll(keptCount, totalCount){
+  const b = document.getElementById('showall');
+  if(!b) return;
+  // totalCount excludes the legend's own choices, so the button never offers to
+  // undo something it leaves alone.
+  if(keptCount < totalCount){
+    b.style.display = '';
+    b.textContent = 'Show all (' + fmtCount(keptCount) + ' of ' + fmtCount(totalCount) + ')';
+  } else {
+    b.style.display = 'none';
+  }
+}
+
 function rebuild(){
   computeOwners();
   const prevNodeIds=new Set(nodes.getIds());
@@ -1038,13 +1130,14 @@ function rebuild(){
     // The count is NOT in the label: measured, "sha018 (6 Container, 3 Service, +1)"
     // is ~250px wide and eighty of them overlap. It lives in the tooltip and in
     // the disc's size, both of which cost no horizontal room.
-    const node={id:n.id,label:dimmed.has(n.type)?undefined:labelOf(n),
+    const node={id:n.id,label:labelOf(n),
               childCount:k,   // the REAL number folded inside, which the grid sizes the disc from
               title:titleOf(n)+(k?('\nfolded inside: '+badgeFull(by)+'  \u2014 double-click to open'):''),
-              // A view turns a type almost off rather than removing it: the reader
-              // keeps the shape of the whole estate and sees what the view is about
-              // inside it. Almost off, never off -- a thing at zero reads as absent.
-              opacity:n.deleted?0.45:(dimmed.has(n.type)?0.08:((q&&!ok&&!MATCH_OWNERS.has(n.id))||(CITED.size&&!CITED.has(n.identityFingerprint)&&!CITED_OWNERS.has(n.id))?0.12:1)),
+              hidden:!keptOnMap(n,q,ok),
+              _legend:hidden.has(n.type),   // read by applyHiding: the reader's own checkbox, not a view
+              // Opacity no longer hides anything; a deleted entity is the only
+              // thing still drawn faint, because it IS there and is on its way out.
+              opacity:n.deleted?0.45:1,
               size:Math.min(34,5+Math.sqrt(d)*4.4)+(k?Math.min(12,Math.sqrt(k)*2.6):0),
               borderWidth:(n.deleted||k)?2:0,
               // the halo IS the star: a glow sized on the node, in its own colour,
@@ -1065,7 +1158,7 @@ function rebuild(){
     nUp.push({id,label:k.n+' '+typeLabel(k.type),
       title:k.n+' '+typeLabel(k.type)+' inside '+(labelOf(ENT[k.owner])||k.owner)+'\n'+
             (openable?'double-click to open them':'too many to draw \u2014 narrow with the attribute filter instead, then open'),
-      shape:'box', opacity:(CITED.size&&!k.cited)?0.12:1,
+      shape:'box', opacity:1, hidden:!!(CITED.size&&!k.cited),
       size:Math.min(30,12+Math.sqrt(k.n)*2.4),
       borderWidth:openable?2:3,
       font:{color:'#d9e3f5',size:12},shadow:{enabled:false},
@@ -1081,6 +1174,8 @@ function rebuild(){
 // No grid and no clusters: the map keeps ONE stable layout for everything, and a
 // view only changes what is lit. Rejected by Matthieu on the real estate -- a
 // square of discs says nothing about how an infrastructure is actually shaped.
+  const hid = applyHiding(nUp);
+  syncShowAll(hid.kept, hid.offerable);
   nodes.update(nUp);
   // Say what is not shown. "0 match" was the lie; "0 shown, 54 inside folded nodes"
   // is the same number with its bound declared.
@@ -1713,9 +1808,14 @@ function renderLitList(box){
   box.classList.add('list');
   // A <details>: it folds to its own title with no script, and a folded card
   // reserves almost nothing, which is the whole point of the exercise.
-  const det=document.createElement('details'); det.open=true;
+  // CLOSED by default: open, this list sat in the middle of the map. Folded it is
+  // a pill the width of its own title, and the chevron says it is a control.
+  const det=document.createElement('details'); det.open=false;
   const sum=document.createElement('summary');
-  sum.textContent=lit.length+' shown';
+  const chev=document.createElement('span'); chev.className='chev';
+  sum.appendChild(document.createTextNode(fmtCount(lit.length)+' shown '));
+  chev.textContent='\u25BE';
+  sum.appendChild(chev);
   det.appendChild(sum);
   box.appendChild(det);
   const ul=document.createElement('div'); ul.className='litlist';
@@ -1734,7 +1834,10 @@ function renderLitList(box){
     ul.appendChild(row);
   }
   det.appendChild(ul);
-  det.addEventListener('toggle',()=>fitEmphasised());   // folding gives pixels back to the map
+  det.addEventListener('toggle',()=>{
+    chev.textContent = det.open ? '\u25B4' : '\u25BE';
+    fitEmphasised();   // folding gives pixels back to the map
+  });
   if(lit.length>LIT_LIST_MAX){
     const more=document.createElement('div'); more.className='muted';
     // Says the bound rather than ending silently: a list that simply stops is a
@@ -1813,9 +1916,9 @@ const cb=document.getElementById('panelClose');
       }
       rebuild();
       if(!expanded.has(id)){
-        // Closing frames the WHOLE map again. Keeping the zoom of the opening
-        // brought 190 machines back at scale 3, with 478 discs on their names.
-        fitReservingPanel();
+        // Closing frames the whole DRAWN map again. Keeping the zoom of the
+        // opening brought 190 machines back at scale 3, with 478 discs on names.
+        fitEmphasised();
         return;
       }
     }
@@ -2147,6 +2250,128 @@ function syncEmBtn(){ emBtn.textContent='edges: '+(!showEdges?'off':(edgeLabels?
 syncEmBtn();
 emBtn.onclick=()=>{ if(showEdges&&!edgeLabels){ edgeLabels=true; } else if(showEdges&&edgeLabels){ edgeLabels=false; showEdges=false; } else { showEdges=true; edgeLabels=false; }
   localStorage.setItem('toise_viz_edges', !showEdges?'off':(edgeLabels?'labels':'on')); syncEmBtn(); rebuild(); };
+// Positions the map as the reader types, without changing the scale: they asked
+// to go somewhere, not to zoom. Hosts are proposed first because that is what
+// the reader names when they name a thing.
+// Is this entity currently removed from the map? Read from the drawn node, not
+// recomputed from the rule: the two could disagree and the drawn one is the truth.
+function isOffMap(id){
+  try{ const nd = nodes.get(id); return !nd || nd.hidden === true; }catch(_){ return false; }
+}
+
+// Show an entity and centre on it. "The search shows and centres the match" was
+// the requirement, so picking something the current view withholds must put it
+// back rather than quietly focus a node nobody can see.
+function reveal(id){
+  if(isOffMap(id)) showAll();
+  try{ net.selectNodes([id]); net.focus(id,{scale:net.getScale(),animation:false}); }catch(_){}
+  syncLabelSize();
+  inspect(id);
+}
+
+function wireGoto(){
+  const inp = document.getElementById('goto');
+  if(!inp) return;
+  const list = document.createElement('div');
+  list.className = 'goto-list';
+  list.style.display = 'none';
+  (inp.parentNode || document.body).appendChild(list);
+  let matches = [];
+
+  const close = () => { list.style.display='none'; list.textContent=''; matches=[]; };
+
+  const draw = () => {
+    list.textContent = '';
+    if(!matches.length){
+      const d = document.createElement('div'); d.className='goto-none';
+      d.textContent = 'no match'; list.appendChild(d);
+    } else {
+      for(const m of matches){
+        const b = document.createElement('button');
+        b.type='button'; b.className='goto-item';
+        b.textContent = labelOf(m.e);
+        b.title = titleOf(m.e);
+        if(m.off){
+          const tag=document.createElement('span');
+          tag.textContent=' \u00b7 hidden';
+          tag.style.opacity='.6';
+          b.appendChild(tag);   // say so, rather than let the click look broken
+        }
+        b.onclick = () => { close(); inp.value=''; reveal(m.id); };
+        list.appendChild(b);
+      }
+    }
+    list.style.display = 'block';
+  };
+
+  let typeTimer = 0;
+  const onType = () => {
+    const want = inp.value.trim().toLowerCase();
+    if(!want){ close(); return; }                 // an empty field moves nothing
+    // Two buckets, not one pass with an early exit: hosts have to be collected
+    // even when they come late in ENT, and ENT is in no useful order. Stopping
+    // only when BOTH buckets are full keeps the walk bounded on a large estate
+    // without ever dropping a host in favour of eight services.
+    const hosts = [], others = [];
+    for(const id in ENT){
+      if(hosts.length >= 8 && others.length >= 8) break;
+      const e = ENT[id];
+      const lab = labelOf(e);
+      if(!lab || lab.toLowerCase().indexOf(want) !== 0) continue;
+      if(e.type === 'host'){ if(hosts.length < 8) hosts.push({id, e}); }
+      else if(others.length < 8) others.push({id, e});
+    }
+    const byName = (a,b) => { const la=labelOf(a.e), lb=labelOf(b.e); return la<lb?-1:la>lb?1:0; };
+    hosts.sort(byName); others.sort(byName);
+    matches = hosts.concat(others).slice(0, 8);
+    for(const m of matches) m.off = isOffMap(m.id);
+    // Only a visible match is worth centring on while typing. An invisible one is
+    // still proposed -- it exists -- and picking it reveals it.
+    const firstOn = matches.find(m => !m.off);
+    if(firstOn){
+      try{ net.selectNodes([firstOn.id]); net.focus(firstOn.id,{scale:net.getScale(),animation:false}); }catch(_){}
+      syncLabelSize();   // focus moves the view without emitting a zoom event
+    }
+    draw();
+  };
+  // Debounced: a rare prefix walks every entity and calls labelOf on each, which
+  // on a sixteen-thousand entity estate is a visible stall on every keystroke.
+  // One walk per burst of typing instead of one per character.
+  inp.addEventListener('input', () => { clearTimeout(typeTimer); typeTimer=setTimeout(onType,120); });
+
+  inp.addEventListener('keydown', (ev) => {
+    if(ev.key === 'Enter'){
+      if(!matches.length) return;
+      ev.preventDefault();
+      const id = matches[0].id;
+      close(); inp.value = '';
+      reveal(id);
+    } else if(ev.key === 'Escape'){
+      ev.preventDefault();
+      clearTimeout(typeTimer);          // a pending walk would re-open what Escape just closed
+      inp.value = ''; close();
+      try{ net.unselectAll(); }catch(_){}
+    }
+  });
+
+  // A click anywhere else dismisses the suggestions and leaves the camera alone.
+  document.addEventListener('pointerdown', (ev) => {
+    if(!inp.parentNode || !inp.parentNode.contains(ev.target)) close();
+  });
+}
+wireGoto();
+
+const showAllBtn = document.getElementById('showall');
+if(showAllBtn) showAllBtn.addEventListener('click', showAll);
+// Escape puts everything back, except while typing: the "go to" field owns its
+// own Escape, and stealing it would clear the map instead of the field.
+document.addEventListener('keydown', (ev) => {
+  if(ev.key !== 'Escape') return;
+  const t = ev.target;
+  if(t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+  showAll();
+});
+
 const attrInput=document.getElementById('attr');
 attrInput.addEventListener('input',()=>{ attrQuery=attrInput.value; fitAfterSettle = true; rebuild(); }); // safe on every keystroke: settle only runs when the node set actually changed
 // --- fold, layers, and opening one node -------------------------------------
@@ -2219,7 +2444,7 @@ syncStaticBtn();
 stBtn.onclick=()=>{ staticLayout=!staticLayout; localStorage.setItem('toise_viz_static',staticLayout?'1':'0');
   syncStaticBtn(); if(staticLayout) freeze(); };
 document.getElementById('resync').onclick=()=>{ loadProfile(); loadFull(); };
-document.getElementById('fit').onclick=()=>fitReservingPanel();
+document.getElementById('fit').onclick=()=>fitEmphasised();
 document.getElementById('relayout').onclick=()=>settle(2600);
 // The heatmap and the ruler stay: they are fed by recentChanges, which reads the
 // PRESENT. The controls that travel in time are wired to the asOf documents the
