@@ -174,6 +174,10 @@ header label input{font:inherit;}
 #showall.off{display:none;}
 #tlEarlier,#tlLater{font-size:12px;line-height:1;padding:.05rem .3rem;}
 /* Large means large: 18px, which a 12px footer barely distinguishes, was not. */
+/* One line, always. During a past read the label wrapped to five lines and the
+   footer grew from 144 to 216px, taking 72px of map for the length of the read.
+   The horizon moves to the tooltip; the line keeps its height in every state. */
+#tlAtLabel{display:block;max-width:100%;height:1.35em;line-height:1.35em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 #tlAtLabel.dragging{font-size:1.4rem;font-weight:600;color:var(--fg);}
 .badge{display:inline-block;margin-left:.35rem;padding:0 .3rem;border-radius:999px;
   background:var(--line);font-size:10px;line-height:1.5;vertical-align:middle;opacity:.9;}
@@ -508,11 +512,19 @@ net.on('beforeDrawing',ctx=>{ for(const f of FIELD){
 // it on demand.
 let freezeTimer=null;
 function freeze(){ clearTimeout(freezeTimer); freezeTimer=null; net.setOptions({physics:{enabled:false}}); }
-function settle(ms=1600){ net.setOptions({physics:{enabled:true}}); clearTimeout(freezeTimer);
+function settle(ms=1600){
+  // Not over a spread, whoever asks -- unfolding, relayout, the lot: physics
+  // would scramble the eased picture. The fit that was expected still happens.
+  if(spreadApplied){ if(fitAfterSettle){ fitAfterSettle=false; fitEmphasised(); } return; }
+  net.setOptions({physics:{enabled:true}}); clearTimeout(freezeTimer);
   freezeTimer=setTimeout(()=>{ freeze(); rememberSky(); if(fitAfterSettle){ fitAfterSettle=false; fitEmphasised(); } }, ms); }
 net.on('zoom',()=>{ syncLabelSize(); declutterLabels(); });   // zooming spreads the boxes: names can come back   // the font is in canvas units, so it shrinks with the view
-net.on('stabilizationIterationsDone',()=>{ freeze(); rememberSky();   // layout done -> freeze, remember, fit, reveal
+net.on('stabilizationIterationsDone',()=>{ freeze();   // layout done -> freeze, remember, spread, fit, reveal
   if(!fitted) return;   // the empty-graph init pass, before any data — nothing to reveal yet
+  rememberSky();
+  // A large estate opens narrowed to Machines before this first settle: the
+  // spread could not run then (the sky was not settled), so it runs now.
+  if(activeView && !spreadApplied){ applySpread(); declutterLabels(); }
   // Through fitEmphasised, not a bare fit: this is the LAST framing the reader
   // sees. A bare fit reserved nothing for the strip -- the six-second reload used
   // to re-frame a moment later and hid that -- and it would now frame the
@@ -873,6 +885,7 @@ function syncLabelSize() {
   const size = Math.min(140, Math.max(11, Math.ceil(LABEL_MIN_PX / net.getScale())));
   if (size !== lastLabelSize) {
     lastLabelSize = size;
+    labelSizeCanvas = size;
     net.setOptions({nodes:{font:{size:size}}});
   }
 }
@@ -918,13 +931,18 @@ const VIS_LABEL_DROP = 10.6;   // measured on the renderer, not assumed
 // Text width at the labels' SCREEN size, from a 2D context with the same face.
 // One offscreen canvas, created on first use.
 let measureCtx = null;
+let labelSizeCanvas = 12;   // what syncLabelSize last set, in canvas units
+function labelScreenPx(){ return labelSizeCanvas * (net ? net.getScale() : 1); }
 function labelWidthPx(text){
+  const px = labelScreenPx();
   try{
     if(!measureCtx){ const c = document.createElement('canvas'); measureCtx = c.getContext('2d'); }
-    if(!measureCtx) return text.length * 6.6;
-    measureCtx.font = "12px 'Geist Sans', system-ui, sans-serif";
+    if(!measureCtx) return text.length * px * 0.55;
+    // At the labels' REAL screen size: 12px is only the target below scale 1,
+    // and past it the font is 11 canvas units times the scale.
+    measureCtx.font = px + "px 'Geist Sans', system-ui, sans-serif";
     return measureCtx.measureText(text).width;
-  }catch(_){ return text.length * 6.6; }
+  }catch(_){ return text.length * px * 0.55; }
 }
 
 function declutterLabels() {
@@ -980,7 +998,7 @@ function declutterLabels() {
   const kept = [];
   const updates = [];
 
-  const labelH = 16 / scale;   // the label's height in canvas units
+  const labelH = (labelScreenPx() + 4) / scale;   // the label's height in canvas units
   for (const id of sorted) {
     const label = labelOf(ENT[id]);
     const p = pos[id];
@@ -995,9 +1013,10 @@ function declutterLabels() {
     // Drop by the node's own radius plus the renderer's gap, both in canvas
     // units, THEN convert: a constant drop is wrong by exactly the size of the
     // disc, which is how this pass cleared Network and missed Machines.
+    const lh = labelScreenPx() + 4;
     const boxAt = (dy) => {
       const top = (p.y + r + VIS_LABEL_DROP + dy) * scale;
-      return { x1: cx - w / 2, x2: cx + w / 2, y1: top, y2: top + 16 };
+      return { x1: cx - w / 2, x2: cx + w / 2, y1: top, y2: top + lh };
     };
     const blocked = (b) => kept.some(k => hits(b, k))
       || ids.some(other => other !== id && discs[other] && hits(b, discs[other]));
@@ -1346,47 +1365,100 @@ function syncShowAll(keptCount, totalCount){
 // reading and the map can come back to the one layout the reader learned.
 const SKY_POS = {};
 let spreadApplied = false;
+let skySettled = false;   // the first stabilization has run and SKY_POS holds it
 function rememberSky(){
-  if(activeView || spreadApplied) return;
-  try{ Object.assign(SKY_POS, net.getPositions()); }catch(_){ }
+  // Never while a spread is on the board; otherwise the sky would learn the
+  // view's positions. On the FIRST settle a view may already be active -- a
+  // large estate opens narrowed to Machines before any layout -- and that is
+  // exactly when the sky must be remembered, since nothing has been spread yet.
+  if(spreadApplied) return;
+  if(activeView && skySettled) return;
+  try{ Object.assign(SKY_POS, net.getPositions()); skySettled = true; }catch(_){ }
 }
 
-// In a view that draws few nodes, the sky's layout is the wrong one to read
-// them in: measured at 1440, twenty hosts inside a 250px circle at the centre
-// of an 800 x 530 map, two isolates at the edges, and the fit framing the
-// isolates. So a view with at most SPREAD_MAX drawn nodes lays them out on a
-// sunflower spiral that fills the frame's ellipse -- deterministic (sorted,
-// hosts first), evenly spaced, no physics. Measured spacing after fit in an
-// 800 x 530 frame: 93px for 20 nodes, 61px for 46, 47px for 80; the cap is
-// where 60px stops holding. Leaving the view restores the sky.
+// In a view that draws few nodes, the sky's picture is kept but made readable:
+// measured at 1440, twenty hosts inside a 250px circle at the centre of an
+// 800 x 530 map, two isolates at the edges, the fit framing the isolates.
+//
+// The rule from the night before stands -- a reader learns where their
+// machines are -- so a view does NOT re-lay them out. The drawn nodes keep the
+// sky's relative positions; the fit scales that picture to the frame; and then
+// hosts closer than 60 screen pixels are eased apart, each pair pushed along
+// the line between them by half the deficit, a bounded number of times, so a
+// host stays where it was, larger. The scale is re-read on every pass because
+// pushing apart can widen the picture and shrink the fit. Only when the easing
+// cannot reach 60 pixels within the bound does the view fall back to a
+// sunflower spiral, and then the footer says so.
 const SPREAD_MAX = 60;
+const SPREAD_TARGET_PX = 60;
+const SPREAD_PASSES = 120;
+let spreadFallback = false;
 function applySpread(){
   const ids = onMapIds().filter(id => ENT[id] || isKind(id));
-  if(!activeView || ids.length === 0 || ids.length > SPREAD_MAX){
+  spreadFallback = false;
+  if(!activeView || ids.length === 0 || ids.length > SPREAD_MAX || !skySettled){
     if(spreadApplied){
+      // EVERY node the sky knows, not only the visible ones: a node spread and
+      // then hidden by a search would otherwise keep a view's coordinates and
+      // reappear there in the sky.
       spreadApplied = false;
-      const back = ids.filter(id => SKY_POS[id]).map(id => ({ id, x: SKY_POS[id].x, y: SKY_POS[id].y }));
+      const present = new Set(nodes.getIds());
+      const back = Object.keys(SKY_POS).filter(id => present.has(id)).map(id => ({ id, x: SKY_POS[id].x, y: SKY_POS[id].y }));
       if(back.length) nodes.update(back);
     }
     return;
   }
-  const name = id => ENT[id] ? labelOf(ENT[id]) : (nodes.get(id) || {}).label || id;
-  ids.sort((a, b) => {
-    const ha = ENT[a] && ENT[a].type === 'host', hb = ENT[b] && ENT[b].type === 'host';
-    if(ha !== hb) return ha ? -1 : 1;
-    const na = name(a), nb = name(b);
-    return na < nb ? -1 : na > nb ? 1 : (a < b ? -1 : 1);
-  });
   const view = document.getElementById('net');
   const W = (view && view.clientWidth) || 800, H = (view && view.clientHeight) || 530;
-  const ax = 400, ay = 400 * (H / W);          // the frame's aspect; the fit sets the scale
-  const phi = Math.PI * (3 - Math.sqrt(5));
-  const N = ids.length;
-  const up = ids.map((id, i) => {
-    const r = Math.sqrt((i + 0.5) / N), t = i * phi;
-    return { id, x: ax * r * Math.cos(t), y: ay * r * Math.sin(t) };
-  });
-  nodes.update(up);
+  // Start from the sky's positions, which is the picture the reader knows; the
+  // current ones only for a node the sky never settled.
+  let cur = {};
+  try{ cur = net.getPositions(ids); }catch(_){ }
+  const base = {};
+  for(const id of ids){ const q = SKY_POS[id] || cur[id]; if(q) base[id] = { x: q.x, y: q.y }; }
+  const hosts = ids.filter(id => ENT[id] && ENT[id].type === 'host' && base[id]);
+  let eased = hosts.length < 2;
+  for(let pass = 0; pass < SPREAD_PASSES && !eased; pass++){
+    let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+    for(const id of ids){ const q = base[id]; if(!q) continue; if(q.x < x1) x1 = q.x; if(q.x > x2) x2 = q.x; if(q.y < y1) y1 = q.y; if(q.y > y2) y2 = q.y; }
+    const bw = Math.max(x2 - x1, 1), bh = Math.max(y2 - y1, 1);
+    const scale = Math.min(W / bw, H / bh) * 0.9;   // what the fit will give, with its margins
+    const d = SPREAD_TARGET_PX / scale;              // 60 screen pixels, in canvas units
+    let moved = false;
+    for(let i = 0; i < hosts.length; i++){
+      for(let j = i + 1; j < hosts.length; j++){
+        const a = base[hosts[i]], b = base[hosts[j]];
+        let dx = b.x - a.x, dy = b.y - a.y, dist = Math.hypot(dx, dy);
+        if(dist >= d * 0.98) continue;                  // within two percent of the target is there
+        if(dist < 1e-6){ dx = 1; dy = 0; dist = 1; }    // the same spot: part them along x
+        const push = (d - dist) / 2;
+        a.x -= dx / dist * push; a.y -= dy / dist * push;
+        b.x += dx / dist * push; b.y += dy / dist * push;
+        moved = true;
+      }
+    }
+    if(!moved) eased = true;
+  }
+  if(eased){
+    nodes.update(ids.filter(id => base[id]).map(id => ({ id, x: base[id].x, y: base[id].y })));
+  } else {
+    // Fallback, and the footer says so: a spiral filling the frame's ellipse,
+    // deterministic -- hosts first, by name -- so at least it is the same spiral
+    // every time. It is not where the reader expects things to be.
+    spreadFallback = true;
+    const name = id => ENT[id] ? labelOf(ENT[id]) : (nodes.get(id) || {}).label || id;
+    const order = ids.slice().sort((a, b) => {
+      const ha = !!(ENT[a] && ENT[a].type === 'host'), hb = !!(ENT[b] && ENT[b].type === 'host');
+      if(ha !== hb) return ha ? -1 : 1;
+      const na = name(a), nb = name(b);
+      return na < nb ? -1 : na > nb ? 1 : (a < b ? -1 : 1);
+    });
+    const ax = 400, ay = 400 * (H / W), phi = Math.PI * (3 - Math.sqrt(5)), N = order.length;
+    nodes.update(order.map((id, i) => {
+      const r = Math.sqrt((i + 0.5) / N), t = i * phi;
+      return { id, x: ax * r * Math.cos(t), y: ay * r * Math.sin(t) };
+    }));
+  }
   spreadApplied = true;
 }
 
@@ -1603,7 +1675,7 @@ function rebuild(){
   // footer said "186 (+912 folded)" in every view while Machines drew twenty.
   const nN=document.getElementById('nNodes');
   const withheld=(SCOPE && SCOPE.hiddenEntities)||0;
-  nN.textContent=fmtCount(hid.kept)+(hiddenByFold?'  (+'+fmtCount(hiddenByFold)+' folded)':'')+(loopbackHidden?'  ('+fmtCount(loopbackHidden)+' loopback hidden)':'')+(withheld?'  ('+fmtCount(withheld)+' withheld by the portal)':'');
+  nN.textContent=fmtCount(hid.kept)+(hiddenByFold?'  (+'+fmtCount(hiddenByFold)+' folded)':'')+(loopbackHidden?'  ('+fmtCount(loopbackHidden)+' loopback hidden)':'')+(withheld?'  ('+fmtCount(withheld)+' withheld by the portal)':'')+(spreadFallback?'  (hosts laid out on a spiral: 60 px apart was not reachable)':'');
   nN.title=(hiddenByFold?(hiddenByFold+' entities are folded into their owner \u2014 double-click a node to open it. '):'')+
            (loopbackHidden?(loopbackHidden+' loopback or wildcard addresses and endpoints are not drawn; name one in "go to" to see it.'):'');
   // Never let a hidden thing read as an absent thing: when edges are painted
@@ -1968,9 +2040,8 @@ function sayInstant() {
     return;
   }
   const h = horizonMs();
-  el.textContent = h == null
-    ? `as of ${fmt(served)}`
-    : `as of ${fmt(served)} · readable back to ${fmt(h)}`;
+  el.textContent = `as of ${fmt(served)}`;
+  el.title = h == null ? '' : `readable back to ${fmt(h)}`;
 }
 
 // --- timeline: PRESENT in this build --------------------------------------------
