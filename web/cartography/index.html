@@ -1488,7 +1488,13 @@ function applySpread(){
     const ux = Math.abs(dx) / dist, uy = Math.abs(dy) / dist;
     const X = ((nameW[hosts[i]] + nameW[hosts[j]]) / 2 + 6) / sc;
     const Y = (namePx + 4) / sc + Math.abs(radius[hosts[i]] - radius[hosts[j]]);
-    const byNames = Math.min(ux > 1e-6 ? X / ux : Infinity, uy > 1e-6 ? Y / uy : Infinity);
+    // Names count only on a frame wide enough to hold them apart. On a phone,
+    // asking two long names to clear each other sideways widens the picture
+    // past the frame, the fit shrinks, and the centres end up CLOSER -- measured
+    // at 390px: 36 and 31 pixels where the centre rule alone had given 39. The
+    // vertical seats handle names there, and measured zero overlaps doing it.
+    const byNames = (W < 560) ? d
+      : Math.min(ux > 1e-6 ? X / ux : Infinity, uy > 1e-6 ? Y / uy : Infinity);
     return { dx, dy, dist, need: Math.max(d, Math.min(byNames, d * 3)) };   // never more than three targets: a pathological line is not a reason to scatter
   };
   // The non-hosts a host must not land on: they keep the sky's places, but a
