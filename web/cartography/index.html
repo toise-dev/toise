@@ -650,12 +650,6 @@ function stateBorder(n){
   return v && Object.prototype.hasOwnProperty.call(LIFECYCLE_BORDER,v) ? LIFECYCLE_BORDER[v] : null;
 }
 
-// Is this type what the active view is about? Read by the fold: a view's subject
-// stands for itself even when the reader has switched its parent off.
-function viewWants(t){
-  return !!(t && activeView && VIEWS[activeView] && VIEWS[activeView].indexOf(t) !== -1);
-}
-
 function computeOwners(){
   OWNER={};
   for(const r of Object.values(REL)){
@@ -688,9 +682,12 @@ function repOf(id,guard){
     // view fills `dimmed`, never `hidden`, and `hidden` is now only ever the
     // reader's own legend and layer buttons.
     //
-    // The exception is a child whose own type is what the active view is ABOUT:
-    // a view must never lose its subject to a parent the reader switched off.
-    if(hidden.has(ENT[up].type) && viewWants(ENT[cur] && ENT[cur].type)) return cur;
+    // No exception for the view's subject. One was tried and it broke the rule it
+    // was meant to soften: in Applications with Host switched off, the services
+    // and listeners ARE the subject, so all of them surfaced at once -- 22 drawn
+    // became 554. A child of a switched-off parent folds on up, and if no
+    // ancestor is drawn it is not drawn either. The notice below says so, because
+    // a view that empties without a word is the worse failure of the two.
     if(hidden.has(ENT[up].type)){ cur=up; continue; }
     if(expanded.has(up)){
       // The owner is open. Its children are represented by one node per KIND
@@ -993,6 +990,23 @@ function openNarrowOnLargeEstate() {
   return true;
 }
 
+// Names the checkbox that is withholding things, which the map can no longer
+// show for itself: the elements are gone from the canvas, not faint on it, so
+// without this a reader sees a thin map and no cause.
+function sayOrphaned(byType){
+  const el=document.getElementById('narrowStat');
+  if(!el) return;
+  if(!byType || !byType.size){ if(el.dataset.orphan==='1'){ el.textContent=''; el.dataset.orphan=''; } return; }
+  // This element also carries the narrowing notice. Never speak over a message
+  // that is not ours: a reader loses the one explanation they were given.
+  if(el.textContent && el.dataset.orphan!=='1') return;
+  let total=0, worst='', worstN=-1;
+  for(const [t,n] of byType){ total+=n; if(n>worstN){ worstN=n; worst=t; } }
+  el.dataset.orphan='1';
+  el.textContent = fmtCount(total)+' elements hang from '+typeLabel(worst)+
+    ', which is switched off in the legend. Switch it back on to see them.';
+}
+
 function sayCap(drawn,total,criterion){
   const el=document.getElementById('capStat'); if(!el) return;
   el.textContent = drawn>=total ? '' :
@@ -1129,6 +1143,7 @@ function rebuild(){
   const firstLoad=!fitted;   // scatter new nodes on the very first layout so stabilisation spreads them
   const inside=foldedInside();
   let hiddenByFold=0;
+  const orphanedBy=new Map();   // type switched off -> how many entities it is withholding
   // Degree drives node size: dist1 with eight links must read as bigger than acc3
   // with one, so the shape of the network is legible before a single label is.
   degree={};
@@ -1138,7 +1153,15 @@ function rebuild(){
   const candidates=[];
   let matchCandidates=0;
   Object.values(ENT).forEach(n=>{ allTypes.add(n.type); if(hidden.has(n.type)) return;
-    if(repOf(n.id)!==n.id){ hiddenByFold++; return; }            // folded into an owner
+    if(repOf(n.id)!==n.id){
+      hiddenByFold++;
+      // Its representative is a type the reader switched off, so this entity has
+      // no drawn ancestor to be counted inside: it is withheld BY THE LEGEND, and
+      // the reader needs to be told which checkbox is doing it.
+      const rep=ENT[repOf(n.id)];
+      if(rep && hidden.has(rep.type)) orphanedBy.set(rep.type,(orphanedBy.get(rep.type)||0)+1);
+      return;
+    }
     const ok=attrMatch(n); if(q && ok) matchCandidates++; if(q && !ok && !MATCH_OWNERS.has(n.id) && filterOnly) return;   // "only" mode hides non-matching, but not an owner hiding a match
     candidates.push({n, d:degree[n.id]||0}); });
 
@@ -1160,6 +1183,7 @@ function rebuild(){
   if(q) capCriterion='matching your search first, then the most connected';
   else if(CITED.size) capCriterion='cited first, then the most connected';
   sayCap(kept.length,cappedTotal,capCriterion);
+  sayOrphaned(orphanedBy);
 
   // Phase 2: build exactly what the old loop built, for the retained candidates only.
   kept.forEach(({n,d})=>{ const ok=attrMatch(n);
