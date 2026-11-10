@@ -1053,13 +1053,19 @@ function keptOnMap(n, q, ok){
 // If the rule would remove EVERYTHING, remove nothing instead and say so. An
 // empty canvas reads as "there is nothing here", which is a different statement
 // from "nothing matched" and the one the reader will believe.
-function applyHiding(nodeList){
+function applyHiding(nodeList, explained){
   // The legend needs no special case here: a type the reader unchecked never
   // reaches this list at all -- it is dropped while candidates are chosen, well
   // before a node is built -- so the rescue below cannot undo their choice.
   let kept = 0;
   for(const nd of nodeList) if(!nd.hidden) kept++;
-  if(kept === 0 && nodeList.length){
+  // `explained` is the whole argument for this rescue, inverted. It exists because
+  // an empty canvas is MUTE -- it reads as "there is nothing here" rather than
+  // "nothing survived what you asked". When the map already names the checkbox
+  // doing the withholding, it is not mute, and overriding the reader to avoid a
+  // silence that is not there would add elements they just switched off.
+  // Measured: Machines with Host switched off went 20 -> 165 that way.
+  if(kept === 0 && nodeList.length && !explained){
     for(const nd of nodeList) nd.hidden = false;
     say('Nothing matched what you asked for, so the whole map is shown.');
     kept = nodeList.length;
@@ -1235,7 +1241,7 @@ function rebuild(){
 // No grid and no clusters: the map keeps ONE stable layout for everything, and a
 // view only changes what is lit. Rejected by Matthieu on the real estate -- a
 // square of discs says nothing about how an infrastructure is actually shaped.
-  const hid = applyHiding(nUp);
+  const hid = applyHiding(nUp, orphanedBy.size > 0);
   syncShowAll(hid.kept, hid.offerable);
   nodes.update(nUp);
   // Say what is not shown. "0 match" was the lie; "0 shown, 54 inside folded nodes"
