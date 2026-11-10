@@ -1023,31 +1023,37 @@ function keptOnMap(n, q, ok){
 // empty canvas reads as "there is nothing here", which is a different statement
 // from "nothing matched" and the one the reader will believe.
 function applyHiding(nodeList){
-  // A type the reader unchecked in the legend is NOT withheld by a view: it must
-  // survive the rescue below, and it must not make the "Show all" button offer to
-  // put back something that button does not touch.
-  let kept = 0, offerable = 0;
-  for(const nd of nodeList){
-    if(!nd._legend) offerable++;
-    if(!nd.hidden) kept++;
-  }
-  if(kept === 0 && offerable > 0){
-    for(const nd of nodeList) nd.hidden = !!nd._legend;
+  // The legend needs no special case here: a type the reader unchecked never
+  // reaches this list at all -- it is dropped while candidates are chosen, well
+  // before a node is built -- so the rescue below cannot undo their choice.
+  let kept = 0;
+  for(const nd of nodeList) if(!nd.hidden) kept++;
+  if(kept === 0 && nodeList.length){
+    for(const nd of nodeList) nd.hidden = false;
     say('Nothing matched what you asked for, so the whole map is shown.');
-    kept = offerable;
+    kept = nodeList.length;
   }
-  return {kept, offerable};
+  return {kept, offerable: nodeList.length};
 }
 
 // Clears what a VIEW withholds, not what the reader unchecked in the legend:
 // `hidden` is an explicit choice of theirs and silently undoing it would be
 // taking a decision back.
 function showAll(){
+  // Leave the VIEW first. Clearing `dimmed` alone did nothing: rebuild() calls
+  // syncLayerView(), which refills it from whichever view is still active -- so
+  // "Show all" put everything back and the next line took it away again. The
+  // view is the state; `dimmed` is only its shadow.
+  activeView = null;
+  syncViewButtons();
+  const cap = document.getElementById('narrowStat');
+  if(cap) cap.textContent = '';           // the notice must not outlive the narrowed map
   dimmed.clear(); CITED.clear(); CITED_OWNERS.clear();
   attrQuery = '';                       // the real state; `q` is derived from it inside rebuild
   const attr = document.getElementById('attr');
   if(attr) attr.value = '';
   rebuild();
+  publishView();                        // the Dock shows the view as a token; it learns it here
   fitEmphasised();
 }
 
@@ -1149,7 +1155,6 @@ function rebuild(){
               childCount:k,   // the REAL number folded inside, which the grid sizes the disc from
               title:titleOf(n)+(k?('\nfolded inside: '+badgeFull(by)+'  \u2014 double-click to open'):''),
               hidden:!keptOnMap(n,q,ok),
-              _legend:hidden.has(n.type),   // read by applyHiding: the reader's own checkbox, not a view
               // Opacity no longer hides anything; a deleted entity is the only
               // thing still drawn faint, because it IS there and is on its way out.
               opacity:n.deleted?0.45:1,
@@ -1805,9 +1810,8 @@ function renderLitList(box){
   box.textContent='';
   box.classList.remove('list');
   const lit=[];
-  for(const id of nodes.getIds()){
-    const e=ENT[id];
-    if(e && !dimmed.has(e.type)) lit.push(id);
+  for(const id of onMapIds()){
+    if(ENT[id]) lit.push(id);   // kind summaries are not entities and are not listed
   }
   if(!lit.length){ const d=document.createElement('div'); d.className='empty';
     d.textContent='Click an element to see its details.'; box.appendChild(d); return; }
@@ -2104,6 +2108,16 @@ function syncLayerView(){
   if(!showExtras) for(const t of (VIEW_EXTRAS[activeView]||[])) keep.delete(t);
   for(const n of Object.values(ENT)) if(!keep.has(n.type)) dimmed.add(n.type);
 }
+// The segments' look, in one place: showAll leaves a view too, and a second copy
+// of this loop would be a second thing to forget.
+function syncViewButtons(){
+  for(const id of Object.keys(VIEWS)){
+    const el = document.getElementById(id);   // tolerate a missing button like the rest of the page
+    // The class owns the segment's look: an inline colour here would beat it and
+    // paint amber on amber.
+    if(el){ el.style.color = ''; el.classList.toggle('on', id===activeView); }
+  }
+}
 function applyView(btn){
   const wasActive = activeView;
   activeView = (activeView===btn) ? null : btn;   // clicking the active view shows everything again
@@ -2119,12 +2133,7 @@ function applyView(btn){
     // twenty machines carrying their children as satellites and counts.
   }
   syncFoldBtn();
-  for(const id of Object.keys(VIEWS)){
-    const el = document.getElementById(id);   // tolerate a missing button like the rest of the page
-    // The class owns the segment's look: an inline colour here would beat it and
-    // paint amber on amber.
-    if(el){ el.style.color = ''; el.classList.toggle('on', id===activeView); }
-  }
+  syncViewButtons();
   publishView();   // the Dock shows the view as a context token; it learns it from here
   // Nothing is re-laid out any more, so there is nothing to settle: the redraw
   // only repaints opacities and labels, and the camera does the rest. That is
