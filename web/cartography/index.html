@@ -1111,14 +1111,17 @@ function seededPos(key){
 // the node that is built -- so an exemption has to be honoured in both.
 const REVEALED = new Set();
 
-// A loopback address, endpoint or listener is a machine talking to itself. It is
+// A loopback address or endpoint is a machine talking to itself. It is
 // real and it is kept in the data, but it carries no topology and it was
 // carrying the labels: hidden from the drawing, counted in the footer, and
 // still reachable by name through "go to".
 function loopbackOf(n){
   let ip = '';
   if(n.type === 'network.address') ip = identOf(n)['network.address'] || '';
-  else if(n.type === 'network.endpoint' || n.type === 'service.listener'){
+  // Not service.listener: its identity is <host-uuid>:<port>/<proto>, with no
+  // address in it, so there is nothing for this to read. Addresses and
+  // endpoints are where the loopback labels came from.
+  else if(n.type === 'network.endpoint'){
     // The WHOLE address token, never a suffix: a suffix match took 2001:db8::1
     // for ::1 and would have hidden a real address. Conservative on purpose --
     // an unrecognised form is treated as not loopback, so at worst a loopback
@@ -1375,6 +1378,7 @@ function rebuild(){
   // Say what is not shown. "0 match" was the lie; "0 shown, 54 inside folded nodes"
   // is the same number with its bound declared.
   const ms=document.getElementById('matchStat');
+  let shownMatchForColour=-1;   // -1: no query, the field keeps its normal colour
   if(!q){ ms.textContent=''; }
   else{
     // "shown" was this number's own word until nothing matching meant the whole
@@ -1386,6 +1390,7 @@ function rebuild(){
     // the footer said "no match" under six drawn, named, matching machines.
     let shownMatch=0;
     for(const nd of nUp){ if(nd.hidden) continue; const e=ENT[nd.id]; if(e && (attrMatch(e)||MATCH_OWNERS.has(e.id))) shownMatch++; }
+    shownMatchForColour=shownMatch;
     if(shownMatch===0){
       ms.textContent='· no match — the whole map is shown';
     } else {
@@ -1395,7 +1400,8 @@ function rebuild(){
       ms.textContent=parts.join(', ');
     }
   }
-  const ai=document.getElementById('attr'); if(ai) ai.style.color=(q&&matched===0)?'var(--warn)':'var(--fg)';
+  // Same count as the footer, or the field says "nothing" over "6 match".
+  const ai=document.getElementById('attr'); if(ai) ai.style.color=(q&&shownMatchForColour===0)?'var(--warn)':'var(--fg)';
   nodes.getIds().forEach(id=>{ if(!nodeIds.has(id)) nodes.remove(id); });
   const edgeIds=new Set(), eUp=[];
   let realCount=Object.values(REL).filter(r=>nodeIds.has(r.fromId)&&nodeIds.has(r.toId)).length;
@@ -1438,7 +1444,7 @@ function rebuild(){
   const nN=document.getElementById('nNodes');
   nN.textContent=fmtCount(hid.kept)+(hiddenByFold?'  (+'+fmtCount(hiddenByFold)+' folded)':'')+(loopbackHidden?'  ('+fmtCount(loopbackHidden)+' loopback hidden)':'');
   nN.title=(hiddenByFold?(hiddenByFold+' entities are folded into their owner \u2014 double-click a node to open it. '):'')+
-           (loopbackHidden?(loopbackHidden+' loopback addresses, endpoints and listeners are not drawn; name one in "go to" to see it.'):'');
+           (loopbackHidden?(loopbackHidden+' loopback or wildcard addresses and endpoints are not drawn; name one in "go to" to see it.'):'');
   // Never let a hidden thing read as an absent thing: when edges are painted
   // invisible the canvas is indistinguishable from a graph with no relations, so
   // the counter says which of the two it is.
@@ -1861,7 +1867,10 @@ async function loadProfile(){
       // and would drown the signal; relation changes have no entity type, so skip them.
       const asOf = asOfISO();
       let windowVars;
-      if (asOf) {
+      // Absolute bounds whenever the window is not live, not only under asOf:
+      // after Earlier with a live map, a window relative to now was fetched and
+      // then filtered to the shifted bounds, which left the strip empty.
+      if (asOf || !isLiveSpan()) {
         const [fromMs, toMs] = spanBounds();
         // Absolute bounds, and NO asOf: recentChanges has no such argument, and a
         // relay that refuses unknown variables answers 400. The window already
@@ -2769,6 +2778,7 @@ const tlLabelEl=document.getElementById('tlLabel'); tlLabelEl.textContent=tlWind
 // ruler one window back, Later one forward, and forward past now is live again.
 function shiftWindow(dir){
   const [s,e]=spanBounds();
+  const lbl=document.getElementById('tlLabel'), liveBtn=document.getElementById('tlLive');
   if(dir<0){
     const h=horizonMs();
     const ne=e-spanMs;
@@ -2776,14 +2786,23 @@ function shiftWindow(dir){
     spanEnd=new Date(ne);
   } else {
     const ne=e+spanMs;
-    if(ne>=Date.now()){ returnLive(); syncSlider(); sayInstant(); return; }
+    if(ne>=Date.now()){
+      // Back to a live window, done HERE and only for the window. returnLive()
+      // was not usable: it reaches a play button and a slider that are not in
+      // this page and throws. And the map's own instant is not touched -- the
+      // window is the ruler's, `historical` and asOfMs are the map's.
+      spanEnd=null; spanMs=WINDOWS[tlWindow]||WINDOWS['24h'];
+      if(lbl) lbl.textContent=tlWindow;
+      if(liveBtn) liveBtn.classList.remove('hist');
+      renderRuler(); loadProfile(); syncSlider(); sayInstant();
+      return;
+    }
     spanEnd=new Date(ne);
   }
-  historical=true;
   renderRuler(); loadProfile(); syncSlider(); sayInstant();
   const [ns,ne2]=spanBounds();
-  document.getElementById('tlLabel').textContent=new Date(ns).toLocaleString()+' \u2192 '+new Date(ne2).toLocaleString();
-  document.getElementById('tlLive').classList.add('hist');
+  if(lbl) lbl.textContent=new Date(ns).toLocaleString()+' \u2192 '+new Date(ne2).toLocaleString();
+  if(liveBtn) liveBtn.classList.add('hist');
 }
 const tlEarlier=document.getElementById('tlEarlier'), tlLater=document.getElementById('tlLater');
 if(tlEarlier) tlEarlier.onclick=()=>shiftWindow(-1);
@@ -2811,19 +2830,26 @@ if (tlAt) {
   // During the drag the label says, large, where the handle IS -- no read, no
   // reload, just the instant -- so the reader knows what they will get before
   // they let go. The read itself still happens on release only.
+  const endDrag = () => { const el = document.getElementById('tlAtLabel'); if (el) el.classList.remove('dragging'); sayInstant(); };
   tlAt.addEventListener('input', () => {
     const el = document.getElementById('tlAtLabel');
     if (!el) return;
     const ms = sliderToMs(Number(tlAt.value));
     el.classList.add('dragging');
-    el.textContent = (ms == null || typeof ms !== 'number') ? 'live' : ('as of ' + new Date(ms).toLocaleString());
+    el.textContent = ms == null ? 'live'
+      : typeof ms !== 'number' ? 'horizon unknown \u2014 release to try'
+      : ('as of ' + new Date(ms).toLocaleString());
   });
+  // `change` does not fire when the handle is released where it started, so the
+  // large label is also taken down on every way a drag can end.
+  tlAt.addEventListener('pointerup', endDrag);
+  tlAt.addEventListener('pointercancel', endDrag);
+  tlAt.addEventListener('keyup', endDrag);
+  tlAt.addEventListener('blur', endDrag);
   tlAt.addEventListener('change', async () => {
     // Wait for the load to settle so the label never claims a moment that failed to load.
     await goToInstant(sliderToMs(Number(tlAt.value)));
-    const el = document.getElementById('tlAtLabel');
-    if (el) el.classList.remove('dragging');
-    sayInstant();
+    endDrag();
     syncSlider();
   });
 }
