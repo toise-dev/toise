@@ -173,7 +173,9 @@ header label input{font:inherit;}
    is three times the width of "Show all" and it was the string that overflowed. */
 #showall.off{display:none;}
 #tlAtLabel.dragging{font-size:1.15rem;font-weight:600;color:var(--fg);}
-#tlEarlier,#tlLater{font-size:11px;padding:.1rem .45rem;}
+#tlEarlier,#tlLater{font-size:12px;line-height:1;padding:.05rem .3rem;}
+/* Large means large: 1.15rem was 18px, which a 12px footer barely distinguishes. */
+#tlAtLabel.dragging{font-size:1.4rem;}
 .badge{display:inline-block;margin-left:.35rem;padding:0 .3rem;border-radius:999px;
   background:var(--line);font-size:10px;line-height:1.5;vertical-align:middle;opacity:.9;}
 .goto-list{position:absolute;top:100%;left:0;z-index:30;min-width:14rem;max-width:22rem;
@@ -206,11 +208,11 @@ aside td{padding:.25rem .4rem;border-bottom:1px solid var(--line);vertical-align
 aside td.k{color:var(--dim);width:40%;word-break:normal;overflow-wrap:break-word;}
 /* Whole, and clickable. Clipped to one row it ended in "Listening po…" and a
    reader who could not see a chip could not switch its type back on. It wraps. */
-.legend{display:flex;flex-wrap:wrap;gap:.4rem .8rem;overflow:visible;font-size:12px;flex:1 1 auto;min-width:0;}
-.legend span{display:flex;align-items:center;gap:.3rem;cursor:pointer;opacity:.85;background:var(--bg);border:1px solid var(--line);border-radius:999px;padding:.15rem .55rem;white-space:nowrap;flex-shrink:0;}
+.legend{display:flex;flex-wrap:wrap;gap:.2rem .5rem;overflow:visible;font-size:11px;flex:1 1 auto;min-width:0;}
+.legend span{display:flex;align-items:center;gap:.25rem;cursor:pointer;opacity:.85;background:var(--bg);border:1px solid var(--line);border-radius:999px;padding:.02rem .45rem;font-size:11px;line-height:1.35;white-space:nowrap;flex-shrink:0;}
 .legend span.off{opacity:.3;text-decoration:line-through;}
 .legend i{width:10px;height:10px;border-radius:50%;display:inline-block;}
-.subbar{display:flex;align-items:center;gap:.6rem 1rem;padding:.4rem 1rem;background:var(--panel);border-bottom:1px solid var(--line);font-size:12px;flex-wrap:wrap;overflow:visible;white-space:normal;min-height:2.1rem;box-sizing:border-box;}
+.subbar{display:flex;align-items:center;gap:.25rem .8rem;padding:.2rem 1rem;background:var(--panel);border-bottom:1px solid var(--line);font-size:12px;flex-wrap:wrap;overflow:visible;white-space:normal;min-height:1.9rem;box-sizing:border-box;}
 /* The legend is what lets a reader switch a type back on, so it never gives
    way: the scope yields first and ellipses. flex-shrink:0 on the scope was
    the defect -- it refused to shrink, so the legend was the one that lost. */
@@ -281,6 +283,9 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
 #feed div{padding:.15rem 0;border-bottom:1px solid var(--line);}
 #err{color:var(--warn);font-size:12px;}
 .tlside{display:flex;flex-direction:column;align-items:flex-end;gap:2px;width:9rem;flex-shrink:0;}
+/* One row, not three: .tlside is a column, and Earlier and Later as their own
+   children were two more rows -- measured as 47px of map lost at the bottom. */
+.tlnav{display:flex;align-items:center;gap:.25rem;}
 .timeline{display:flex;align-items:flex-start;gap:.7rem;padding:.35rem 1rem .45rem;background:var(--panel);border-top:1px solid var(--line);font-size:12px;}
 .tlwrap{flex:1 1 0;min-width:0;display:flex;flex-direction:column;gap:3px;}
 /* change-density heatmap: one row per entity type, a grid of cells (empty = faint
@@ -403,12 +408,10 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
     </div>
   </div>
   <div class="tlside">
-    <label class="muted">Window <select id="tlWin">
+    <span class="tlnav"><button id="tlEarlier" title="Show the window before this one (earlier)">&#9666;</button><label class="muted">Window <select id="tlWin">
       <option value="1h">1h</option><option value="6h">6h</option>
-      <option value="24h">24h</option><option value="7d">7d</option></select></label>
+      <option value="24h">24h</option><option value="7d">7d</option></select></label><button id="tlLater" title="Show the window after this one (later)">&#9656;</button></span>
     <span id="tlLabel">24h</span>
-    <button id="tlEarlier" title="Show the window before this one">&#9666; Earlier</button>
-    <button id="tlLater" title="Show the window after this one">Later &#9656;</button>
     <input type="range" id="tlAt" min="0" max="1000" value="1000" step="1" title="The handle picks the moment to revisit; playback starts on release" style="width:100%">
     <button id="tlLive">live</button>
     <span id="tlAtLabel" class="muted"></span>
