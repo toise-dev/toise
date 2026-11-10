@@ -1454,7 +1454,8 @@ function rebuild(){
   // What is DRAWN, not what was built: nodeIds counted hidden nodes too, so the
   // footer said "186 (+912 folded)" in every view while Machines drew twenty.
   const nN=document.getElementById('nNodes');
-  nN.textContent=fmtCount(hid.kept)+(hiddenByFold?'  (+'+fmtCount(hiddenByFold)+' folded)':'')+(loopbackHidden?'  ('+fmtCount(loopbackHidden)+' loopback hidden)':'');
+  const withheld=(SCOPE && SCOPE.hiddenEntities)||0;
+  nN.textContent=fmtCount(hid.kept)+(hiddenByFold?'  (+'+fmtCount(hiddenByFold)+' folded)':'')+(loopbackHidden?'  ('+fmtCount(loopbackHidden)+' loopback hidden)':'')+(withheld?'  ('+fmtCount(withheld)+' withheld by the portal)':'');
   nN.title=(hiddenByFold?(hiddenByFold+' entities are folded into their owner \u2014 double-click a node to open it. '):'')+
            (loopbackHidden?(loopbackHidden+' loopback or wildcard addresses and endpoints are not drawn; name one in "go to" to see it.'):'');
   // Never let a hidden thing read as an absent thing: when edges are painted
@@ -1605,22 +1606,33 @@ function sayIncomplete(loadedE, loadedR, bounds) {
   if (!scopeDescribesInstant) { el.textContent = ''; return; }
   // Comparing against every scope reading tolerates a creation or deletion that
   // happened during the load, without inventing an arbitrary tolerance threshold.
+  // The portal withholds whole types by construction and says how many in
+  // hiddenEntities. Those were never asked for, so they are not "not loaded":
+  // measured in production, "entities 1088 of 2332 loaded" on a complete read,
+  // 1244 of them withheld on purpose. A complete read presented as incomplete
+  // teaches the reader to ignore the one line that should alarm them.
+  //
+  // Relations touching a withheld entity are withheld too, and the portal gives
+  // no count for those, so with anything withheld the relation bound is unknown
+  // and no claim is made about relations: a claim needs a known bound.
+  const say = (lE, totalE, lR, totalR, hidden) => {
+    const askedE = totalE - hidden;
+    const gapE = lE < askedE;
+    const gapR = !hidden && lR < totalR;
+    el.textContent = (gapE || gapR)
+      ? 'Incomplete: entities ' + fmtCount(lE) + ' of ' + fmtCount(askedE) +
+        (hidden ? '' : ', relations ' + fmtCount(lR) + ' of ' + fmtCount(totalR)) + ' loaded.'
+      : '';
+  };
   if (bounds && bounds.length) {
     const minE = Math.min(...bounds.map(b => b.entities));
     const minR = Math.min(...bounds.map(b => b.relations));
-    if (loadedE < minE || loadedR < minR) {
-      el.textContent = 'Incomplete: entities ' + loadedE + ' of ' + minE + ', relations ' + loadedR + ' of ' + minR + ' loaded.';
-    } else {
-      el.textContent = '';
-    }
+    const hidden = Math.max(...bounds.map(b => b.hidden || 0));
+    say(loadedE, minE, loadedR, minR, hidden);
     return;
   }
   if (!SCOPE) { el.textContent = ''; return; } // without a total, any claimed gap would be invented
-  if (loadedE < SCOPE.entities || loadedR < SCOPE.relations) {
-    el.textContent = 'Incomplete: entities ' + loadedE + ' of ' + SCOPE.entities + ', relations ' + loadedR + ' of ' + SCOPE.relations + ' loaded.';
-  } else {
-    el.textContent = '';
-  }
+  say(loadedE, SCOPE.entities, loadedR, SCOPE.relations, SCOPE.hiddenEntities || 0);
 }
 
 async function loadFull() {
@@ -1632,7 +1644,7 @@ async function loadFull() {
     // Quiet on the way in too: at this point the maps are empty, so comparing
     // would claim "0 of N" until the data lands.
     await refreshScope({ quiet: true });
-    const first = SCOPE ? { entities: SCOPE.entities, relations: SCOPE.relations } : null;
+    const first = SCOPE ? { entities: SCOPE.entities, relations: SCOPE.relations, hidden: SCOPE.hiddenEntities || 0 } : null;
     const [ents, rels] = await Promise.all([fetchAll('entities'), fetchAll('relations')]);
     for (const k in ENT) delete ENT[k]; for (const k in REL) delete REL[k];
     ents.forEach(n => ENT[n.id] = n);
@@ -1642,7 +1654,7 @@ async function loadFull() {
     // REPLACES this first rebuild rather than adding a second full node build.
     if (!openNarrowOnLargeEstate()) rebuild();
     await refreshScope({ quiet: true });
-    const second = SCOPE ? { entities: SCOPE.entities, relations: SCOPE.relations } : null;
+    const second = SCOPE ? { entities: SCOPE.entities, relations: SCOPE.relations, hidden: SCOPE.hiddenEntities || 0 } : null;
     // Remember what the scope said at the moment this graph was read, so the
     // poll can tell "nothing happened" from "we have not looked".
     if (SCOPE) loadedCounts = SCOPE.entities+'/'+SCOPE.relations;
