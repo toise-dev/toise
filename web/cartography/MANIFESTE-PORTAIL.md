@@ -87,13 +87,13 @@ Toise en direct est refusée, et c'est normal. Ils figurent ici parce que ce
 document est le contrat du RELAIS, pas celui du serveur.
 
 La page affiche `hiddenNotice` telle quelle et **n'écrit jamais de phrase à la
-
-**Invariant dont la page dépend — une seule convention** : `entities` et `relations` sont les totaux de ce que le relais **va livrer**, c'est-à-dire **après** ce qu'il retient. `hiddenEntities` est le nombre d'entités retenues, donné à part pour information ; la page l'affiche au pied de page et **ne le soustrait jamais**. La page mesure la complétude d'une lecture contre `entities` et `relations` tels quels : une lecture complète est silencieuse, une lecture tronquée dit « Incomplete: entities 1,038 of 1,088 ». Un relais qui annoncerait des totaux bruts ferait passer toute lecture complète pour incomplète.
 place**. C'est la règle « celui qui filtre est celui qui déclare » appliquée
 jusqu'au bout : si la page composait la phrase, le jour où le relais retire un
 autre type elle continuerait à nommer l'ancien. C'est la présence de la phrase
 qui décide de son affichage, jamais le compte — un compte sans phrase laisserait
 le filtrage muet, et c'est exactement ce que cette règle interdit.
+
+**Invariant dont la page dépend — une seule convention** : `entities` et `relations` sont les totaux de ce que le relais **va livrer**, c'est-à-dire **après** ce qu'il retient. `hiddenEntities` est le nombre d'entités retenues, donné à part pour information ; la page l'affiche au pied de page et **ne le soustrait jamais**. La page mesure la complétude d'une lecture contre `entities` et `relations` tels quels : une lecture complète est silencieuse, une lecture tronquée dit « Incomplete: entities 1,038 of 1,088 ». Un relais qui annoncerait des totaux bruts ferait passer toute lecture complète pour incomplète.
 
 **Les sept champs sont tous lus par la page, et trois d'entre eux la
 gouvernent** : `oldestAnswerable` est la borne basse de la frise — sans lui la
