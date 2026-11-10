@@ -172,10 +172,9 @@ header label input{font:inherit;}
 /* The count rides as a badge rather than inside the label: "Show all (20 of 185)"
    is three times the width of "Show all" and it was the string that overflowed. */
 #showall.off{display:none;}
-#tlAtLabel.dragging{font-size:1.15rem;font-weight:600;color:var(--fg);}
 #tlEarlier,#tlLater{font-size:12px;line-height:1;padding:.05rem .3rem;}
-/* Large means large: 1.15rem was 18px, which a 12px footer barely distinguishes. */
-#tlAtLabel.dragging{font-size:1.4rem;}
+/* Large means large: 18px, which a 12px footer barely distinguishes, was not. */
+#tlAtLabel.dragging{font-size:1.4rem;font-weight:600;color:var(--fg);}
 .badge{display:inline-block;margin-left:.35rem;padding:0 .3rem;border-radius:999px;
   background:var(--line);font-size:10px;line-height:1.5;vertical-align:middle;opacity:.9;}
 .goto-list{position:absolute;top:100%;left:0;z-index:30;min-width:14rem;max-width:22rem;
