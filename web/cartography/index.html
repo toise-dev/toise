@@ -1468,6 +1468,11 @@ function applySpread(){
     }
   }
   const target = (W < 560 ? SPREAD_TARGET_PHONE_PX : SPREAD_TARGET_PX);
+  // The loop converges to within two percent, and the objective is "at least":
+  // measured, 59 where 60 were asked and 38 where 40 were. So the loop aims
+  // three percent above the target, and the real-scale check demands the target
+  // itself, not its neighbourhood.
+  const aim = target * 1.03;
   // The scale the fit will really give. Estimating it from the bounding box
   // came out 13% too generous -- measured: 52px where 60 were asked -- because
   // vis fits node extents, not centres, and the strip then takes its share. So
@@ -1484,7 +1489,7 @@ function applySpread(){
     for(const id of ids){ const q = base[id]; if(!q) continue; if(q.x < x1) x1 = q.x; if(q.x > x2) x2 = q.x; if(q.y < y1) y1 = q.y; if(q.y > y2) y2 = q.y; }
     const bw = Math.max(x2 - x1, 1), bh = Math.max(y2 - y1, 1);
     const scale = scaleOverride || (Math.min(W / bw, H / bh) * 0.9);
-    const d = target / scale;   // screen pixels, in canvas units
+    const d = aim / scale;   // screen pixels, in canvas units
     let moved = false;
     for(let i = 0; i < hosts.length; i++){
       for(let j = i + 1; j < hosts.length; j++){
@@ -1523,7 +1528,7 @@ function applySpread(){
     let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
     for(const id of ids){ const q = base[id]; if(!q) continue; if(q.x < x1) x1 = q.x; if(q.x > x2) x2 = q.x; if(q.y < y1) y1 = q.y; if(q.y > y2) y2 = q.y; }
     const scale = scaleOverride || (Math.min(W / Math.max(x2 - x1, 1), H / Math.max(y2 - y1, 1)) * 0.9);
-    const d = target / scale;
+    const d = aim / scale;
     hostsSettled = true;
     for(let i = 0; i < hosts.length && hostsSettled; i++)
       for(let j = i + 1; j < hosts.length; j++){
@@ -1548,7 +1553,7 @@ function applySpread(){
       const a = base[hosts[i]], b = base[hosts[j]];
       minPx = Math.min(minPx, Math.hypot(b.x - a.x, b.y - a.y) * realScale);
     }
-    if(minPx >= target * 0.98) break;
+    if(minPx >= target) break;   // the objective itself, measured at the real scale
     ({ eased, hostsSettled } = ease(realScale));
   }
   // At the bound, the positions reached are the best effort and they are kept
