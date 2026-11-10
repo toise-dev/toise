@@ -509,9 +509,9 @@ net.on('beforeDrawing',ctx=>{ for(const f of FIELD){
 let freezeTimer=null;
 function freeze(){ clearTimeout(freezeTimer); freezeTimer=null; net.setOptions({physics:{enabled:false}}); }
 function settle(ms=1600){ net.setOptions({physics:{enabled:true}}); clearTimeout(freezeTimer);
-  freezeTimer=setTimeout(()=>{ freeze(); if(fitAfterSettle){ fitAfterSettle=false; fitEmphasised(); } }, ms); }
+  freezeTimer=setTimeout(()=>{ freeze(); rememberSky(); if(fitAfterSettle){ fitAfterSettle=false; fitEmphasised(); } }, ms); }
 net.on('zoom',()=>{ syncLabelSize(); declutterLabels(); });   // zooming spreads the boxes: names can come back   // the font is in canvas units, so it shrinks with the view
-net.on('stabilizationIterationsDone',()=>{ freeze();   // layout done -> freeze, fit, reveal
+net.on('stabilizationIterationsDone',()=>{ freeze(); rememberSky();   // layout done -> freeze, remember, fit, reveal
   if(!fitted) return;   // the empty-graph init pass, before any data — nothing to reveal yet
   // Through fitEmphasised, not a bare fit: this is the LAST framing the reader
   // sees. A bare fit reserved nothing for the strip -- the six-second reload used
@@ -915,6 +915,18 @@ function listenForHighlight() {
 }
 
 const VIS_LABEL_DROP = 10.6;   // measured on the renderer, not assumed
+// Text width at the labels' SCREEN size, from a 2D context with the same face.
+// One offscreen canvas, created on first use.
+let measureCtx = null;
+function labelWidthPx(text){
+  try{
+    if(!measureCtx){ const c = document.createElement('canvas'); measureCtx = c.getContext('2d'); }
+    if(!measureCtx) return text.length * 6.6;
+    measureCtx.font = "12px 'Geist Sans', system-ui, sans-serif";
+    return measureCtx.measureText(text).width;
+  }catch(_){ return text.length * 6.6; }
+}
+
 function declutterLabels() {
   // Labels are removed, never moved: the layout is fixed and already
   // learned by the reader, so only visibility may change between views.
@@ -976,7 +988,10 @@ function declutterLabels() {
     const cx = p.x * scale;
     const nd = nodes.get(id);
     const r = (nd && typeof nd.size === 'number') ? nd.size : 0;
-    const w = label.length * 6.6 + 8;
+    // MEASURED, not estimated. "length × 6.6 + 8" under-read proportional text
+    // enough that eight overlapping pairs passed as clear while only one name
+    // was moved -- the portal counted the overlaps on the rendered page.
+    const w = labelWidthPx(label) + 8;
     // Drop by the node's own radius plus the renderer's gap, both in canvas
     // units, THEN convert: a constant drop is wrong by exactly the size of the
     // disc, which is how this pass cleared Network and missed Machines.
@@ -1327,6 +1342,54 @@ function syncShowAll(keptCount, totalCount){
   }
 }
 
+// The sky's settled positions, kept so a view can lay its few nodes out for
+// reading and the map can come back to the one layout the reader learned.
+const SKY_POS = {};
+let spreadApplied = false;
+function rememberSky(){
+  if(activeView || spreadApplied) return;
+  try{ Object.assign(SKY_POS, net.getPositions()); }catch(_){ }
+}
+
+// In a view that draws few nodes, the sky's layout is the wrong one to read
+// them in: measured at 1440, twenty hosts inside a 250px circle at the centre
+// of an 800 x 530 map, two isolates at the edges, and the fit framing the
+// isolates. So a view with at most SPREAD_MAX drawn nodes lays them out on a
+// sunflower spiral that fills the frame's ellipse -- deterministic (sorted,
+// hosts first), evenly spaced, no physics. Measured spacing after fit in an
+// 800 x 530 frame: 93px for 20 nodes, 61px for 46, 47px for 80; the cap is
+// where 60px stops holding. Leaving the view restores the sky.
+const SPREAD_MAX = 60;
+function applySpread(){
+  const ids = onMapIds().filter(id => ENT[id] || isKind(id));
+  if(!activeView || ids.length === 0 || ids.length > SPREAD_MAX){
+    if(spreadApplied){
+      spreadApplied = false;
+      const back = ids.filter(id => SKY_POS[id]).map(id => ({ id, x: SKY_POS[id].x, y: SKY_POS[id].y }));
+      if(back.length) nodes.update(back);
+    }
+    return;
+  }
+  const name = id => ENT[id] ? labelOf(ENT[id]) : (nodes.get(id) || {}).label || id;
+  ids.sort((a, b) => {
+    const ha = ENT[a] && ENT[a].type === 'host', hb = ENT[b] && ENT[b].type === 'host';
+    if(ha !== hb) return ha ? -1 : 1;
+    const na = name(a), nb = name(b);
+    return na < nb ? -1 : na > nb ? 1 : (a < b ? -1 : 1);
+  });
+  const view = document.getElementById('net');
+  const W = (view && view.clientWidth) || 800, H = (view && view.clientHeight) || 530;
+  const ax = 400, ay = 400 * (H / W);          // the frame's aspect; the fit sets the scale
+  const phi = Math.PI * (3 - Math.sqrt(5));
+  const N = ids.length;
+  const up = ids.map((id, i) => {
+    const r = Math.sqrt((i + 0.5) / N), t = i * phi;
+    return { id, x: ax * r * Math.cos(t), y: ay * r * Math.sin(t) };
+  });
+  nodes.update(up);
+  spreadApplied = true;
+}
+
 function rebuild(){
   computeOwners();
   const prevNodeIds=new Set(nodes.getIds());
@@ -1499,6 +1562,7 @@ function rebuild(){
   // Same count as the footer, or the field says "nothing" over "6 match".
   const ai=document.getElementById('attr'); if(ai) ai.style.color=(q&&shownMatchForColour===0)?'var(--warn)':'var(--fg)';
   nodes.getIds().forEach(id=>{ if(!nodeIds.has(id)) nodes.remove(id); });
+  applySpread();   // the node set is final here; edges do not care where their ends are
   const edgeIds=new Set(), eUp=[];
   let realCount=Object.values(REL).filter(r=>nodeIds.has(r.fromId)&&nodeIds.has(r.toId)).length;
   // Folded: several relations between two owners collapse into one drawn link,
@@ -1567,7 +1631,7 @@ function rebuild(){
   if(!structural){ for(const id of nodeIds){ if(!prevNodeIds.has(id)){ structural=true; break; } } }
   const card=document.getElementById('detail');
   if(card && !card.querySelector('.actions')) renderLitList(card);   // resting state, or nothing ever asks for the list
-  if(structural && fitted && !staticLayout) settle();
+  if(structural && fitted && !staticLayout && !spreadApplied) settle();
   // First data render: lay the graph out ONCE while the canvas is hidden, then reveal
   // it already-settled (no visible fly-in). Reveal + fit happen on stabilizationIterationsDone.
   if(!fitted && nodeIds.size){ fitted=true; net.setOptions({physics:{enabled:true}});
@@ -3201,8 +3265,13 @@ function drawDome(){
   // only, replaced whole on every frame; never read by the page itself.
   const ledger=[];
   for(const it of named){
-    if(!it.n.label) continue;
-    const text=String(it.n.label).split('\n')[0];
+    // From the entity, not from the node: the flat pass writes `label: undefined`
+    // on every non-host it drops, and the sky was inheriting those drops -- on
+    // a Machines plate with no other label kept, the sky named nothing else
+    // among sixty-seven drawn. A kind box has no entity and keeps its own label.
+    const raw = ENT[it.n.id] ? labelOf(ENT[it.n.id]) : it.n.label;
+    if(!raw) continue;
+    const text=String(raw).split('\n')[0];
     const w=g2.measureText(text).width, x=it.p.x-w/2, y=it.p.y+it.rad+4;
     const box={x0:x-2,y0:y-1,x1:x+w+2,y1:y+12};
     let clash=false;
