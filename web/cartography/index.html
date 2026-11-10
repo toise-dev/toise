@@ -696,7 +696,15 @@ function labelOf(n){
   const full = (labelMode==='name'?nameLabel(n):idLabel(n))||n.id.slice(0,6);
   return (labelMode==='name' && n.type==='host') ? shortOf(full) : full;
 }
-function titleOf(n){ const I=(n.identity||[]).map(a=>a.key+'='+a.value).join(', '); return n.type+(I?' · '+I:'')+' · '+n.id; }
+// The tooltip opens with the FULL display name. It used to carry the type, the
+// identity and the id -- a host's identity is a UUID -- so a host drawn under
+// its short name had its full name nowhere on hover, which the short names had
+// promised. Measured by lab on the production page.
+function titleOf(n){
+  const I=(n.identity||[]).map(a=>a.key+'='+a.value).join(', ');
+  const full=nameLabel(n);
+  return (full?full+'\n':'')+n.type+(I?' · '+I:'')+' · '+n.id;
+}
 
 // --- folding: a graph of 546 entities is unreadable at any stroke weight ------
 // Measured on a real bench: 88% of entities are the CHILD of a single owner —
@@ -2869,7 +2877,10 @@ function wireGoto(){
       for(const m of matches){
         const b = document.createElement('button');
         b.type='button'; b.className='goto-item';
-        b.textContent = labelOf(m.e);
+        // "sfh914 · sfh914.senhub.io": the short form the map draws, and the
+        // full name it stands for, when the two differ.
+        const shortName = labelOf(m.e), fullName = nameLabel(m.e) || '';
+        b.textContent = (fullName && fullName !== shortName) ? shortName + ' \u00b7 ' + fullName : shortName;
         b.title = titleOf(m.e);
         if(m.off){
           const tag=document.createElement('span');
