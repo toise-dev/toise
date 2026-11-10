@@ -1219,6 +1219,10 @@ function rebuild(){
     // handled the kind case, so by default this set stayed empty and no owner lit up.
     CITED_OWNERS.add(isKind(r)?kindParts(r).owner:r);
   }
+  // An exemption outlives the entity it names when that entity leaves the estate
+  // between two polls; left in place it kept the Show all button up for an
+  // element that no longer existed.
+  for(const id of REVEALED) if(!ENT[id]) REVEALED.delete(id);
   const firstLoad=!fitted;   // scatter new nodes on the very first layout so stabilisation spreads them
   const inside=foldedInside();
   let hiddenByFold=0;
