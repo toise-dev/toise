@@ -3268,7 +3268,10 @@ if (tlLive) {
     // The window first, so the map read that follows reads the profile for the
     // live window once. If that read fails, the map stays where it was and says
     // so; the window being live over it is the accepted case.
-    if (!isLiveSpan()) windowLive({ noProfile: true });
+    // ...unless a read is already running: goToInstant then stands down at once
+    // and reads nothing, so the window must read its own profile.
+    const busy = loading || replaying;
+    if (!isLiveSpan()) windowLive({ noProfile: !busy });
     // Wait for the live restore so the label reflects the instant actually loaded.
     await goToInstant(null);
     sayInstant();
