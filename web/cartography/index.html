@@ -1941,7 +1941,9 @@ function sayScope() {
   // The tenant name does not depend on the instant, so it survives; the counters
   // were read at another moment and would misstate this one.
   if (!scopeDescribesInstant) {
-    el.textContent = t + ' · scope for this instant is not known';
+    // Hidden in live, human otherwise: "scope for this instant is not known" was
+    // a sentence for whoever wrote it, read by Matthieu in the page header.
+    el.textContent = (asOfMs == null) ? t : t + ' \u00b7 these counts are for a different moment than the map';
   } else if (SCOPE.entities === 0) {
     el.textContent = 'Tenant ' + t + ': 0 entities, no events yet.';
   } else {
@@ -2149,7 +2151,11 @@ function sliderToMs(v) {
 function sayInstant() {
   const el = document.getElementById('tlAtLabel');
   if (!el) return;
-  const fmt = ms => new Date(ms).toLocaleString();
+  // Compact on the line -- "11/10 13:00" -- so the instant is readable whole in a
+  // nine-rem column: the full form ended in an ellipse. The full form, with
+  // seconds, goes to the tooltip with the horizon.
+  const fmt = ms => { const d = new Date(ms); return d.toLocaleDateString([], { month: '2-digit', day: '2-digit' }) + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); };
+  const full = ms => new Date(ms).toLocaleString();
   // Show what was served, not what was requested.
   // An unreadable echo is not a date: fall back to what the page asked for, which
   // is what it already trusts for the counters.
@@ -2171,7 +2177,7 @@ function sayInstant() {
   }
   const h = horizonMs();
   el.textContent = `as of ${fmt(served)}`;
-  el.title = h == null ? '' : `readable back to ${fmt(h)}`;
+  el.title = `as of ${full(served)}` + (h == null ? '' : ` \u00b7 readable back to ${full(h)}`);
 }
 
 // --- timeline: PRESENT in this build --------------------------------------------
@@ -3171,6 +3177,16 @@ const tlWin=document.getElementById('tlWin'); tlWin.value=tlWindow;
 const tlLabelEl=document.getElementById('tlLabel'); tlLabelEl.textContent=tlWindow;
 // Beyond the window, the window moves -- not the handle. Earlier shifts the
 // ruler one window back, Later one forward, and forward past now is live again.
+// Back to a live window: the ruler's end follows now again. Used by Later past
+// now and by the live button -- that button used to return the MAP to the
+// present and leave the window where Earlier had put it, so a live map sat over
+// a ruler reading "07:00 → 13:00" at seven in the evening.
+function windowLive(){
+  const lbl=document.getElementById('tlLabel');
+  spanEnd=null; spanMs=WINDOWS[tlWindow]||WINDOWS['24h'];
+  if(lbl){ lbl.textContent=tlWindow; lbl.title=''; }
+  renderRuler(); loadProfile(); syncSlider(); sayInstant();
+}
 function shiftWindow(dir){
   const [s,e]=spanBounds();
   const lbl=document.getElementById('tlLabel');
@@ -3181,16 +3197,7 @@ function shiftWindow(dir){
     spanEnd=new Date(ne);
   } else {
     const ne=e+spanMs;
-    if(ne>=Date.now()){
-      // Back to a live window, done HERE and only for the window. returnLive()
-      // was not usable: it reaches a play button and a slider that are not in
-      // this page and throws. And the map's own instant is not touched -- the
-      // window is the ruler's, `historical` and asOfMs are the map's.
-      spanEnd=null; spanMs=WINDOWS[tlWindow]||WINDOWS['24h'];
-      if(lbl){ lbl.textContent=tlWindow; lbl.title=''; }
-      renderRuler(); loadProfile(); syncSlider(); sayInstant();
-      return;
-    }
+    if(ne>=Date.now()){ windowLive(); return; }   // not returnLive(): it reaches controls this page does not have
     spanEnd=new Date(ne);
   }
   renderRuler(); loadProfile(); syncSlider(); sayInstant();
@@ -3232,9 +3239,10 @@ if (tlAt) {
     if (!el) return;
     const ms = sliderToMs(Number(tlAt.value));
     el.classList.add('dragging');
+    const d = (typeof ms === 'number') ? new Date(ms) : null;
     el.textContent = ms == null ? 'live'
-      : typeof ms !== 'number' ? 'horizon unknown \u2014 release to try'
-      : ('as of ' + new Date(ms).toLocaleString());
+      : !d ? 'horizon unknown \u2014 release to try'
+      : ('as of ' + d.toLocaleDateString([], { month: '2-digit', day: '2-digit' }) + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
   });
   // `change` does not fire when the handle is released where it started, so the
   // large label is also taken down on every way a drag can end.
@@ -3254,6 +3262,7 @@ if (tlLive) {
     if (tlAt) tlAt.value = '1000';
     // Wait for the live restore so the label reflects the instant actually loaded.
     await goToInstant(null);
+    if (!isLiveSpan()) windowLive();   // the window comes back too, not only the map
     sayInstant();
     syncSlider();
   });
