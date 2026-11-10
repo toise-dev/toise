@@ -230,12 +230,15 @@ aside td.k{color:var(--dim);width:40%;word-break:normal;overflow-wrap:break-word
      nothing to the bar's height and takes nothing from the map. */
   #showall.off{display:block;visibility:hidden;}
   header label[for=goto]{font-size:0;flex:1 1 auto;min-width:0;}
-  header label[for=goto] input{width:100%;margin-left:0;font-size:12px;line-height:normal;padding:.25rem .4rem;height:1.8rem;box-sizing:border-box;}
+  header label[for=goto] input{width:100%;margin-left:0;font-size:16px;line-height:normal;padding:.25rem .4rem;height:1.9rem;box-sizing:border-box;}
   .segmented{flex:1 1 100%;}
   .segmented button{flex:1 1 0;min-width:0;padding:.2rem .25rem;}
   .stats{display:none;}
   header label[for=attr]{font-size:0;flex:1 1 auto;min-width:0;}
-  header label[for=attr] input{width:100%;margin-left:0;font-size:12px;line-height:normal;padding:.25rem .4rem;height:1.8rem;box-sizing:border-box;}
+  /* 16px, not 12: below 16px iOS Safari zooms the whole page when a field takes
+     focus, and a page that jumps under the keyboard reads as a field that does
+     not work. Not measured on a device by us; the standard remedy, applied. */
+  header label[for=attr] input{width:100%;margin-left:0;font-size:16px;line-height:normal;padding:.25rem .4rem;height:1.9rem;box-sizing:border-box;}
   .options{margin-left:.5rem;}
   .subbar{gap:.5rem;}
 }
@@ -1089,15 +1092,15 @@ const REVEALED = new Set();
 
 function keptOnMap(n, q, ok){
   if(hidden.has(n.type)) return false;                       // the legend's own checkbox
+  // Right after the legend and before everything else. Naming an element by hand
+  // is the most specific intent on the page, so it outranks the view, the search
+  // and the Dock's highlight -- Matthieu's decision, 10/11 -- and the page says
+  // which of them it is being shown outside of. It does not outrank the legend:
+  // switching a type off must never put more on the map, and a type the reader
+  // unchecked is dropped upstream of here anyway, so this line could not save it.
+  if(REVEALED.has(n.id)) return true;
   if(CITED.size && !CITED.has(n.identityFingerprint) && !CITED_OWNERS.has(n.id)) return false;
   if(q && !ok && !MATCH_OWNERS.has(n.id)) return false;
-  // LAST, so it lifts the view and nothing else. What was asked for is "the view
-  // stays, this one element comes out of it"; placed any earlier it also escaped
-  // the search and the Dock's highlight, and a map filtered by a query would hold
-  // an element that does not match the query. It is not placed before the legend
-  // either: switching a type off must never put more on the map, and a type the
-  // reader unchecked is dropped upstream of here anyway.
-  if(REVEALED.has(n.id)) return true;
   if(dimmed.has(n.type)) return false;                       // the view's subject
   return true;
 }
@@ -1138,11 +1141,19 @@ function showAll(){
   const cap = document.getElementById('narrowStat');
   if(cap) cap.textContent = '';           // the notice must not outlive the narrowed map
   dimmed.clear(); CITED.clear(); CITED_OWNERS.clear();
+  const hadRevealed = REVEALED.size > 0;
   REVEALED.clear();                     // leaving the state drops the per-element exemptions with it
   attrQuery = '';                       // the real state; `q` is derived from it inside rebuild
   const attr = document.getElementById('attr');
   if(attr) attr.value = '';
   rebuild();
+  if(hadRevealed){
+    // The revealed element folds back into its carrier on this redraw, so the
+    // node it was no longer exists: a selection and a card left pointing at it
+    // would describe something with no position on the map.
+    try{ net.unselectAll(); }catch(_){}
+    inspect(null);
+  }
   publishView();                        // the Dock shows the view as a token; it learns it here
   fitEmphasised();
 }
@@ -2404,6 +2415,20 @@ function isOffMap(id){
 // Show an entity and centre on it. "The search shows and centres the match" was
 // the requirement, so picking something the current view withholds must put it
 // back rather than quietly focus a node nobody can see.
+// What is keeping this entity off the map, by name, so the page can say it. An
+// empty set with the entity off the map means the fold alone: it is riding
+// inside a carrier, withheld by nothing.
+function withheldBy(id){
+  const e = ENT[id];
+  const why = new Set();
+  if(!e){ why.add('gone'); return why; }
+  if(hidden.has(e.type)) why.add('legend');
+  if(activeView && dimmed.has(e.type)) why.add('view');
+  if(CITED.size && !CITED.has(e.identityFingerprint) && !CITED_OWNERS.has(e.id)) why.add('highlight');
+  if(attrQuery.trim() && !attrMatch(e) && !MATCH_OWNERS.has(e.id)) why.add('search');
+  return why;
+}
+
 function reveal(id){
   // The view STAYS. Only this element leaves the withholding, which is what was
   // asked for: showing one machine by name should not undo the reader's view.
@@ -2413,20 +2438,33 @@ function reveal(id){
   // is the right trade: revealing them too would widen the view by an unbounded
   // amount, which is the opposite of naming one element.
   if(isOffMap(id)){
-    REVEALED.add(id);
-    rebuild();
-    // Verify, do not assume. The exemption lifts the view, not the legend, so an
-    // element whose type the reader switched off stays off the map -- and saying
-    // "showing this element" over a map that does not show it is the worst of
-    // the possible outcomes. Check the result and name the real obstacle.
-    if(isOffMap(id)){
-      REVEALED.delete(id);
-      const e=ENT[id];
-      say(e ? typeLabel(e.type)+' is switched off in the legend, so this element cannot be shown. Switch it back on first.'
-            : 'That element is no longer on the map.');
+    // Decide the cause BEFORE acting. The first version acted, then blamed the
+    // legend whatever the cause -- measured: an element held back by the search
+    // or the Dock's highlight stayed hidden under a message naming a legend
+    // nobody had touched, while the badge rose by one with nothing more drawn,
+    // because the exemption had been added, built, hidden, and then dropped
+    // without a redraw.
+    const why = withheldBy(id);
+    if(why.has('gone')){ say('That element is no longer on the map.'); return; }
+    if(why.has('legend')){
+      say(typeLabel(ENT[id].type)+' is switched off in the legend, so this element cannot be shown. Switch it back on first.');
       return;
     }
-    say('Showing this element outside the current view \u2014 Esc or Show all puts everything back.');
+    REVEALED.add(id);
+    rebuild();
+    if(isOffMap(id)){
+      // Still verify: a cause this function does not know about must not become
+      // a false "showing". Undo, redraw so the badge tells the truth, and say so.
+      REVEALED.delete(id);
+      rebuild();
+      say('This element could not be shown.');
+      return;
+    }
+    const names = {view:'the current view', search:'the search', highlight:"the Dock's highlight"};
+    const outside = [...why].filter(w => names[w]).map(w => names[w]);
+    say(outside.length
+      ? 'Showing this element outside '+outside.join(' and ')+' \u2014 Esc or Show all puts everything back.'
+      : 'Showing this element on its own, out of the carrier it was folded into \u2014 Esc or Show all puts everything back.');
   }
   try{ net.selectNodes([id]); net.focus(id,{scale:net.getScale(),animation:false}); }catch(_){}
   syncLabelSize();
