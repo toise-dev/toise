@@ -3111,6 +3111,10 @@ function drawDome(){
   // one thing the old rule guaranteed never to draw. Both are obstacles for the
   // rest, and may overprint each other, which is the lesser evil of the two.
   const placed=[];
+  // What this pass drew, as data, for whoever measures the sky: the labels live
+  // on a canvas, so nothing in the DOM says which host carries its name. Read
+  // only, replaced whole on every frame; never read by the page itself.
+  const ledger=[];
   for(const it of named){
     if(!it.n.label) continue;
     const text=String(it.n.label).split('\n')[0];
@@ -3122,11 +3126,18 @@ function drawDome(){
     }
     if(clash) continue;
     placed.push(box);
+    ledger.push(Object.freeze({id:it.n.id, kind:isHost(it)?'host':(isKind(it.n.id)?'kind':'other'), text, box:Object.freeze({...box})}));
     g2.globalAlpha=it.alpha;
     g2.fillStyle='rgba(195,209,234,0.92)';
     g2.fillText(text, it.p.x, y);
     g2.globalAlpha=1;
   }
+  try{
+    window.toiseDomeLabels=Object.freeze({
+      drawn:Object.freeze({hosts:drawn.filter(isHost).length, kinds:drawn.filter(it=>isKind(it.n.id)).length, others:drawn.filter(it=>!isKind(it.n.id)&&!isHost(it)).length}),
+      labels:Object.freeze(ledger)
+    });
+  }catch(_){ }
 
   const az=((yaw*180/Math.PI)%360+360)%360, alt=pitch*180/Math.PI;
   document.getElementById('bearing').textContent=
