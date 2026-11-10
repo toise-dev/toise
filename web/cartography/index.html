@@ -434,7 +434,10 @@ const TYPE_LABEL={
   host:'Host', 'compute.vm':'Virtual machine', container:'Container', pod:'Pod',
   'service.instance':'Service', 'service.listener':'Listening port', 'host.service':'System unit',
   db:'Database', 'network.interface':'Interface', 'network.address':'IP address',
-  'network.segment':'Network', 'network.device':'Network device', 'network.endpoint':'Endpoint',
+  // "Network segment" and not "Network": the view tab is also called Network and
+  // does something else entirely. Two controls with one name, one of which hides a
+  // type while the other changes the whole view.
+  'network.segment':'Network segment', 'network.device':'Network device', 'network.endpoint':'Endpoint',
   'network.route':'Route', 'network.neighbor':'Neighbour', 'cloud.resource':'Cloud resource',
   process:'Process'
 };
@@ -681,6 +684,11 @@ function computeOwners(){
 // stop at the first ancestor the reader opened, or at the top.
 function repOf(id,guard){
   if(!folded) return id;
+  // Before the climb: a revealed entity stands for itself, or it would fold into
+  // a carrier and never be built at all, which would make the exemption in
+  // keptOnMap moot for exactly the entities that need it most -- in Machines, a
+  // service lives folded inside its host.
+  if(REVEALED.has(id)) return id;
 
   const seen=guard||new Set();
   let cur=id;
@@ -1073,11 +1081,24 @@ function seededPos(key){
 // keeps its POSITION, and vis hides every edge touching a hidden end on its own,
 // which is exactly "the links between what is kept stay visible". Deleting and
 // re-adding would lose the positions and restart the physics.
+// Entities pulled out of the current view's removal one at a time, by name, via
+// "go to". It exists because removal happens in TWO independent places -- the
+// fold drops an entity before a node is even built for it, and keptOnMap hides
+// the node that is built -- so an exemption has to be honoured in both.
+const REVEALED = new Set();
+
 function keptOnMap(n, q, ok){
-  if(dimmed.has(n.type)) return false;                       // the view's subject
   if(hidden.has(n.type)) return false;                       // the legend's own checkbox
   if(CITED.size && !CITED.has(n.identityFingerprint) && !CITED_OWNERS.has(n.id)) return false;
   if(q && !ok && !MATCH_OWNERS.has(n.id)) return false;
+  // LAST, so it lifts the view and nothing else. What was asked for is "the view
+  // stays, this one element comes out of it"; placed any earlier it also escaped
+  // the search and the Dock's highlight, and a map filtered by a query would hold
+  // an element that does not match the query. It is not placed before the legend
+  // either: switching a type off must never put more on the map, and a type the
+  // reader unchecked is dropped upstream of here anyway.
+  if(REVEALED.has(n.id)) return true;
+  if(dimmed.has(n.type)) return false;                       // the view's subject
   return true;
 }
 
@@ -1117,6 +1138,7 @@ function showAll(){
   const cap = document.getElementById('narrowStat');
   if(cap) cap.textContent = '';           // the notice must not outlive the narrowed map
   dimmed.clear(); CITED.clear(); CITED_OWNERS.clear();
+  REVEALED.clear();                     // leaving the state drops the per-element exemptions with it
   attrQuery = '';                       // the real state; `q` is derived from it inside rebuild
   const attr = document.getElementById('attr');
   if(attr) attr.value = '';
@@ -2209,6 +2231,10 @@ function applyView(btn){
   activeView = (activeView===btn) ? null : btn;   // clicking the active view shows everything again
   const cap = document.getElementById('narrowStat');   // the notice must not outlive the narrowed map
   if (activeView !== wasActive && cap) cap.textContent = '';
+  // An exemption was granted against ONE view. Carrying it into the next one
+  // would leave an element the new view withholds sitting on the map with no
+  // control on screen to explain it.
+  if(activeView !== wasActive) REVEALED.clear();
   if(!activeView){
     dimmed.clear();
   } else {
@@ -2373,7 +2399,29 @@ function isOffMap(id){
 // the requirement, so picking something the current view withholds must put it
 // back rather than quietly focus a node nobody can see.
 function reveal(id){
-  if(isOffMap(id)) showAll();
+  // The view STAYS. Only this element leaves the withholding, which is what was
+  // asked for: showing one machine by name should not undo the reader's view.
+  //
+  // Its links do not come with it. vis keeps an edge hidden while either end is
+  // hidden, so a lone revealed element arrives without its neighbours -- and that
+  // is the right trade: revealing them too would widen the view by an unbounded
+  // amount, which is the opposite of naming one element.
+  if(isOffMap(id)){
+    REVEALED.add(id);
+    rebuild();
+    // Verify, do not assume. The exemption lifts the view, not the legend, so an
+    // element whose type the reader switched off stays off the map -- and saying
+    // "showing this element" over a map that does not show it is the worst of
+    // the possible outcomes. Check the result and name the real obstacle.
+    if(isOffMap(id)){
+      REVEALED.delete(id);
+      const e=ENT[id];
+      say(e ? typeLabel(e.type)+' is switched off in the legend, so this element cannot be shown. Switch it back on first.'
+            : 'That element is no longer on the map.');
+      return;
+    }
+    say('Showing this element outside the current view \u2014 Esc or Show all puts everything back.');
+  }
   try{ net.selectNodes([id]); net.focus(id,{scale:net.getScale(),animation:false}); }catch(_){}
   syncLabelSize();
   inspect(id);
