@@ -172,6 +172,8 @@ header label input{font:inherit;}
 /* The count rides as a badge rather than inside the label: "Show all (20 of 185)"
    is three times the width of "Show all" and it was the string that overflowed. */
 #showall.off{display:none;}
+#tlAtLabel.dragging{font-size:1.15rem;font-weight:600;color:var(--fg);}
+#tlEarlier,#tlLater{font-size:11px;padding:.1rem .45rem;}
 .badge{display:inline-block;margin-left:.35rem;padding:0 .3rem;border-radius:999px;
   background:var(--line);font-size:10px;line-height:1.5;vertical-align:middle;opacity:.9;}
 .goto-list{position:absolute;top:100%;left:0;z-index:30;min-width:14rem;max-width:22rem;
@@ -202,11 +204,13 @@ aside h2{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing
 aside table{border-collapse:collapse;width:100%;table-layout:fixed;}
 aside td{padding:.25rem .4rem;border-bottom:1px solid var(--line);vertical-align:top;overflow-wrap:anywhere;word-break:break-word;}
 aside td.k{color:var(--dim);width:40%;word-break:normal;overflow-wrap:break-word;}
-.legend{display:flex;flex-wrap:nowrap;gap:.4rem .8rem;overflow-x:auto;overflow-y:hidden;font-size:12px;scrollbar-width:thin;flex:0 1 auto;flex-shrink:1;min-width:0;}
+/* Whole, and clickable. Clipped to one row it ended in "Listening po…" and a
+   reader who could not see a chip could not switch its type back on. It wraps. */
+.legend{display:flex;flex-wrap:wrap;gap:.4rem .8rem;overflow:visible;font-size:12px;flex:1 1 auto;min-width:0;}
 .legend span{display:flex;align-items:center;gap:.3rem;cursor:pointer;opacity:.85;background:var(--bg);border:1px solid var(--line);border-radius:999px;padding:.15rem .55rem;white-space:nowrap;flex-shrink:0;}
 .legend span.off{opacity:.3;text-decoration:line-through;}
 .legend i{width:10px;height:10px;border-radius:50%;display:inline-block;}
-.subbar{display:flex;align-items:center;gap:1rem;padding:.4rem 1rem;background:var(--panel);border-bottom:1px solid var(--line);font-size:12px;flex-wrap:nowrap;overflow:hidden;white-space:nowrap;height:2.1rem;box-sizing:border-box;}
+.subbar{display:flex;align-items:center;gap:.6rem 1rem;padding:.4rem 1rem;background:var(--panel);border-bottom:1px solid var(--line);font-size:12px;flex-wrap:wrap;overflow:visible;white-space:normal;min-height:2.1rem;box-sizing:border-box;}
 /* The legend is what lets a reader switch a type back on, so it never gives
    way: the scope yields first and ellipses. flex-shrink:0 on the scope was
    the defect -- it refused to shrink, so the legend was the one that lost. */
@@ -403,6 +407,8 @@ button{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-
       <option value="1h">1h</option><option value="6h">6h</option>
       <option value="24h">24h</option><option value="7d">7d</option></select></label>
     <span id="tlLabel">24h</span>
+    <button id="tlEarlier" title="Show the window before this one">&#9666; Earlier</button>
+    <button id="tlLater" title="Show the window after this one">Later &#9656;</button>
     <input type="range" id="tlAt" min="0" max="1000" value="1000" step="1" title="The handle picks the moment to revisit; playback starts on release" style="width:100%">
     <button id="tlLive">live</button>
     <span id="tlAtLabel" class="muted"></span>
@@ -874,6 +880,11 @@ function declutterLabels() {
     const ca = CITED.has(ea.identityFingerprint) ? 0 : 1;
     const cb = CITED.has(eb.identityFingerprint) ? 0 : 1;
     if (ca !== cb) return ca - cb;
+    // Hosts before anything else. Degree alone handed the names to the most
+    // connected things, which in Network are addresses and endpoints: the biggest
+    // discs read "127.0.0.1:9471" while eleven of twenty hosts went unnamed.
+    const ha = ENT[a] && ENT[a].type === 'host', hb = ENT[b] && ENT[b].type === 'host';
+    if (ha !== hb) return ha ? -1 : 1;
     const da = degree[a] || 0, db = degree[b] || 0;
     if (da !== db) return db - da;
     return a < b ? -1 : 1;
@@ -1100,6 +1111,29 @@ function seededPos(key){
 // the node that is built -- so an exemption has to be honoured in both.
 const REVEALED = new Set();
 
+// A loopback address, endpoint or listener is a machine talking to itself. It is
+// real and it is kept in the data, but it carries no topology and it was
+// carrying the labels: hidden from the drawing, counted in the footer, and
+// still reachable by name through "go to".
+function loopbackOf(n){
+  let ip = '';
+  if(n.type === 'network.address') ip = identOf(n)['network.address'] || '';
+  else if(n.type === 'network.endpoint' || n.type === 'service.listener'){
+    // The WHOLE address token, never a suffix: a suffix match took 2001:db8::1
+    // for ::1 and would have hidden a real address. Conservative on purpose --
+    // an unrecognised form is treated as not loopback, so at worst a loopback
+    // is drawn, never a real address hidden.
+    const tok = String(nameLabel(n) || '').trim().split(/\s+/).pop() || '';
+    let m;
+    if((m = tok.match(/^\[([0-9a-f:.]+)\](?::\d+)?$/i))) ip = m[1];                       // [v6]:port
+    else if((m = tok.match(/^(\d+\.\d+\.\d+\.\d+)(?::\d+)?$/))) ip = m[1];               // v4[:port]
+    else if((m = tok.match(/^[a-z0-9.-]+:(\d+\.\d+\.\d+\.\d+)(?::\d+)?$/i))) ip = m[1];   // host:v4[:port]
+    else if((m = tok.match(/^[a-z0-9.-]+:\[([0-9a-f:.]+)\](?::\d+)?$/i))) ip = m[1];        // host:[v6]:port
+    else if(/^[0-9a-f:]+$/i.test(tok) && tok.includes(':')) ip = tok;                   // bare v6, no port
+  }
+  return !!ip && (ip.startsWith('127.') || ip === '::1' || ip === '0.0.0.0' || ip === '::');
+}
+
 function keptOnMap(n, q, ok){
   if(hidden.has(n.type)) return false;                       // the legend's own checkbox
   // Right after the legend and before everything else. Naming an element by hand
@@ -1235,7 +1269,7 @@ function rebuild(){
   for(const id of REVEALED) if(!ENT[id]) REVEALED.delete(id);
   const firstLoad=!fitted;   // scatter new nodes on the very first layout so stabilisation spreads them
   const inside=foldedInside();
-  let hiddenByFold=0;
+  let hiddenByFold=0, loopbackHidden=0;
   const orphanedBy=new Map();   // type switched off -> how many entities it is withholding
   // Degree drives node size: dist1 with eight links must read as bigger than acc3
   // with one, so the shape of the network is legible before a single label is.
@@ -1246,6 +1280,7 @@ function rebuild(){
   const candidates=[];
   let matchCandidates=0;
   Object.values(ENT).forEach(n=>{ allTypes.add(n.type); if(hidden.has(n.type)) return;
+    if(loopbackOf(n) && !REVEALED.has(n.id)){ loopbackHidden++; return; }
     if(repOf(n.id)!==n.id){
       hiddenByFold++;
       // Its representative is a type the reader switched off, so this entity has
@@ -1346,10 +1381,15 @@ function rebuild(){
     // map got drawn instead: "0 shown" then sat under 185 visible discs. It
     // counts MATCHES, so it says match, and the no-match case says what the map
     // did about it in the same breath.
-    if(matched===0){
+    // Count what is SHOWN and matches, owners included: "nginx" isolates six hosts
+    // through the services they carry, and `matched` counted direct hits only, so
+    // the footer said "no match" under six drawn, named, matching machines.
+    let shownMatch=0;
+    for(const nd of nUp){ if(nd.hidden) continue; const e=ENT[nd.id]; if(e && (attrMatch(e)||MATCH_OWNERS.has(e.id))) shownMatch++; }
+    if(shownMatch===0){
       ms.textContent='· no match — the whole map is shown';
     } else {
-      const parts=['· '+matched+' match'];
+      const parts=['· '+fmtCount(shownMatch)+' match'];
       if(foldedMatches>0) parts.push(foldedMatches+' inside folded nodes');
       if(matchCandidates-matched>0) parts.push((matchCandidates-matched)+' not drawn (cap)');
       ms.textContent=parts.join(', ');
@@ -1393,9 +1433,12 @@ function rebuild(){
   edges.getIds().forEach(id=>{ if(!edgeIds.has(id)) edges.remove(id); });
   // A folded node hides its children; a count that does not say so reads as a
   // graph that simply has fewer things in it (#378).
+  // What is DRAWN, not what was built: nodeIds counted hidden nodes too, so the
+  // footer said "186 (+912 folded)" in every view while Machines drew twenty.
   const nN=document.getElementById('nNodes');
-  nN.textContent=nodeIds.size+(hiddenByFold?'  (+'+hiddenByFold+' folded)':'');
-  nN.title=hiddenByFold?(hiddenByFold+' entities are folded into their owner \u2014 double-click a node to open it'):'';
+  nN.textContent=fmtCount(hid.kept)+(hiddenByFold?'  (+'+fmtCount(hiddenByFold)+' folded)':'')+(loopbackHidden?'  ('+fmtCount(loopbackHidden)+' loopback hidden)':'');
+  nN.title=(hiddenByFold?(hiddenByFold+' entities are folded into their owner \u2014 double-click a node to open it. '):'')+
+           (loopbackHidden?(loopbackHidden+' loopback addresses, endpoints and listeners are not drawn; name one in "go to" to see it.'):'');
   // Never let a hidden thing read as an absent thing: when edges are painted
   // invisible the canvas is indistinguishable from a graph with no relations, so
   // the counter says which of the two it is.
@@ -1704,12 +1747,19 @@ function readFailureMessage(status, fallback) {
   return fallback;
 }
 
+// The handle spans the WINDOW the ruler shows, never the whole retention. It
+// used to map 0..1000 onto [horizon, now], so with a 6h window drawn above it a
+// nudge to the left landed a week back on a map of three entities -- measured in
+// the UX walkthrough of 10/11. tlInstant() below already did this right and was
+// wired to a slider that does not exist; this is that logic, on the real handle.
 function sliderToMs(v) {
-  if (v === 1000) return null;
+  if (v === 1000 && isLiveSpan()) return null;
   const h = horizonMs();
   if (h == null) return 'unknown-horizon';
-  const now = Date.now();
-  return snapWithin(h + (v / 1000) * (now - h), h, now);
+  const [s, e] = spanBounds();
+  const lo = Math.max(s, h);
+  const ms = s + (e - s) * (v / 1000);
+  return snapWithin(Math.max(ms, lo), lo, e);
 }
 
 function sayInstant() {
@@ -2456,6 +2506,7 @@ function withheldBy(id){
   if(activeView && dimmed.has(e.type)) why.add('view');
   if(CITED.size && !CITED.has(e.identityFingerprint) && !CITED_OWNERS.has(e.id)) why.add('highlight');
   if(attrQuery.trim() && !attrMatch(e) && !MATCH_OWNERS.has(e.id)) why.add('search');
+  if(loopbackOf(e)) why.add('loopback');
   // Its carrier switched off in the legend is not a reason to refuse -- the rule
   // "switching a type off never puts more on the map" holds, since nothing
   // appeared at the moment of switching, and the reader asked for this element
@@ -2518,7 +2569,7 @@ function reveal(id){
     // main path -- Enter -- and only true after a mouse click on a suggestion.
     const g = document.getElementById('goto');
     if(g && document.activeElement === g) g.blur();
-    const names = {view:'the current view', search:'the search', highlight:"the Dock's highlight"};
+    const names = {view:'the current view', search:'the search', highlight:"the Dock's highlight", loopback:'the loopback filter'};
     const outside = [...why].filter(w => names[w]).map(w => names[w]);
     const offType = why.has('carrier') ? hiddenAncestorType(id) : '';
     const carrierOff = offType ? ' Its '+typeLabel(offType)+' is switched off in the legend.' : '';
@@ -2714,20 +2765,42 @@ document.getElementById('relayout').onclick=()=>settle(2600);
 // relay now exposes, so they call them on release only, with a single replay in flight.
 const tlWin=document.getElementById('tlWin'); tlWin.value=tlWindow;
 const tlLabelEl=document.getElementById('tlLabel'); tlLabelEl.textContent=tlWindow;
+// Beyond the window, the window moves -- not the handle. Earlier shifts the
+// ruler one window back, Later one forward, and forward past now is live again.
+function shiftWindow(dir){
+  const [s,e]=spanBounds();
+  if(dir<0){
+    const h=horizonMs();
+    const ne=e-spanMs;
+    if(h!=null && ne<=h){ say('Nothing is readable before '+new Date(h).toLocaleString()+'.'); return; }
+    spanEnd=new Date(ne);
+  } else {
+    const ne=e+spanMs;
+    if(ne>=Date.now()){ returnLive(); syncSlider(); sayInstant(); return; }
+    spanEnd=new Date(ne);
+  }
+  historical=true;
+  renderRuler(); loadProfile(); syncSlider(); sayInstant();
+  const [ns,ne2]=spanBounds();
+  document.getElementById('tlLabel').textContent=new Date(ns).toLocaleString()+' \u2192 '+new Date(ne2).toLocaleString();
+  document.getElementById('tlLive').classList.add('hist');
+}
+const tlEarlier=document.getElementById('tlEarlier'), tlLater=document.getElementById('tlLater');
+if(tlEarlier) tlEarlier.onclick=()=>shiftWindow(-1);
+if(tlLater) tlLater.onclick=()=>shiftWindow(+1);
 tlWin.onchange=()=>{ tlWindow=tlWin.value; localStorage.setItem('toise_viz_window',tlWindow);
   spanEnd=null; spanMs=WINDOWS[tlWindow]||WINDOWS['24h']; renderRuler(); loadProfile();
   tlLabelEl.textContent=tlWindow; };
 renderRuler(); loadProfile();
 function syncSlider() {
   if (!tlAt) return;
-  const h = horizonMs();
   if (asOfMs === null || asOfMs === undefined) {
     tlAt.value = '1000';
-  } else if (typeof h === 'number' && h > 0) {
-    const now = Date.now();
-    const pos = Math.round(((asOfMs - h) / (now - h)) * 1000);
-    tlAt.value = String(Math.max(0, Math.min(1000, pos)));
+    return;
   }
+  const [s, e] = spanBounds();   // the same window the handle reads, so the two agree
+  const pos = Math.round(((asOfMs - s) / (e - s)) * 1000);
+  tlAt.value = String(Math.max(0, Math.min(1000, pos)));
 }
 
 const tlAt = document.getElementById('tlAt');
@@ -2735,9 +2808,21 @@ const tlLive = document.getElementById('tlLive');
 if (tlAt) {
   // input fires on every pixel of the drag; change fires only on release,
   // so the platform enforces the rule instead of us faking it with a timer.
+  // During the drag the label says, large, where the handle IS -- no read, no
+  // reload, just the instant -- so the reader knows what they will get before
+  // they let go. The read itself still happens on release only.
+  tlAt.addEventListener('input', () => {
+    const el = document.getElementById('tlAtLabel');
+    if (!el) return;
+    const ms = sliderToMs(Number(tlAt.value));
+    el.classList.add('dragging');
+    el.textContent = (ms == null || typeof ms !== 'number') ? 'live' : ('as of ' + new Date(ms).toLocaleString());
+  });
   tlAt.addEventListener('change', async () => {
     // Wait for the load to settle so the label never claims a moment that failed to load.
     await goToInstant(sliderToMs(Number(tlAt.value)));
+    const el = document.getElementById('tlAtLabel');
+    if (el) el.classList.remove('dragging');
     sayInstant();
     syncSlider();
   });
