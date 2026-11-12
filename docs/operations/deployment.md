@@ -71,6 +71,17 @@ The whole state is the Pebble **data-dir**. To back it up:
 A restored data-dir is self-contained: there is no external state. After restore,
 the server replays from the latest snapshot plus the event tail.
 
+**A data-dir belongs to one replica.** It carries a journal identifier
+(`meta/journal_id`), minted at the first writable start and stamped into the
+pagination cursors of `recentChanges`, `entityHistory` and `relations`, so a
+cursor from another replica is refused instead of misread (#605). Restoring a
+replica from **its own** backup is correct: same journal, same identifiers.
+**Do not create a second replica by copying another replica's data-dir**: both
+would carry the same journal identifier while minting different event and entity
+identifiers from then on, and a cursor carried from one to the other would again
+fail silently. Start a new replica on an empty data-dir and let it ingest, as
+each replica of a fan-out deployment does.
+
 ## Production checklist
 
 - Pin a version (binary or image tag), not `latest`.
