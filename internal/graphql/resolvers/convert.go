@@ -148,6 +148,8 @@ func decodeCursor(c string) (string, error) {
 // schema descriptions and the error message quote one number rather than three.
 const MaxPageSize = 200
 
+// paginate returns a slice of items after the given cursor, capped at first
+// (default 50), along with the end cursor and whether more pages remain.
 func paginate[T any](items []T, idOf func(T) string, first *int, after *string) (page []T, endCursor *string, hasNext bool, err error) {
 	start := 0
 	if after != nil && *after != "" {
@@ -163,21 +165,9 @@ func paginate[T any](items []T, idOf func(T) string, first *int, after *string) 
 			}
 		}
 	}
-	// MaxPageSize is the page bound, the same one the MCP tools apply (#144).
-	// An over-cap `first` is REFUSED rather than quietly served smaller (#366):
-	// a caller who asked for five hundred, received two hundred and was told
-	// nothing concluded the timeline was complete, and read a three-hour-old
-	// event as the newest. hasNextPage was set and technically honest, but it
-	// answers "is there more", not "what you are holding is not the end".
-	n := 50
-	if first != nil {
-		n = *first
-	}
-	if n > MaxPageSize {
-		return nil, nil, false, fmt.Errorf("first: %d exceeds the maximum page size of %d; ask for at most %d and page with `after`, or narrow the query — serving fewer than requested without saying so is how a partial answer gets read as a complete one", n, MaxPageSize, MaxPageSize)
-	}
-	if n < 0 {
-		n = 0
+	n, serr := pageSize(first)
+	if serr != nil {
+		return nil, nil, false, serr
 	}
 	if start > len(items) {
 		start = len(items)
