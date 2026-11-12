@@ -12,13 +12,14 @@ import (
 	"github.com/toise-dev/toise/internal/store"
 )
 
-// fakeEventReader is an in-memory EventReader that counts Resolve calls so a
-// test can prove the resolver only pays for the page it returns.
 type fakeEventReader struct {
+	journal  string
 	entries  []store.TimeIndexEntry // stored newest-first
 	events   map[uint64]model.Event
 	resolves int
 }
+
+func (f *fakeEventReader) JournalID() string { return f.journal }
 
 func (f *fakeEventReader) ReadByEntity(ctx context.Context, id model.EntityID) ([]model.Event, error) {
 	return nil, nil

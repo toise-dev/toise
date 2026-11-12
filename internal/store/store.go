@@ -1,7 +1,9 @@
 package store
 
 import (
+	"crypto/rand"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
@@ -36,6 +38,12 @@ var metaPruneHorizonKey = []byte("meta/prune_horizon")
 // written before the marker existed are format 1 by definition.
 var metaFormatKey = []byte("meta/format_version")
 
+// metaJournalIDKey persists this journal's identity: 16 random bytes hex-encoded
+// (32 chars), minted once at the first writable open. Local cursors carry it so a
+// cursor replayed on another replica is refused loudly instead of silently
+// paginating against a different journal.
+var metaJournalIDKey = []byte("meta/journal_id")
+
 // formatVersion is the current on-disk format.
 const formatVersion = uint64(1)
 
@@ -46,6 +54,8 @@ type Store struct {
 	cfg      Config
 	dir      string
 	readOnly bool
+
+	journalID string // identity of this journal, read once at open; "" on a read-only store that never had one
 
 	mu               sync.Mutex // guards seq/counters and serializes appends
 	maintMu          sync.Mutex // serializes maintenance (coalesce/prune) against itself, NOT against appends
@@ -80,12 +90,56 @@ func open(dir string, cfg Config, readOnly bool) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := s.loadOrCreateJournalID(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("loading journal id: %w", err)
+	}
 	if err := s.recoverSeq(); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 	return s, nil
 }
+
+// loadOrCreateJournalID reads the journal identity once and keeps it in the
+// struct. On a writable store a missing id is minted from crypto/rand and
+// persisted with Sync so every later open sees the same one; on a read-only
+// store a missing id stays empty (nothing is written), which makes cursors fall
+// back to the legacy unmarked form.
+func (s *Store) loadOrCreateJournalID() error {
+	val, closer, err := s.db.Get(metaJournalIDKey)
+	if err == nil {
+		id := string(val)
+		_ = closer.Close()
+		// A replica's own cursors carry this value; one of any other shape would
+		// make it refuse its own cursors as malformed, so refuse to open instead.
+		if _, herr := hex.DecodeString(id); len(id) != 32 || herr != nil {
+			return fmt.Errorf("corrupt journal id marker: want 32 hex characters, got %d", len(id))
+		}
+		s.journalID = id
+		return nil
+	}
+	if !errors.Is(err, pebble.ErrNotFound) {
+		return fmt.Errorf("reading journal id: %w", err)
+	}
+	if s.readOnly {
+		s.journalID = ""
+		return nil
+	}
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return fmt.Errorf("generating journal id: %w", err)
+	}
+	s.journalID = hex.EncodeToString(buf)
+	if err := s.db.Set(metaJournalIDKey, []byte(s.journalID), pebble.Sync); err != nil {
+		return fmt.Errorf("persisting journal id: %w", err)
+	}
+	return nil
+}
+
+// JournalID is this journal's persistent identity (32 hex chars), or "" on a
+// read-only store opened before one existed.
+func (s *Store) JournalID() string { return s.journalID }
 
 // checkFormat stamps a fresh (or pre-marker) store with the current format
 // version and refuses one written by a NEWER format — misreading it would

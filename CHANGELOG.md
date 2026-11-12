@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+**A pagination cursor from another replica is refused instead of misread
+(#605).** Each replica keeps its own journal and mints its own event and
+entity identifiers, so the cursors of `recentChanges`, `entityHistory` and
+`relations` only mean something on the replica that issued them. A client
+whose second request reached the other replica got, for the change feeds, an
+empty last page — a truncated list read as complete — and for `relations` a
+page starting at an arbitrary point, with holes or duplicates. Nothing said
+so.
+
+Each journal now carries a random identifier, minted once and persisted, and
+these three reads stamp it into their cursors. A cursor from another journal
+is refused with an error that names the remedy: restart the enumeration
+without `after` and keep one enumeration on one endpoint. A cursor from the
+same journal behaves exactly as before, including when its element vanished
+between two pages. Cursors issued before this change carry no stamp and are
+still accepted, as before, for the transition. Entity cursors are unchanged:
+they are identity fingerprints, the same on every replica.
+
+This makes the failure visible; it does not yet make these cursors portable
+between replicas, which needs relation events to carry their endpoints'
+fingerprints.
+
 ## [0.24.2] - 2026-11-12
 
 ### Security
