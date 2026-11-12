@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.1] - 2026-11-12
+
+### Fixed
+
+**`recentChanges` reads the page, not the whole window.** On a tenant with
+392,871 changes in 24 hours, the GraphQL query over 6 or 24 hours timed out
+at 10 s and answered 503 — with `first: 1` as with `first: 200` — because the
+resolver read and decoded every event of the window before paging it. It now
+counts the total from the time index and reads only the page, as the MCP
+`recent_changes` tool has done since #351. Measured on a bench tenant twice
+that size: 7.0–7.6 s before, 0.67–0.92 s after for `first: 100`, 0.12 s for
+`first: 1`, with `totalCount` equal to the MCP total.
+
+Everything a caller observes is unchanged: edges, cursors, `totalCount`,
+`hasNextPage`, `endCursor`, `holdsNewest` and `holdsOldest`. Two consequences
+of not reading what is not returned, the same ones the MCP tool has: an I/O
+error on a record beyond the page no longer fails the query, and an index key
+that outlives its record during a concurrent maintenance batch is counted in
+`totalCount` for that instant.
+
 ## [0.24.0] - 2026-11-09
 
 ### Added
