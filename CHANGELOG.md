@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.2] - 2026-11-12
+
+### Security
+
+**No reachable vulnerability left in the server binary.** `govulncheck
+-mode=binary` on v0.24.1 reported five, all already present in v0.24.0. The
+toolchain moves to go1.26.11 (an HTTP/1 server could crash on a
+`MaxBytesReader` race, GO-2026-6859), `golang.org/x/net` to 0.62.0
+(GO-2026-6866, GO-2026-6860) and `klauspost/compress` to 1.20.2, a panic
+(GO-2026-6865). GO-2026-5932, in the unmaintained `x/crypto/openpgp`, has no
+upstream fix; Toise never calls it and it is no longer reachable in either
+scan. The `go` directive is unchanged and no code changes.
+
 ## [0.24.1] - 2026-11-12
 
 ### Fixed
