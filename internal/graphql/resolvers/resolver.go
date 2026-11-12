@@ -19,7 +19,6 @@ import (
 	"github.com/toise-dev/toise/internal/store"
 )
 
-// EventReader is the subset of the store the resolvers read history from.
 type EventReader interface {
 	ReadByEntity(ctx context.Context, id model.EntityID) ([]model.Event, error)
 	ReadByTimeRange(ctx context.Context, start, end time.Time) ([]model.Event, error)
@@ -39,6 +38,9 @@ type EventReader interface {
 	// a restarted replica has a brand-new projection over an old graph, and
 	// reporting the rebuild would claim freshness it does not have.
 	NewestEventTime() (time.Time, bool, error)
+	// JournalID is this journal's persistent identity; local cursors are tagged
+	// with it so a cursor from another replica can be refused.
+	JournalID() string
 }
 
 // Graph is the subset of the projection the resolvers read current state from.
@@ -284,15 +286,19 @@ func (r *queryResolver) Relations(ctx context.Context, filter *generated.Relatio
 	}
 	afterKey := ""
 	if after != nil && *after != "" {
-		afterKey, err = decodeCursor(*after)
+		// Local cursor: a cursor minted by another journal is refused here,
+		// because PageRelations positions by string comparison and would land
+		// at an arbitrary spot with holes and duplicates.
+		afterKey, err = decodeLocalCursor(*after, r.Store.JournalID())
 		if err != nil {
 			return nil, fmt.Errorf("invalid after cursor: %w", err)
 		}
 	}
 	page, next, total := g.PageRelations(typ, from, to, afterKey, n)
+	journal := r.Store.JournalID()
 	edges := make([]generated.RelationEdge, len(page))
 	for i, rel := range page {
-		edges[i] = generated.RelationEdge{Cursor: encodeCursor(string(rel.ID)), Node: relationToGQL(rel)}
+		edges[i] = generated.RelationEdge{Cursor: encodeLocalCursor(journal, string(rel.ID)), Node: relationToGQL(rel)}
 	}
 	pageInfo := &generated.PageInfo{HasNextPage: next != ""}
 	if len(edges) > 0 {
@@ -428,7 +434,9 @@ func (r *queryResolver) RecentChanges(ctx context.Context, window, from, to, sco
 	var afterID string
 	cursorSeen := after == nil || *after == ""
 	if !cursorSeen {
-		afterID, err = decodeCursor(*after)
+		// Local cursor: a cursor from another journal would match no event here
+		// and silently yield an empty page with hasNextPage false.
+		afterID, err = decodeLocalCursor(*after, r.Store.JournalID())
 		if err != nil {
 			return nil, err
 		}
@@ -528,23 +536,17 @@ func (r *queryResolver) RecentChanges(ctx context.Context, window, from, to, sco
 	if err != nil {
 		return nil, err
 	}
-	return buildChangeConnection(page, total, hasNext, generated.ChangeOrderNewestFirst), nil
+	return buildChangeConnection(r.Store.JournalID(), page, total, hasNext, generated.ChangeOrderNewestFirst), nil
 }
 
-// buildChangeConnection assembles the connection from an already-bounded page:
-// edges carry the cursor of their node, the end cursor is the last edge's
-// cursor (nil on an empty page), and the far end of the matching set is
-// reachable only when the page runs to the end of it. An empty match holds
-// both ends trivially: there is nothing absent to warn about, and claiming
-// otherwise would read as a truncation.
-func buildChangeConnection(page []model.Event, total int, hasNext bool, order generated.ChangeOrder) *generated.ChangeConnection {
+func buildChangeConnection(journal string, page []model.Event, total int, hasNext bool, order generated.ChangeOrder) *generated.ChangeConnection {
 	edges := make([]generated.ChangeEdge, len(page))
 	for i, ev := range page {
-		edges[i] = generated.ChangeEdge{Cursor: encodeCursor(eventID(ev)), Node: eventToChangeGQL(ev)}
+		edges[i] = generated.ChangeEdge{Cursor: encodeLocalCursor(journal, eventID(ev)), Node: eventToChangeGQL(ev)}
 	}
 	var end *string
 	if len(page) > 0 {
-		c := encodeCursor(eventID(page[len(page)-1]))
+		c := encodeLocalCursor(journal, eventID(page[len(page)-1]))
 		end = &c
 	}
 	reachesFarEnd := !hasNext
@@ -568,11 +570,23 @@ func buildChangeConnection(page []model.Event, total int, hasNext bool, order ge
 }
 
 func (r *queryResolver) changeConnection(evs []model.Event, first *int, after *string, order generated.ChangeOrder) (*generated.ChangeConnection, error) {
-	page, _, hasNext, err := paginate(evs, eventID, first, after)
+	// paginate decodes `after` itself with the legacy decoder, so a local cursor
+	// is unwrapped here and re-encoded in the legacy form; paginate stays generic
+	// and untouched for entity cursors.
+	legacyAfter := after
+	if after != nil && *after != "" {
+		id, err := decodeLocalCursor(*after, r.Store.JournalID())
+		if err != nil {
+			return nil, err
+		}
+		legacy := encodeCursor(id)
+		legacyAfter = &legacy
+	}
+	page, _, hasNext, err := paginate(evs, eventID, first, legacyAfter)
 	if err != nil {
 		return nil, err
 	}
-	return buildChangeConnection(page, len(evs), hasNext, order), nil
+	return buildChangeConnection(r.Store.JournalID(), page, len(evs), hasNext, order), nil
 }
 
 type subscriptionResolver struct{ *Resolver }

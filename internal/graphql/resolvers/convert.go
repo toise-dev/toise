@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/toise-dev/toise/internal/graphql/generated"
@@ -140,6 +141,46 @@ func decodeCursor(c string) (string, error) {
 		return "", fmt.Errorf("invalid cursor %q: pass an `endCursor` value returned by a previous page", c)
 	}
 	return string(b), nil
+}
+
+// localCursorPrefix marks cursors that carry the issuing journal's identity.
+// The "j1:" tag leaves room for a future format bump without re-parsing old
+// cursors.
+const localCursorPrefix = "j1:"
+
+// encodeLocalCursor wraps id in a cursor tagged with the issuing journal, so a
+// cursor replayed on another replica is refused instead of silently paginating
+// against a different journal. An empty journal (read-only store without an id)
+// keeps the legacy unmarked form.
+func encodeLocalCursor(journal, id string) string {
+	if journal == "" {
+		return encodeCursor(id)
+	}
+	return encodeCursor(localCursorPrefix + journal + ":" + id)
+}
+
+// decodeLocalCursor reverses encodeLocalCursor. A cursor from another journal is
+// an error naming the remedy, because its id means nothing in this journal:
+// feeds would return a silent empty page, relations an arbitrary position.
+// Legacy unmarked cursors pass through unchanged for the transition.
+func decodeLocalCursor(c, journal string) (string, error) {
+	s, err := decodeCursor(c)
+	if err != nil {
+		return "", err
+	}
+	if !strings.HasPrefix(s, localCursorPrefix) {
+		return s, nil
+	}
+	rest := s[len(localCursorPrefix):]
+	// The journal id is exactly 32 hex chars followed by ":".
+	if len(rest) < 33 || rest[32] != ':' {
+		return "", fmt.Errorf("malformed cursor")
+	}
+	issuer := rest[:32]
+	if issuer != journal {
+		return "", fmt.Errorf("cursor was issued by another replica of this service and cannot be resolved here: restart the enumeration without after, and keep one enumeration on one endpoint")
+	}
+	return rest[33:], nil
 }
 
 // paginate returns a slice of items after the given cursor, capped at first
