@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-11-13
+
+Each server now names its exact build (`/version`), a release binary can be
+rebuilt byte for byte from its tag, Toise emits OpenTelemetry traces when an
+OTLP endpoint is set, and the new MCP tool `change_digest` reads what changed
+just before an alert. No wire-contract break, no data migration: a 0.22 or
+later data directory upgrades in place. One metric change can affect a
+dashboard: the producer-defect counters gain a `tenant` label (see Changed).
+
 ### Added
 
 - **`change_digest`: what changed just before an instant, in groups a person
