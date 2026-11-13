@@ -61,10 +61,12 @@ type DigestGroup struct {
 }
 
 type DigestExample struct {
-	Fingerprint string `json:"fingerprint,omitempty" jsonschema:"identity fingerprint of the entity; empty for relations"`
-	Type        string `json:"type" jsonschema:"entity or relation type"`
-	DisplayName string `json:"display_name,omitempty" jsonschema:"display name; for relations '<from> -> <to>'"`
-	At          string `json:"at" jsonschema:"RFC 3339 event time"`
+	Fingerprint     string `json:"fingerprint,omitempty" jsonschema:"identity fingerprint of the entity; empty for relations"`
+	Type            string `json:"type" jsonschema:"entity or relation type"`
+	DisplayName     string `json:"display_name,omitempty" jsonschema:"display name; for relations '<from> -> <to>'"`
+	Host            string `json:"host,omitempty" jsonschema:"name of the host the entity sits on (host.name, else host.id); absent when no single host is found or the example is itself a host"`
+	HostFingerprint string `json:"host_fingerprint,omitempty" jsonschema:"identity_fingerprint of that host, the handle to open it; absent with host"`
+	At              string `json:"at" jsonschema:"RFC 3339 event time"`
 }
 
 const digestNote = "Groups are ordered newest first and are not ranked by relevance. event_time is when a producer observed a change, not when it became true: changes closer together than the producer's polling interval carry no ordering, and no causal conclusion may be drawn from them."
@@ -180,7 +182,8 @@ func (s *Server) changeDigest(ctx context.Context, _ *mcpsdk.CallToolRequest, in
 		}
 		return model.DisplayName(e)
 	}
-	groups, total, groupCount, truncated := groupEvents(events, from, to, first, name)
+	hr := newHostResolver(s.graph, events)
+	groups, total, groupCount, truncated := groupEvents(events, from, to, first, name, hr.forEvent)
 	note := digestNote
 	if w := s.horizonWarning(from, to); w != "" {
 		note = w + " " + note
@@ -261,23 +264,25 @@ func digestExample(ev model.Event, name func(model.EntityID) string) DigestExamp
 }
 
 type digestAcc struct {
-	key          string
-	changeType   string
-	typ          string
-	changedKeys  []string
-	scope        string
-	deleteSource string
-	structural   bool
-	count        int
-	firstAt      time.Time
-	lastAt       time.Time
-	examples     []DigestExample
-	exampleTimes []time.Time
+	key           string
+	changeType    string
+	typ           string
+	changedKeys   []string
+	scope         string
+	deleteSource  string
+	structural    bool
+	count         int
+	firstAt       time.Time
+	lastAt        time.Time
+	examples      []DigestExample
+	exampleTimes  []time.Time
+	exampleEvents []model.Event
 }
 
 // addExample keeps at most the five newest examples, newest first; equal
-// instants keep arrival order.
-func (a *digestAcc) addExample(ex DigestExample, at time.Time) {
+// instants keep arrival order. The raw events are kept in parallel so the
+// host is resolved only for the examples actually returned.
+func (a *digestAcc) addExample(ex DigestExample, ev model.Event, at time.Time) {
 	pos := len(a.exampleTimes)
 	for i, t := range a.exampleTimes {
 		if t.Before(at) {
@@ -287,17 +292,21 @@ func (a *digestAcc) addExample(ex DigestExample, at time.Time) {
 	}
 	a.examples = append(a.examples, DigestExample{})
 	a.exampleTimes = append(a.exampleTimes, time.Time{})
+	a.exampleEvents = append(a.exampleEvents, model.Event{})
 	copy(a.examples[pos+1:], a.examples[pos:])
 	copy(a.exampleTimes[pos+1:], a.exampleTimes[pos:])
+	copy(a.exampleEvents[pos+1:], a.exampleEvents[pos:])
 	a.examples[pos] = ex
 	a.exampleTimes[pos] = at
+	a.exampleEvents[pos] = ev
 	if len(a.examples) > 5 {
 		a.examples = a.examples[:5]
 		a.exampleTimes = a.exampleTimes[:5]
+		a.exampleEvents = a.exampleEvents[:5]
 	}
 }
 
-func groupEvents(events []model.Event, from, to time.Time, first int, name func(model.EntityID) string) (groups []DigestGroup, total, groupCount int, truncated bool) {
+func groupEvents(events []model.Event, from, to time.Time, first int, name func(model.EntityID) string, host func(model.Event) (string, string)) (groups []DigestGroup, total, groupCount int, truncated bool) {
 	if first <= 0 {
 		first = 50
 	}
@@ -338,7 +347,7 @@ func groupEvents(events []model.Event, from, to time.Time, first int, name func(
 		if acc.count == 1 || at.After(acc.lastAt) {
 			acc.lastAt = at
 		}
-		acc.addExample(digestExample(ev, name), at)
+		acc.addExample(digestExample(ev, name), ev, at)
 	}
 	// Sort on the accumulators' time.Time values, then build the groups in
 	// that order so no RFC 3339 string is ever re-parsed.
@@ -379,6 +388,14 @@ func groupEvents(events []model.Event, from, to time.Time, first int, name func(
 	truncated = groupCount > first
 	if truncated {
 		groups = groups[:first]
+	}
+	// Resolve the host only for the examples actually returned: resolution
+	// is a graph walk, so doing it for every event would be wasteful.
+	for i := range groups {
+		acc := sorted[i]
+		for j := range groups[i].Examples {
+			groups[i].Examples[j].Host, groups[i].Examples[j].HostFingerprint = host(acc.exampleEvents[j])
+		}
 	}
 	return groups, len(events), groupCount, truncated
 }

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`change_digest` examples name the host they sit on.** Each example now
+  carries `host` (`host.name`, else `host.id`) and `host_fingerprint`, so a
+  reader sees "shop on a1" and can open that host without one more call per
+  example. The host is found through the entity's `host.id` identity key, else
+  the nearest host within two hops, counting the links removed during the
+  window so an entity that disappeared still names its host. Both fields are
+  absent when the example is itself a host, when no host is found, and when
+  two hosts are equally near: the answer never guesses. Additive: no field
+  changes meaning.
+
 ## [0.25.0] - 2026-11-13
 
 Each server now names its exact build (`/version`), a release binary can be

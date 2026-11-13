@@ -31,7 +31,7 @@ func TestGroupEventsLivenessDeletions(t *testing.T) {
 		digestEntEv("h2", model.EntityDeleted, "host", model.DeleteSourceLivenessExpiry, nil, base.Add(time.Minute)),
 		digestEntEv("h3", model.EntityDeleted, "host", model.DeleteSourceLivenessExpiry, nil, base.Add(2*time.Minute)),
 	}
-	groups, total, groupCount, truncated := groupEvents(events, base.Add(-time.Hour), base, 50, noName)
+	groups, total, groupCount, truncated := groupEvents(events, base.Add(-time.Hour), base, 50, noName, noHost)
 	if total != 3 || groupCount != 1 || truncated || len(groups) != 1 {
 		t.Fatalf("got total=%d groupCount=%d truncated=%v groups=%d", total, groupCount, truncated, len(groups))
 	}
@@ -58,7 +58,7 @@ func TestGroupEventsOrderNewestFirst(t *testing.T) {
 		digestEntEv("a1", model.EntityCreated, "host", "", nil, base.Add(10*time.Minute)),
 		digestEntEv("b1", model.EntityCreated, "process", "", nil, base.Add(30*time.Minute)),
 	}
-	groups, _, _, _ := groupEvents(events, base.Add(-time.Hour), base, 50, noName)
+	groups, _, _, _ := groupEvents(events, base.Add(-time.Hour), base, 50, noName, noHost)
 	if len(groups) != 2 || groups[0].Type != "process" || groups[1].Type != "host" {
 		t.Fatalf("order wrong: %+v", groups)
 	}
@@ -70,7 +70,7 @@ func TestGroupEventsExamplesCappedNewestFirst(t *testing.T) {
 	for i := 0; i < 7; i++ {
 		events = append(events, digestEntEv("h"+strings.Repeat("x", i), model.EntityStateChanged, "host", "", []string{"state"}, base.Add(time.Duration(i)*time.Minute)))
 	}
-	groups, total, _, _ := groupEvents(events, base.Add(-time.Hour), base, 50, noName)
+	groups, total, _, _ := groupEvents(events, base.Add(-time.Hour), base, 50, noName, noHost)
 	if total != 7 || len(groups) != 1 || groups[0].Count != 7 {
 		t.Fatalf("total=%d groups=%d count=%d", total, len(groups), groups[0].Count)
 	}
@@ -92,12 +92,12 @@ func TestGroupEventsExamplesCappedNewestFirst(t *testing.T) {
 func TestGroupIDStableAcrossCallsAndWindowSensitive(t *testing.T) {
 	base := time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC)
 	events := []model.Event{digestEntEv("a1", model.EntityCreated, "host", "", nil, base)}
-	g1, _, _, _ := groupEvents(events, base.Add(-time.Hour), base, 50, noName)
-	g2, _, _, _ := groupEvents(events, base.Add(-time.Hour), base, 50, noName)
+	g1, _, _, _ := groupEvents(events, base.Add(-time.Hour), base, 50, noName, noHost)
+	g2, _, _, _ := groupEvents(events, base.Add(-time.Hour), base, 50, noName, noHost)
 	if g1[0].ID != g2[0].ID {
 		t.Fatalf("id not stable: %q vs %q", g1[0].ID, g2[0].ID)
 	}
-	g3, _, _, _ := groupEvents(events, base.Add(-30*time.Minute), base, 50, noName)
+	g3, _, _, _ := groupEvents(events, base.Add(-30*time.Minute), base, 50, noName, noHost)
 	if g1[0].ID == g3[0].ID {
 		t.Fatalf("id did not change with the window")
 	}
@@ -109,7 +109,7 @@ func TestGroupEventsTruncated(t *testing.T) {
 		digestEntEv("a1", model.EntityCreated, "host", "", nil, base.Add(10*time.Minute)),
 		digestEntEv("b1", model.EntityCreated, "process", "", nil, base.Add(30*time.Minute)),
 	}
-	groups, _, groupCount, truncated := groupEvents(events, base.Add(-time.Hour), base, 1, noName)
+	groups, _, groupCount, truncated := groupEvents(events, base.Add(-time.Hour), base, 1, noName, noHost)
 	if !truncated || groupCount != 2 || len(groups) != 1 {
 		t.Fatalf("truncated=%v groupCount=%d len=%d", truncated, groupCount, len(groups))
 	}
