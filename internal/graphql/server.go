@@ -136,6 +136,7 @@ func NewHandler(r *resolvers.Resolver, cfg Config) http.Handler {
 		srv.Use(extension.Introspection{})
 	}
 	srv.Use(extension.FixedComplexityLimit(cfg.ComplexityLimit))
+	srv.Use(tracing{})
 
 	// The per-request timeout uses http.TimeoutHandler, whose ResponseWriter
 	// does not implement http.Hijacker. A WebSocket subscription needs to hijack

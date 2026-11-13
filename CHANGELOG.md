@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Toise emits OpenTelemetry traces.** Until now it emitted none, so a slow
+  read or a stalled ingest could only be explained from logs and counters.
+  Set `OTEL_EXPORTER_OTLP_ENDPOINT` and Toise exports, over OTLP/gRPC, one span
+  per HTTP request (named by route), per OTLP ingest export, per GraphQL
+  operation and per MCP method or tool call, with `service.version` set to the
+  build. Without that variable nothing changes: no connection, no cost, which
+  keeps zero-config intact, and a tracing misconfiguration is logged rather
+  than stopping the server. The standard `OTEL_*` variables apply. GraphQL and
+  MCP spans carry `toise.tenant`, and HTTP spans the request query, which can
+  name a tenant: send them only to a backend trusted with tenant names.
+
 ## [0.24.3] - 2026-11-12
 
 ### Fixed
