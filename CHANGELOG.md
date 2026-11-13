@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`change_digest`: what changed just before an instant, in groups a person
+  can read.** A new MCP tool reads the 15 minutes to 1 hour before an instant,
+  typically an alert's start, and folds the changes into groups: kind of
+  change, kind of thing, changed keys, collector and disappearance source,
+  each with an exact count, its first and last instant, up to five examples
+  newest first, and a stable id. Every group carries a label twice: as
+  `label_key` plus `label_params`, for a consumer to render in its reader's
+  language with the same numbers, and as an English sentence. An optional
+  scope narrows it to one entity and its neighbors up to two hops, including a
+  neighbor that was linked or unlinked during the window, so a machine that
+  vanished just before the alert is still caught. Heartbeats are excluded.
+  Groups are ordered newest first and are not ranked: Toise states what
+  changed, and the consumer decides what matters. Longer spans stay with
+  `graph_diff`; this tool refuses a window over an hour.
 - **Toise emits OpenTelemetry traces.** Until now it emitted none, so a slow
   read or a stalled ingest could only be explained from logs and counters.
   Set `OTEL_EXPORTER_OTLP_ENDPOINT` and Toise exports, over OTLP/gRPC or

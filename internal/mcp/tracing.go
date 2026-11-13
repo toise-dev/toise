@@ -27,6 +27,7 @@ var knownTools = map[string]bool{
 	"describe_type":   true,
 	"telemetry_keys":  true,
 	"annotate_entity": true,
+	"change_digest":   true,
 }
 
 // knownMethods is the bounded set of MCP protocol methods we trace.
