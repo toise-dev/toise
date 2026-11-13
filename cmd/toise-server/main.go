@@ -38,6 +38,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/stats"
 
 	"github.com/toise-dev/toise/internal/annotations"
 	"github.com/toise-dev/toise/internal/audit"
@@ -406,7 +407,13 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	// sweep starts expiring entities (#112). Exiting lets the supervisor restart.
 	errc := make(chan error, 2)
 
-	grpcOpts = append(grpcOpts, grpc.StatsHandler(otelgrpc.NewServerHandler()))
+	// Only the one method the receiver serves is traced: the span name is the
+	// gRPC method the client sent, so tracing any other would let a caller
+	// mint span names at will.
+	grpcOpts = append(grpcOpts, grpc.StatsHandler(otelgrpc.NewServerHandler(
+		otelgrpc.WithFilter(func(info *stats.RPCTagInfo) bool {
+			return info.FullMethodName == "/opentelemetry.proto.collector.logs.v1.LogsService/Export"
+		}))))
 	receiver := ingest.NewRoutedReceiver(engineFor, authn.AllowedForTenantGRPC, ingestMetrics, cfg.AcceptUnknownTypes, logger, grpcOpts...)
 	if cfg.DeriveOnlyTenancy() {
 		// derive-only: a scoped token's tenant is derived and locked, ignoring a
