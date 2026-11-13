@@ -147,6 +147,24 @@ only** unless you allowlist origins explicitly:
 toise-server --production --allowed-origins "https://graph.example.com"
 ```
 
+## Traces
+
+Tracing is off by default: with no OTLP configuration Toise keeps the no-op
+tracer provider and opens no connection. Set `OTEL_EXPORTER_OTLP_ENDPOINT`
+(or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`) to enable OTLP export; set
+`OTEL_SDK_DISABLED=true` to force it off even with an endpoint. Export is
+OTLP/gRPC by default (port 4317); set `OTEL_EXPORTER_OTLP_PROTOCOL` (or
+`OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`) to `http/protobuf` for OTLP/HTTP (port
+4318). Any other protocol, `http/json` included, is refused: the server logs
+the error and runs without tracing. The other standard `OTEL_*` variables
+apply (headers, certificate, insecure, timeouts, `OTEL_TRACES_SAMPLER`,
+`OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES`).
+Spans are emitted for each HTTP request (named by route, not raw path), each
+OTLP ingest export, each GraphQL operation, and each MCP method/tool call.
+`service.version` is the build version. GraphQL and MCP spans carry the
+`toise.tenant` attribute, and HTTP spans the request path and query, which can
+name a tenant: send traces only to a backend trusted with tenant names.
+
 ## Operational endpoints
 
 On the HTTP `listen` address, the server exposes probes for orchestrators and
@@ -157,6 +175,7 @@ uptime monitors:
 | `/healthz` | **Liveness** — `200 ok` while the HTTP server is serving. |
 | `/readyz` | **Readiness** — `200 ready` when the event store is reachable; `503` with the reason otherwise. |
 | `/metrics` | **Prometheus** — Toise internals plus the standard Go runtime/process metrics. |
+| `/version` | **Build** — `{"version","commit","built"}` as JSON: the tag, the full commit and the UTC time of that commit, the same line `toise-server version` prints. Authenticated like `/metrics`, and public only when `metrics_public` is set. |
 
 Wire the probes directly instead of probing a UI page. For structured logs into a
 log backend, set `log_format: json` (and `log_level` as needed).

@@ -4,8 +4,11 @@
 package ops
 
 import (
+	"encoding/json"
 	"net/http"
 	"sync"
+
+	"github.com/toise-dev/toise/internal/version"
 )
 
 // Healthz is a liveness probe: it returns 200 as long as the HTTP server is
@@ -62,5 +65,17 @@ func Readyz(ready func() error, onChange func(error)) http.HandlerFunc {
 		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ready\n"))
+	}
+}
+
+// Version serves the build-time version information as JSON. It is mounted
+// under the same authorization as /metrics: the version tells an anonymous
+// caller which vulnerability to aim at, so it is not public unless
+// metrics_public is set, and it targets no tenant.
+func Version() http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(version.Get())
 	}
 }

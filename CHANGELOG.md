@@ -23,6 +23,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Groups are ordered newest first and are not ranked: Toise states what
   changed, and the consumer decides what matters. Longer spans stay with
   `graph_diff`; this tool refuses a window over an hour.
+- **Toise emits OpenTelemetry traces.** Until now it emitted none, so a slow
+  read or a stalled ingest could only be explained from logs and counters.
+  Set `OTEL_EXPORTER_OTLP_ENDPOINT` and Toise exports, over OTLP/gRPC or
+  OTLP/HTTP (`OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`), one span
+  per HTTP request (named by route), per OTLP ingest export, per GraphQL
+  operation and per MCP method or tool call, with `service.version` set to the
+  build. Without that variable nothing changes: no connection, no cost, which
+  keeps zero-config intact, and a tracing misconfiguration is logged rather
+  than stopping the server. The standard `OTEL_*` variables apply. GraphQL and
+  MCP spans carry `toise.tenant`, and HTTP spans the request query, which can
+  name a tenant: send them only to a backend trusted with tenant names.
+
+- **`/version`, and a `version` line that names the build in full.** Each
+  server now says which build it runs: `GET /version` returns
+  `{"version","commit","built"}` and `toise-server version` prints the same
+  three fields on one line, with the full commit and the UTC time of that
+  commit.
+  Until now the version could only be read on `/metrics`, short commit and no
+  date, so it could not be told apart between two builds of one tag.
+  `/version` is authenticated like `/metrics` and public only under
+  `metrics_public`: an exact build tells an anonymous caller which
+  vulnerability to aim at. A container image can no longer be built without
+  its version, commit and build time, so no image reports a placeholder.
+- **A release binary can be rebuilt byte for byte from its tag.** Builds use
+  `-trimpath`, no VCS stamp and an empty build id, and the build time is the
+  commit time rather than the clock, so the same commit gives the same
+  sha256 wherever it is built. `make build-release` reproduces the flags of
+  the release archives and the container image, which now pins its Go
+  toolchain to the one in `go.mod`.
+
+### Changed
+
+- **The producer-defect counters say which tenant they are about.**
+  `toise_discarded_relations_total`, `toise_refused_liveness_promises_total`,
+  `toise_refused_liveness_promise_seconds` and
+  `toise_identity_alias_conflicts_total` gain a `tenant` label. A discarded
+  edge, a refused cadence and a refused alias leave no trace in the graph, so
+  these series are the only way anyone learns of them, and a figure that cannot
+  be attributed to a client sends the operator to the logs. The bench recorded
+  the first two as a reserve on 0.22; the alias-conflict counter, added since,
+  had the same gap.
+
+  **Breaking for a dashboard that sums these without `by`:** the new label
+  splits the series, one line per tenant where there was one. Use
+  `sum without (tenant) (...)` to keep the old shape. A report from a stack
+  with no tenant id is kept under `tenant="unknown"`, never dropped.
+
+  The attribution comes from the registry, the only layer that holds the
+  mapping: an engine serves one tenant and does not know which, so each stack
+  is installed with a reporter bound to its own id. The `_count` companions
+  stay unlabeled on purpose: they exist at zero from the first scrape, so an
+  alert on an increase needs no series to appear first, which a per-tenant
+  series cannot offer.
 
 ## [0.24.3] - 2026-11-12
 

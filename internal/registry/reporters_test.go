@@ -2,6 +2,7 @@ package registry
 
 import (
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -11,7 +12,8 @@ import (
 	"github.com/toise-dev/toise/internal/store"
 )
 
-// recorder collects reporter calls from any tenant's engine.
+// recorder collects reporter calls from any tenant's engine, keeping the
+// tenant id each call was attributed to.
 type recorder struct {
 	mu       sync.Mutex
 	discards []string
@@ -19,22 +21,22 @@ type recorder struct {
 	aliases  []string
 }
 
-func (r *recorder) dropped(relationType, fromType, toType string) {
+func (r *recorder) dropped(tenantID, relationType, fromType, toType string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.discards = append(r.discards, relationType+" "+fromType+"->"+toType)
+	r.discards = append(r.discards, tenantID+" "+relationType+" "+fromType+"->"+toType)
 }
 
-func (r *recorder) refused(producer, entityType string, _ time.Duration) {
+func (r *recorder) refused(tenantID, producer, entityType string, _ time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.promises = append(r.promises, producer+" "+entityType)
+	r.promises = append(r.promises, tenantID+" "+producer+" "+entityType)
 }
 
-func (r *recorder) conflicted(attributeKey, aliasValue string) {
+func (r *recorder) conflicted(tenantID, attributeKey, aliasValue string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.aliases = append(r.aliases, attributeKey+"="+aliasValue)
+	r.aliases = append(r.aliases, tenantID+" "+attributeKey+"="+aliasValue)
 }
 
 func (r *recorder) counts() (int, int, int) {
@@ -110,6 +112,68 @@ func TestReportersReachTenantsOpenedAtBoot(t *testing.T) {
 	if aliases != 2 {
 		t.Errorf("alias conflicts reported = %d, want 2 (one per tenant); %v", aliases, rec.aliases)
 	}
+}
+
+// TestReportersCarryTheRightTenantID opens two tenants and checks that every
+// report is attributed to the tenant whose engine emitted it. The engine is
+// tenant-blind by design; the registry binds the id in the closure, and a mix-up
+// here would send one client's incidents to another's dashboard.
+func TestReportersCarryTheRightTenantID(t *testing.T) {
+	dataDir := t.TempDir()
+
+	now := clock
+	reg, err := openWithClock(dataDir, store.DefaultConfig(), time.Second, Limits{AutoCreate: true}, discard(),
+		func() time.Time { return now })
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = reg.Close() })
+
+	rec := &recorder{}
+	reg.SetDiscardReporter(rec.dropped)
+	reg.SetPromiseReporter(rec.refused)
+	reg.SetIdentityAliasConflictReporter(rec.conflicted)
+
+	tenants := []string{"acme", "globex"}
+	stacks := make([]*Stack, 0, len(tenants))
+	for _, id := range tenants {
+		st, err := reg.For(id)
+		if err != nil {
+			t.Fatalf("tenant %s: %v", id, err)
+		}
+		stacks = append(stacks, st)
+	}
+
+	// Only the first tenant misbehaves: a binding that swapped or merged the
+	// ids would then attribute its reports to the other one.
+	parkDoomedRelation(t, stacks[0].Engine, now)
+	refuseImplausiblePromise(t, stacks[0].Engine, now)
+	provokeAliasConflict(t, stacks[0].Engine, now)
+
+	now = now.Add(time.Minute)
+	for _, st := range stacks {
+		if _, err := st.Engine.Sweep(); err != nil {
+			t.Fatalf("sweep %s: %v", st.Tenant, err)
+		}
+	}
+
+	assertTenant := func(kind string, rows []string) {
+		t.Helper()
+		if len(rows) == 0 {
+			t.Errorf("%s: no report at all", kind)
+		}
+		for _, row := range rows {
+			if !strings.HasPrefix(row, tenants[0]+" ") {
+				t.Errorf("%s: report %q is not attributed to %q, the only tenant that misbehaved", kind, row, tenants[0])
+			}
+		}
+	}
+
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	assertTenant("discards", rec.discards)
+	assertTenant("promises", rec.promises)
+	assertTenant("aliases", rec.aliases)
 }
 
 // parkDoomedRelation asserts an edge whose endpoints nothing ever emits, so the
