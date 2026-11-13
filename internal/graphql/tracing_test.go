@@ -5,6 +5,7 @@ import (
 
 	"github.com/99designs/gqlgen/client"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
@@ -26,11 +27,21 @@ func TestTracingSpanPerOperation(t *testing.T) {
 
 	found := false
 	for _, span := range rec.Ended() {
-		if span.Name() == "graphql Probe" {
-			found = true
+		if span.Name() != "graphql query" {
+			continue
+		}
+		found = true
+		hasName := false
+		for _, a := range span.Attributes() {
+			if a.Key == attribute.Key("graphql.operation.name") && a.Value.AsString() == "Probe" {
+				hasName = true
+			}
+		}
+		if !hasName {
+			t.Fatalf("span missing graphql.operation.name=Probe attribute: %v", span.Attributes())
 		}
 	}
 	if !found {
-		t.Fatalf("no ended span named %q; got %v", "graphql Probe", rec.Ended())
+		t.Fatalf("no ended span named %q; got %v", "graphql query", rec.Ended())
 	}
 }

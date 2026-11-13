@@ -13,6 +13,8 @@ import (
 	"github.com/toise-dev/toise/internal/tenant"
 )
 
+const maxOperationNameLen = 64
+
 // tracing is a gqlgen extension opening one span per GraphQL operation.
 type tracing struct{}
 
@@ -29,21 +31,24 @@ func (tracing) InterceptResponse(ctx context.Context, next gql.ResponseHandler) 
 	if oc.Operation != nil && oc.Operation.Operation == ast.Subscription {
 		return next(ctx)
 	}
-	name := oc.OperationName
-	if name == "" && oc.Operation != nil {
-		name = oc.Operation.Name // a client may name the operation in the document only
-	}
-	if name == "" {
-		name = "anonymous"
+	opType := "unknown"
+	opName := "anonymous"
+	if oc.Operation != nil {
+		opType = string(oc.Operation.Operation)
+		// The parser already validated the name: [_A-Za-z][_0-9A-Za-z]*.
+		if oc.Operation.Name != "" {
+			opName = oc.Operation.Name
+			if len(opName) > maxOperationNameLen {
+				opName = opName[:maxOperationNameLen]
+			}
+		}
 	}
 	attrs := []attribute.KeyValue{
-		attribute.String("graphql.operation.name", name),
+		attribute.String("graphql.operation.name", opName),
+		attribute.String("graphql.operation.type", opType),
 		attribute.String(telemetry.AttrTenant, tenant.FromContext(ctx)),
 	}
-	if oc.Operation != nil {
-		attrs = append(attrs, attribute.String("graphql.operation.type", string(oc.Operation.Operation)))
-	}
-	ctx, span := telemetry.Tracer().Start(ctx, "graphql "+name,
+	ctx, span := telemetry.Tracer().Start(ctx, "graphql "+opType,
 		trace.WithSpanKind(trace.SpanKindInternal),
 		trace.WithAttributes(attrs...),
 	)
