@@ -15,7 +15,8 @@ and CGO-free, so the binaries are static and the image is distroless.
 > (`toise_entities`, `toise_entities_by_type`), and event counts and on-disk size
 > (`toise_events_total`, `toise_store_disk_bytes`) —
 > which is why the front-server requirement exists, not just the TLS one.
-> `/healthz` and `/readyz` disclose nothing comparable and stay open.
+> `/version` discloses the exact build too and follows the same rule as
+> `/metrics`. `/healthz` and `/readyz` disclose nothing comparable and stay open.
 
 ## Prebuilt binaries
 
@@ -30,6 +31,16 @@ curl -sSLO https://github.com/toise-dev/toise/releases/download/${VERSION}/toise
 sha256sum -c toise_${VERSION}_linux_amd64.tar.gz.sha256
 tar xzf toise_${VERSION}_linux_amd64.tar.gz
 ./toise_${VERSION}_linux_amd64/toise-server --help
+```
+
+A release binary is reproducible: building its tag again with the Go toolchain
+named in `go.mod` gives the same sha256. The build time it reports is the
+commit time, not the moment it was compiled.
+
+```sh
+git checkout v${VERSION}
+make build-release GOOS=linux GOARCH=amd64 VERSION=v${VERSION}
+sha256sum bin/release/toise-server ./toise_${VERSION}_linux_amd64/toise-server
 ```
 
 ## Container image
