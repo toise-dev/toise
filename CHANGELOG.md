@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The producer-defect counters say which tenant they are about.**
+  `toise_discarded_relations_total`, `toise_refused_liveness_promises_total`,
+  `toise_refused_liveness_promise_seconds` and
+  `toise_identity_alias_conflicts_total` gain a `tenant` label. A discarded
+  edge, a refused cadence and a refused alias leave no trace in the graph, so
+  these series are the only way anyone learns of them, and a figure that cannot
+  be attributed to a client sends the operator to the logs. The bench recorded
+  the first two as a reserve on 0.22; the alias-conflict counter, added since,
+  had the same gap.
+
+  **Breaking for a dashboard that sums these without `by`:** the new label
+  splits the series, one line per tenant where there was one. Use
+  `sum without (tenant) (...)` to keep the old shape. A report from a stack
+  with no tenant id is kept under `tenant="unknown"`, never dropped.
+
+  The attribution comes from the registry, the only layer that holds the
+  mapping: an engine serves one tenant and does not know which, so each stack
+  is installed with a reporter bound to its own id. The `_count` companions
+  stay unlabeled on purpose: they exist at zero from the first scrape, so an
+  alert on an increase needs no series to appear first, which a per-tenant
+  series cannot offer.
+
 ## [0.24.3] - 2026-11-12
 
 ### Fixed
