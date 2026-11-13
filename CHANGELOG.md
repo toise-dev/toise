@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.25.1] - 2026-11-13
+
+`change_digest` examples now name the host they sit on. No wire-contract
+break, no data migration: a 0.22 or later data directory upgrades in place,
+and a 0.25.0 server can be rolled back to from this release.
+
 ### Added
 
 - **`change_digest` examples name the host they sit on.** Each example now
