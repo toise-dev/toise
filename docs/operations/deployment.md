@@ -15,7 +15,8 @@ and CGO-free, so the binaries are static and the image is distroless.
 > (`toise_entities`, `toise_entities_by_type`), and event counts and on-disk size
 > (`toise_events_total`, `toise_store_disk_bytes`) —
 > which is why the front-server requirement exists, not just the TLS one.
-> `/healthz` and `/readyz` disclose nothing comparable and stay open.
+> `/version` discloses the exact build too and follows the same rule as
+> `/metrics`. `/healthz` and `/readyz` disclose nothing comparable and stay open.
 
 ## Prebuilt binaries
 

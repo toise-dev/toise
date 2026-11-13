@@ -11,12 +11,18 @@ RUN go mod download
 
 COPY . .
 
-# Version/commit are stamped via ldflags (passed from CI; default to dev).
-ARG VERSION=0.0.0-dev
-ARG COMMIT=unknown
+# Version/commit/build timestamp are stamped via ldflags and must come from
+# CI: a binary built without them would report "unknown" and hide which build
+# is actually deployed.
+ARG VERSION
+ARG COMMIT
+ARG BUILT
 # CGO-free, static, stripped — Pebble and the whole tree are pure Go.
+RUN if [ -z "$VERSION" ] || [ -z "$COMMIT" ] || [ -z "$BUILT" ]; then \
+      echo "VERSION, COMMIT and BUILT build args are required" >&2; exit 1; \
+    fi
 RUN CGO_ENABLED=0 go build \
-    -ldflags "-s -w -X github.com/toise-dev/toise/internal/version.Version=${VERSION} -X github.com/toise-dev/toise/internal/version.Commit=${COMMIT}" \
+    -ldflags "-s -w -X github.com/toise-dev/toise/internal/version.Version=${VERSION} -X github.com/toise-dev/toise/internal/version.Commit=${COMMIT} -X github.com/toise-dev/toise/internal/version.Built=${BUILT}" \
     -o /out/toise-server ./cmd/toise-server
 
 # Pre-create a data dir owned by the nonroot user (distroless has no shell/mkdir).

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`/version`, and a `version` line that names the build in full.** Each
+  server now says which build it runs: `GET /version` returns
+  `{"version","commit","built"}` and `toise-server version` prints the same
+  three fields on one line, with the full commit and the UTC build time.
+  Until now the version could only be read on `/metrics`, short commit and no
+  date, so it could not be told apart between two builds of one tag.
+  `/version` is authenticated like `/metrics` and public only under
+  `metrics_public`: an exact build tells an anonymous caller which
+  vulnerability to aim at. A container image can no longer be built without
+  its version, commit and build time, so no image reports a placeholder.
+
 ## [0.24.3] - 2026-11-12
 
 ### Fixed

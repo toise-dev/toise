@@ -53,8 +53,9 @@ jobs:
           VERSION: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          COMMIT=$(git rev-parse --short HEAD)
-          LDFLAGS="-s -w -X github.com/toise-dev/toise/internal/version.Version=${VERSION} -X github.com/toise-dev/toise/internal/version.Commit=${COMMIT}"
+          COMMIT=$(git rev-parse HEAD)
+          BUILT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          LDFLAGS="-s -w -X github.com/toise-dev/toise/internal/version.Version=${VERSION} -X github.com/toise-dev/toise/internal/version.Commit=${COMMIT} -X github.com/toise-dev/toise/internal/version.Built=${BUILT}"
           DIST="toise_${VERSION}_${GOOS}_${GOARCH}"
           mkdir -p "dist/${DIST}"
           go build -ldflags "${LDFLAGS}" -o "dist/${DIST}/toise-server" ./cmd/toise-server
@@ -114,6 +115,10 @@ jobs:
             echo "EOF"
           } >> "${GITHUB_OUTPUT}"
 
+      - name: Compute build timestamp
+        id: built
+        run: echo "value=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_OUTPUT}"
+
       - name: Build and push (multi-arch)
         uses: docker/build-push-action@v6
         with:
@@ -124,3 +129,4 @@ jobs:
           build-args: |
             VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}
+            BUILT=${{ steps.built.outputs.value }}

@@ -16,10 +16,11 @@ COVERAGE_HTML := coverage.html
 # (e.g. v0.6.0; 0.1.0-0.5.0 predate the prefix, see ADR 0027) — otherwise the
 # short commit. `git describe` returns the v-prefixed tag and it is stamped
 # as-is. Override with `make build VERSION=v0.6.0`.
-VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 0.0.0-dev)
-COMMIT      ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 0.0.0-unknown)
+COMMIT      ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
+BUILT       ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 VERSION_PKG := github.com/toise-dev/toise/internal/version
-LDFLAGS     := -X $(VERSION_PKG).Version=$(VERSION) -X $(VERSION_PKG).Commit=$(COMMIT)
+LDFLAGS     := -X $(VERSION_PKG).Version=$(VERSION) -X $(VERSION_PKG).Commit=$(COMMIT) -X $(VERSION_PKG).Built=$(BUILT)
 
 .DEFAULT_GOAL := help
 
