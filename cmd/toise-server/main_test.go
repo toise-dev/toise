@@ -118,6 +118,14 @@ func TestServerBoot(t *testing.T) {
 		t.Errorf("unauthenticated /metrics = %d, want 401", code)
 	}
 
+	// /version discloses the exact build, so it is held to /metrics' rule.
+	if code := httpCode(t, base+"/version", "GET", "", false); code != http.StatusUnauthorized {
+		t.Errorf("unauthenticated /version = %d, want 401", code)
+	}
+	if v := authBody(t, base+"/version", bootScopedToken); !strings.Contains(v, `"commit"`) || !strings.Contains(v, `"built"`) {
+		t.Errorf("/version for an authenticated caller = %q, want the version JSON", v)
+	}
+
 	// The ingest counters are on /metrics end-to-end (#113), for a global token.
 	body := authBody(t, base+"/metrics", bootToken)
 	for _, m := range []string{"toise_ingest_exports_total", "toise_ingest_records_total", "toise_auth_failures_total"} {

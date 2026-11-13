@@ -65,7 +65,7 @@ func main() {
 	// and in toise_build_info on /metrics — both of which require a running
 	// server, and neither of which answers "what is this file on disk".
 	if versionRequested(os.Args[1:]) {
-		fmt.Println(version.String())
+		fmt.Println(version.Line())
 		return
 	}
 
@@ -457,6 +457,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	mux.Handle("/graphql", graphqlRouter)
 	mux.Handle("/mcp", mcpRouter)
 	mux.Handle("/healthz", ops.Healthz())
+	mux.Handle("/version", ops.Version())
 	mux.Handle("/readyz", ops.Readyz(func() error {
 		for _, st := range reg.Stacks() {
 			if herr := st.Store.Healthy(); herr != nil {
@@ -560,10 +561,13 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	public := map[string]bool{"/healthz": true, "/readyz": true}
 	if cfg.MetricsPublic {
 		public["/metrics"] = true
+		// /version rides the same switch: it discloses the exact build, which
+		// tells an anonymous caller which vulnerability to aim at.
+		public["/version"] = true
 	}
 	// The scrape authenticates but targets no tenant: it is filtered to what the
 	// token may see, so the per-tenant authorization must not run on it.
-	authn.SetTenantExemptPaths(map[string]bool{"/metrics": true})
+	authn.SetTenantExemptPaths(map[string]bool{"/metrics": true, "/version": true})
 	logger.Info("scrape surface", "path", "/metrics",
 		"authenticated", !cfg.MetricsPublic, "per_tenant_scope", !cfg.MetricsPublic)
 	// CORS sits OUTSIDE auth, because a preflight carries no Authorization

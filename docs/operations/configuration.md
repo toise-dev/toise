@@ -157,6 +157,7 @@ uptime monitors:
 | `/healthz` | **Liveness** — `200 ok` while the HTTP server is serving. |
 | `/readyz` | **Readiness** — `200 ready` when the event store is reachable; `503` with the reason otherwise. |
 | `/metrics` | **Prometheus** — Toise internals plus the standard Go runtime/process metrics. |
+| `/version` | **Build** — `{"version","commit","built"}` as JSON: the tag, the full commit and the UTC time of that commit, the same line `toise-server version` prints. Authenticated like `/metrics`, and public only when `metrics_public` is set. |
 
 Wire the probes directly instead of probing a UI page. For structured logs into a
 log backend, set `log_format: json` (and `log_level` as needed).

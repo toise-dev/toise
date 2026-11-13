@@ -41,6 +41,14 @@ jobs:
           go version
           (cd pkg/emit && go version)
 
+      - name: The image builds with the toolchain of go.mod
+        # The golang image sets GOTOOLCHAIN=local, so it would build with its own
+        # Go and the image binary would differ from the release archive.
+        run: |
+          want=$(sed -n "s/^toolchain go//p" go.mod)
+          got=$(sed -n "s/^FROM golang:\([0-9.]*\) AS build/\1/p" Dockerfile)
+          test "$want" = "$got" || { echo "Dockerfile golang:$got, go.mod toolchain go$want" >&2; exit 1; }
+
       - name: Download dependencies
         run: go mod download
 

@@ -63,6 +63,14 @@ jobs:
             echo "EOF"
           } >> "${GITHUB_OUTPUT}"
 
+      - name: Compute build timestamp and commit
+        id: built
+        # The commit is the one checked out from inputs.ref, not github.sha,
+        # which names the commit the workflow was dispatched from.
+        run: |
+          echo "value=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ HEAD)" >> "${GITHUB_OUTPUT}"
+          echo "commit=$(git rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
+
       - name: Build and push (multi-arch)
         uses: docker/build-push-action@v6
         with:
@@ -72,4 +80,5 @@ jobs:
           tags: ${{ steps.tags.outputs.tags }}
           build-args: |
             VERSION=${{ inputs.version }}
-            COMMIT=${{ github.sha }}
+            COMMIT=${{ steps.built.outputs.commit }}
+            BUILT=${{ steps.built.outputs.value }}

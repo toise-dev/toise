@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`/version`, and a `version` line that names the build in full.** Each
+  server now says which build it runs: `GET /version` returns
+  `{"version","commit","built"}` and `toise-server version` prints the same
+  three fields on one line, with the full commit and the UTC time of that
+  commit.
+  Until now the version could only be read on `/metrics`, short commit and no
+  date, so it could not be told apart between two builds of one tag.
+  `/version` is authenticated like `/metrics` and public only under
+  `metrics_public`: an exact build tells an anonymous caller which
+  vulnerability to aim at. A container image can no longer be built without
+  its version, commit and build time, so no image reports a placeholder.
+- **A release binary can be rebuilt byte for byte from its tag.** Builds use
+  `-trimpath`, no VCS stamp and an empty build id, and the build time is the
+  commit time rather than the clock, so the same commit gives the same
+  sha256 wherever it is built. `make build-release` reproduces the flags of
+  the release archives and the container image, which now pins its Go
+  toolchain to the one in `go.mod`.
+
 ### Changed
 
 - **The producer-defect counters say which tenant they are about.**
