@@ -1456,7 +1456,7 @@ function applySpread(){
   const hosts = ids.filter(id => ENT[id] && ENT[id].type === 'host' && base[id]);
   // Each host's name width on screen: two hosts side by side need room for
   // both names below their discs, which sixty pixels between centres does not
-  // give a long name -- measured in Network, "preprod-sensorfactory-shop" on
+  // give a long name -- measured in Network, a 26-character host name on
   // its neighbour's, stable over three loads, with every vertical seat taken.
   // At the font the fit WILL give, not the current zoom: the label font is 12
   // screen pixels up to a scale of 12/11 and eleven canvas units times the
