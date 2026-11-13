@@ -18,13 +18,13 @@ COVERAGE_HTML := coverage.html
 # as-is. Override with `make build VERSION=v0.6.0`.
 VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 0.0.0-unknown)
 COMMIT      ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
-BUILT       ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+BUILT       ?= $(shell TZ=UTC git show -s --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ HEAD 2>/dev/null || echo unknown)
 VERSION_PKG := github.com/toise-dev/toise/internal/version
-LDFLAGS     := -X $(VERSION_PKG).Version=$(VERSION) -X $(VERSION_PKG).Commit=$(COMMIT) -X $(VERSION_PKG).Built=$(BUILT)
+LDFLAGS     := -X $(VERSION_PKG).Version=$(VERSION) -X $(VERSION_PKG).Commit=$(COMMIT) -X $(VERSION_PKG).Built=$(BUILT) -buildid=
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build test test-coverage bench lint fmt tidy proto clean
+.PHONY: help build build-release test test-coverage bench lint fmt tidy proto clean
 
 help: ## Show this help
 	@echo "Toise — available targets:"
@@ -34,9 +34,16 @@ help: ## Show this help
 
 build: ## Build the toise-server, toise-demo and toise-probe binaries into bin/
 	@mkdir -p $(BIN_DIR)
-	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(BINARY) $(CMD_PKG)
-	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(DEMO_BINARY) $(DEMO_PKG)
-	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(PROBE_BINARY) $(PROBE_PKG)
+	go build -trimpath -buildvcs=false -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(BINARY) $(CMD_PKG)
+	go build -trimpath -buildvcs=false -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(DEMO_BINARY) $(DEMO_PKG)
+	go build -trimpath -buildvcs=false -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(PROBE_BINARY) $(PROBE_PKG)
+
+# Same flags as the release workflow and the image, so a delivered binary can be
+# rebuilt byte for byte from its tag (same Go toolchain as go.mod):
+#   make build-release GOOS=linux GOARCH=amd64
+build-release: ## Build toise-server exactly as a release does, into bin/release/
+	@mkdir -p $(BIN_DIR)/release
+	CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags "-s -w $(LDFLAGS)" -o $(BIN_DIR)/release/$(BINARY) $(CMD_PKG)
 
 # pkg/emit is a nested module (ADR 0027): ./... from the root does not reach
 # it, so the SDK gets its own sub-invocation wherever the root runs ./...

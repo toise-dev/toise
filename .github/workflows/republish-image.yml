@@ -68,7 +68,7 @@ jobs:
         # The commit is the one checked out from inputs.ref, not github.sha,
         # which names the commit the workflow was dispatched from.
         run: |
-          echo "value=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_OUTPUT}"
+          echo "value=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ HEAD)" >> "${GITHUB_OUTPUT}"
           echo "commit=$(git rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
 
       - name: Build and push (multi-arch)

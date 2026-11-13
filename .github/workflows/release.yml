@@ -54,12 +54,12 @@ jobs:
         run: |
           set -euo pipefail
           COMMIT=$(git rev-parse HEAD)
-          BUILT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          LDFLAGS="-s -w -X github.com/toise-dev/toise/internal/version.Version=${VERSION} -X github.com/toise-dev/toise/internal/version.Commit=${COMMIT} -X github.com/toise-dev/toise/internal/version.Built=${BUILT}"
+          BUILT=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ HEAD)
+          LDFLAGS="-s -w -X github.com/toise-dev/toise/internal/version.Version=${VERSION} -X github.com/toise-dev/toise/internal/version.Commit=${COMMIT} -X github.com/toise-dev/toise/internal/version.Built=${BUILT} -buildid="
           DIST="toise_${VERSION}_${GOOS}_${GOARCH}"
           mkdir -p "dist/${DIST}"
-          go build -ldflags "${LDFLAGS}" -o "dist/${DIST}/toise-server" ./cmd/toise-server
-          go build -ldflags "${LDFLAGS}" -o "dist/${DIST}/toise-probe" ./cmd/toise-probe
+          go build -trimpath -buildvcs=false -ldflags "${LDFLAGS}" -o "dist/${DIST}/toise-server" ./cmd/toise-server
+          go build -trimpath -buildvcs=false -ldflags "${LDFLAGS}" -o "dist/${DIST}/toise-probe" ./cmd/toise-probe
           cp README.md LICENSE CHANGELOG.md "dist/${DIST}/"
           tar -C dist -czf "dist/${DIST}.tar.gz" "${DIST}"
           sha256sum "dist/${DIST}.tar.gz" | sed "s| .*| ${DIST}.tar.gz|" > "dist/${DIST}.tar.gz.sha256"
@@ -117,7 +117,7 @@ jobs:
 
       - name: Compute build timestamp
         id: built
-        run: echo "value=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_OUTPUT}"
+        run: echo "value=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ HEAD)" >> "${GITHUB_OUTPUT}"
 
       - name: Build and push (multi-arch)
         uses: docker/build-push-action@v6

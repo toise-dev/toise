@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # --- build stage -------------------------------------------------------------
-FROM golang:1.26 AS build
+FROM golang:1.26.11 AS build
 WORKDIR /src
 
 # Cache modules first. The main module requires the published pkg/emit tag
@@ -21,8 +21,8 @@ ARG BUILT
 RUN if [ -z "$VERSION" ] || [ -z "$COMMIT" ] || [ -z "$BUILT" ]; then \
       echo "VERSION, COMMIT and BUILT build args are required" >&2; exit 1; \
     fi
-RUN CGO_ENABLED=0 go build \
-    -ldflags "-s -w -X github.com/toise-dev/toise/internal/version.Version=${VERSION} -X github.com/toise-dev/toise/internal/version.Commit=${COMMIT} -X github.com/toise-dev/toise/internal/version.Built=${BUILT}" \
+RUN CGO_ENABLED=0 go build -trimpath -buildvcs=false \
+    -ldflags "-s -w -X github.com/toise-dev/toise/internal/version.Version=${VERSION} -X github.com/toise-dev/toise/internal/version.Commit=${COMMIT} -X github.com/toise-dev/toise/internal/version.Built=${BUILT} -buildid=" \
     -o /out/toise-server ./cmd/toise-server
 
 # Pre-create a data dir owned by the nonroot user (distroless has no shell/mkdir).

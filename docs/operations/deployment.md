@@ -33,6 +33,16 @@ tar xzf toise_${VERSION}_linux_amd64.tar.gz
 ./toise_${VERSION}_linux_amd64/toise-server --help
 ```
 
+A release binary is reproducible: building its tag again with the Go toolchain
+named in `go.mod` gives the same sha256. The build time it reports is the
+commit time, not the moment it was compiled.
+
+```sh
+git checkout v${VERSION}
+make build-release GOOS=linux GOARCH=amd64 VERSION=v${VERSION}
+sha256sum bin/release/toise-server ./toise_${VERSION}_linux_amd64/toise-server
+```
+
 ## Container image
 
 Published to GHCR for `linux/amd64` and `linux/arm64`:
