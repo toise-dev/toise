@@ -267,6 +267,7 @@ func New(graph Graph, events EventReader) *Server {
 	}
 	srv := mcpsdk.NewServer(impl, &mcpsdk.ServerOptions{Instructions: serverInstructions})
 	s.register(srv)
+	srv.AddReceivingMiddleware(traceMiddleware)
 	s.srv = srv
 	return s
 }

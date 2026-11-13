@@ -34,8 +34,11 @@ import (
 	"time"
 
 	"github.com/99designs/gqlgen/graphql/playground"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/stats"
 
 	"github.com/toise-dev/toise/internal/annotations"
 	"github.com/toise-dev/toise/internal/audit"
@@ -54,6 +57,7 @@ import (
 	"github.com/toise-dev/toise/internal/ops"
 	"github.com/toise-dev/toise/internal/registry"
 	"github.com/toise-dev/toise/internal/store"
+	"github.com/toise-dev/toise/internal/telemetry"
 	"github.com/toise-dev/toise/internal/tenant"
 	"github.com/toise-dev/toise/internal/version"
 )
@@ -146,6 +150,20 @@ func ingestTLSConfig(base *tls.Config, clientCAFile string) (*tls.Config, error)
 }
 
 func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
+	// A tracing misconfiguration must not take the service down with it: the
+	// graph is the product, its traces are not.
+	shutdownTracing, err := telemetry.Setup(context.Background(), logger)
+	if err != nil {
+		logger.Error("tracing disabled: setup failed", "error", err)
+		shutdownTracing = func(context.Context) error { return nil }
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if serr := shutdownTracing(ctx); serr != nil {
+			logger.Warn("tracing shutdown", "error", serr)
+		}
+	}()
 	// Per-tenant retention bounds parse before anything opens: a malformed pair
 	// must refuse to boot rather than prune someone's history to the wrong bound.
 	tenantRetention, err := cfg.TenantRetentionMap()
@@ -389,6 +407,13 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	// sweep starts expiring entities (#112). Exiting lets the supervisor restart.
 	errc := make(chan error, 2)
 
+	// Only the one method the receiver serves is traced: the span name is the
+	// gRPC method the client sent, so tracing any other would let a caller
+	// mint span names at will.
+	grpcOpts = append(grpcOpts, grpc.StatsHandler(otelgrpc.NewServerHandler(
+		otelgrpc.WithFilter(func(info *stats.RPCTagInfo) bool {
+			return info.FullMethodName == "/opentelemetry.proto.collector.logs.v1.LogsService/Export"
+		}))))
 	receiver := ingest.NewRoutedReceiver(engineFor, authn.AllowedForTenantGRPC, ingestMetrics, cfg.AcceptUnknownTypes, logger, grpcOpts...)
 	if cfg.DeriveOnlyTenancy() {
 		// derive-only: a scoped token's tenant is derived and locked, ignoring a
@@ -574,6 +599,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	// header: a browser asks whether it may send one before it sends it. An
 	// empty allowlist makes this a no-op, so same-origin stays the default.
 	handler := graphql.CORSMiddleware(cfg.AllowedOrigins, authn.HTTPMiddleware(public)(mux))
+	handler = otelhttp.NewHandler(handler, "toise", otelhttp.WithSpanNameFormatter(httpSpanName), otelhttp.WithFilter(traceable))
 	httpSrv := &http.Server{
 		Addr:              cfg.Listen,
 		Handler:           handler,
@@ -1275,4 +1301,25 @@ func loopbackAddr(addr string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// httpSpanName names HTTP spans by route, never by raw path, to keep span
+// cardinality bounded.
+func httpSpanName(_ string, r *http.Request) string {
+	for _, route := range []string{"/graphql", "/mcp", "/version", "/metrics"} {
+		if r.URL.Path == route || strings.HasPrefix(r.URL.Path, route+"/") {
+			return r.Method + " " + route
+		}
+	}
+	return r.Method + " /"
+}
+
+// traceable excludes health probes and metrics scrapes from tracing: at probe
+// frequency they are pure noise.
+func traceable(r *http.Request) bool {
+	switch r.URL.Path {
+	case "/healthz", "/readyz", "/metrics":
+		return false
+	}
+	return true
 }
