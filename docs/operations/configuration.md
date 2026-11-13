@@ -151,10 +151,14 @@ toise-server --production --allowed-origins "https://graph.example.com"
 
 Tracing is off by default: with no OTLP configuration Toise keeps the no-op
 tracer provider and opens no connection. Set `OTEL_EXPORTER_OTLP_ENDPOINT`
-(or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`) to enable OTLP/gRPC export; set
-`OTEL_SDK_DISABLED=true` to force it off even with an endpoint. All standard
-`OTEL_*` variables apply (headers, certificate, insecure, timeouts,
-`OTEL_TRACES_SAMPLER`, `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES`).
+(or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`) to enable OTLP export; set
+`OTEL_SDK_DISABLED=true` to force it off even with an endpoint. Export is
+OTLP/gRPC by default (port 4317); set `OTEL_EXPORTER_OTLP_PROTOCOL` (or
+`OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`) to `http/protobuf` for OTLP/HTTP (port
+4318). Any other protocol, `http/json` included, is refused: the server logs
+the error and runs without tracing. The other standard `OTEL_*` variables
+apply (headers, certificate, insecure, timeouts, `OTEL_TRACES_SAMPLER`,
+`OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES`).
 Spans are emitted for each HTTP request (named by route, not raw path), each
 OTLP ingest export, each GraphQL operation, and each MCP method/tool call.
 `service.version` is the build version. GraphQL and MCP spans carry the

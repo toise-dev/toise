@@ -6,12 +6,14 @@ package telemetry
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -31,7 +33,7 @@ func Setup(ctx context.Context, logger *slog.Logger) (shutdown func(context.Cont
 		(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") == "" && os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") == "") {
 		return noop, nil
 	}
-	exp, err := otlptracegrpc.New(ctx)
+	exp, protocol, err := newExporter(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -57,8 +59,36 @@ func Setup(ctx context.Context, logger *slog.Logger) (shutdown func(context.Cont
 	)
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
-	logger.Info("tracing enabled", "exporter", "otlp/grpc")
+	logger.Info("tracing enabled", "exporter", "otlp/"+protocol)
 	return tp.Shutdown, nil
+}
+
+// newExporter builds the OTLP span exporter selected by
+// OTEL_EXPORTER_OTLP_TRACES_PROTOCOL, falling back to OTEL_EXPORTER_OTLP_PROTOCOL
+// and defaulting to gRPC. It returns the protocol name that was used.
+func newExporter(ctx context.Context) (sdktrace.SpanExporter, string, error) {
+	variable := "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL"
+	protocol := os.Getenv(variable)
+	if protocol == "" {
+		variable = "OTEL_EXPORTER_OTLP_PROTOCOL"
+		protocol = os.Getenv(variable)
+	}
+	switch protocol {
+	case "", "grpc":
+		exp, err := otlptracegrpc.New(ctx)
+		if err != nil {
+			return nil, "", fmt.Errorf("create otlptracegrpc exporter: %w", err)
+		}
+		return exp, "grpc", nil
+	case "http/protobuf":
+		exp, err := otlptracehttp.New(ctx)
+		if err != nil {
+			return nil, "", fmt.Errorf("create otlptracehttp exporter: %w", err)
+		}
+		return exp, "http/protobuf", nil
+	default:
+		return nil, "", fmt.Errorf("unsupported %s %q: accepted values are \"grpc\" and \"http/protobuf\"", variable, protocol)
+	}
 }
 
 // Tracer returns the Toise tracer.

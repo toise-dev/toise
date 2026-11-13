@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Toise emits OpenTelemetry traces.** Until now it emitted none, so a slow
   read or a stalled ingest could only be explained from logs and counters.
-  Set `OTEL_EXPORTER_OTLP_ENDPOINT` and Toise exports, over OTLP/gRPC, one span
+  Set `OTEL_EXPORTER_OTLP_ENDPOINT` and Toise exports, over OTLP/gRPC or
+  OTLP/HTTP (`OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`), one span
   per HTTP request (named by route), per OTLP ingest export, per GraphQL
   operation and per MCP method or tool call, with `service.version` set to the
   build. Without that variable nothing changes: no connection, no cost, which
