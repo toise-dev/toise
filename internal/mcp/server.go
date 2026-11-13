@@ -380,6 +380,15 @@ func (s *Server) register(srv *mcpsdk.Server) {
 	}, observe(s, "graph_diff", s.graphDiff))
 
 	mcpsdk.AddTool(srv, &mcpsdk.Tool{
+		Name: "change_digest",
+		Description: "What changed in the short window (15m to 1h) before an instant — an alert's start or a question's time — " +
+			"folded into readable groups (type of change, kind of thing, keys, collector), newest first, each with an exact count, " +
+			"up to five examples, a stable id, and a label as a key plus parameters for rendering in any language and an English sentence. " +
+			"Optional scope: one entity and its neighbors up to depth 2, including neighbors linked or unlinked during the window. " +
+			"Heartbeats are excluded. Not ranked by relevance and not a causal claim. For longer spans use graph_diff.",
+	}, observe(s, "change_digest", s.changeDigest))
+
+	mcpsdk.AddTool(srv, &mcpsdk.Tool{
 		Name: "describe_type",
 		Description: "Zoom on one entity or relation type: its registration, live count, the " +
 			"identifying and descriptive attribute keys actually observed (with example " +

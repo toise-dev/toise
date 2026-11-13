@@ -619,8 +619,8 @@ func TestMCPRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	if len(tools.Tools) != 12 {
-		t.Fatalf("want 12 tools, got %d", len(tools.Tools))
+	if len(tools.Tools) != 13 {
+		t.Fatalf("want 13 tools, got %d", len(tools.Tools))
 	}
 
 	// Resources and prompts are part of the same surface — exercise them over the

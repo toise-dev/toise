@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`change_digest`: what changed just before an instant, in groups a person
+  can read.** A new MCP tool reads the 15 minutes to 1 hour before an instant,
+  typically an alert's start, and folds the changes into groups: kind of
+  change, kind of thing, changed keys, collector and disappearance source,
+  each with an exact count, its first and last instant, up to five examples
+  newest first, and a stable id. Every group carries a label twice: as
+  `label_key` plus `label_params`, for a consumer to render in its reader's
+  language with the same numbers, and as an English sentence. An optional
+  scope narrows it to one entity and its neighbors up to two hops, including a
+  neighbor that was linked or unlinked during the window, so a machine that
+  vanished just before the alert is still caught. Heartbeats are excluded.
+  Groups are ordered newest first and are not ranked: Toise states what
+  changed, and the consumer decides what matters. Longer spans stay with
+  `graph_diff`; this tool refuses a window over an hour.
+
 ## [0.24.3] - 2026-11-12
 
 ### Fixed

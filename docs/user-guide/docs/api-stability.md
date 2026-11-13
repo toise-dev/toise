@@ -110,7 +110,7 @@ is deliberate rather than a backlog:
   relations, history, subscriptions. A client picks its own fields.
 - **MCP adds analysis**: traversal and interpretation an assistant would
   otherwise have to reimplement from many round trips — `impact_of`, `find_path`,
-  `graph_diff`, `describe_type`, `telemetry_keys`.
+  `graph_diff`, `change_digest`, `describe_type`, `telemetry_keys`.
 
 What *is* promised is narrower and more useful: **where both surfaces answer the
 same question, they answer it identically** — same walk, same thresholds, same
