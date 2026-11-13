@@ -88,13 +88,13 @@ type Registry struct {
 	// liveness interval. Set once via SetPromiseReporter before serving; it
 	// applies to every stack opened after. A refusal is already logged, and a
 	// WARN line wakes nobody — this is what makes it alertable.
-	promiseReporter func(producer, entityType string, declared time.Duration)
+	promiseReporter func(tenantID, producer, entityType string, declared time.Duration)
 	// discardReporter is called when a tenant engine gives up on an edge whose
 	// endpoint never arrived. Set once via SetDiscardReporter before serving.
-	discardReporter func(relationType, fromType, toType string)
+	discardReporter func(tenantID, relationType, fromType, toType string)
 	// aliasConflictReporter is called when two speakers claim one alias value
 	// for different canonical values, so neither resolves.
-	aliasConflictReporter func(attributeKey, aliasValue string)
+	aliasConflictReporter func(tenantID, attributeKey, aliasValue string)
 	limits                Limits
 	logger                *slog.Logger
 	// now is the clock each tenant engine uses (liveness floor at boot, Sweep).
@@ -147,12 +147,12 @@ func Open(dataDir string, storeCfg store.Config, relBuf time.Duration, logger *s
 // total: the stacks that miss the reporter are precisely the ones with data, so
 // a production instance, where every tenant exists at boot, reported nothing at
 // all while the WARN lines piled up (#525).
-func (r *Registry) SetDiscardReporter(fn func(relationType, fromType, toType string)) {
+func (r *Registry) SetDiscardReporter(fn func(tenantID, relationType, fromType, toType string)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.discardReporter = fn
-	for _, st := range r.stacks {
-		st.Engine.SetDiscardReporter(fn)
+	for id, st := range r.stacks {
+		st.Engine.SetDiscardReporter(r.discardFor(id))
 	}
 }
 
@@ -160,24 +160,61 @@ func (r *Registry) SetDiscardReporter(fn func(relationType, fromType, toType str
 // stack and every stack opened later. Without it the refusal is correct and
 // silent: a reader sees an adjacency that never came back and has nothing to
 // consult.
-func (r *Registry) SetIdentityAliasConflictReporter(fn func(attributeKey, aliasValue string)) {
+func (r *Registry) SetIdentityAliasConflictReporter(fn func(tenantID, attributeKey, aliasValue string)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.aliasConflictReporter = fn
-	for _, st := range r.stacks {
-		st.Engine.SetIdentityAliasConflictReporter(fn)
+	for id, st := range r.stacks {
+		st.Engine.SetIdentityAliasConflictReporter(r.aliasConflictFor(id))
 	}
 }
 
 // SetPromiseReporter installs the callback a tenant engine calls when it
 // refuses an implausible liveness interval, with the same reach as
 // SetDiscardReporter and for the same reason.
-func (r *Registry) SetPromiseReporter(fn func(producer, entityType string, declared time.Duration)) {
+func (r *Registry) SetPromiseReporter(fn func(tenantID, producer, entityType string, declared time.Duration)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.promiseReporter = fn
-	for _, st := range r.stacks {
-		st.Engine.SetPromiseReporter(fn)
+	for id, st := range r.stacks {
+		st.Engine.SetPromiseReporter(r.promiseFor(id))
+	}
+}
+
+// discardFor binds the registry-level reporter to one tenant. The engine stays
+// blind to the tenant — it serves a single stack and holds no handle on which —
+// so the id is captured here, in the closure. The field is read without r.mu
+// because stack opening runs outside the mutex; that is only safe under the
+// setter contract (reporters installed before serving, never changed after).
+func (r *Registry) discardFor(id string) func(relationType, fromType, toType string) {
+	fn := r.discardReporter
+	if fn == nil {
+		return nil
+	}
+	return func(relationType, fromType, toType string) {
+		fn(id, relationType, fromType, toType)
+	}
+}
+
+// promiseFor is discardFor for refused liveness intervals.
+func (r *Registry) promiseFor(id string) func(producer, entityType string, declared time.Duration) {
+	fn := r.promiseReporter
+	if fn == nil {
+		return nil
+	}
+	return func(producer, entityType string, declared time.Duration) {
+		fn(id, producer, entityType, declared)
+	}
+}
+
+// aliasConflictFor is discardFor for refused identity equivalences.
+func (r *Registry) aliasConflictFor(id string) func(attributeKey, aliasValue string) {
+	fn := r.aliasConflictReporter
+	if fn == nil {
+		return nil
+	}
+	return func(attributeKey, aliasValue string) {
+		fn(id, attributeKey, aliasValue)
 	}
 }
 
@@ -489,9 +526,9 @@ func (r *Registry) openStack(id string) (*Stack, error) {
 		change.WithClock(clock),
 		change.WithLogger(r.logger.With("tenant", id)),
 		change.WithRelationBuffer(r.relBuf),
-		change.WithPromiseReporter(r.promiseReporter),
-		change.WithDiscardReporter(r.discardReporter),
-		change.WithIdentityAliasConflictReporter(r.aliasConflictReporter))
+		change.WithPromiseReporter(r.promiseFor(id)),
+		change.WithDiscardReporter(r.discardFor(id)),
+		change.WithIdentityAliasConflictReporter(r.aliasConflictFor(id)))
 	// Restore the liveness Memento (#139): absolute deadlines, so a producer
 	// that died during the downtime is swept on the first tick after boot.
 	if err := engine.RestoreLiveness(liveness); err != nil {
