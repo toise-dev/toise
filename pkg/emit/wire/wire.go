@@ -346,6 +346,12 @@ const (
 	// A segment is emitted with this edge or not at all: a segment nobody can say
 	// whose it is has no business in the graph.
 	RelTypeHasSegment = "has_segment"
+	// RelTypeAcceptsFrom is carried by the listener that observes an incoming
+	// call; the target is the client's address as seen on the wire, a non-public
+	// IP, without the ephemeral port. The address is a third party's record, so
+	// no failure propagates along this edge, and no depends_on is ever emitted on
+	// behalf of the client.
+	RelTypeAcceptsFrom = "accepts_from"
 )
 
 // Legacy relation types, superseded under topology-as-entities (ADR 0022) and
@@ -392,7 +398,7 @@ func RelationTypes() []string {
 		RelTypeRunsOn, RelTypeHasInterface, RelTypeBoundTo, RelTypeNextHopVia,
 		RelTypeListensOn, RelTypeMonitors, RelTypeHasRoute, RelTypeConnectedTo,
 		RelTypeDependsOn, RelTypeSameAs, RelTypeResolvesTo, RelTypeAggregatedInto,
-		RelTypeAttachedTo, RelTypeHasSegment,
+		RelTypeAttachedTo, RelTypeHasSegment, RelTypeAcceptsFrom,
 		RelTypeNeighborOf,
 		RelTypeRoutesVia, RelTypeForwardsTo, RelTypeAdjacentTo,
 	}
