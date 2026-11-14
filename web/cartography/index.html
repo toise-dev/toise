@@ -2362,7 +2362,12 @@ async function loadProfile(){
       after=c.pageInfo.hasNextPage?c.pageInfo.endCursor:null;
       if((guard&3)===0) renderProfile(data,s,e);   // progressive fill (every 4 pages)
     }while(after && ++guard<40);
-    if(gen===profileGen) renderProfile(data,s,e);
+    if(gen===profileGen){
+      renderProfile(data,s,e);
+      // The feed is newest-first, so stopping at the page cap drops the START of
+      // the window; the strip would look complete while missing its oldest part.
+      if(after && errEl) errEl.textContent='⚠ change history incomplete: more than '+fmtCount(40*200)+' changes in this window, the oldest are not shown';
+    }
   }catch(err){
     // A partial read must not look like a complete one: the strip only shows
     // what arrived before the failure, so the message has to say so.
