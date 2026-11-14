@@ -2314,6 +2314,7 @@ function renderRuler(){
 // pages arrive so it fills in instead of blocking.
 const CELL_PX=9, GAP_PX=2, ROW_PX=11;
 let profileGen=0;
+const CAPPED_MSG=()=>'⚠ change history incomplete: more than '+fmtCount(40*200)+' changes in this window, the oldest are not shown';
 let profileCache=null;
 async function loadProfile(opts){
   const el=document.getElementById('tlProfile'); if(!el) return;
@@ -2378,6 +2379,7 @@ async function loadProfile(opts){
       profileCache.data = merged;
       profileCache.readTo = e;
       renderProfile(merged, s, e);
+      if(profileCache.incomplete && errEl) errEl.textContent=CAPPED_MSG();
       return;
     }
     if(gen !== profileGen) return;
@@ -2430,8 +2432,11 @@ async function loadProfile(opts){
       renderProfile(data,s,e);
       // The feed is newest-first, so stopping at the page cap drops the START of
       // the window; the strip would look complete while missing its oldest part.
-      if(after && errEl) errEl.textContent='⚠ change history incomplete: more than '+fmtCount(40*200)+' changes in this window, the oldest are not shown';
-      profileCache = (after || !isLiveSpan() || asOfISO()) ? null : { spanMs, data, readTo: e };
+      if(after && errEl) errEl.textContent=CAPPED_MSG();
+      // A capped read still seeds the cache, marked incomplete: dropping it sent the
+      // next minute back to a full read, forty pages again, on exactly the fleets
+      // that hit the cap. The tail refresh keeps the mark until a full read clears it.
+      profileCache = (!isLiveSpan() || asOfISO()) ? null : { spanMs, data, readTo: e, incomplete: !!after };
     }
   }catch(err){
     // A partial read must not look like a complete one: the strip only shows
