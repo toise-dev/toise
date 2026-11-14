@@ -72,12 +72,12 @@ un changement et il noierait le signal.
 
 1. **imposer le tenant** depuis la session du portail, et **retirer** `?tenant=` et
    `X-Scope-OrgID`. La page ne les envoie plus, c'est une défense en profondeur ;
-2. **retirer `entity.owner.contact`** et tout attribut de contact des réponses. Mesuré :
-   deux adresses personnelles réelles sur 10 des 20 hôtes du tenant 1. Un masquage côté
-   page serait sans effet, la donnée arrivant dans le navigateur ;
+2. **retirer `entity.owner.contact`** et tout attribut de contact des réponses : ces
+   attributs peuvent porter des adresses personnelles. Un masquage côté page serait sans
+   effet, la donnée arrivant dans le navigateur ;
 3. **retirer les entités de type `host.service`** des réponses `entities`. Deux raisons :
-   elles nomment ce que nous surveillons pour des tiers (`senhub-sensor-pegelonline`,
-   `-dynamics365`, `-o365`, `-digitalocean`), et elles sont 1241 sur ~1700, donc illisibles.
+   elles nomment les services surveillés pour des tiers, et elles forment la grande
+   majorité des entités d'un tenant, ce qui rend le graphe illisible.
    **Les relations qui les visent peuvent rester** : la page ne dessine une arête que si
    ses deux extrémités sont présentes ;
 4. **refuser toute variable inconnue**, et toute requête hors de ces trois identifiants.
@@ -87,8 +87,7 @@ un changement et il noierait le signal.
 `entities(first:N)` plafonne à **200** côté serveur, et la page suit le curseur exprès :
 au-delà, le graphe serait tronqué et incohérent, avec des nœuds orphelins dont l'hôte est
 sur une page suivante. Le **même identifiant est donc appelé plusieurs fois** avec un
-`after` différent. Sur le tenant 1, environ **trois appels `entities`** après le retrait des
-`host.service`, et un à deux `relations`.
+`after` différent, une fois par page de 200.
 
 ## Ce que la page n'envoie plus
 

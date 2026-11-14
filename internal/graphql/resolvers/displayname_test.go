@@ -14,19 +14,19 @@ func TestEntityToGQLCarriesDisplayName(t *testing.T) {
 		ID:         "01ABC",
 		Type:       model.TypeContainer,
 		Identity:   []model.KeyValue{{Key: "container.id", Value: model.StringValue("b5183e6e")}},
-		Attributes: []model.KeyValue{{Key: "container.name", Value: model.StringValue("senhub-ping")}},
+		Attributes: []model.KeyValue{{Key: "container.name", Value: model.StringValue("ping-probe")}},
 	}
 
 	got := entityToGQL(e, false)
-	if got.DisplayName != "senhub-ping" {
-		t.Fatalf("displayName = %q, want senhub-ping", got.DisplayName)
+	if got.DisplayName != "ping-probe" {
+		t.Fatalf("displayName = %q, want ping-probe", got.DisplayName)
 	}
 	if got.IdentityFingerprint == "" {
 		t.Fatal("identityFingerprint must still be populated")
 	}
 
 	renamed := e
-	renamed.Attributes = []model.KeyValue{{Key: "container.name", Value: model.StringValue("senhub-ping-2")}}
+	renamed.Attributes = []model.KeyValue{{Key: "container.name", Value: model.StringValue("ping-probe-2")}}
 	after := entityToGQL(renamed, false)
 	if after.DisplayName == got.DisplayName {
 		t.Fatal("the fixture must actually change the display name")

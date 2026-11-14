@@ -83,11 +83,11 @@ func TestIdentityKeyIsReplicaIndependent(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
 	const identity = "host:1a2b3c4d5e6f"
 
-	if _, err := nodeA.SetAt(identity, "01ULID_ON_A", map[string]string{"ha.pair": "sha002"}, "op", now); err != nil {
+	if _, err := nodeA.SetAt(identity, "01ULID_ON_A", map[string]string{"ha.pair": "node-b"}, "op", now); err != nil {
 		t.Fatalf("write on node A: %v", err)
 	}
 	// Node B knows the same machine under a different logical id.
-	if _, err := nodeB.SetAt(identity, "01ULID_ON_B", map[string]string{"ha.pair": "sha002"}, "op", now); err != nil {
+	if _, err := nodeB.SetAt(identity, "01ULID_ON_B", map[string]string{"ha.pair": "node-b"}, "op", now); err != nil {
 		t.Fatalf("write on node B: %v", err)
 	}
 

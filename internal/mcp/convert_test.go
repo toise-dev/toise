@@ -16,12 +16,12 @@ func TestEntityOutCarriesDisplayName(t *testing.T) {
 		ID:         "01ABC",
 		Type:       model.TypeHost,
 		Identity:   []model.KeyValue{{Key: "host.id", Value: model.StringValue("6ccc0dcc")}},
-		Attributes: []model.KeyValue{{Key: "host.name", Value: model.StringValue("dash172")}},
+		Attributes: []model.KeyValue{{Key: "host.name", Value: model.StringValue("web01")}},
 	}
 
 	full := entityOut(e, false)
-	if full.DisplayName != "dash172" {
-		t.Fatalf("display_name = %q, want dash172", full.DisplayName)
+	if full.DisplayName != "web01" {
+		t.Fatalf("display_name = %q, want web01", full.DisplayName)
 	}
 	if full.IdentityFingerprint == "" || full.IdentityFingerprint == full.DisplayName {
 		t.Fatalf("the key and the display value must be separate fields, got %q / %q",
@@ -31,14 +31,14 @@ func TestEntityOutCarriesDisplayName(t *testing.T) {
 	// Compact is the mode that exists to scan many entities cheaply, and it is
 	// the one that used to hide every readable name.
 	compact := entityOutV(e, false, true)
-	if compact.DisplayName != "dash172" {
-		t.Fatalf("compact display_name = %q, want dash172", compact.DisplayName)
+	if compact.DisplayName != "web01" {
+		t.Fatalf("compact display_name = %q, want web01", compact.DisplayName)
 	}
 
 	// A rename moves the display value and leaves the handle alone. Nothing may
 	// key on the first; that is what the second is for.
 	renamed := e
-	renamed.Attributes = []model.KeyValue{{Key: "host.name", Value: model.StringValue("dash172-bis")}}
+	renamed.Attributes = []model.KeyValue{{Key: "host.name", Value: model.StringValue("web01-bis")}}
 	after := entityOut(renamed, false)
 	if after.DisplayName == full.DisplayName {
 		t.Fatal("the fixture must actually change the display name")

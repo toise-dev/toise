@@ -1285,7 +1285,7 @@ a value that drifts, so anything grouping or joining on one must move to
   its own.
 
   The label change below fixed scanning but left one string doing two jobs, and
-  `host dash172 host.id=6ccc0dcc-…` is wrong for a screen that wants `dash172`.
+  `host web01 host.id=6ccc0dcc-…` is wrong for a screen that wants `web01`.
   A caller therefore still had two bad paths — split a string documented as not
   parseable, or dig into attributes for `host.name` and end up keying on a value
   that drifts. That second path is how a consumer came to group flapping
@@ -1315,14 +1315,14 @@ a value that drifts, so anything grouping or joining on one must move to
 - **An entity label now carries the name the graph already held.** Labels were built
   from identifying attributes alone, so in `verbosity: compact` — the mode that
   exists to scan many entities cheaply — hosts rendered as `host host.id=<uuid>` and
-  never `dash172`, and containers as sixty-four hex characters and never
-  `senhub-ping`. `host.name` was present on every host and `container.name` on every
+  never `web01`, and containers as sixty-four hex characters and never
+  `ping-probe`. `host.name` was present on every host and `container.name` on every
   container: the names were in the data and absent from the rendering, and the
   cheap-scan mode was precisely the one that hid them. An ops consumer auditing the
   fleet found hosts hard to recognise in that mode, although the graph held their
   names.
 
-  A label now reads `host dash172 host.id=<uuid>`. The identity stays in full;
+  A label now reads `host web01 host.id=<uuid>`. The identity stays in full;
   the name leads because that is what a reader reaches first. `model.DisplayName`
   is one shared source for the MCP, GraphQL and debug-UI labels, which were three
   parallel implementations free to drift. An entity whose identity is already

@@ -101,7 +101,7 @@ type Entity {
   """
   identityFingerprint: String!
   """
-  What a human calls this entity — `dash172` for a host, `senhub-ping` for a
+  What a human calls this entity — `web01` for a host, `ping-probe` for a
   container — or empty when nothing observed on it reads better than its
   identity. Render it as-is: it is the display value, and it is the only field
   meant to be shown on its own.
