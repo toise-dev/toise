@@ -2314,11 +2314,75 @@ function renderRuler(){
 // pages arrive so it fills in instead of blocking.
 const CELL_PX=9, GAP_PX=2, ROW_PX=11;
 let profileGen=0;
-async function loadProfile(){
+let profileCache=null;
+async function loadProfile(opts){
   const el=document.getElementById('tlProfile'); if(!el) return;
   const gen=++profileGen;   // supersede any in-flight profile load
   const errEl=document.getElementById('tlErr'); if(errEl) errEl.textContent='';
   const [s,e]=spanBounds();
+  const useIncremental = !!(opts && opts.incremental === true && isLiveSpan() && !asOfISO() && profileCache && profileCache.spanMs === spanMs);
+  // The minute refresh re-reads only a short tail of a live window: re-reading the
+  // whole window was forty pages a minute on a fleet that churns. The tail
+  // overlaps the last read by ten minutes and REPLACES that part rather than
+  // adding to it, because a late event can carry an older eventTime and the feed
+  // gives no event id to de-duplicate on.
+  if(useIncremental){
+    let ok = false;
+    let cutoff;
+    const newData = new Map();
+    try{
+      cutoff = Math.floor(Math.max(s, profileCache.readTo - 600000) / 1000) * 1000;
+      const incTo = Math.floor(e / 1000) * 1000;
+      const varsBase = {
+        from: new Date(cutoff).toISOString().replace(/\.\d{3}Z$/, 'Z'),
+        to: new Date(incTo).toISOString().replace(/\.\d{3}Z$/, 'Z'),
+        first: 200
+      };
+      let after = null;
+      let guard = 0;
+      do{
+        const variables = after ? { ...varsBase, after } : varsBase;
+        const r = await fetch(API,{method:'POST',headers:gqlHeaders(),credentials:'same-origin',body:JSON.stringify({id:'recentChanges',variables})});
+        if(!r.ok) throw new Error(readFailureMessage(r.status,'read failed with status '+r.status));
+        const j = await r.json(); if(j.errors) throw new Error(j.errors[0].message);
+        if(gen !== profileGen) return;
+        const c = j.data.recentChanges;
+        for(const ed of c.edges){
+          const n = ed.node;
+          if(n.changeType.endsWith('UNCHANGED') || !n.entity) continue;
+          const t = Date.parse(n.eventTime);
+          if(t >= cutoff && t <= e){
+            let arr = newData.get(n.entity.type);
+            if(!arr){ arr = []; newData.set(n.entity.type, arr); }
+            arr.push(t);
+          }
+        }
+        after = c.pageInfo.hasNextPage ? c.pageInfo.endCursor : null;
+      }while(after && ++guard < 40);
+      ok = !after;
+    }catch(err){
+      ok = false;
+    }
+    if(ok){
+      const merged = new Map();
+      for(const [type, arr] of profileCache.data){
+        const kept = arr.filter(t => t >= s && t < cutoff);
+        const inc = newData.get(type) || [];
+        if(kept.length || inc.length){
+          merged.set(type, kept.concat(inc));
+        }
+      }
+      for(const [type, arr] of newData){
+        if(!merged.has(type)) merged.set(type, arr);
+      }
+      profileCache.data = merged;
+      profileCache.readTo = e;
+      renderProfile(merged, s, e);
+      return;
+    }
+    if(gen !== profileGen) return;
+    profileCache = null;
+  }
   // Derived from the window, never from a second clock read: spanBounds() already
   // took the time, and reading it again makes the span one millisecond longer, so
   // the duration comes out 86401s for a 24h window. The relay accepts a closed list
@@ -2367,11 +2431,13 @@ async function loadProfile(){
       // The feed is newest-first, so stopping at the page cap drops the START of
       // the window; the strip would look complete while missing its oldest part.
       if(after && errEl) errEl.textContent='⚠ change history incomplete: more than '+fmtCount(40*200)+' changes in this window, the oldest are not shown';
+      profileCache = (after || !isLiveSpan() || asOfISO()) ? null : { spanMs, data, readTo: e };
     }
   }catch(err){
     // A partial read must not look like a complete one: the strip only shows
     // what arrived before the failure, so the message has to say so.
     if(gen===profileGen){
+      profileCache = null;
       const e2=document.getElementById('tlErr');
       if(e2){
         const reason=(err&&typeof err.message==='string'&&err.message)?err.message:(err!=null?String(err):'unknown cause');
@@ -3359,10 +3425,10 @@ sayInstant();
 // Keep the live profile fresh, but only while someone looks: a hidden tab left open
 // overnight re-read the whole window every minute, like the 6s poll before it.
 let profileTimer=null;
-function startProfileTimer(){ if(!profileTimer) profileTimer=setInterval(()=>{ if(isLiveSpan()) loadProfile(); }, 60000); }
+function startProfileTimer(){ if(!profileTimer) profileTimer=setInterval(()=>{ if(isLiveSpan()) loadProfile({incremental:true}); }, 60000); }
 document.addEventListener('visibilitychange',()=>{
   if(document.hidden){ if(profileTimer){ clearInterval(profileTimer); profileTimer=null; } }
-  else { startProfileTimer(); if(isLiveSpan()) loadProfile(); } });
+  else { startProfileTimer(); if(isLiveSpan()) loadProfile({incremental:true}); } });
 startProfileTimer();
 // The brush that zoomed the density profile into a period is REMOVED. A brush
 // would select an arbitrary period, while the profile window is taken from a
