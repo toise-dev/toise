@@ -3351,7 +3351,14 @@ if (tlLive) {
   });
 }
 sayInstant();
-setInterval(()=>{ if(isLiveSpan()) loadProfile(); }, 60000);   // keep the live profile fresh
+// Keep the live profile fresh, but only while someone looks: a hidden tab left open
+// overnight re-read the whole window every minute, like the 6s poll before it.
+let profileTimer=null;
+function startProfileTimer(){ if(!profileTimer) profileTimer=setInterval(()=>{ if(isLiveSpan()) loadProfile(); }, 60000); }
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden){ if(profileTimer){ clearInterval(profileTimer); profileTimer=null; } }
+  else { startProfileTimer(); if(isLiveSpan()) loadProfile(); } });
+startProfileTimer();
 // The brush that zoomed the density profile into a period is REMOVED. A brush
 // would select an arbitrary period, while the profile window is taken from a
 // closed list (from/to served by the relay, or the 1h/6h/24h/7d selector), and
