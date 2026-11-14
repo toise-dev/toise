@@ -17,8 +17,8 @@ func TestDisplayName(t *testing.T) {
 		// The case that motivated this: 21 production hosts whose identity is a
 		// UUID and whose host.name is present on every one of them.
 		name: "host falls back to host.name when identity is the uuid",
-		e:    ent(TypeHost, []KeyValue{kv("host.id", "6ccc0dcc")}, []KeyValue{kv("host.name", "dash172")}),
-		want: "dash172",
+		e:    ent(TypeHost, []KeyValue{kv("host.id", "6ccc0dcc")}, []KeyValue{kv("host.name", "web01")}),
+		want: "web01",
 	}, {
 		// The field always answers: an entity identified by its own name still
 		// has a name to show, and a caller that had to branch on "empty" would
@@ -72,12 +72,12 @@ func TestDisplayName(t *testing.T) {
 	}, {
 		name: "container prefers container.name",
 		e: ent(TypeContainer, []KeyValue{kv("container.id", "b5183e6e")},
-			[]KeyValue{kv("compose.service", "senhub-ping"), kv("container.name", "senhub-ping-1")}),
-		want: "senhub-ping-1",
+			[]KeyValue{kv("compose.service", "ping-probe"), kv("container.name", "ping-probe-1")}),
+		want: "ping-probe-1",
 	}, {
 		name: "container falls through to compose.service",
-		e:    ent(TypeContainer, []KeyValue{kv("container.id", "b5183e6e")}, []KeyValue{kv("compose.service", "senhub-ping")}),
-		want: "senhub-ping",
+		e:    ent(TypeContainer, []KeyValue{kv("container.id", "b5183e6e")}, []KeyValue{kv("compose.service", "ping-probe")}),
+		want: "ping-probe",
 	}, {
 		name: "service instance uses service.name",
 		e:    ent(TypeServiceInstance, []KeyValue{kv("service.instance.id", "ef5c0135")}, []KeyValue{kv("service.name", "senhub-agent")}),
@@ -96,7 +96,7 @@ func TestDisplayName(t *testing.T) {
 		want: "",
 	}, {
 		name: "unregistered type yields none",
-		e:    ent("something.else", []KeyValue{kv("k", "v")}, []KeyValue{kv("host.name", "dash172")}),
+		e:    ent("something.else", []KeyValue{kv("k", "v")}, []KeyValue{kv("host.name", "web01")}),
 		want: "",
 	}}
 
@@ -113,8 +113,8 @@ func TestDisplayName(t *testing.T) {
 // its host.id does not), and a drifting value used as a key is how two systems
 // end up describing the same thing under names that no longer join.
 func TestDisplayNameDoesNotAffectIdentity(t *testing.T) {
-	before := ent(TypeHost, []KeyValue{kv("host.id", "6ccc0dcc")}, []KeyValue{kv("host.name", "dash172")})
-	after := ent(TypeHost, []KeyValue{kv("host.id", "6ccc0dcc")}, []KeyValue{kv("host.name", "dash172-renamed")})
+	before := ent(TypeHost, []KeyValue{kv("host.id", "6ccc0dcc")}, []KeyValue{kv("host.name", "web01")})
+	after := ent(TypeHost, []KeyValue{kv("host.id", "6ccc0dcc")}, []KeyValue{kv("host.name", "web01-renamed")})
 
 	if DisplayName(before) == DisplayName(after) {
 		t.Fatal("the fixture must actually change the display name")
@@ -134,9 +134,9 @@ func TestLabelNameDropsTheDuplicate(t *testing.T) {
 		t.Fatalf("LabelName = %q, want empty to avoid a duplicated label", got)
 	}
 
-	byID := ent(TypeHost, []KeyValue{kv("host.id", "6ccc0dcc")}, []KeyValue{kv("host.name", "dash172")})
-	if got := LabelName(byID); got != "dash172" {
-		t.Fatalf("LabelName = %q, want dash172", got)
+	byID := ent(TypeHost, []KeyValue{kv("host.id", "6ccc0dcc")}, []KeyValue{kv("host.name", "web01")})
+	if got := LabelName(byID); got != "web01" {
+		t.Fatalf("LabelName = %q, want web01", got)
 	}
 }
 

@@ -76,7 +76,7 @@ func DisplayNameAbsentReason(entityType string) (reason string, declared bool) {
 	return reason, declared
 }
 
-// DisplayName returns what a human calls an entity — "dash172", "senhub-ping",
+// DisplayName returns what a human calls an entity — "web01", "ping-probe",
 // "10.0.0.5:5432" — or "" when nothing observed on it reads better than its
 // identity.
 //

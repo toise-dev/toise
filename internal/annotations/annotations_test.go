@@ -86,7 +86,7 @@ func TestCountMakesTheOverlayMeasurable(t *testing.T) {
 		t.Fatalf("empty store: Count = %d, %v; want 0, nil", n, err)
 	}
 
-	if _, err := s.Set("01ENT_A", map[string]string{"ha.pair": "sha001/sha002"}, "ops", time.Now()); err != nil {
+	if _, err := s.Set("01ENT_A", map[string]string{"ha.pair": "node-a/node-b"}, "ops", time.Now()); err != nil {
 		t.Fatalf("set: %v", err)
 	}
 	if _, err := s.Set("01ENT_B", map[string]string{"ops.reboot.constraint": "never both at once"}, "ops", time.Now()); err != nil {

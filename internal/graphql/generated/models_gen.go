@@ -251,7 +251,7 @@ type Entity struct {
 	// written inline as `type:key=value` (comma-separated for a multi-key
 	// identity) — which reaches the entity without a lookup first (ADR 0035).
 	IdentityFingerprint string `json:"identityFingerprint"`
-	// What a human calls this entity — `dash172` for a host, `senhub-ping` for a
+	// What a human calls this entity — `web01` for a host, `ping-probe` for a
 	// container — or empty when nothing observed on it reads better than its
 	// identity. Render it as-is: it is the display value, and it is the only field
 	// meant to be shown on its own.

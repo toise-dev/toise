@@ -41,7 +41,7 @@ func TestSyncConvergesTwoNodes(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
 
-	if _, err := nodeA.Set("host:aaa", map[string]string{"ha.pair": "sha002", "ops.reboot.constraint": "never both"}, "op", t0); err != nil {
+	if _, err := nodeA.Set("host:aaa", map[string]string{"ha.pair": "node-b", "ops.reboot.constraint": "never both"}, "op", t0); err != nil {
 		t.Fatalf("write on A: %v", err)
 	}
 	if _, err := nodeB.Set("host:bbb", map[string]string{"owner": "infra"}, "op", t0); err != nil {

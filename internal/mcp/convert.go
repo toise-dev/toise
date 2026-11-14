@@ -24,7 +24,7 @@ type Entity struct {
 	ID                  string `json:"id" jsonschema:"this replica's local id for the entity (a ULID); it differs between replicas and is re-minted after a long silence, so prefer identity_fingerprint to carry between calls"`
 	IdentityFingerprint string `json:"identity_fingerprint" jsonschema:"the handle that names the entity itself, derived from its identifying attributes; every replica computes the same one, and any tool taking an entity id takes this instead"`
 	Type                string `json:"type" jsonschema:"the entity type, e.g. host, process, network_interface"`
-	DisplayName         string `json:"display_name,omitempty" jsonschema:"what a human calls this entity - dash172 for a host, senhub-ping for a container - or absent when nothing observed on it reads better than its identity; render it as-is, and never group, join or match on it: a display name drifts when a thing is renamed, identity_fingerprint does not"`
+	DisplayName         string `json:"display_name,omitempty" jsonschema:"what a human calls this entity - web01 for a host, ping-probe for a container - or absent when nothing observed on it reads better than its identity; render it as-is, and never group, join or match on it: a display name drifts when a thing is renamed, identity_fingerprint does not"`
 	Label               string `json:"label" jsonschema:"a one-line summary for scanning: the type, the display name, then the identifying attributes; not a key and not meant to be shown on its own - use display_name to render and identity_fingerprint to match"`
 	// Identity and Attributes follow the list rule stated on Attributes: an empty
 	// list and a null are two different answers, and neither is an absent field.
@@ -179,7 +179,7 @@ func attrsOut(kvs []model.KeyValue) []Attribute {
 
 // label builds a compact, human-readable identifier: the type, the entity's
 // display name when it has one, then its identifying attributes — e.g.
-// "host dash172 host.id=6ccc0dcc-...". The name comes first because this is what
+// "host web01 host.id=6ccc0dcc-...". The name comes first because this is what
 // a caller scanning many entities reads, and an identity is often a UUID or a
 // digest; the identity stays in full because the name is not a key (#378).
 func label(e model.Entity) string {
