@@ -93,6 +93,6 @@ func TestConformanceIntervalZeroNeverExpires(t *testing.T) {
 	// cadence-less hosts: interval==0 is permanent, not a one-shot reprieve.
 	now = now.Add(365 * 24 * time.Hour)
 	if n, err := eng.Sweep(); err != nil || n.Total() != 0 {
-		t.Fatalf("re-sweep = (%d, %v), want (0, nil): cadence-less entities must stay live", n, err)
+		t.Fatalf("re-sweep = (%d, %v), want (0, nil): cadence-less entities must stay live", n.Total(), err)
 	}
 }

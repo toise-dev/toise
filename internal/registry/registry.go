@@ -102,7 +102,9 @@ type Registry struct {
 	// (negative disables the time bound); zero keeps the built-in default (#344).
 	// Set once via SetResurrectionGrace before serving; it applies to stacks
 	// already open and to every stack opened after.
-	resGrace time.Duration
+	resGrace   time.Duration
+	pauseAfter time.Duration
+	pauseMax   time.Duration
 	// promiseReporter is called when a tenant engine refuses an implausible
 	// liveness interval. Set once via SetPromiseReporter before serving; it
 	// applies to every stack opened after. A refusal is already logged, and a
@@ -234,6 +236,19 @@ func (r *Registry) aliasConflictFor(id string) func(attributeKey, aliasValue str
 	}
 	return func(attributeKey, aliasValue string) {
 		fn(id, attributeKey, aliasValue)
+	}
+}
+
+// SetLivenessPause sets the liveness pause after and max durations on every open
+// engine and on engines opened later. after <= 0 disables the pause; max <= 0
+// means the default 24h bound.
+func (r *Registry) SetLivenessPause(after, max time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pauseAfter = after
+	r.pauseMax = max
+	for _, st := range r.stacks {
+		st.Engine.SetLivenessPause(after, max)
 	}
 }
 
@@ -567,6 +582,7 @@ func (r *Registry) openStack(id string) (*Stack, error) {
 		change.WithPromiseReporter(r.promiseFor(id)),
 		change.WithDiscardReporter(r.discardFor(id)),
 		change.WithIdentityAliasConflictReporter(r.aliasConflictFor(id)))
+	engine.SetLivenessPause(r.pauseAfter, r.pauseMax)
 	// Restore the liveness Memento (#139): absolute deadlines, so a producer
 	// that died during the downtime is swept on the first tick after boot.
 	if err := engine.RestoreLiveness(liveness); err != nil {

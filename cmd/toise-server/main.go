@@ -186,6 +186,9 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	if cfg.ResurrectionGrace != 0 {
 		reg.SetResurrectionGrace(cfg.ResurrectionGrace.D())
 	}
+	if cfg.LivenessPauseAfter > 0 {
+		reg.SetLivenessPause(cfg.LivenessPauseAfter.D(), cfg.LivenessPauseMax.D())
+	}
 	defer func() { _ = reg.Close() }()
 
 	// Both producer-defect reporters are installed here, before the OTLP
@@ -635,6 +638,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 					for _, st := range reg.Stacks() {
 						_ = maint.Observe("sweep", st.Tenant, func() error {
 							res, err := st.Engine.Sweep()
+							maint.SetLivenessPaused(st.Tenant, res.Paused)
 							if res.Total() > 0 {
 								logger.Info("liveness sweep expired stale records", "tenant", st.Tenant,
 									"entities", res.Entities, "relations", res.Relations)

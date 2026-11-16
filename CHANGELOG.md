@@ -38,6 +38,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   partial success (`rejected_log_records`, with the reason) and the others
   are ingested. An export whose every ResourceLogs is refused still fails
   with the same status as before.
+- **`liveness_pause_after` keeps a cut from expiring the whole graph.** When a
+  tenant has received nothing at all for that long, sweeps stop expiring and
+  `toise_liveness_paused{tenant}` reads 1. The first observation that arrives
+  ends the pause and moves every deadline to one interval later, as a restart
+  already did. A single silent producer still expires on schedule.
+  `liveness_pause_max` (24 h) bounds the pause. Off by default.
 
 ## [0.25.1] - 2026-11-13
 

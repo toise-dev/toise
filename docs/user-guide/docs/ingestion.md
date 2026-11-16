@@ -152,6 +152,30 @@ missed re-emission; size it `3 × 120 = 360s`.
     `entity.report.interval` it declares, or the sweeper will expire them between
     heartbeats. Pick a heartbeat comfortably below the declared interval.
 
+### When ingestion stops
+
+Liveness deadlines run on the server clock. When nothing reaches Toise, every
+deadline still runs out. This happens when the path from the collectors is cut,
+or when a gateway queues on disk. A cut longer than the shortest report interval
+then expires the whole graph as `liveness_expiry`, although no producer stopped.
+A restart of Toise itself does not do this: restored deadlines are moved to
+one interval after the restart.
+
+With [`liveness_pause_after`](configuration.md#settings) set, a tenant that has
+received nothing at all for that long stops expiring:
+
+- each sweep expires nothing, and `toise_liveness_paused{tenant}` reads 1;
+- the first observation that arrives, even an empty export, ends the pause and
+  moves every deadline to one interval later;
+- an entity that is not re-asserted after that expires on schedule.
+
+A producer that goes silent while others keep reporting still expires as
+usual: only a silence of the whole tenant pauses. Choose a value above the
+longest report interval in the tenant, or a quiet spell between two of its own
+heartbeats would pause expiry. [`liveness_pause_max`](configuration.md#settings)
+(24 h by default) bounds the pause: past it, a tenant whose only producer has
+really stopped is drained as before.
+
 ### Coming back: the 15-minute resurrection window
 
 A deleted entity is not immediately forgotten. For **15 minutes** after its

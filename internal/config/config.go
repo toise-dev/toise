@@ -69,6 +69,8 @@ type Config struct {
 	MCPStdio              bool     `yaml:"mcp_stdio"`
 	RelationBufferTTL     Duration `yaml:"relation_buffer_ttl"`
 	LivenessSweepInterval Duration `yaml:"liveness_sweep_interval"`
+	LivenessPauseAfter    Duration `yaml:"liveness_pause_after"`
+	LivenessPauseMax      Duration `yaml:"liveness_pause_max"`
 	// ResurrectionGrace is how long a deleted entity's identity stays
 	// resurrectable: a producer that returns within it gets the original
 	// logical id back with a continuous history; past it, the same identity is
@@ -376,6 +378,12 @@ func (c Config) Validate() error {
 	if c.TombstoneCap < 0 {
 		return fmt.Errorf("tombstone_cap must be >= 0 (0 = the default), got %d", c.TombstoneCap)
 	}
+	if c.LivenessPauseAfter < 0 {
+		return fmt.Errorf("liveness_pause_after must be >= 0, got %s", c.LivenessPauseAfter.D())
+	}
+	if c.LivenessPauseMax < 0 {
+		return fmt.Errorf("liveness_pause_max must be >= 0, got %s", c.LivenessPauseMax.D())
+	}
 	switch c.TenantTrustMode {
 	case "", "trust-header", "derive-only":
 	default:
@@ -507,6 +515,8 @@ func Default() Config {
 		MCPStdio:                   false,
 		RelationBufferTTL:          Duration(30 * time.Second),
 		LivenessSweepInterval:      Duration(30 * time.Second),
+		LivenessPauseAfter:         Duration(0),
+		LivenessPauseMax:           Duration(24 * time.Hour),
 		RetentionMaxAge:            0,
 		CompactionInterval:         Duration(time.Hour),
 		SnapshotInterval:           Duration(5 * time.Minute),
@@ -644,6 +654,8 @@ func (c *Config) applyEnv(getenv func(string) string) error {
 	}{
 		{"TOISE_RELATION_BUFFER_TTL", &c.RelationBufferTTL},
 		{"TOISE_LIVENESS_SWEEP_INTERVAL", &c.LivenessSweepInterval},
+		{"TOISE_LIVENESS_PAUSE_AFTER", &c.LivenessPauseAfter},
+		{"TOISE_LIVENESS_PAUSE_MAX", &c.LivenessPauseMax},
 		{"TOISE_RESURRECTION_GRACE", &c.ResurrectionGrace},
 		{"TOISE_RETENTION_MAX_AGE", &c.RetentionMaxAge},
 		{"TOISE_RETENTION_COMPACTION_INTERVAL", &c.CompactionInterval},
@@ -829,6 +841,10 @@ func resolve(args []string, getenv func(string) string) (Config, error) {
 		"how long to hold an out-of-order edge waiting for its endpoints before dropping it (0 = disabled)")
 	livenessSweepInterval := fs.Duration("liveness-sweep-interval", cfg.LivenessSweepInterval.D(),
 		"how often to expire entities past their heartbeat interval (0 = disabled)")
+	livenessPauseAfter := fs.Duration("liveness-pause-after", cfg.LivenessPauseAfter.D(),
+		"pause liveness expiry once a tenant has received nothing for this long (0 = disabled)")
+	livenessPauseMax := fs.Duration("liveness-pause-max", cfg.LivenessPauseMax.D(),
+		"longest a liveness pause may last before sweeps expire as usual (0 = 24h)")
 	resurrectionGrace := fs.Duration("resurrection-grace", cfg.ResurrectionGrace.D(),
 		"how long a deleted entity's identity keeps its logical id on return (0 = built-in 15m, negative = no time bound)")
 	retentionMaxAge := fs.Duration("retention-max-age", cfg.RetentionMaxAge.D(),
@@ -881,6 +897,8 @@ func resolve(args []string, getenv func(string) string) (Config, error) {
 	cfg.MCPStdio = *mcpStdio
 	cfg.RelationBufferTTL = Duration(*relationBufferTTL)
 	cfg.LivenessSweepInterval = Duration(*livenessSweepInterval)
+	cfg.LivenessPauseAfter = Duration(*livenessPauseAfter)
+	cfg.LivenessPauseMax = Duration(*livenessPauseMax)
 	cfg.ResurrectionGrace = Duration(*resurrectionGrace)
 	cfg.RetentionMaxAge = Duration(*retentionMaxAge)
 	cfg.CompactionInterval = Duration(*compactionInterval)
