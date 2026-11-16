@@ -129,6 +129,12 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (re
 	ld := req.Logs()
 	var handled, skipped, rejected int
 	var rejectMsg, rejectTenant string
+	// refuseErr retains the first ResourceLogs-level tenant policy refusal so
+	// an export where every producer is refused can return today's status.
+	// rejected already includes refused records so a partially accepted export
+	// reports them through OTLP partial success without a retry.
+	var refuseErr error
+	var refusedRLs int
 	// Inert beliefs are counted per export and reported on ONE warning line, the
 	// same shape as rejections: a line per export that had any, with no
 	// deduplication across exports. That choice was paid for — a rejection line
@@ -158,6 +164,24 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (re
 	// Each ResourceLogs (one producer) is ingested as a single batch so its events
 	// commit with one durable append (one fsync) instead of one per record.
 	rls := ld.ResourceLogs()
+	// refuse records a tenant-policy refusal of ResourceLogs i: its records are
+	// reported through partial success instead of failing the export, because one
+	// refused producer must not cost the others their data, and partial success
+	// is not retried. The first refusal is kept for the all-refused case.
+	refuse := func(i int, refusal error, who string) {
+		sls := rls.At(i).ScopeLogs()
+		for j := 0; j < sls.Len(); j++ {
+			rejected += sls.At(j).LogRecords().Len()
+		}
+		refusedRLs++
+		s.metrics.tenantRejected()
+		if refuseErr == nil {
+			refuseErr = refusal
+		}
+		if rejectMsg == "" {
+			rejectMsg, rejectTenant = status.Convert(refusal).Message(), who
+		}
+	}
 	for i := 0; i < rls.Len(); i++ {
 		res := rls.At(i).Resource()
 		producer, _ := strAttr(res.Attributes(), resAttrProducer)
@@ -165,16 +189,16 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (re
 		if rt, ok := strAttr(res.Attributes(), tenant.ResourceAttr); ok && !tenantLocked {
 			san, ok := tenant.Sanitize(rt)
 			if !ok {
-				s.metrics.tenantRejected()
-				return plogotlp.NewExportResponse(), status.Errorf(codes.InvalidArgument, "invalid %s resource attribute %q", tenant.ResourceAttr, rt)
+				refuse(i, status.Errorf(codes.InvalidArgument, "invalid %s resource attribute %q", tenant.ResourceAttr, rt), rt)
+				continue
 			}
 			tenantID = san
 		}
 		if s.authorize != nil && !s.authorize(ctx, tenantID) {
 			// The token authenticated (the interceptor passed) but is not
 			// bound to this tenant: permanent, do not retry (#104).
-			s.metrics.tenantRejected()
-			return plogotlp.NewExportResponse(), status.Errorf(codes.PermissionDenied, "token not authorized for tenant %q", tenantID)
+			refuse(i, status.Errorf(codes.PermissionDenied, "token not authorized for tenant %q", tenantID), tenantID)
+			continue
 		}
 		engine, err := s.engineFor(tenantID)
 		if err != nil {
@@ -182,8 +206,8 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (re
 			// permanent: InvalidArgument, do not retry. Anything else is a
 			// transient store/resolution failure: Unavailable, retry (#111).
 			if errors.Is(err, tenant.ErrNotAllowed) {
-				s.metrics.tenantRejected()
-				return plogotlp.NewExportResponse(), status.Errorf(codes.InvalidArgument, "resolving tenant %q: %v", tenantID, err)
+				refuse(i, status.Errorf(codes.InvalidArgument, "resolving tenant %q: %v", tenantID, err), tenantID)
+				continue
 			}
 			return plogotlp.NewExportResponse(), status.Errorf(codes.Unavailable, "resolving tenant %q: %v", tenantID, err)
 		}
@@ -296,10 +320,16 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (re
 		s.metrics.addRecords(t, "rejected", c.rejected)
 		s.metrics.addDroppedValues(t, c.dropped)
 	}
+	if refusedRLs > 0 && refusedRLs == rls.Len() {
+		// Every producer was refused for tenant-policy reasons. Return the
+		// first refusal unchanged, preserving today's single-producer status.
+		return plogotlp.NewExportResponse(), refuseErr
+	}
 	resp = plogotlp.NewExportResponse()
 	if rejected > 0 {
 		// OTLP partial success: the export as a whole is accepted (no retry),
-		// the rejected records are reported back to the producer.
+		// the rejected records — both per-record contract violations and
+		// whole-producer tenant refusals — are reported back to the producer.
 		ps := resp.PartialSuccess()
 		ps.SetRejectedLogRecords(int64(rejected))
 		ps.SetErrorMessage(rejectMsg)
