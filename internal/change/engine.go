@@ -609,7 +609,7 @@ func (e *Engine) noteIngestLocked(now time.Time) {
 			}
 		}
 		e.logger.Info("liveness resumed: ingestion is back",
-			"paused_for", now.Sub(e.pausedAt),
+			"silent_for", now.Sub(e.pausedAt),
 			"rearmed", rearmed)
 		e.paused = false
 	}
