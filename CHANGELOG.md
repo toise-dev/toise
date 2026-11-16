@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-11-16
+
+The resurrection bound becomes configurable, a tenant allowlist now also
+governs ingest into `default`, and one refused producer no longer fails a
+whole OTLP export. No wire-contract break, no data migration: a 0.22 or
+later data directory upgrades in place. To roll back to 0.25.1, remove
+`tombstone_cap` from the configuration first: 0.25.1 refuses unknown keys.
+**Behavior change:** with a non-empty `tenant_allowlist` that does not list
+`default`, unlabeled data is now refused instead of filed under `default`.
+
 ### Added
 
 - **`tombstone_cap` makes the resurrection bound configurable.** Per tenant,
