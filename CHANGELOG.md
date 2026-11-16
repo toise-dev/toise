@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inside the window: the oldest still came back under a fresh id. Set with
   `tombstone_cap`, `TOISE_TOMBSTONE_CAP` or `--tombstone-cap`; applied when a
   tenant is opened, so a change needs a restart.
+
 ### Changed
 
 - **A tenant allowlist now also governs ingest into `default`.** With a
@@ -27,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stays readable. If you set an allowlist and rely on `default`, add it to
   the list. The startup log line `default tenant ingest policy` says which
   applies.
+
 ### Fixed
 
 - **One refused producer no longer costs the others their data.** When an
