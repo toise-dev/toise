@@ -46,6 +46,11 @@ type Limits struct {
 	// MaxTenants, when > 0, caps the number of open stacks; creation beyond it
 	// is refused until tenants are removed.
 	MaxTenants int
+	// TombstoneCap is the per-tenant projection bound on soft-deleted entities
+	// kept for resurrection. 0 means the projection's built-in default. It is
+	// applied at stack open because event-log replay evicts tombstones beyond
+	// the cap.
+	TombstoneCap int
 }
 
 func (l Limits) allows(id string, open int) error {
@@ -524,7 +529,7 @@ func (r *Registry) openStack(id string) (*Stack, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening event log for tenant %q: %w", id, err)
 	}
-	graph := projection.New()
+	graph := projection.NewWithTombstoneCap(r.limits.TombstoneCap)
 	if r.resGrace != 0 {
 		graph.SetTombstoneTTL(r.resGrace)
 	}

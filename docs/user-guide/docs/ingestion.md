@@ -169,6 +169,13 @@ Since 0.16.0 it is tunable with
 report intervals, so that riding out a couple of missed cycles does not split a
 timeline. Changing it requires a restart.
 
+The window has a second bound: per tenant, at most
+[`tombstone_cap`](configuration.md#settings) deleted entities (1024 by default)
+stay resurrectable, and the oldest are forgotten first. A tenant with more
+deletions than that inside the window, for example after a long cut between
+the collectors and Toise, still mints fresh ids for the oldest ones. Raise
+both together: the grace sets how long, the cap sets how many.
+
 Two consequences worth internalising before you debug an incident with the
 change feed:
 
