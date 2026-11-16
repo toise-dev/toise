@@ -240,15 +240,15 @@ func (r *Registry) aliasConflictFor(id string) func(attributeKey, aliasValue str
 }
 
 // SetLivenessPause sets the liveness pause after and max durations on every open
-// engine and on engines opened later. after <= 0 disables the pause; max <= 0
+// engine and on engines opened later. after <= 0 disables the pause; limit <= 0
 // means the default 24h bound.
-func (r *Registry) SetLivenessPause(after, max time.Duration) {
+func (r *Registry) SetLivenessPause(after, limit time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.pauseAfter = after
-	r.pauseMax = max
+	r.pauseMax = limit
 	for _, st := range r.stacks {
-		st.Engine.SetLivenessPause(after, max)
+		st.Engine.SetLivenessPause(after, limit)
 	}
 }
 
