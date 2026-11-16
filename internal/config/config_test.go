@@ -259,6 +259,8 @@ func TestValidateRejectsSilentMisconfigurations(t *testing.T) {
 		{"unknown log level", func(c *Config) { c.LogLevel = "verbose" }},
 		{"unknown log format", func(c *Config) { c.LogFormat = "logfmt" }},
 		{"negative max_tenants", func(c *Config) { c.MaxTenants = -1 }},
+		{"negative liveness_pause_after", func(c *Config) { c.LivenessPauseAfter = Duration(-time.Second) }},
+		{"negative liveness_pause_max", func(c *Config) { c.LivenessPauseMax = Duration(-time.Second) }},
 		{"empty allowlist entry", func(c *Config) { c.TenantAllowlist = []string{""} }},
 		{"whitespace allowlist entry", func(c *Config) { c.TenantAllowlist = []string{"ten ant"} }},
 		{"unknown tenant_trust_mode", func(c *Config) { c.TenantTrustMode = "wishful" }},

@@ -800,7 +800,7 @@ func TestSweepExpiresInOneAppend(t *testing.T) {
 		t.Errorf("events appended = %d, want %d", ap.events, want)
 	}
 	if n.Total() != 3*hosts {
-		t.Errorf("expired count = %d, want %d", n, 3*hosts)
+		t.Errorf("expired count = %d, want %d", n.Total(), 3*hosts)
 	}
 	if g.EntityCount() != 0 || g.RelationCount() != 0 {
 		t.Errorf("graph after sweep = %d entities, %d relations, want 0 and 0", g.EntityCount(), g.RelationCount())
@@ -1177,7 +1177,7 @@ func TestDeleteSourceProvenance(t *testing.T) {
 	recs = recs[:0]
 	now = now.Add(2 * time.Minute)
 	if n, serr := e.Sweep(); serr != nil || n.Total() != 2 {
-		t.Fatalf("sweep expired %d (err=%v), want 2 (host + cascaded edge)", n, serr)
+		t.Fatalf("sweep expired %d (err=%v), want 2 (host + cascaded edge)", n.Total(), serr)
 	}
 	var sawExpiry, sawCascade bool
 	for _, r := range recs {

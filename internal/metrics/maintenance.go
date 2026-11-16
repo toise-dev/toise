@@ -15,6 +15,7 @@ import (
 type Maintenance struct {
 	runs     *prometheus.CounterVec // op, outcome, tenant
 	duration *prometheus.GaugeVec   // op, tenant
+	paused   *prometheus.GaugeVec   // tenant
 }
 
 // NewMaintenance builds the maintenance instruments.
@@ -28,12 +29,28 @@ func NewMaintenance() *Maintenance {
 			Name: "toise_maintenance_last_duration_seconds",
 			Help: "Duration of the most recent maintenance pass, by op and tenant.",
 		}, []string{"op", "tenant"}),
+		paused: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "toise_liveness_paused",
+			Help: "1 while liveness expiry is paused because the tenant has received nothing for longer than liveness_pause_after, else 0.",
+		}, []string{"tenant"}),
 	}
 }
 
 // Collectors returns the underlying collectors for registration.
 func (m *Maintenance) Collectors() []prometheus.Collector {
-	return []prometheus.Collector{m.runs, m.duration}
+	return []prometheus.Collector{m.runs, m.duration, m.paused}
+}
+
+// SetLivenessPaused records whether liveness expiry is paused for a tenant.
+func (m *Maintenance) SetLivenessPaused(tenant string, paused bool) {
+	if m == nil {
+		return
+	}
+	v := 0.0
+	if paused {
+		v = 1.0
+	}
+	m.paused.WithLabelValues(tenant).Set(v)
 }
 
 // Observe runs fn as one maintenance pass and records its outcome and

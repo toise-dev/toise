@@ -98,6 +98,21 @@ type Engine struct {
 	// can be named as a condition. Guarded by obsMu.
 	contested map[model.EntityID]*contestedNames
 
+	// pauseAfter and pauseMax enable pausing liveness expiry while the tenant
+	// receives nothing at all (see SetLivenessPause). pauseAfter is the silence
+	// duration after the last observation before a sweep stops expiring and
+	// instead returns Paused=true. pauseMax bounds the pause: past this silence,
+	// sweeps proceed normally, so a tenant whose only producer stopped still
+	// drains. lastIngest is the server-clock timestamp of the most recent
+	// observation (including empty batches). paused records that a pause is in
+	// effect, and pausedAt the lastIngest time at which the pause began; both are
+	// only meaningful when pauseAfter > 0.
+	pauseAfter time.Duration
+	pauseMax   time.Duration
+	lastIngest time.Time
+	paused     bool
+	pausedAt   time.Time
+
 	// aliases is the identity alias index: speaker-asserted equivalences
 	// between identity values, recorded from same_as observations and used to
 	// resolve relation endpoints that arrive under an alias value. Guarded by
@@ -533,11 +548,72 @@ func New(graph *projection.Graph, appender Appender, opts ...Option) *Engine {
 	for _, o := range opts {
 		o(e)
 	}
+	// A boot with no ingestion counts silence from start: if no observation ever
+	// arrives, pauseAfter is measured from boot, not from the zero time.
+	e.lastIngest = e.now()
 	// The projection's tombstone grace window must judge "expired" on the same
 	// clock the engine stamps events with, so tests with a fake clock stay
 	// deterministic (#183).
 	graph.SetClock(e.now)
 	return e
+}
+
+// SetLivenessPause enables pausing liveness expiry while the tenant receives
+// nothing at all. after <= 0 disables it. max bounds a pause: past it, sweeps
+// expire as usual (a tenant whose only producer stopped must still drain);
+// max <= 0 means 24h.
+func (e *Engine) SetLivenessPause(after, max time.Duration) {
+	if after < 0 {
+		after = 0
+	}
+	if max <= 0 {
+		max = 24 * time.Hour
+	}
+	e.obsMu.Lock()
+	defer e.obsMu.Unlock()
+	e.pauseAfter = after
+	e.pauseMax = max
+	if after <= 0 {
+		// Disable and reset pause state.
+		e.paused = false
+		e.pausedAt = time.Time{}
+	}
+}
+
+// noteIngestLocked records that the tenant received an observation (including an
+// empty batch) at now. If liveness expiry was paused, it re-arms every live
+// reference whose deadline is non-zero by flooring it to now+interval, so a
+// returning link does not immediately expire everything that piled up silently.
+// Caller holds obsMu.
+func (e *Engine) noteIngestLocked(now time.Time) {
+	if e.paused {
+		rearmed := 0
+		for _, refs := range e.refs {
+			for key, ref := range refs {
+				if ref.deadline.IsZero() {
+					continue
+				}
+				ref.deadline = floorDeadline(ref.deadline, ref.interval, now)
+				refs[key] = ref
+				rearmed++
+			}
+		}
+		for _, rels := range e.relRefs {
+			for key, ref := range rels {
+				if ref.deadline.IsZero() {
+					continue
+				}
+				ref.deadline = floorDeadline(ref.deadline, ref.interval, now)
+				rels[key] = ref
+				rearmed++
+			}
+		}
+		e.logger.Info("liveness resumed: ingestion is back",
+			"paused_for", now.Sub(e.pausedAt),
+			"rearmed", rearmed)
+		e.paused = false
+	}
+	e.lastIngest = now
 }
 
 // Subscribe registers fn and returns a function that unsubscribes it.
@@ -718,6 +794,7 @@ type RelationObservation struct {
 func (e *Engine) ObserveEntity(obs EntityObservation) (model.Event, error) {
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()
+	e.noteIngestLocked(e.now())
 	return e.observeEntityLocked(obs)
 }
 
@@ -1113,6 +1190,7 @@ func (e *Engine) livenessIntervalLocked(id model.EntityID) (time.Duration, bool)
 func (e *Engine) DeleteEntity(obs EntityObservation) (ev model.Event, emitted bool, err error) {
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()
+	e.noteIngestLocked(e.now())
 	return e.deleteEntityLocked(obs)
 }
 
@@ -1185,6 +1263,10 @@ func (e *Engine) removeIncidentRelations(id model.EntityID, when time.Time) (int
 type SweepResult struct {
 	Entities  int
 	Relations int
+	// Paused reports that the sweep expired nothing because the tenant's
+	// ingestion is silent and liveness pausing is in effect (see
+	// SetLivenessPause). The caller may surface this as an operational metric.
+	Paused bool
 }
 
 // Total is the number of things expired, both kinds together.
@@ -1202,6 +1284,23 @@ func (e *Engine) Sweep() (SweepResult, error) {
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()
 
+	now := e.now()
+
+	if e.pauseAfter > 0 {
+		silent := now.Sub(e.lastIngest)
+		if silent > e.pauseAfter && silent <= e.pauseMax {
+			if !e.paused {
+				e.paused = true
+				e.pausedAt = e.lastIngest
+				e.logger.Warn("liveness paused: the tenant has received nothing",
+					"silent_for", silent,
+					"pause_after", e.pauseAfter,
+					"pause_max", e.pauseMax)
+			}
+			return SweepResult{Paused: true}, nil
+		}
+	}
+
 	// Stage every expiry into one durable batch: a mass expiry (a producer dies
 	// and its whole subtree lapses at once) otherwise costs one fsync per entity
 	// and edge, stalling ingestion for the duration. commit() sees the staged
@@ -1211,8 +1310,6 @@ func (e *Engine) Sweep() (SweepResult, error) {
 	// self-heals from the still-live projection.
 	st := newStaged()
 	e.staged = st
-
-	now := e.now()
 	var res SweepResult
 	var errs []error
 
@@ -1371,6 +1468,7 @@ func (e *Engine) Sweep() (SweepResult, error) {
 func (e *Engine) ObserveRelation(obs RelationObservation) (ev model.Event, emitted bool, err error) {
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()
+	e.noteIngestLocked(e.now())
 	return e.observeRelationBuffered(obs)
 }
 
@@ -1559,6 +1657,7 @@ func (e *Engine) rebuildPendingHashes() {
 func (e *Engine) RemoveRelation(obs RelationObservation) (ev model.Event, emitted bool, err error) {
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()
+	e.noteIngestLocked(e.now())
 	return e.removeRelationLocked(obs)
 }
 
@@ -1675,6 +1774,7 @@ func (e *Engine) commit(ev model.Event, highPriority bool) error {
 func (e *Engine) Batch(fn func(*Batch)) error {
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()
+	e.noteIngestLocked(e.now())
 
 	st := newStaged()
 	e.staged = st
