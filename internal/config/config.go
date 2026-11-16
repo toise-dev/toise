@@ -157,6 +157,13 @@ type Config struct {
 	TenantAutoCreate bool     `yaml:"tenant_auto_create"`
 	TenantAllowlist  []string `yaml:"tenant_allowlist"`
 	MaxTenants       int      `yaml:"max_tenants"`
+	// TombstoneCap bounds the number of soft-deleted entities kept per tenant
+	// for resurrection within resurrection_grace. 0 means the built-in
+	// default of 1024. It must be >= 0. Memory grows with the cap because each
+	// tombstone keeps its full entity payload. Requires a restart; it is
+	// applied when the stack is opened because replay evicts tombstones beyond
+	// the cap.
+	TombstoneCap int `yaml:"tombstone_cap"`
 
 	// MetricsPublic keeps /metrics outside authentication, as it was before
 	// 0.23. The scrape surface is labeled by tenant, so one unauthenticated
@@ -365,6 +372,9 @@ func (c Config) Validate() error {
 	}
 	if c.MaxTenants < 0 {
 		return fmt.Errorf("max_tenants must be >= 0 (0 = unbounded), got %d", c.MaxTenants)
+	}
+	if c.TombstoneCap < 0 {
+		return fmt.Errorf("tombstone_cap must be >= 0 (0 = the default), got %d", c.TombstoneCap)
 	}
 	switch c.TenantTrustMode {
 	case "", "trust-header", "derive-only":
@@ -607,6 +617,13 @@ func (c *Config) applyEnv(getenv func(string) string) error {
 		}
 		c.MaxTenants = n
 	}
+	if v := getenv("TOISE_TOMBSTONE_CAP"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("invalid TOISE_TOMBSTONE_CAP %q: %w", v, err)
+		}
+		c.TombstoneCap = n
+	}
 	if v := getenv("TOISE_OTLP_MAX_RECV_BYTES"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
@@ -835,6 +852,7 @@ func resolve(args []string, getenv func(string) string) (Config, error) {
 	tenantAllowlist := fs.String("tenant-allowlist", strings.Join(cfg.TenantAllowlist, ","), "comma-separated tenant ids allowed to be created (empty: any)")
 	tenantNames := fs.String("tenant-names", strings.Join(cfg.TenantNames, ","), "comma-separated tenant:name pairs, a human label beside the id (presentational only; never a tenant selector)")
 	maxTenants := fs.Int("max-tenants", cfg.MaxTenants, "cap on open tenants, 0 = unbounded")
+	tombstoneCap := fs.Int("tombstone-cap", cfg.TombstoneCap, "per-tenant projection cap on soft-deleted entities kept for resurrection, 0 = default")
 	tenantTrustMode := fs.String("tenant-trust-mode", cfg.TenantTrustMode, "how a request's tenant is decided: trust-header (default) or derive-only (derive a scoped token's tenant, ignore the client header)")
 	oidcIssuer := fs.String("oidc-issuer", cfg.OIDCIssuer, "OIDC issuer URL to verify JWT bearers on the read surfaces; empty = OIDC off")
 	oidcAudience := fs.String("oidc-audience", cfg.OIDCAudience, "expected OIDC audience (aud) for JWT verification")
@@ -878,6 +896,7 @@ func resolve(args []string, getenv func(string) string) (Config, error) {
 	cfg.TenantAllowlist = splitOrigins(*tenantAllowlist)
 	cfg.TenantNames = splitOrigins(*tenantNames)
 	cfg.MaxTenants = *maxTenants
+	cfg.TombstoneCap = *tombstoneCap
 	cfg.TenantTrustMode = *tenantTrustMode
 	cfg.OIDCIssuer = *oidcIssuer
 	cfg.OIDCAudience = *oidcAudience
