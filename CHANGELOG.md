@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inside the window: the oldest still came back under a fresh id. Set with
   `tombstone_cap`, `TOISE_TOMBSTONE_CAP` or `--tombstone-cap`; applied when a
   tenant is opened, so a change needs a restart.
+- **`liveness_pause_after` keeps a cut from expiring the whole graph.** When a
+  tenant has received nothing at all for that long, sweeps stop expiring and
+  `toise_liveness_paused{tenant}` reads 1. The first observation that arrives
+  ends the pause and moves every deadline to one interval later, as a restart
+  already did. A single silent producer still expires on schedule.
+  `liveness_pause_max` (24 h) bounds the pause. Off by default.
+
 ### Changed
 
 - **A tenant allowlist now also governs ingest into `default`.** With a
@@ -27,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stays readable. If you set an allowlist and rely on `default`, add it to
   the list. The startup log line `default tenant ingest policy` says which
   applies.
+
 ### Fixed
 
 - **One refused producer no longer costs the others their data.** When an
@@ -38,12 +46,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   partial success (`rejected_log_records`, with the reason) and the others
   are ingested. An export whose every ResourceLogs is refused still fails
   with the same status as before.
-- **`liveness_pause_after` keeps a cut from expiring the whole graph.** When a
-  tenant has received nothing at all for that long, sweeps stop expiring and
-  `toise_liveness_paused{tenant}` reads 1. The first observation that arrives
-  ends the pause and moves every deadline to one interval later, as a restart
-  already did. A single silent producer still expires on schedule.
-  `liveness_pause_max` (24 h) bounds the pause. Off by default.
 
 ## [0.25.1] - 2026-11-13
 
