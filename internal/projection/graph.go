@@ -119,6 +119,14 @@ func (g *Graph) TombstoneTTL() time.Duration {
 	return g.tombstoneTTL
 }
 
+// TombstoneCap returns the per-tenant bound on soft-deleted entities kept for
+// resurrection that was applied when this graph was opened.
+func (g *Graph) TombstoneCap() int {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.tombstoneCap
+}
+
 // Replay rebuilds the graph by applying every event from the scanner in order.
 func (g *Graph) Replay(s EventScanner) error {
 	return s.Scan(func(_ uint64, ev model.Event) error {
