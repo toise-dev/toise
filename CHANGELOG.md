@@ -27,6 +27,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stays readable. If you set an allowlist and rely on `default`, add it to
   the list. The startup log line `default tenant ingest policy` says which
   applies.
+### Fixed
+
+- **One refused producer no longer costs the others their data.** When an
+  OTLP export carried several ResourceLogs and one was refused for a tenant
+  reason (tenant not allowed, invalid `tenant.id`, token not bound to the
+  tenant), the whole export failed: the ResourceLogs before it were kept,
+  the ones after it were never read, and the collector dropped the request
+  as permanent. The refused ResourceLogs is now reported through OTLP
+  partial success (`rejected_log_records`, with the reason) and the others
+  are ingested. An export whose every ResourceLogs is refused still fails
+  with the same status as before.
 
 ## [0.25.1] - 2026-11-13
 
