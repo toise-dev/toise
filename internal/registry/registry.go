@@ -78,6 +78,20 @@ func (l Limits) allows(id string, open int) error {
 	return nil
 }
 
+// defaultWritable reports whether ingest may write to the default tenant: always
+// with no allowlist (zero-config), and only when "default" is listed otherwise.
+func (l Limits) defaultWritable() bool {
+	if len(l.Allowlist) == 0 {
+		return true
+	}
+	for _, a := range l.Allowlist {
+		if a == tenant.Default {
+			return true
+		}
+	}
+	return false
+}
+
 // Registry lazily opens and caches one Stack per tenant under a shared data dir.
 // It is safe for concurrent use.
 type Registry struct {
@@ -392,6 +406,25 @@ func (r *Registry) For(rawTenant string) (*Stack, error) {
 		minting = true
 	}
 	return r.ensure(id, minting)
+}
+
+// ForWrite is For for the ingest path. It refuses the default tenant with
+// tenant.ErrNotAllowed when a non-empty allowlist does not list it; every other
+// tenant follows For unchanged.
+func (r *Registry) ForWrite(rawTenant string) (*Stack, error) {
+	id, ok := tenant.Sanitize(rawTenant)
+	if !ok {
+		return nil, fmt.Errorf("invalid tenant id %q", rawTenant)
+	}
+	if id == tenant.Default && !r.limits.defaultWritable() {
+		return nil, fmt.Errorf("%w: %q is not on the tenant allowlist", tenant.ErrNotAllowed, id)
+	}
+	return r.For(rawTenant)
+}
+
+// DefaultWritable reports whether ingest may write to the default tenant.
+func (r *Registry) DefaultWritable() bool {
+	return r.limits.defaultWritable()
 }
 
 // Peek returns the stack only if it is already open. Query surfaces use it so
