@@ -18,6 +18,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   partial success (`rejected_log_records`, with the reason) and the others
   are ingested. An export whose every ResourceLogs is refused still fails
   with the same status as before.
+### Changed
+
+- **A tenant allowlist now also governs ingest into `default`.** With a
+  non-empty `tenant_allowlist` that does not list `default`, an export with
+  no `X-Scope-OrgID` and no `tenant.id` is refused (InvalidArgument) instead
+  of being filed under `default`. Before, `default` accepted writes whatever
+  the allowlist said, so unlabeled data landed in a tenant the operator had
+  not allowed. No allowlist: unchanged. The `default` tenant still opens and
+  stays readable. If you set an allowlist and rely on `default`, add it to
+  the list. The startup log line `default tenant ingest policy` says which
+  applies.
+### Added
+
+- **`tombstone_cap` makes the resurrection bound configurable.** Per tenant,
+  the projection keeps at most this many deleted entities resurrectable
+  (default 1024, unchanged). Before, the bound was fixed, so raising
+  `resurrection_grace` did not help a tenant with more deletions than that
+  inside the window: the oldest still came back under a fresh id. Set with
+  `tombstone_cap`, `TOISE_TOMBSTONE_CAP` or `--tombstone-cap`; applied when a
+  tenant is opened, so a change needs a restart.
 
 ## [0.25.1] - 2026-11-13
 

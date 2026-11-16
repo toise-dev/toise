@@ -174,13 +174,15 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	// (ADR 0025). A legacy single-tenant data dir is migrated to the default tenant
 	// on open; existing tenants and the default are opened up front.
 	reg, err := registry.OpenWithLimits(cfg.DataDir, storeCfg, cfg.RelationBufferTTL.D(), registry.Limits{
-		AutoCreate: cfg.TenantAutoCreate,
-		Allowlist:  cfg.TenantAllowlist,
-		MaxTenants: cfg.MaxTenants,
+		AutoCreate:   cfg.TenantAutoCreate,
+		Allowlist:    cfg.TenantAllowlist,
+		MaxTenants:   cfg.MaxTenants,
+		TombstoneCap: cfg.TombstoneCap,
 	}, logger)
 	if err != nil {
 		return fmt.Errorf("opening tenant registry: %w", err)
 	}
+	logger.Info("default tenant ingest policy", "accepts_writes", reg.DefaultWritable())
 	if cfg.ResurrectionGrace != 0 {
 		reg.SetResurrectionGrace(cfg.ResurrectionGrace.D())
 	}
@@ -226,7 +228,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	}
 
 	engineFor := func(t string) (*change.Engine, error) {
-		st, ferr := reg.For(t)
+		st, ferr := reg.ForWrite(t)
 		if ferr != nil {
 			return nil, ferr
 		}

@@ -46,6 +46,11 @@ type Limits struct {
 	// MaxTenants, when > 0, caps the number of open stacks; creation beyond it
 	// is refused until tenants are removed.
 	MaxTenants int
+	// TombstoneCap is the per-tenant projection bound on soft-deleted entities
+	// kept for resurrection. 0 means the projection's built-in default. It is
+	// applied at stack open because event-log replay evicts tombstones beyond
+	// the cap.
+	TombstoneCap int
 }
 
 func (l Limits) allows(id string, open int) error {
@@ -71,6 +76,20 @@ func (l Limits) allows(id string, open int) error {
 		return fmt.Errorf("%w: tenant cap (%d) reached", tenant.ErrNotAllowed, l.MaxTenants)
 	}
 	return nil
+}
+
+// defaultWritable reports whether ingest may write to the default tenant: always
+// with no allowlist (zero-config), and only when "default" is listed otherwise.
+func (l Limits) defaultWritable() bool {
+	if len(l.Allowlist) == 0 {
+		return true
+	}
+	for _, a := range l.Allowlist {
+		if a == tenant.Default {
+			return true
+		}
+	}
+	return false
 }
 
 // Registry lazily opens and caches one Stack per tenant under a shared data dir.
@@ -389,6 +408,25 @@ func (r *Registry) For(rawTenant string) (*Stack, error) {
 	return r.ensure(id, minting)
 }
 
+// ForWrite is For for the ingest path. It refuses the default tenant with
+// tenant.ErrNotAllowed when a non-empty allowlist does not list it; every other
+// tenant follows For unchanged.
+func (r *Registry) ForWrite(rawTenant string) (*Stack, error) {
+	id, ok := tenant.Sanitize(rawTenant)
+	if !ok {
+		return nil, fmt.Errorf("invalid tenant id %q", rawTenant)
+	}
+	if id == tenant.Default && !r.limits.defaultWritable() {
+		return nil, fmt.Errorf("%w: %q is not on the tenant allowlist", tenant.ErrNotAllowed, id)
+	}
+	return r.For(rawTenant)
+}
+
+// DefaultWritable reports whether ingest may write to the default tenant.
+func (r *Registry) DefaultWritable() bool {
+	return r.limits.defaultWritable()
+}
+
 // Peek returns the stack only if it is already open. Query surfaces use it so
 // reading an unknown tenant can never mint one (#115): before this, a GET with
 // a ghost X-Scope-OrgID lazily created a store directory.
@@ -491,7 +529,7 @@ func (r *Registry) openStack(id string) (*Stack, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening event log for tenant %q: %w", id, err)
 	}
-	graph := projection.New()
+	graph := projection.NewWithTombstoneCap(r.limits.TombstoneCap)
 	if r.resGrace != 0 {
 		graph.SetTombstoneTTL(r.resGrace)
 	}

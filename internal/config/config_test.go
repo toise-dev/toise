@@ -136,8 +136,10 @@ func TestLoadPrecedence(t *testing.T) {
 listen: 10.0.0.1:9000
 data_dir: /var/lib/toise
 relation_buffer_ttl: 1m
+tombstone_cap: 2048
 `)
 	getenv := env(map[string]string{
+		"TOISE_TOMBSTONE_CAP":       "4096",
 		"TOISE_DATA_DIR":            "/srv/toise", // env overrides the file
 		"TOISE_RELATION_BUFFER_TTL": "2m",         // env overrides the file...
 	})
@@ -153,6 +155,9 @@ relation_buffer_ttl: 1m
 	}
 	if cfg.DataDir != "/srv/toise" {
 		t.Errorf("data_dir = %q, want the env value (env overrides file)", cfg.DataDir)
+	}
+	if cfg.TombstoneCap != 4096 {
+		t.Errorf("tombstone_cap = %d, want the env value 4096 (env overrides file)", cfg.TombstoneCap)
 	}
 	if cfg.RelationBufferTTL.D() != 3*time.Minute {
 		t.Errorf("relation_buffer_ttl = %v, want 3m (flag overrides env+file)", cfg.RelationBufferTTL.D())
@@ -259,6 +264,7 @@ func TestValidateRejectsSilentMisconfigurations(t *testing.T) {
 		{"unknown log level", func(c *Config) { c.LogLevel = "verbose" }},
 		{"unknown log format", func(c *Config) { c.LogFormat = "logfmt" }},
 		{"negative max_tenants", func(c *Config) { c.MaxTenants = -1 }},
+		{"negative tombstone_cap", func(c *Config) { c.TombstoneCap = -1 }},
 		{"empty allowlist entry", func(c *Config) { c.TenantAllowlist = []string{""} }},
 		{"whitespace allowlist entry", func(c *Config) { c.TenantAllowlist = []string{"ten ant"} }},
 		{"unknown tenant_trust_mode", func(c *Config) { c.TenantTrustMode = "wishful" }},
