@@ -71,7 +71,7 @@ func TestLivenessPauseResumeAndReArm(t *testing.T) {
 
 	// Empty batch at 30 min proves the link is up; it re-arms the entity.
 	clk = time.Unix(1000, 0).Add(30 * time.Minute)
-	if err := eng.Batch(func(*Batch) {}); err != nil {
+	if err = eng.Batch(func(*Batch) {}); err != nil {
 		t.Fatalf("Batch: %v", err)
 	}
 	// 30s later (still before new deadline) no expiry.

@@ -559,20 +559,20 @@ func New(graph *projection.Graph, appender Appender, opts ...Option) *Engine {
 }
 
 // SetLivenessPause enables pausing liveness expiry while the tenant receives
-// nothing at all. after <= 0 disables it. max bounds a pause: past it, sweeps
+// nothing at all. after <= 0 disables it. limit bounds a pause: past it, sweeps
 // expire as usual (a tenant whose only producer stopped must still drain);
-// max <= 0 means 24h.
-func (e *Engine) SetLivenessPause(after, max time.Duration) {
+// limit <= 0 means 24h.
+func (e *Engine) SetLivenessPause(after, limit time.Duration) {
 	if after < 0 {
 		after = 0
 	}
-	if max <= 0 {
-		max = 24 * time.Hour
+	if limit <= 0 {
+		limit = 24 * time.Hour
 	}
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()
 	e.pauseAfter = after
-	e.pauseMax = max
+	e.pauseMax = limit
 	if after <= 0 {
 		// Disable and reset pause state.
 		e.paused = false
