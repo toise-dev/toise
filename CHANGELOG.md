@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`tombstone_cap` makes the resurrection bound configurable.** Per tenant,
+  the projection keeps at most this many deleted entities resurrectable
+  (default 1024, unchanged). Before, the bound was fixed, so raising
+  `resurrection_grace` did not help a tenant with more deletions than that
+  inside the window: the oldest still came back under a fresh id. Set with
+  `tombstone_cap`, `TOISE_TOMBSTONE_CAP` or `--tombstone-cap`; applied when a
+  tenant is opened, so a change needs a restart.
+
 ### Changed
 
 - **A tenant allowlist now also governs ingest into `default`.** With a
@@ -18,15 +28,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stays readable. If you set an allowlist and rely on `default`, add it to
   the list. The startup log line `default tenant ingest policy` says which
   applies.
-### Added
 
-- **`tombstone_cap` makes the resurrection bound configurable.** Per tenant,
-  the projection keeps at most this many deleted entities resurrectable
-  (default 1024, unchanged). Before, the bound was fixed, so raising
-  `resurrection_grace` did not help a tenant with more deletions than that
-  inside the window: the oldest still came back under a fresh id. Set with
-  `tombstone_cap`, `TOISE_TOMBSTONE_CAP` or `--tombstone-cap`; applied when a
-  tenant is opened, so a change needs a restart.
+### Fixed
+
+- **One refused producer no longer costs the others their data.** When an
+  OTLP export carried several ResourceLogs and one was refused for a tenant
+  reason (tenant not allowed, invalid `tenant.id`, token not bound to the
+  tenant), the whole export failed: the ResourceLogs before it were kept,
+  the ones after it were never read, and the collector dropped the request
+  as permanent. The refused ResourceLogs is now reported through OTLP
+  partial success (`rejected_log_records`, with the reason) and the others
+  are ingested. An export whose every ResourceLogs is refused still fails
+  with the same status as before.
 
 ## [0.25.1] - 2026-11-13
 
