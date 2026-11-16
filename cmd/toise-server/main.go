@@ -182,6 +182,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("opening tenant registry: %w", err)
 	}
+	logger.Info("default tenant ingest policy", "accepts_writes", reg.DefaultWritable())
 	if cfg.ResurrectionGrace != 0 {
 		reg.SetResurrectionGrace(cfg.ResurrectionGrace.D())
 	}
@@ -227,7 +228,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	}
 
 	engineFor := func(t string) (*change.Engine, error) {
-		st, ferr := reg.For(t)
+		st, ferr := reg.ForWrite(t)
 		if ferr != nil {
 			return nil, ferr
 		}
