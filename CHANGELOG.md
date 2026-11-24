@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+**`accepts_from`: a server can now say who calls it (ent#944).** A new
+relation, `service.listener --accepts_from--> network.address`, lets a
+producer record a client address a listener saw call. A caller that runs no
+agent becomes visible; a caller that runs one joins on the same address
+through its own `bound_to`. Only non-public addresses are meant to be emitted,
+32 at most per listener (ADR 0032, addendum of 2026-11-13).
+
+The relation carries no failure impact and is not structural: the address is
+a third party's record, and impact into it would make one host's blast radius
+list every caller of every listener. `find_path` never enters an entity by
+`accepts_from` and leaves it by `accepts_from`, so two servers with a common
+caller are not reported as linked.
+
+A producer must not emit `accepts_from` before a Toise carrying this release is
+deployed: an older Toise rejects the record under the strict vocabulary, or,
+with `accept_unknown_types`, propagates failure in both directions. The
+constant is `wire.RelTypeAcceptsFrom` in `pkg/emit` v0.17.0.
+
 ## [0.24.3] - 2026-11-12
 
 ### Fixed

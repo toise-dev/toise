@@ -127,7 +127,7 @@ func (s *Server) walkPaths(g Graph, start, goal model.EntityID, relType string, 
 					if model.IsTerminalEntityType(ent.Type) {
 						terminal = true
 					}
-					if model.CrossingNeedsADifferentRelation(ent.Type) {
+					if model.CrossingNeedsADifferentRelation(ent.Type) || model.CrossingByRelationNeedsADifferentRelation(w.parents[cur].via.rel.Type) {
 						arrivedBy = w.parents[cur].via.rel.Type
 					}
 				}

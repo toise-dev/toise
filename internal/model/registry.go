@@ -114,6 +114,8 @@ const (
 	RelNeighborOf = wire.RelTypeNeighborOf
 	RelNextHopVia = wire.RelTypeNextHopVia
 	RelListensOn  = wire.RelTypeListensOn
+	// RelAcceptsFrom attaches a client address to the listener that saw it call.
+	RelAcceptsFrom = wire.RelTypeAcceptsFrom
 )
 
 // Producer-vocabulary relation types (senhub-agent integration). The From/To
@@ -381,6 +383,12 @@ var relationTypes = map[string]RelationTypeDef{
 	// "X has_segment Y": the cluster failing drops the segments it declares —
 	// same shape and direction as has_interface and has_route.
 	RelHasSegment: {Type: RelHasSegment, From: TypeServiceInstance, To: TypeNetworkSegment, Structural: true, Impact: ImpactFromTo},
+	// "X accepts_from Y": the listener saw a call from the client address Y.
+	// Non-structural: a new caller is not an alert. ImpactNone, for the reason
+	// measured on neighbor_of: the target is a third party's record, and impact
+	// flowing into it would make impact_of on one host report every caller of
+	// every listener it runs.
+	RelAcceptsFrom: {Type: RelAcceptsFrom, From: TypeServiceListener, To: TypeNetworkAddress, Structural: false, Impact: ImpactNone},
 	// legacy device-level edges (superseded; not emitted — see the const block)
 	RelRoutesVia:  {Type: RelRoutesVia, From: TypeNetworkDevice, To: TypeNetworkDevice, Structural: true, Impact: ImpactToFrom},
 	RelForwardsTo: {Type: RelForwardsTo, From: TypeNetworkDevice, To: TypeNetworkDevice, Structural: true, Impact: ImpactBoth},
@@ -437,6 +445,24 @@ var crossOnlyByChangingRelationTypes = map[string]struct{}{
 // entity of type t must enter and leave it through different relation types.
 func CrossingNeedsADifferentRelation(t string) bool {
 	_, ok := crossOnlyByChangingRelationTypes[t]
+	return ok
+}
+
+// convergentRelationTypes are the relation types an entity reached through may
+// not be left through again. The rule keys on the relation, not on the entity
+// type, because a network.address is legitimately crossed by bound_to and
+// next_hop_via, and a per-entity-type rule would cut real paths there. Two
+// listeners sharing one caller are not linked by it, nor are two callers of
+// one listener.
+var convergentRelationTypes = map[string]struct{}{
+	RelAcceptsFrom: {},
+}
+
+// CrossingByRelationNeedsADifferentRelation reports whether a traversal that
+// reached an entity along an edge of type relType must leave it through a
+// different relation type.
+func CrossingByRelationNeedsADifferentRelation(relType string) bool {
+	_, ok := convergentRelationTypes[relType]
 	return ok
 }
 

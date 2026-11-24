@@ -446,6 +446,21 @@ the boundary. The registry is:
   high-confidence `same_as` edges is a deferred read-time overlay (ADR 0020 Lot B);
   until then the edges accumulate and are queryable as-is. Per ADR 0022 Toise
   stores the asserted `confidence`/`basis` as-is and does not police their values.
+- **`accepts_from` — the inbound half of a connection, seen by the server (ent#944).**
+  `service.listener --accepts_from--> network.address`: the listener records a client
+  address it saw call, so a caller that runs no agent is still visible. Carried by the
+  listener, because the carrier of an embedded relationship is its source; it is never a
+  `depends_on` asserted on the client's behalf. The target is the bare client address,
+  without the ephemeral port, and only a non-public one (RFC 1918, CGNAT, ULA): a
+  public caller is counted in telemetry, never stored. Addresses that repeat by
+  convention (loopback, link-local, a local bridge, a CNI network) are never emitted,
+  under the same rule as `bound_to`. Non-structural (a new caller is not an alert) and
+  **no failure impact**: the address is a third party's record, and impact flowing into
+  it would make one host's blast radius list every caller of every listener it runs —
+  the measured `neighbor_of` error. A traversal never enters an entity by
+  `accepts_from` and leaves it by `accepts_from`: two servers with a common caller are
+  not linked by it, nor are two callers of one server. When the caller runs an agent,
+  its own `bound_to` lands on the same `network.address`, and the join is exact.
 - **legacy relations** `routes_via`, `forwards_to`, `adjacent_to` remain registered
   (so the boundary still accepts them) but are **superseded and not to be emitted** —
   use `network.route` + `has_route` + `next_hop_via`, and port-to-port

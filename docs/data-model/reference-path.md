@@ -120,6 +120,7 @@ exists the first hop of the call is a deduction.
 | B3 | `host` → `network.interface` | `has_interface` | **observed** |
 | B4 | `network.address` → `network.interface` | `bound_to` | **observed** |
 | B5 | up into the fabric | `connected_to` / the L2 descent of §6 | **partly missing** |
+| B6 | `service.listener` → `network.address` of a caller | `accepts_from`, From listener (ent#944) | **registered**, emitted from senhub-agent 0.7.2 |
 
 ## 5. The junction, and why it is not an edge
 
@@ -343,19 +344,26 @@ type and not only for hosts.
    `neighbor_of`, out by `resolves_to`, never two `neighbor_of`; and
    `network.interface` when entered by `aggregated_into` — out by `connected_to`,
    never two `aggregated_into`.
-3. **Transited freely**: everything else, including `network.device`.
+3. **Never left by the relation type it was entered by, for `accepts_from`.**
+   This one keys on the relation, not on the node: a `network.address` is crossed
+   legitimately by `bound_to` and `next_hop_via`, so a rule on the address type
+   would cut real paths. Two `accepts_from` meeting at an address are two servers
+   sharing a caller; meeting at a listener, two callers of one server. Neither is a
+   link. In by `bound_to` and out by `accepts_from` (or the reverse) is the real
+   path from a caller's host to the server.
+4. **Transited freely**: everything else, including `network.device`.
 
-Category 3 carries an **approximation, declared rather than hidden**: a
+Category 4 carries an **approximation, declared rather than hidden**: a
 `network.device` is assumed to forward. True today, because a `network.device` is
 only ever minted by SNMP-polling network gear. It would stop being true for a
 polled box that forwards nothing — a UPS, an environmental probe, a controller —
 and the first one inventoried will be transited wrongly.
 
 For a `host` the opposite assumption would be wrong **today**, since most do not
-forward, which is why #472 targets hosts and why a `host` stays out of category 3
+forward, which is why #472 targets hosts and why a `host` stays out of category 4
 until a producer emits the fact. `senhub.host.ip_forwarding` has been asked for:
 a sysctl read once per cycle, unambiguous and free, which turns a guess by type
-into an observation and lets Linux gateways and VyOS into category 3 for the
+into an observation and lets Linux gateways and VyOS into category 4 for the
 right reason instead of by exception.
 
 ### Which MAC belongs to whom — the part that is easy to get backwards

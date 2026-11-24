@@ -35,6 +35,7 @@ func TestObservationRelationsAreNotFailurePaths(t *testing.T) {
 		RelResolvesTo:     "a neighbor resolving to an interface is a reading, not a reliance",
 		RelAggregatedInto: "a member folded into an aggregate is a presentation of the same facts",
 		RelMonitors:       "watching a thing is not depending on it",
+		RelAcceptsFrom:    "a listener recording the caller it saw is a reading of a third party, not a reliance",
 	}
 	for relType, why := range observational {
 		def, ok := RelationDef(relType)
@@ -43,6 +44,20 @@ func TestObservationRelationsAreNotFailurePaths(t *testing.T) {
 		}
 		if def.Impact != ImpactNone {
 			t.Errorf("%s has Impact %v, want ImpactNone: %s. A failure must not travel this edge; if this relation really is a dependency, it does not belong in this list.", relType, def.Impact, why)
+		}
+	}
+}
+
+func TestAcceptsFromIsConvergent(t *testing.T) {
+	if def, ok := RelationDef(RelAcceptsFrom); !ok || def.From != TypeServiceListener || def.To != TypeNetworkAddress || def.Structural {
+		t.Errorf("accepts_from def = %+v, want a non-structural service.listener -> network.address", def)
+	}
+	if !CrossingByRelationNeedsADifferentRelation(RelAcceptsFrom) {
+		t.Error("accepts_from must be convergent: entering and leaving an entity by accepts_from is a convergence, not a path")
+	}
+	for _, relType := range []string{RelBoundTo, RelHasInterface} {
+		if CrossingByRelationNeedsADifferentRelation(relType) {
+			t.Errorf("%s must not be convergent: it legitimately crosses entities", relType)
 		}
 	}
 }

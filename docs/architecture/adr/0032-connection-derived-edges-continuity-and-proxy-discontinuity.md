@@ -186,3 +186,38 @@ Rules:
 5. **Producer rollout is an identity break** for existing loopback endpoints
    (old deleted, new created): group it with a producer version bump and
    release-note the churn.
+
+## Addendum (2026-11-13): the inbound half, seen by the server (ent#944)
+
+Agreed with the senhub-agent and OpenTelemetry-alignment maintainers for
+senhub-agent 0.7.2, on the maintainer's decision to make a caller with no agent
+visible.
+
+Decision 3 places the dependency on the client, and it stays there: a server
+never asserts `depends_on` on a client's behalf. What the server can assert is
+its own observation, so the inbound half is a **different relation carried by
+the listener**: `service.listener --accepts_from--> network.address`.
+
+1. **The target is the bare client address**, a `network.address`, without the
+   ephemeral port. Its identity is the address alone, which the server holds in
+   full, so when the caller also runs an agent, that agent's `bound_to` lands on
+   the same entity and the two halves join exactly, with no merge rule.
+2. **Non-public addresses only** (RFC 1918, CGNAT, ULA). A public caller is
+   counted in telemetry and never stored: an Internet-facing listener has an
+   unbounded set of callers, and individual Internet addresses kept for the
+   retention period would be personal data. Addresses that repeat by convention
+   (loopback, link-local, a local bridge or CNI network) are not emitted, under
+   the rule that already governs `bound_to`.
+3. **At most 32 callers per listener**, held from first fill: an address keeps
+   its place while seen, a place freed by disappearance goes to the next
+   candidate by first appearance. Ranking by frequency or age was rejected,
+   since each rotation is a state change carrying no information.
+4. **No failure impact, not structural.** The address is a third party's
+   record; impact into it would make one host's blast radius list every caller
+   of every listener it runs, the error measured on `neighbor_of`.
+5. **A traversal never enters an entity by `accepts_from` and leaves it by
+   `accepts_from`.** Two servers sharing a caller, or two callers of one
+   server, are a convergence, not a path. The rule keys on the relation type,
+   because a `network.address` is legitimately crossed by `bound_to`.
+6. **NAT and load balancers:** the address seen is emitted as seen. The server
+   sees one side only, so it never asserts `same_as` (decision 5).

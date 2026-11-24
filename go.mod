@@ -80,3 +80,5 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	gopkg.in/ini.v1 v1.67.2 // indirect
 )
+
+replace github.com/toise-dev/toise/pkg/emit => ./pkg/emit
