@@ -766,6 +766,12 @@ and the first is the one that matters:
    not happen, and it refreshes a liveness deadline on evidence that does not
    exist.
 
+**Bounding the neighbours of a device.** A polled `network.device` carries
+**`senhub.neighbors.truncated`** (bool, from senhub-agent 0.7.2), **always present**,
+`true` when the producer's neighbour bound left observed neighbours out. It replaces
+an earlier count for the reason given for `senhub.routes.truncated`: a count that
+moves with every poll is a change event on every poll.
+
 **Relation: `neighbor_of`** (neighbour → the observing `network.interface`), read
 actively — this neighbour was seen on that interface. It carries **no impact in
 either direction**, like `same_as`: an observation is not a failure path. Measured
@@ -1283,12 +1289,19 @@ the contract asks a producer **not** to emit what its source says.
 A full BGP table must **not** be inventoried route by route. The bound is not a
 performance knob: it is the admission that this model does not fit that device.
 
-- **`senhub.routes.omitted`** (int) and **`senhub.routes.limit`** (int) on the
-  **owner**, `host` or `network.device`, **always present**, zero when nothing was
-  left out. Absent would mean *the producer did not say*, which is a third thing.
+- **`senhub.routes.limit`** (int) on the **owner**, `host` or `network.device`,
+  **always present**.
+- On a **`host`**: **`senhub.routes.omitted`** (int), **always present**, zero when
+  nothing was left out. Absent would mean *the producer did not say*, which is a
+  third thing.
+- On a **`network.device`** (from senhub-agent 0.7.2): **`senhub.routes.truncated`**
+  (bool) in place of the count, **always present**, `false` when nothing was left
+  out, for the same reason. A count that moves with every poll is an attribute
+  change, hence a log record, on every poll; a flag changes only when the cut
+  starts or stops. The exact count stays in the agent's own log line.
 - Connected routes and the default route are **always kept**; the remainder is
   ordered deterministically.
-- `omitted` counts every route observed and not emitted — the bound *and* lines
+- `omitted` (and, on a device, `truncated`) covers every route observed and not emitted — the bound *and* lines
   skipped for any other reason, such as a Windows `invalid` entry. A counter that
   excludes one kind of omission lies.
 
@@ -1401,7 +1414,8 @@ emitted**. One identity and a half is not two.
   single entity whose egress interface oscillates at poll cadence — exactly the
   flapping that putting the next hop in the identity was introduced to remove.
 
-  Everything omitted here counts in `senhub.routes.omitted`. Exact
+  Everything omitted here counts in `senhub.routes.omitted` (`senhub.routes.truncated`
+  on a device). Exact
   `(destination, next hop)` repeats are collapsed, which on a device is normally the
   same route appearing in both `ipCidrRouteTable` and `inetCidrRouteTable`. Nothing
   else is dropped: two distinct next hops are two distinct routes and both are
