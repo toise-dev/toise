@@ -141,7 +141,7 @@ func TestSingleMoveDoesNotLeavePermanentConflict(t *testing.T) {
 		}
 	}
 
-	now = now.Add(6 * time.Minute)
+	now = now.Add(conflictWindow + time.Minute)
 	if c, w := d.observe("agent-a", "host-b"); c || w {
 		t.Fatalf("observe host-b after window: conflicting=%v warn=%v, want false false", c, w)
 	}
@@ -182,5 +182,26 @@ func TestNoHostIDKeepsReconciliationUnchanged(t *testing.T) {
 	}
 	if hosts := d.ConflictingHosts("agent-a"); hosts != nil {
 		t.Fatalf("ConflictingHosts(\"agent-a\") = %v, want nil", hosts)
+	}
+}
+
+func TestStaggeredClonesAreDetected(t *testing.T) {
+	d := newConflictDetector()
+	now := t0
+	d.now = func() time.Time { return now }
+
+	// 4 cycles; host-b lags host-a by 6 minutes on a 10-minute cadence.
+	obs := 0
+	for cycle := 0; cycle < 4; cycle++ {
+		if c, _ := d.observe("agent-a", "host-a"); obs > 0 && !c {
+			t.Fatalf("observation %d (host-a): conflicting=%v, want true", obs, c)
+		}
+		obs++
+		now = now.Add(6 * time.Minute)
+		if c, _ := d.observe("agent-a", "host-b"); obs > 0 && !c {
+			t.Fatalf("observation %d (host-b): conflicting=%v, want true", obs, c)
+		}
+		obs++
+		now = now.Add(4 * time.Minute)
 	}
 }

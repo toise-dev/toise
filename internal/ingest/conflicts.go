@@ -6,7 +6,10 @@ import (
 	"time"
 )
 
-const conflictWindow = 5 * time.Minute
+// conflictWindow must span several report cycles: two machines sharing an
+// identity each re-emit on their own cadence, often minutes apart, and a window
+// shorter than one cycle would see only one of them at a time.
+const conflictWindow = 30 * time.Minute
 
 const conflictReasonSharedInstanceID = "shared_instance_id"
 
