@@ -23,6 +23,7 @@ import (
 	"github.com/toise-dev/toise/internal/change"
 	"github.com/toise-dev/toise/internal/model"
 	"github.com/toise-dev/toise/internal/tenant"
+	"github.com/toise-dev/toise/pkg/emit/wire"
 )
 
 // Receiver is an OTLP/gRPC logs server that routes entity events to the change
@@ -52,7 +53,7 @@ func NewRoutedReceiver(engineFor func(tenantID string) (*change.Engine, error), 
 		logger = slog.Default()
 	}
 	srv := grpc.NewServer(opts...)
-	ls := &logsServer{engineFor: engineFor, authorize: authorize, metrics: m, acceptUnknown: acceptUnknownTypes, logger: logger, reconcilers: make(map[string]*embeddedReconciler)}
+	ls := &logsServer{engineFor: engineFor, authorize: authorize, metrics: m, acceptUnknown: acceptUnknownTypes, logger: logger, reconcilers: make(map[string]*embeddedReconciler), conflicts: make(map[string]*conflictDetector)}
 	// Default tenant resolution = the X-Scope-OrgID metadata, never locked (the
 	// per-ResourceLogs tenant.id override applies). derive-only swaps this via
 	// SetTenantResolver (ADR 0028).
@@ -73,6 +74,14 @@ func (r *Receiver) SetTenantResolver(fn func(ctx context.Context) (string, bool,
 	if fn != nil {
 		r.logs.resolveTenant = fn
 	}
+}
+
+// ConflictsFor returns the conflict detector for the given tenant. It is the
+// narrow read surface the MCP layer uses; nothing is written to the event log.
+func (r *Receiver) ConflictsFor(tenantID string) interface {
+	ConflictingHosts(producer string) []string
+} {
+	return r.logs.conflictsFor(tenantID)
 }
 
 // Serve accepts connections on lis until Stop is called. It blocks.
@@ -107,6 +116,7 @@ type logsServer struct {
 	// reconciler would let one tenant's re-emit remove the other's relations.
 	mu          sync.Mutex
 	reconcilers map[string]*embeddedReconciler
+	conflicts   map[string]*conflictDetector
 }
 
 func (s *logsServer) reconcilerFor(tenantID string) *embeddedReconciler {
@@ -118,6 +128,17 @@ func (s *logsServer) reconcilerFor(tenantID string) *embeddedReconciler {
 		s.reconcilers[tenantID] = r
 	}
 	return r
+}
+
+func (s *logsServer) conflictsFor(tenantID string) *conflictDetector {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c, ok := s.conflicts[tenantID]
+	if !ok {
+		c = newConflictDetector()
+		s.conflicts[tenantID] = c
+	}
+	return c
 }
 
 // Export ingests a batch of OTLP logs, routing entity-event LogRecords to the
@@ -185,6 +206,7 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (re
 	for i := 0; i < rls.Len(); i++ {
 		res := rls.At(i).Resource()
 		producer, _ := strAttr(res.Attributes(), resAttrProducer)
+		hostID, _ := strAttr(res.Attributes(), wire.IdentityHostID)
 		tenantID := baseTenant
 		if rt, ok := strAttr(res.Attributes(), tenant.ResourceAttr); ok && !tenantLocked {
 			san, ok := tenant.Sanitize(rt)
@@ -213,6 +235,12 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (re
 		}
 		reconciler := s.reconcilerFor(tenantID)
 		s.metrics.ensure(tenantID)
+		if conflicting, warn := s.conflictsFor(tenantID).observe(producer, hostID); conflicting {
+			s.metrics.addProducerConflict(tenantID, conflictReasonSharedInstanceID)
+			if warn {
+				s.logger.Warn("several machines report under one producer identity", "tenant", tenantID, "producer", producer, "hosts", s.conflictsFor(tenantID).ConflictingHosts(producer), "window", conflictWindow)
+			}
+		}
 		atHandled, atSkipped, atRejected, atDropped := handled, skipped, rejected, len(dropped)
 		sls := rls.At(i).ScopeLogs()
 		var routeErr error
@@ -252,7 +280,7 @@ func (s *logsServer) Export(ctx context.Context, req plogotlp.ExportRequest) (re
 					}
 					// Embedded relationships ride on entity-state events (spec PR
 					// #4836); reconcile them additively alongside routeRecord.
-					edrop, ebeliefs, eerr := reconciler.handleVocab(b, lr, producer, scope, !s.acceptUnknown)
+					edrop, ebeliefs, eerr := reconciler.handleVocabHost(b, lr, producer, hostID, scope, !s.acceptUnknown)
 					dropped = append(dropped, edrop...)
 					for _, bn := range ebeliefs {
 						s.metrics.addInertBelief(tenantID, bn.relType, bn.reason)
