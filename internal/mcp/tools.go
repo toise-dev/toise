@@ -228,11 +228,12 @@ type GetEntityInput struct {
 // GetEntityOutput carries the entity and any operator annotations (an overlay,
 // not producer truth — see annotate_entity).
 type GetEntityOutput struct {
-	Graph       GraphMeta       `json:"graph" jsonschema:"what the answering graph holds and how fresh it is; read this before treating absence as fact"`
-	Resolution  *Resolution     `json:"resolution,omitempty" jsonschema:"how often this entity is observed, and what that means for reading any timestamp about it; absent when no live producer declares a cadence"`
-	Entity      Entity          `json:"entity"`
-	Annotations *AnnotationOut  `json:"annotations,omitempty" jsonschema:"operator-added notes on this entity (not producer truth); absent when none. REPLICA-LOCAL: annotations live in a sidecar that log shipping does not replicate, so an absent block means EITHER no note exists OR this replica is not the one that received the write. Absence is therefore not proof; compare toise_annotations_entities across the pair"`
-	Canonical   *CanonicalGroup `json:"canonical,omitempty" jsonschema:"read-time identity overlay (ADR 0020): other entities that high-confidence same_as edges assert are the same real thing; absent when none. The entities are NOT merged — this is a derived view over the belief edges."`
+	Graph            GraphMeta            `json:"graph" jsonschema:"what the answering graph holds and how fresh it is; read this before treating absence as fact"`
+	Resolution       *Resolution          `json:"resolution,omitempty" jsonschema:"how often this entity is observed, and what that means for reading any timestamp about it; absent when no live producer declares a cadence"`
+	Entity           Entity               `json:"entity"`
+	Annotations      *AnnotationOut       `json:"annotations,omitempty" jsonschema:"operator-added notes on this entity (not producer truth); absent when none. REPLICA-LOCAL: annotations live in a sidecar that log shipping does not replicate, so an absent block means EITHER no note exists OR this replica is not the one that received the write. Absence is therefore not proof; compare toise_annotations_entities across the pair"`
+	Canonical        *CanonicalGroup      `json:"canonical,omitempty" jsonschema:"read-time identity overlay (ADR 0020): other entities that high-confidence same_as edges assert are the same real thing; absent when none. The entities are NOT merged — this is a derived view over the belief edges."`
+	ProducerConflict *ProducerConflictOut `json:"producer_conflict,omitempty" jsonschema:"present only when several machines (distinct host.id values) report under this service.instance.id within the last few minutes: they share one identity, so attributes here may belong to either machine. Absent means no conflict is currently observed, and says nothing about the past: it is live state, never rebuilt for an as_of read"`
 }
 
 func (s *Server) getEntity(ctx context.Context, _ *mcpsdk.CallToolRequest, in GetEntityInput) (*mcpsdk.CallToolResult, GetEntityOutput, error) {
@@ -256,11 +257,12 @@ func (s *Server) getEntity(ctx context.Context, _ *mcpsdk.CallToolRequest, in Ge
 		return nil, GetEntityOutput{}, s.notFoundMsg(in.EntityID, in.AsOf)
 	}
 	return nil, GetEntityOutput{
-		Graph:       s.graphMeta(g, in.AsOf),
-		Resolution:  s.resolutionFor(id, in.AsOf),
-		Entity:      s.entityWithProducers(e, deleted, compact, in.AsOf),
-		Annotations: s.annotationFor(string(id)),
-		Canonical:   s.canonicalGroup(g, id),
+		Graph:            s.graphMeta(g, in.AsOf),
+		Resolution:       s.resolutionFor(id, in.AsOf),
+		Entity:           s.entityWithProducers(e, deleted, compact, in.AsOf),
+		Annotations:      s.annotationFor(string(id)),
+		Canonical:        s.canonicalGroup(g, id),
+		ProducerConflict: s.producerConflictFor(e, in.AsOf),
 	}, nil
 }
 

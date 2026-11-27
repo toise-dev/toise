@@ -90,6 +90,9 @@ tool get_entity
     relations int
     tenant string
     tenant_name string
+  producer_conflict object
+    host_ids []string
+    message string
   resolution object
     meaning string
     observation_interval string

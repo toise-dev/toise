@@ -154,6 +154,7 @@ type Server struct {
 	audit      *audit.Auditor     // nil/disabled = no audit records (ADR 0028)
 	idThr      float64            // same_as confidence threshold for the canonical view (ADR 0020 Lot B)
 	cadence    Cadence            // producer observation cadence; nil omits the resolution block
+	conflicts  ProducerConflicts  // shared-identity lookup; nil omits the producer_conflict block
 }
 
 // defaultIdentityThreshold is the same_as confidence at or above which an alias
