@@ -875,20 +875,75 @@ func (g *Graph) ResolveHandle(handle string) (model.EntityID, bool) {
 }
 
 // SnapshotEvents returns synthetic create/add events that, applied in order to a
-// fresh graph, reconstruct the current live state: every live entity as an
-// EntityCreated, then every relation as a RelationAdded. Soft-deleted entities are
-// omitted (they are not part of the live graph). The given time stamps the events;
-// it is immaterial to reconstruction (Apply ignores event times). Used to write a
+// fresh graph, reconstruct the current state: an EntityCreated/EntityDeleted
+// pair per current tombstone, then every live entity as an EntityCreated, then
+// every relation as a RelationAdded. The tombstone pairs preserve the
+// identity->id mapping of soft-deleted entities (and its deletion order) so a
+// re-asserted identity still resurrects its original id within the grace window
+// after a restart (#183); a lone EntityCreated would resurrect the entity, so the
+// pairing also keeps it out of the restored live set (#106). The EntityDeleted's
+// RecordedAt preserves the grace window: when a tombstone deadline is known and
+// the TTL is positive, it is deadline - tombstoneTTL (Apply re-anchors the
+// deadline as RecordedAt + the restoring graph's TTL), otherwise it is the
+// snapshot time. The given time stamps the events; it is immaterial to
+// reconstruction apart from that (Apply ignores event times). Used to write a
 // projection snapshot for fast restart (#49).
 func (g *Graph) SnapshotEvents(when time.Time) []model.Event {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	out := make([]model.Event, 0, len(g.entities)+len(g.relations))
+	// Tombstone pairs come FIRST: a tombstone and a live entity can share an
+	// identity (the producer came back after the grace window and got a new
+	// id). Applying the pair after the live entity would clear the live
+	// entity's identity index entry, so its next observation would mint a
+	// duplicate; applying it before lets the live entity take the identity
+	// back, which is the state the graph was in.
+	seen := make(map[model.EntityID]struct{}, len(g.tombstones))
+	for _, id := range g.tombstones {
+		if !g.deleted[id] {
+			// Stale queue entry: the id was resurrected or pruned (#140).
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		e := g.entities[id]
+		deletedAt := when
+		if g.tombstoneTTL > 0 {
+			if deadline, ok := g.tombDeadline[id]; ok {
+				// Re-anchor the grace window on the original deletion time so a
+				// window that elapsed before the restart still arrives expired
+				// on the restoring graph (#183).
+				deletedAt = deadline.Add(-g.tombstoneTTL)
+			}
+		}
+		out = append(out,
+			model.Event{Entity: &model.EntityEvent{
+				EventID:       model.NewEventID(),
+				ChangeType:    model.EntityCreated,
+				Entity:        e,
+				EventTime:     when,
+				RecordedAt:    when,
+				SchemaVersion: model.SchemaVersion,
+			}},
+			model.Event{Entity: &model.EntityEvent{
+				EventID:       model.NewEventID(),
+				ChangeType:    model.EntityDeleted,
+				Entity:        e,
+				EventTime:     when,
+				RecordedAt:    deletedAt,
+				SchemaVersion: model.SchemaVersion,
+			}},
+		)
+	}
 	for id, e := range g.entities {
 		if g.deleted[id] {
-			// A soft-deleted entity must not be written to the snapshot: its
-			// EntityDeleted predates the snapshot sequence and is never
-			// replayed, so emitting it here resurrects it on restore (#106).
+			// A soft-deleted entity must not be written to the snapshot as a
+			// live entity: its EntityDeleted predates the snapshot sequence and
+			// is never replayed, so a bare EntityCreated here resurrects it on
+			// restore (#106). Tombstoned entities are emitted as
+			// create/delete pairs above instead.
 			continue
 		}
 		out = append(out, model.Event{Entity: &model.EntityEvent{
