@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A log restored from a base segment now refuses as-of reads older than the
+  history it holds (#635).** Restore re-appended the events but left the
+  store's prune horizon unset, so an as-of read before the base's history
+  was answered from partial data instead of being refused. Restore now sets
+  the horizon recorded in the base, and a store that holds no events no
+  longer forgets a persisted horizon or snapshot reference when reopened.
 - **Shipped log segments are now zstd-compressed.** Segments sent to the
   log-shipping target were raw framed protobuf, and the target keeps them
   until something removes them, so it grew by gigabytes a day. New segments

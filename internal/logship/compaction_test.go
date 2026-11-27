@@ -672,3 +672,70 @@ func TestBaseCodecRoundTrip(t *testing.T) {
 		t.Fatal("decodeBase of invalid bytes: want error, got nil")
 	}
 }
+
+func TestReplayWithHorizonReturnsBaseHorizon(t *testing.T) {
+	t.Run("base", func(t *testing.T) {
+		dir := t.TempDir()
+		sink, err := NewFileSink(dir)
+		if err != nil {
+			t.Fatalf("NewFileSink: %v", err)
+		}
+		hz := fixedTime.Add(-2 * time.Hour)
+		first := eventsOf(mustIDs(3))
+		src := &fakeSource{events: first, horizon: hz}
+		sh := New(sink)
+		if _, shipErr := sh.Ship(context.Background(), "acme", src); shipErr != nil {
+			t.Fatalf("Ship: %v", shipErr)
+		}
+		sh.now = func() time.Time { return fixedTime }
+		if compactErr := sh.Compact(context.Background(), "acme", src, 24*time.Hour, 12*time.Hour); compactErr != nil {
+			t.Fatalf("Compact: %v", compactErr)
+		}
+		src2 := &fakeSource{events: eventsOf(mustIDs(5)), horizon: hz}
+		if _, shipErr2 := sh.Ship(context.Background(), "acme", src2); shipErr2 != nil {
+			t.Fatalf("Ship 2: %v", shipErr2)
+		}
+		var got []string
+		hzGot, replayErr := sh.ReplayWithHorizon(context.Background(), "acme", func(e model.Event) error {
+			got = append(got, e.Entity.EventID)
+			return nil
+		})
+		if replayErr != nil {
+			t.Fatalf("ReplayWithHorizon: %v", replayErr)
+		}
+		if !hzGot.Equal(hz) {
+			t.Fatalf("horizon = %v, want %v", hzGot, hz)
+		}
+		if !equal(got, ids(eventsOf(mustIDs(5)))) {
+			t.Fatalf("replayed ids = %v, want %v", got, ids(eventsOf(mustIDs(5))))
+		}
+	})
+
+	t.Run("no base", func(t *testing.T) {
+		dir := t.TempDir()
+		sink, err := NewFileSink(dir)
+		if err != nil {
+			t.Fatalf("NewFileSink: %v", err)
+		}
+		events := eventsOf(mustIDs(3))
+		src := &fakeSource{events: events, horizon: fixedTime}
+		sh := New(sink)
+		if _, shipErr := sh.Ship(context.Background(), "acme", src); shipErr != nil {
+			t.Fatalf("Ship: %v", shipErr)
+		}
+		var got []string
+		hzGot, replayErr := sh.ReplayWithHorizon(context.Background(), "acme", func(e model.Event) error {
+			got = append(got, e.Entity.EventID)
+			return nil
+		})
+		if replayErr != nil {
+			t.Fatalf("ReplayWithHorizon: %v", replayErr)
+		}
+		if !hzGot.IsZero() {
+			t.Fatalf("horizon = %v, want zero", hzGot)
+		}
+		if !equal(got, ids(events)) {
+			t.Fatalf("replayed ids = %v, want %v", got, ids(events))
+		}
+	})
+}

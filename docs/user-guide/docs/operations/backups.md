@@ -108,7 +108,7 @@ toise-server restore-log --from /var/lib/toise/segments --data-dir /var/lib/tois
 toise-server restore-log --from /var/lib/toise/segments --data-dir /var/lib/toise/restored --tenant acme
 ```
 
-It replays each tenant's contiguous segments and re-appends the events into a new per-tenant store, faithfully reconstructing the log (the event/recorded timestamps ride on the events, so history and time-travel are preserved); the projection rebuilds on the next start. It **refuses to write into a data dir that already holds events**, so it never clobbers or duplicates an existing log — always restore into an empty/new directory, then point the server at it. Default restores every tenant found at the source.
+It replays each tenant's contiguous segments and re-appends the events into a new per-tenant store, faithfully reconstructing the log (the event/recorded timestamps ride on the events, so history and time-travel are preserved); the projection rebuilds on the next start. When the restore starts from a base segment, the restored store records the base's prune horizon, so an as-of read before the history it holds is refused explicitly. It **refuses to write into a data dir that already holds events**, so it never clobbers or duplicates an existing log — always restore into an empty/new directory, then point the server at it. Default restores every tenant found at the source.
 
 ## High availability
 

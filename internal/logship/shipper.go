@@ -177,6 +177,13 @@ func (sh *Shipper) Replay(ctx context.Context, tenant string, apply func(model.E
 	return err
 }
 
+// ReplayWithHorizon is Replay that also reports the prune horizon recorded in
+// the base it started from (the zero time when it replayed without a base), so
+// a restore can refuse as-of reads older than the history it holds.
+func (sh *Shipper) ReplayWithHorizon(ctx context.Context, tenant string, apply func(model.Event) error) (time.Time, error) {
+	return sh.replay(ctx, tenant, apply)
+}
+
 // replay is the body of Replay: it returns the horizon of the base it started
 // from (the zero time when it replayed without a base).
 func (sh *Shipper) replay(ctx context.Context, tenant string, apply func(model.Event) error) (time.Time, error) {

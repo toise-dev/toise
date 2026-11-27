@@ -1157,20 +1157,28 @@ func restoreTenantLog(ctx context.Context, shipper *logship.Shipper, dataDir, id
 		batch = batch[:0]
 		return nil
 	}
-	if rerr := shipper.Replay(ctx, id, func(ev model.Event) error {
+	horizon, rerr := shipper.ReplayWithHorizon(ctx, id, func(ev model.Event) error {
 		batch = append(batch, ev)
 		count++
 		if len(batch) >= batchSize {
 			return flush()
 		}
 		return nil
-	}); rerr != nil {
+	})
+	if rerr != nil {
 		return rerr
 	}
 	if ferr := flush(); ferr != nil {
 		return ferr
 	}
-	fmt.Printf("restored tenant %s -> %s (%d events)\n", id, filepath.Join(dataDir, id), count)
+	if herr := st.RestorePruneHorizon(horizon); herr != nil {
+		return fmt.Errorf("setting prune horizon of tenant %s: %w", id, herr)
+	}
+	if !horizon.IsZero() {
+		fmt.Printf("restored tenant %s -> %s (%d events, history from %s)\n", id, filepath.Join(dataDir, id), count, horizon.Format(time.RFC3339))
+	} else {
+		fmt.Printf("restored tenant %s -> %s (%d events)\n", id, filepath.Join(dataDir, id), count)
+	}
 	return nil
 }
 
