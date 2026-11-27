@@ -60,13 +60,13 @@ func (s *Server) annotateEntity(ctx context.Context, _ *mcpsdk.CallToolRequest, 
 	if !ok {
 		return nil, AnnotateEntityOutput{}, fmt.Errorf("no entity for handle %q; annotate a known entity (use find_entities)", in.EntityID)
 	}
-	a, err := s.ann.SetAt(e.IdentityHash(), string(entID), in.Annotations, "", s.now())
+	a, err := s.ann.SetAt(e.IdentityHash(), string(entID), in.Annotations, auth.Principal(ctx), s.now())
 	if err != nil {
 		return nil, AnnotateEntityOutput{}, err
 	}
 	s.audit.Record(audit.Event{
 		Time: s.now(), Tenant: tenant.FromContext(ctx), Surface: "mcp",
-		Action: "annotate_entity", Target: in.EntityID,
+		Action: "annotate_entity", Target: in.EntityID, Actor: auth.Principal(ctx),
 	})
 	return nil, AnnotateEntityOutput{Annotation: annotationOut(a)}, nil
 }

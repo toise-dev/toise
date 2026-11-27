@@ -299,6 +299,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		// authenticator cannot be built at all.
 		stdioWrites := authn.UnauthenticatedWritesAllowed()
 		ctx = auth.WithWritable(ctx, stdioWrites)
+		ctx = auth.WithPrincipal(ctx, "local")
 		logger.Info("serving MCP over stdio", "data_dir", cfg.DataDir, "tenant", tenant.Default,
 			"writes", stdioWrites)
 		if serveErr := mcp.New(st.Graph, st.Store).SetTenant(st.Tenant).SetCadence(st.Engine).SetAnnotations(st.Annotations).SetIdentityThreshold(cfg.IdentityThreshold).ServeStdio(ctx); serveErr != nil && !errors.Is(serveErr, context.Canceled) {

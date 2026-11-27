@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **An annotation now records who wrote it (#628).** Both write surfaces
+  stored an empty author and the audit record carried no actor, so a
+  contested note could not be traced. The authenticated principal is now
+  stored as the annotation author and as the audit `actor`: `token:` plus
+  a short prefix of the token's SHA-256 for a static token, `oidc:` plus
+  the `sub` claim for an OIDC bearer, `unauthenticated` when auth is off,
+  and `local` on MCP over stdio. The author is never taken from the
+  request.
+
 ## [0.26.0] - 2026-11-16
 
 The resurrection bound becomes configurable, a tenant allowlist now also

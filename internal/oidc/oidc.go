@@ -63,34 +63,36 @@ func newFromVerifier(v *gooidc.IDTokenVerifier, cfg Config) *Verifier {
 	return &Verifier{v: v, cfg: cfg}
 }
 
-// Verify validates rawToken and returns the tenant id (sanitized) and the role
-// it grants ("full"/"read"/"ingest"). The role is "full" when no role claim is
-// configured. ok=false on any verification, claim, or sanitization failure — the
-// caller then falls through to the static-token path or rejects. The role is a
-// plain string so internal/auth can depend on a narrow interface, not this
-// package. Safe on a nil receiver (OIDC disabled).
-func (vr *Verifier) Verify(ctx context.Context, rawToken string) (tenantID, role string, ok bool) {
+// Verify validates rawToken and returns the tenant id (sanitized), the role it
+// grants ("full"/"read"/"ingest"), and the token's `sub` claim (empty if absent
+// or not a string; absence never rejects). The role is "full" when no role claim
+// is configured. ok=false on any verification, claim, or sanitization failure —
+// the caller then falls through to the static-token path or rejects. The role and
+// subject are plain strings so internal/auth can depend on a narrow interface,
+// not this package. Safe on a nil receiver (OIDC disabled).
+func (vr *Verifier) Verify(ctx context.Context, rawToken string) (tenantID, role, subject string, ok bool) {
 	if vr == nil {
-		return "", "", false
+		return "", "", "", false
 	}
 	idt, err := vr.v.Verify(ctx, rawToken)
 	if err != nil {
-		return "", "", false
+		return "", "", "", false
 	}
 	var claims map[string]any
 	if err := idt.Claims(&claims); err != nil {
-		return "", "", false
+		return "", "", "", false
 	}
+	sub, _ := claims["sub"].(string)
 	rawTenant, _ := claims[vr.cfg.tenantClaim()].(string)
 	if rawTenant == "" {
 		// An empty/absent tenant claim must NOT authenticate: tenant.Sanitize("")
 		// resolves to the default tenant, which would silently grant default-tenant
 		// access to any otherwise-valid JWT.
-		return "", "", false
+		return "", "", "", false
 	}
 	san, sanOK := tenant.Sanitize(rawTenant)
 	if !sanOK || san == "" {
-		return "", "", false // a non-canonical tenant claim is rejected, never coerced
+		return "", "", "", false // a non-canonical tenant claim is rejected, never coerced
 	}
 	out := RoleFull
 	if vr.cfg.RoleClaim != "" {
@@ -103,8 +105,8 @@ func (vr *Verifier) Verify(ctx context.Context, rawToken string) (tenantID, role
 			// hard reject — never a silent grant of full. Once the operator opts
 			// into role claims, a token without a valid one is untrusted, not an
 			// implicit admin.
-			return "", "", false
+			return "", "", "", false
 		}
 	}
-	return san, string(out), true
+	return san, string(out), sub, true
 }

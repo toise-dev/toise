@@ -362,11 +362,11 @@ type fakeOIDC struct {
 	ok           bool
 }
 
-func (f fakeOIDC) Verify(_ context.Context, raw string) (string, string, bool) {
+func (f fakeOIDC) Verify(_ context.Context, raw string) (string, string, string, bool) {
 	if raw == "" {
-		return "", "", false
+		return "", "", "", false
 	}
-	return f.tenant, f.role, f.ok
+	return f.tenant, f.role, "", f.ok
 }
 
 func TestOIDCMiddleware(t *testing.T) {

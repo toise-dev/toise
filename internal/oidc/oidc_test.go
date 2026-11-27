@@ -56,20 +56,20 @@ func TestVerify(t *testing.T) {
 
 	// A nil verifier (OIDC disabled) rejects everything.
 	var off *Verifier
-	if _, _, ok := off.Verify(ctx, "anything"); ok {
+	if _, _, _, ok := off.Verify(ctx, "anything"); ok {
 		t.Error("nil verifier must reject")
 	}
 
 	// Valid token: tenant + role from the configured claims.
 	tok := mintJWT(t, priv, testIssuer, testAudience, future, map[string]any{"tenant": "acme", "role": "read"})
-	if id, role, ok := vr.Verify(ctx, tok); !ok || id != "acme" || role != string(RoleRead) {
+	if id, role, _, ok := vr.Verify(ctx, tok); !ok || id != "acme" || role != string(RoleRead) {
 		t.Errorf("valid token = %q,%v,%v; want acme,read,true", id, role, ok)
 	}
 
 	// No role claim configured => full role.
 	vrNoRole := testVerifier(t, priv, Config{Issuer: testIssuer, Audience: testAudience})
 	tok = mintJWT(t, priv, testIssuer, testAudience, future, map[string]any{"tenant": "acme"})
-	if id, role, ok := vrNoRole.Verify(ctx, tok); !ok || id != "acme" || role != string(RoleFull) {
+	if id, role, _, ok := vrNoRole.Verify(ctx, tok); !ok || id != "acme" || role != string(RoleFull) {
 		t.Errorf("no role claim => full; got %q,%v,%v", id, role, ok)
 	}
 
@@ -91,7 +91,7 @@ func TestVerify(t *testing.T) {
 		{"garbage", "not.a.jwt"},
 	}
 	for _, c := range bad {
-		if _, _, ok := vr.Verify(ctx, c.tok); ok {
+		if _, _, _, ok := vr.Verify(ctx, c.tok); ok {
 			t.Errorf("%s: must reject, but verified", c.name)
 		}
 	}

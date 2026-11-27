@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"net/http"
 	"strings"
 
@@ -39,6 +40,7 @@ const (
 	// OIDC identity (the tenant comes from a verified claim). EffectiveTenantHTTP
 	// reads it so the tenant router routes to the claim's tenant.
 	resolvedTenantKey
+	principalKey
 )
 
 // OIDCVerifier verifies an OIDC/JWT bearer on the read surfaces and returns the
@@ -46,7 +48,7 @@ const (
 // so this package need not depend on internal/oidc (or its go-oidc transitive
 // deps). nil disables OIDC.
 type OIDCVerifier interface {
-	Verify(ctx context.Context, rawToken string) (tenant, role string, ok bool)
+	Verify(ctx context.Context, rawToken string) (tenant, role, subject string, ok bool)
 }
 
 // WithWritable records the write decision for ctx. A transport without an HTTP
@@ -54,6 +56,17 @@ type OIDCVerifier interface {
 // itself; without it CanWrite refuses every write on that transport.
 func WithWritable(ctx context.Context, writable bool) context.Context {
 	return context.WithValue(ctx, writableKey, writable)
+}
+
+// WithPrincipal records the authenticated principal for ctx.
+func WithPrincipal(ctx context.Context, principal string) context.Context {
+	return context.WithValue(ctx, principalKey, principal)
+}
+
+// Principal returns the principal recorded in ctx, or "" if none was.
+func Principal(ctx context.Context) string {
+	v, _ := ctx.Value(principalKey).(string)
+	return v
 }
 
 // CanWrite reports whether the caller in ctx may perform a write (e.g. annotate
@@ -391,6 +404,12 @@ func hashToken(t string) []byte {
 	return sum[:]
 }
 
+// tokenPrincipal derives a stable, non-reversible principal label for a static
+// bearer: the first 8 lowercase hex chars of its hash.
+func tokenPrincipal(h string) string {
+	return "token:" + hex.EncodeToString(hashToken(bearer(h))[:4])
+}
+
 // Enabled reports whether any token or OIDC is configured (i.e. auth is
 // enforced). An OIDC-only deployment (no static tokens) still enforces auth —
 // from the moment it is DECLARED, not from the moment its verifier is built, so
@@ -521,7 +540,9 @@ func (a *Authenticator) HTTPMiddleware(public map[string]bool) func(http.Handler
 		if !a.Enabled() {
 			writable := a.UnauthenticatedWritesAllowed()
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				next.ServeHTTP(w, r.WithContext(WithWritable(r.Context(), writable)))
+				ctx := WithWritable(r.Context(), writable)
+				ctx = WithPrincipal(ctx, "unauthenticated")
+				next.ServeHTTP(w, r.WithContext(ctx))
 			})
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -544,6 +565,7 @@ func (a *Authenticator) HTTPMiddleware(public map[string]bool) func(http.Handler
 				// Tag the request so write handlers (annotate) can reject a
 				// read-only token: full/scoped tokens may write, read-only cannot.
 				ctx := WithWritable(r.Context(), a.canWriteHeader(h))
+				ctx = WithPrincipal(ctx, tokenPrincipal(h))
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
@@ -552,7 +574,7 @@ func (a *Authenticator) HTTPMiddleware(public map[string]bool) func(http.Handler
 			// claim (the client X-Scope-OrgID is ignored), flowed to the router via
 			// resolvedTenantKey. An ingest-only role may not read.
 			if a.oidc != nil {
-				if tID, role, ok := a.oidc.Verify(r.Context(), bearer(h)); ok {
+				if tID, role, subject, ok := a.oidc.Verify(r.Context(), bearer(h)); ok {
 					if role == "ingest" {
 						a.failed()
 						http.Error(w, "token not authorized for this tenant", http.StatusForbidden)
@@ -560,6 +582,11 @@ func (a *Authenticator) HTTPMiddleware(public map[string]bool) func(http.Handler
 					}
 					ctx := context.WithValue(r.Context(), resolvedTenantKey, tID)
 					ctx = WithWritable(ctx, role == "full")
+					principal := "oidc"
+					if subject != "" {
+						principal = "oidc:" + subject
+					}
+					ctx = WithPrincipal(ctx, principal)
 					next.ServeHTTP(w, r.WithContext(ctx))
 					return
 				}
