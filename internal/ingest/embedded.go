@@ -52,6 +52,13 @@ func (r *embeddedReconciler) handle(e engine, lr plog.LogRecord, producer, scope
 // routeRecordVocab: with strictVocab false (accept_unknown_types, #141) an
 // unknown relationship.type passes as long as the descriptor's shape is sound.
 func (r *embeddedReconciler) handleVocab(e engine, lr plog.LogRecord, producer, scope string, strictVocab bool) (dropped []string, beliefs []beliefNote, err error) {
+	return r.handleVocabHost(e, lr, producer, "", scope, strictVocab)
+}
+
+// handleVocabHost is handleVocab with the host (machine) the export's Resource
+// names folded into the reconciler key, so producers on distinct machines do not
+// retract each other's embedded edges.
+func (r *embeddedReconciler) handleVocabHost(e engine, lr plog.LogRecord, producer, hostID, scope string, strictVocab bool) (dropped []string, beliefs []beliefNote, err error) {
 	attrs := lr.Attributes()
 	et := lr.EventName()
 	if et != evEntityState && et != evEntityDelete {
@@ -81,7 +88,16 @@ func (r *embeddedReconciler) handleVocab(e engine, lr plog.LogRecord, producer, 
 	// With the scope in the key, a method diffs against what IT last asserted, so
 	// a producer emits the complete set PER METHOD — which is what it observes
 	// anyway — instead of a union it has to assemble and keep.
-	sk := producerKey(producer, scope, source)
+	//
+	// The key also carries the machine (host.id) when the export's Resource names
+	// one, because two machines sharing one service.instance.id are one producer
+	// to the engine and would otherwise retract each other's embedded edges
+	// (toise-dev/toise#630); without host.id the key is unchanged.
+	keyProducer := producer
+	if hostID != "" {
+		keyProducer = producer + "\x00host.id=" + hostID
+	}
+	sk := producerKey(keyProducer, scope, source)
 
 	switch et {
 	case evEntityDelete:

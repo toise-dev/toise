@@ -17,6 +17,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the `sub` claim for an OIDC bearer, `unauthenticated` when auth is off,
   and `local` on MCP over stdio. The author is never taken from the
   request.
+- **Two machines sharing one `service.instance.id` no longer retract each
+  other's embedded edges.** The reconciler now also keys on the Resource's
+  `host.id`, so each machine diffs only against its own assertions and both
+  edges coexist; the removal is no longer attributed to the producer for
+  another machine's edge. Without `host.id` the behavior is unchanged. The
+  conflict is named: `toise_ingest_producer_conflicts_total` (tenant, reason),
+  one warning per producer per window, and a `producer_conflict` block on
+  `get_entity` for the producer's `service.instance`, listing the `host.id`
+  values (#630).
+
 - **`find_path` no longer reports two hosts behind one gateway as connected.**
   Routes naming the same next-hop address came back `reachable: true` with no
   convergence, although both only emit towards the gateway. The shared address

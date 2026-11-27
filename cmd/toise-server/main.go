@@ -471,7 +471,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		}), nil
 	})
 	mcpRouter := newTenantRouter(reg, logger, func(st *registry.Stack) (http.Handler, error) {
-		return mcp.New(st.Graph, st.Store).SetTenant(st.Tenant).SetTenantName(tenantNames[st.Tenant]).SetCadence(st.Engine).SetObserver(queryMetrics).SetAnnotations(st.Annotations).SetAuditor(auditor).SetIdentityThreshold(cfg.IdentityThreshold).HTTPHandler(), nil
+		return mcp.New(st.Graph, st.Store).SetTenant(st.Tenant).SetTenantName(tenantNames[st.Tenant]).SetCadence(st.Engine).SetObserver(queryMetrics).SetAnnotations(st.Annotations).SetProducerConflicts(receiver.ConflictsFor(st.Tenant)).SetAuditor(auditor).SetIdentityThreshold(cfg.IdentityThreshold).HTTPHandler(), nil
 	})
 	if cfg.DeriveOnlyTenancy() || cfg.OIDCEnabled() {
 		// Route to the effective tenant: a derive-only scoped token's own tenant,

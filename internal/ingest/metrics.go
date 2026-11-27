@@ -40,6 +40,12 @@ type Metrics struct {
 	// same reason tenantRejections stays unlabeled. The producer is named on the
 	// warning line instead, where cardinality costs nothing.
 	inertBeliefs *prometheus.CounterVec // tenant, relation_type, reason
+	// producerConflicts counts exports from a producer identity under which
+	// several distinct host.id values report within the conflict window. It
+	// carries the tenant and a closed-set reason but NOT the producer, which is
+	// caller-supplied and therefore of unbounded cardinality; the producer is
+	// named on the warning line instead.
+	producerConflicts *prometheus.CounterVec // tenant, reason
 	// tenantRejections stays unlabeled ON PURPOSE. It counts ids that FAILED
 	// validation, and on an open server that value is caller-supplied: labeling
 	// it would hand an unauthenticated caller a way to mint unbounded series.
@@ -81,6 +87,10 @@ func NewMetrics() *Metrics {
 				"a resolves_to confidence is readable and read by nothing. Both leave a producer believing it published " +
 				"something that changes no answer.",
 		}, []string{"tenant", "relation_type", "reason"}),
+		producerConflicts: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "toise_ingest_producer_conflicts_total",
+			Help: "Exports from a producer identity shared by several machines (distinct host.id within the conflict window), by tenant and reason.",
+		}, []string{"tenant", "reason"}),
 	}
 	for _, v := range []string{"ok", "error"} {
 		m.exports.WithLabelValues(v)
@@ -120,12 +130,13 @@ func (m *Metrics) ensure(tenant string) {
 	for _, c := range inertBeliefCases {
 		m.inertBeliefs.WithLabelValues(tenant, c[0], c[1])
 	}
+	m.producerConflicts.WithLabelValues(tenant, conflictReasonSharedInstanceID)
 }
 
 // Collectors returns the underlying collectors for registration on a
 // Prometheus registry (alongside the scrape-time state collector).
 func (m *Metrics) Collectors() []prometheus.Collector {
-	return []prometheus.Collector{m.exports, m.records, m.droppedValues, m.tenantRejections, m.unknownTypes, m.inertBeliefs}
+	return []prometheus.Collector{m.exports, m.records, m.droppedValues, m.tenantRejections, m.unknownTypes, m.inertBeliefs, m.producerConflicts}
 }
 
 func (m *Metrics) export(ok bool) {
@@ -151,6 +162,13 @@ func (m *Metrics) addInertBelief(tenant, relationType, reason string) {
 		return
 	}
 	m.inertBeliefs.WithLabelValues(tenant, relationType, reason).Inc()
+}
+
+func (m *Metrics) addProducerConflict(tenant, reason string) {
+	if m == nil || tenant == "" {
+		return
+	}
+	m.producerConflicts.WithLabelValues(tenant, reason).Inc()
 }
 
 func (m *Metrics) addDroppedValues(tenant string, n int) {
