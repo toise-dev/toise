@@ -1172,10 +1172,23 @@ func (e *Engine) removeIncidentRelations(id model.EntityID, when time.Time) (int
 			errs = append(errs, fmt.Errorf("removing edge %s of deleted %s: %w", rel.ID, id, err))
 			continue
 		}
-		delete(e.relRefs, rel.ID)
+		if prev, ok := e.relRefs[rel.ID]; ok {
+			delete(e.relRefs, rel.ID)
+			e.onStagedRollback(func() { e.relRefs[rel.ID] = prev })
+		}
 		n++
 	}
 	return n, errors.Join(errs...)
+}
+
+// onStagedRollback registers fn on the currently staged batch so that a failed
+// flush can undo a liveness-bookkeeping mutation made while the batch was
+// staged. Outside a sweep there is no staged batch and fn is dropped: the
+// caller has already committed (or failed) on its own.
+func (e *Engine) onStagedRollback(fn func()) {
+	if e.staged != nil {
+		e.staged.rollbacks = append(e.staged.rollbacks, fn)
+	}
 }
 
 // SweepResult reports what one liveness pass expired, entities and edges kept
@@ -1206,9 +1219,11 @@ func (e *Engine) Sweep() (SweepResult, error) {
 	// and its whole subtree lapses at once) otherwise costs one fsync per entity
 	// and edge, stalling ingestion for the duration. commit() sees the staged
 	// slot and buffers instead of appending per event (C1/C5). Liveness
-	// bookkeeping (refs, relRefs) is mutated directly below and, per the
-	// Batch contract, is not rolled back on a flush failure — the next Sweep
-	// self-heals from the still-live projection.
+	// bookkeeping (refs, relRefs, contested) is mutated directly below, but
+	// every mutation registers its undo on the staged batch: on a failed flush
+	// the reference changes are rolled back, so the next Sweep retries the same
+	// expiries against the still-live projection (the re-inserted refs are
+	// still lapsed).
 	st := newStaged()
 	e.staged = st
 
@@ -1236,6 +1251,12 @@ func (e *Engine) Sweep() (SweepResult, error) {
 					silenced[id] = silencedSpeaker{scope: scope, deadline: ref.deadline}
 				}
 				delete(speakers, key)
+				e.onStagedRollback(func() {
+					if _, ok := e.refs[id]; !ok {
+						e.refs[id] = speakers
+					}
+					speakers[key] = ref
+				})
 			}
 		}
 		if len(speakers) == 0 {
@@ -1245,8 +1266,14 @@ func (e *Engine) Sweep() (SweepResult, error) {
 	for _, id := range orphaned {
 		ent, ok, deleted := e.graph.GetEntity(id)
 		if !ok || deleted {
-			delete(e.refs, id)
-			delete(e.contested, id)
+			if prev, ok := e.refs[id]; ok {
+				delete(e.refs, id)
+				e.onStagedRollback(func() { e.refs[id] = prev })
+			}
+			if prev, ok := e.contested[id]; ok {
+				delete(e.contested, id)
+				e.onStagedRollback(func() { e.contested[id] = prev })
+			}
 			continue
 		}
 		ev := model.Event{Entity: &model.EntityEvent{
@@ -1262,10 +1289,18 @@ func (e *Engine) Sweep() (SweepResult, error) {
 		if err := e.commit(ev, false); err != nil {
 			e.logger.Error("failed to expire stale entity", "id", id, "err", err)
 			errs = append(errs, fmt.Errorf("expiring stale entity %s: %w", id, err))
-			continue // leave the (empty) ref set to retry next sweep
+			// commit cannot fail while a batch is staged; this branch only
+			// guards the unstaged form.
+			continue
 		}
-		delete(e.refs, id)
-		delete(e.contested, id)
+		if prev, ok := e.refs[id]; ok {
+			delete(e.refs, id)
+			e.onStagedRollback(func() { e.refs[id] = prev })
+		}
+		if prev, ok := e.contested[id]; ok {
+			delete(e.contested, id)
+			e.onStagedRollback(func() { e.contested[id] = prev })
+		}
 		e.logger.Warn("expired stale entity: no producer heartbeat within its interval",
 			"entity_type", ent.Type, "entity_id", id)
 		res.Entities++
@@ -1283,11 +1318,15 @@ func (e *Engine) Sweep() (SweepResult, error) {
 			for v, at := range c.values {
 				if now.After(at.Add(interval)) {
 					delete(c.values, v)
+					e.onStagedRollback(func() { c.values[v] = at })
 				}
 			}
 		}
 		if len(c.values) == 0 {
-			delete(e.contested, id)
+			if prev, ok := e.contested[id]; ok {
+				delete(e.contested, id)
+				e.onStagedRollback(func() { e.contested[id] = prev })
+			}
 		}
 	}
 
@@ -1319,6 +1358,12 @@ func (e *Engine) Sweep() (SweepResult, error) {
 		for key, ref := range speakers {
 			if !ref.deadline.IsZero() && now.After(ref.deadline) {
 				delete(speakers, key)
+				e.onStagedRollback(func() {
+					if _, ok := e.relRefs[id]; !ok {
+						e.relRefs[id] = speakers
+					}
+					speakers[key] = ref
+				})
 			}
 		}
 		if len(speakers) == 0 {
@@ -1328,7 +1373,10 @@ func (e *Engine) Sweep() (SweepResult, error) {
 	for _, id := range expiredRelations {
 		rel, ok := e.graph.GetRelation(id)
 		if !ok {
-			delete(e.relRefs, id)
+			if prev, ok := e.relRefs[id]; ok {
+				delete(e.relRefs, id)
+				e.onStagedRollback(func() { e.relRefs[id] = prev })
+			}
 			continue
 		}
 		ev := e.relationEvent(model.RelationRemoved, rel, now, model.DeleteSourceLivenessExpiry)
@@ -1337,7 +1385,10 @@ func (e *Engine) Sweep() (SweepResult, error) {
 			errs = append(errs, fmt.Errorf("expiring stale relation %s: %w", id, err))
 			continue
 		}
-		delete(e.relRefs, id)
+		if prev, ok := e.relRefs[id]; ok {
+			delete(e.relRefs, id)
+			e.onStagedRollback(func() { e.relRefs[id] = prev })
+		}
 		e.logger.Warn("expired stale relation: not re-asserted within its interval",
 			"relation_type", rel.Type, "relation_id", id)
 		res.Relations++
@@ -1345,8 +1396,9 @@ func (e *Engine) Sweep() (SweepResult, error) {
 
 	if ferr := e.flushStaged(st); ferr != nil {
 		// The batch is atomic: on a failed flush nothing was persisted or applied,
-		// so nothing was expired. Report zero and let the next sweep retry against
-		// the still-live projection.
+		// so nothing was expired. The rollbacks above restore the liveness
+		// bookkeeping this pass mutated, so report zero and let the next sweep
+		// retry the same expiries against the still-live projection.
 		errs = append(errs, ferr)
 		res = SweepResult{}
 	}
