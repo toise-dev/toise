@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resurrection grace window got a new id: the entity's history split. The
   snapshot now carries every tombstone, in deletion order, with its grace
   window anchored on the original deletion.
+- **A failed liveness sweep no longer leaves entities live and untracked
+  (#553).** The sweep stages every expiry into one batch and dropped each
+  producer reference as it went; when the batch failed to persist, nothing
+  expired but the references were already gone, so no later sweep could see
+  those entities or edges again, and a snapshot taken afterwards made the loss
+  permanent. Every reference change the sweep makes is now undone when its
+  flush fails, so the next sweep retries the same expiries.
 - **An annotation now records who wrote it (#628).** Both write surfaces
   stored an empty author and the audit record carried no actor, so a
   contested note could not be traced. The authenticated principal is now
