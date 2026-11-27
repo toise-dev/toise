@@ -1,7 +1,7 @@
-// base.go: BASE segment snapshots. A base is a full, compressed copy of a
-// tenant's event log up to sequence S. Once a base exists, older regular
-// segments (and older bases) below the retention cut can be deleted, because
-// the base alone is sufficient to replay history up to S.
+// base.go: BASE segment snapshots. A base is a full copy of a tenant's event
+// log up to sequence S. Once a base exists, older regular segments (and older
+// bases) below the retention cut can be deleted, because the base alone is
+// sufficient to replay history up to S.
 
 package logship
 
@@ -58,12 +58,15 @@ func isBaseName(name string) bool {
 	return ok
 }
 
-// baseHeader is serialized uncompressed as:
+// baseHeader is serialized at the START of the object, UNCOMPRESSED, as:
 //
 //	"TBSE" | version byte (1) | horizon int64 BE unix nanos (0 == zero Time)
-//	       | writtenAt int64 BE unix nanos | framed events (encodeSegment)
+//	       | writtenAt int64 BE unix nanos
 //
-// followed by zstd compression. Fixed part is baseHeaderLen bytes.
+// The fixed part is baseHeaderLen bytes; it is followed by
+// compressSegment(encodeSegment(events)), i.e. the zstd-compressed framed
+// events. Keeping the header raw means the retention cut can be found with a
+// small ranged read instead of downloading and decompressing whole bases.
 type baseHeader struct {
 	Horizon   time.Time
 	WrittenAt time.Time
@@ -83,43 +86,52 @@ func nanosToTime(n int64) time.Time {
 	return time.Unix(0, n).UTC()
 }
 
+// parseBaseHeader parses and validates the fixed baseHeaderLen-byte prefix of
+// a base object. It never touches the compressed payload.
+func parseBaseHeader(raw []byte) (baseHeader, error) {
+	if len(raw) < baseHeaderLen {
+		return baseHeader{}, fmt.Errorf("logship: base too short: %d bytes", len(raw))
+	}
+	if string(raw[:4]) != baseMagic {
+		return baseHeader{}, fmt.Errorf("logship: bad base magic %q", raw[:4])
+	}
+	if v := raw[4]; v != baseVersion {
+		return baseHeader{}, fmt.Errorf("logship: unsupported base version %d (want version 1)", v)
+	}
+	return baseHeader{
+		Horizon:   nanosToTime(int64(binary.BigEndian.Uint64(raw[5:13]))),
+		WrittenAt: nanosToTime(int64(binary.BigEndian.Uint64(raw[13:21]))),
+	}, nil
+}
+
 func encodeBase(h baseHeader, events []model.Event) ([]byte, error) {
 	body, err := encodeSegment(events)
 	if err != nil {
 		return nil, fmt.Errorf("logship: encode base events: %w", err)
 	}
-	buf := make([]byte, baseHeaderLen, baseHeaderLen+len(body))
+	compressed, err := compressSegment(body)
+	if err != nil {
+		return nil, fmt.Errorf("logship: compress base: %w", err)
+	}
+	buf := make([]byte, baseHeaderLen, baseHeaderLen+len(compressed))
 	copy(buf, baseMagic)
 	buf[4] = baseVersion
 	binary.BigEndian.PutUint64(buf[5:13], uint64(timeToNanos(h.Horizon)))
 	binary.BigEndian.PutUint64(buf[13:21], uint64(timeToNanos(h.WrittenAt)))
-	buf = append(buf, body...)
-	compressed, err := compressSegment(buf)
-	if err != nil {
-		return nil, fmt.Errorf("logship: compress base: %w", err)
-	}
-	return compressed, nil
+	buf = append(buf, compressed...)
+	return buf, nil
 }
 
 func decodeBase(data []byte) (baseHeader, []model.Event, error) {
-	raw, err := decompressSegment(data)
+	h, err := parseBaseHeader(data)
+	if err != nil {
+		return baseHeader{}, nil, err
+	}
+	raw, err := decompressSegment(data[baseHeaderLen:])
 	if err != nil {
 		return baseHeader{}, nil, fmt.Errorf("logship: decompress base: %w", err)
 	}
-	if len(raw) < baseHeaderLen {
-		return baseHeader{}, nil, fmt.Errorf("logship: base too short: %d bytes", len(raw))
-	}
-	if string(raw[:4]) != baseMagic {
-		return baseHeader{}, nil, fmt.Errorf("logship: bad base magic %q", raw[:4])
-	}
-	if v := raw[4]; v != baseVersion {
-		return baseHeader{}, nil, fmt.Errorf("logship: unsupported base version %d (want version 1)", v)
-	}
-	h := baseHeader{
-		Horizon:   nanosToTime(int64(binary.BigEndian.Uint64(raw[5:13]))),
-		WrittenAt: nanosToTime(int64(binary.BigEndian.Uint64(raw[13:21]))),
-	}
-	events, err := decodeSegment(raw[baseHeaderLen:])
+	events, err := decodeSegment(raw)
 	if err != nil {
 		return baseHeader{}, nil, fmt.Errorf("logship: decode base events: %w", err)
 	}
@@ -154,6 +166,21 @@ func (sh *Shipper) readBase(ctx context.Context, tenant string, seq uint64) (bas
 	return h, events, nil
 }
 
+// readBaseHeader fetches only the fixed uncompressed header of a base, so
+// retention decisions never download or decompress the events payload.
+func (sh *Shipper) readBaseHeader(ctx context.Context, tenant string, seq uint64) (baseHeader, error) {
+	name := baseName(tenant, seq)
+	raw, err := sh.sink.GetPrefix(ctx, name, baseHeaderLen)
+	if err != nil {
+		return baseHeader{}, fmt.Errorf("logship: get %s header: %w", name, err)
+	}
+	h, err := parseBaseHeader(raw)
+	if err != nil {
+		return baseHeader{}, fmt.Errorf("logship: decode %s header: %w", name, err)
+	}
+	return h, nil
+}
+
 // Compact writes a base segment for the tenant when retention is positive and
 // the newest base is older than baseInterval, then deletes the segments and
 // bases that a base at least retention old makes redundant. It never ships:
@@ -180,7 +207,7 @@ func (sh *Shipper) Compact(ctx context.Context, tenant string, src EventSource, 
 		newestSeq = existing[len(existing)-1]
 	}
 	if newestAt.IsZero() && len(existing) > 0 {
-		h, _, readErr := sh.readBase(ctx, tenant, newestSeq)
+		h, readErr := sh.readBaseHeader(ctx, tenant, newestSeq)
 		if readErr != nil {
 			return readErr
 		}
@@ -250,11 +277,12 @@ func (sh *Shipper) Compact(ctx context.Context, tenant string, src EventSource, 
 	}
 
 	// Walk newest to oldest; the cut is the NEWEST base old enough for
-	// retention, so we never delete history covered by a fresh base.
+	// retention, so we never delete history covered by a fresh base. Only the
+	// fixed header of each base is read, not its events payload.
 	cut := uint64(0)
 	found := false
 	for i := len(bases) - 1; i >= 0; i-- {
-		h, _, readErr := sh.readBase(ctx, tenant, bases[i])
+		h, readErr := sh.readBaseHeader(ctx, tenant, bases[i])
 		if readErr != nil {
 			return readErr
 		}

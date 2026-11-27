@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -23,6 +24,10 @@ import (
 type Sink interface {
 	Put(ctx context.Context, name string, data []byte) error
 	Get(ctx context.Context, name string) ([]byte, error)
+	// GetPrefix returns at most the first n bytes of the object (fewer if the
+	// object is shorter). Backends with ranged reads use it so callers can
+	// inspect a header without fetching the whole object.
+	GetPrefix(ctx context.Context, name string, n int) ([]byte, error)
 	// List returns the names under prefix, in lexical order.
 	List(ctx context.Context, prefix string) ([]string, error)
 	// Delete removes name; a missing object is not an error.
@@ -93,6 +98,28 @@ func (f *FileSink) Get(ctx context.Context, name string) ([]byte, error) {
 		return nil, fmt.Errorf("logship: reading %s: %w", name, err)
 	}
 	return data, nil
+}
+
+// GetPrefix reads up to n bytes from the start of the object; a file shorter
+// than n yields its full content.
+func (f *FileSink) GetPrefix(ctx context.Context, name string, n int) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if n <= 0 {
+		return nil, nil
+	}
+	file, err := os.Open(f.path(name))
+	if err != nil {
+		return nil, fmt.Errorf("logship: reading %s: %w", name, err)
+	}
+	defer func() { _ = file.Close() }()
+	buf := make([]byte, n)
+	m, err := io.ReadFull(file, buf)
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		return nil, fmt.Errorf("logship: reading %s: %w", name, err)
+	}
+	return buf[:m], nil
 }
 
 // List returns segment names under prefix in lexical order, skipping the

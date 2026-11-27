@@ -514,15 +514,8 @@ func TestReplayBaseChainErrors(t *testing.T) {
 			if err != nil {
 				t.Fatalf("encodeBase: %v", err)
 			}
-			raw, err := decompressSegment(data)
-			if err != nil {
-				t.Fatalf("decompressSegment: %v", err)
-			}
-			raw[4] = 2
-			bad, err := compressSegment(raw)
-			if err != nil {
-				t.Fatalf("compressSegment: %v", err)
-			}
+			bad := append([]byte(nil), data...)
+			bad[4] = 2
 			putBase(dir, bad)
 		})
 		if err == nil || !strings.Contains(err.Error(), "version") {
@@ -536,15 +529,8 @@ func TestReplayBaseChainErrors(t *testing.T) {
 			if err != nil {
 				t.Fatalf("encodeBase: %v", err)
 			}
-			raw, err := decompressSegment(data)
-			if err != nil {
-				t.Fatalf("decompressSegment: %v", err)
-			}
-			raw[0] = 'X'
-			bad, err := compressSegment(raw)
-			if err != nil {
-				t.Fatalf("compressSegment: %v", err)
-			}
+			bad := append([]byte(nil), data...)
+			bad[0] = 'X'
 			putBase(dir, bad)
 		})
 		if err == nil {
@@ -650,15 +636,8 @@ func TestBaseCodecRoundTrip(t *testing.T) {
 		t.Fatalf("Horizon = %v, want zero time", h2.Horizon)
 	}
 
-	// Truncated payload: shorter than the 21-byte header once decompressed.
-	raw, err := decompressSegment(data)
-	if err != nil {
-		t.Fatalf("decompressSegment: %v", err)
-	}
-	short, err := compressSegment(raw[:10])
-	if err != nil {
-		t.Fatalf("compressSegment: %v", err)
-	}
+	// Truncated object: shorter than the uncompressed 21-byte header.
+	short := data[:10]
 	if _, _, decErr := decodeBase(short); decErr == nil {
 		t.Fatal("decodeBase of truncated data: want error, got nil")
 	}
