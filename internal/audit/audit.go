@@ -22,6 +22,7 @@ type Event struct {
 	Surface string    `json:"surface"`          // "mcp" | "graphql"
 	Action  string    `json:"action"`           // e.g. "annotate_entity"
 	Target  string    `json:"target,omitempty"` // the affected entity id
+	Actor   string    `json:"actor,omitempty"`  // the authenticated principal that performed it
 }
 
 // Auditor appends JSON-line audit records to a sink. Safe for concurrent use.

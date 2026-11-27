@@ -118,7 +118,9 @@ func TestUnauthenticatedWritesAllowedNeedsNothingAuthenticating(t *testing.T) {
 // only its presence is.
 type stubVerifier struct{}
 
-func (stubVerifier) Verify(context.Context, string) (string, string, bool) { return "", "", false }
+func (stubVerifier) Verify(context.Context, string) (string, string, string, bool) {
+	return "", "", "", false
+}
 
 // TestEnabledFollowsTheDeclarationNotTheVerifier pins the ordering hazard
 // directly. Enabled() answers "is a credential required". Answering it from the

@@ -49,13 +49,13 @@ func (r *mutationResolver) AnnotateEntity(ctx context.Context, id string, in []g
 	for _, e := range in {
 		values[e.Key] = e.Value
 	}
-	a, err := r.Annotations.SetAt(ent.IdentityHash(), id, values, "", r.now())
+	a, err := r.Annotations.SetAt(ent.IdentityHash(), id, values, auth.Principal(ctx), r.now())
 	if err != nil {
 		return nil, err
 	}
 	r.Audit.Record(audit.Event{
 		Time: r.now(), Tenant: tenant.FromContext(ctx), Surface: "graphql",
-		Action: "annotate_entity", Target: id,
+		Action: "annotate_entity", Target: id, Actor: auth.Principal(ctx),
 	})
 	return annotationToGQL(a), nil
 }

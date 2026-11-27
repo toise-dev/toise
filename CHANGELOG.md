@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An annotation now records who wrote it (#628).** Both write surfaces
+  stored an empty author and the audit record carried no actor, so a
+  contested note could not be traced. The authenticated principal is now
+  stored as the annotation author and as the audit `actor`: `token:` plus
+  a short prefix of the token's SHA-256 for a static token, `oidc:` plus
+  the `sub` claim for an OIDC bearer, `unauthenticated` when auth is off,
+  and `local` on MCP over stdio. The author is never taken from the
+  request.
 - **Two machines sharing one `service.instance.id` no longer retract each
   other's embedded edges.** The reconciler now also keys on the Resource's
   `host.id`, so each machine diffs only against its own assertions and both
