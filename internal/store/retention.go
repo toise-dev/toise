@@ -13,9 +13,11 @@ import (
 
 // CoalesceHeartbeats compacts the log by collapsing maximal runs of consecutive
 // entity.unchanged heartbeats for the same entity down to their first and last
-// record, deleting the redundant middle ones (primary record and index
-// entries). Meaningful events and relation events are never touched. It returns
-// the number of records removed. See ADR 0013.
+// record, plus the record with the smallest event time (ties broken by lowest
+// seq) so that horizon baselines minted by PruneOlderThan survive as run
+// middles. Only the remaining middle records are deleted (primary record and
+// index entries). Meaningful events and relation events are never touched. It
+// returns the number of records removed. See ADR 0013.
 //
 // The scan runs on a pebble snapshot without s.mu, so ingestion never waits on
 // maintenance (#115): every staged delete is a seq that existed at snapshot
@@ -59,10 +61,21 @@ func (s *Store) CoalesceHeartbeats() (int, error) {
 			for j+1 < len(recs) && recs[j+1].ct == model.EntityUnchanged {
 				j++
 			}
-			// Keep recs[i] (first) and recs[j] (last); drop the middle. The
-			// scan already carried everything the index keys need — no
-			// per-record re-read.
+			// Keep recs[i] (first) and recs[j] (last); also keep the record
+			// with the smallest event time (lowest seq on ties) so that a
+			// horizon baseline appended mid-run survives coalescing. Drop the
+			// remaining middle. The scan already carried everything the index
+			// keys need — no per-record re-read.
+			earliest := i
+			for k := i + 1; k <= j; k++ {
+				if recs[k].eventTimeNano < recs[earliest].eventTimeNano {
+					earliest = k
+				}
+			}
 			for k := i + 1; k < j; k++ {
+				if k == earliest {
+					continue
+				}
 				r := recs[k]
 				for _, key := range [][]byte{
 					primaryKey(r.seq),
