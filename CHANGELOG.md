@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Shipped log segments are now zstd-compressed.** Segments sent to the
+  log-shipping target were raw framed protobuf, and the target keeps them
+  until something removes them, so it grew by gigabytes a day. New segments
+  are written as `<from>-<to>.seg.zst`; restore reads both formats as one
+  validated chain, so an existing shipped log continues without a gap. No
+  configuration change.
 - **A restart no longer forgets recent deletions.** Soft-deleted entities were
   left out of the projection snapshot, so a deletion older than the last
   snapshot lost its tombstone at restart, and a producer returning within the
