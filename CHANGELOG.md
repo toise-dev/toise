@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A restart no longer forgets recent deletions.** Soft-deleted entities were
+  left out of the projection snapshot, so a deletion older than the last
+  snapshot lost its tombstone at restart, and a producer returning within the
+  resurrection grace window got a new id: the entity's history split. The
+  snapshot now carries every tombstone, in deletion order, with its grace
+  window anchored on the original deletion.
 - **An annotation now records who wrote it (#628).** Both write surfaces
   stored an empty author and the audit record carried no actor, so a
   contested note could not be traced. The authenticated principal is now
