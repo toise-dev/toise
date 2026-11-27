@@ -72,8 +72,8 @@ type FindPathOutput struct {
 	MaxDepth  int       `json:"max_depth" jsonschema:"the hop cap that was applied; raise it if reachable=false looks wrong"`
 	Path      []PathHop `json:"path,omitempty" jsonschema:"the entities along the shortest path, start first"`
 
-	Convergences     []Entity `json:"convergences,omitempty" jsonschema:"terminal entities (an observed network.endpoint) that BOTH ends depend on. They were reached from both sides and deliberately not crossed: dialing the same destination is not evidence that the two ends communicate. Read convergence_note before concluding anything from them"`
-	ConvergenceTotal int      `json:"convergence_total,omitempty" jsonschema:"how many shared terminal entities were found, when convergences lists fewer"`
+	Convergences     []Entity `json:"convergences,omitempty" jsonschema:"terminal entities (an observed network.endpoint) or shared next-hop addresses (a network.address) that BOTH ends reach and deliberately do not cross: dialing the same destination is not evidence that the two ends communicate. Read convergence_note before concluding anything from them"`
+	ConvergenceTotal int      `json:"convergence_total,omitempty" jsonschema:"how many shared terminal entities or next-hop addresses were found, when convergences lists fewer"`
 	ConvergenceNote  string   `json:"convergence_note,omitempty" jsonschema:"what the convergences mean and what they do not mean, in words"`
 }
 
@@ -218,7 +218,14 @@ func (s *Server) findPath(ctx context.Context, _ *mcpsdk.CallToolRequest, in Fin
 		}
 		if len(shared) > 0 {
 			out.Convergences, out.ConvergenceTotal = convergenceEntities(g, shared)
-			out.ConvergenceNote = convergenceNote(out.ConvergenceTotal)
+			anyAddress := false
+			for i := range out.Convergences {
+				if out.Convergences[i].Type == model.TypeNetworkAddress {
+					anyAddress = true
+					break
+				}
+			}
+			out.ConvergenceNote = convergenceNote(out.ConvergenceTotal, anyAddress)
 		}
 	}
 	if !found {
@@ -272,16 +279,20 @@ func convergenceEntities(g Graph, ids []model.EntityID) (listed []Entity, total 
 
 // convergenceNote states what a convergence means and what it does not, in a
 // sentence: a flag nobody reads is a flag ignored.
-func convergenceNote(n int) string {
+func convergenceNote(n int, anyAddress bool) string {
 	subject := "this destination"
 	if n > 1 {
 		subject = "these destinations"
 	}
-	return fmt.Sprintf("no path within max_depth, but both ends depend on %d shared terminal %s. "+
+	note := fmt.Sprintf("no path within max_depth, but both ends depend on %d shared terminal %s. "+
 		"They were reached from both sides and NOT crossed: dialing %s is not evidence that the two ends "+
 		"communicate with each other, and treating it as a hop is how a convergence gets reported as a route. "+
 		"Call get_neighbors on one to see who else dials it.",
 		n, plural("entity", "entities", n), subject)
+	if anyAddress {
+		note += " A shared network.address means both ends reach the same address, typically the same gateway address they route via: each emits towards it, which is not evidence that they communicate with each other, and nothing here observed a path between them."
+	}
+	return note
 }
 
 func plural(one, many string, n int) string {

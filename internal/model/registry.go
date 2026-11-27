@@ -421,8 +421,12 @@ var terminalEntityTypes = map[string]struct{}{
 //     Two aggregated_into edges mean two members of one bond, and traffic does
 //     not pass from one member to another — it goes up into the logical
 //     interface and into the machine.
+//   - a network.address entered by next_hop_via and left by next_hop_via is a
+//     gateway two routes share. The address is always the To of that relation,
+//     so both routes point at it and emit towards it: two hosts behind one
+//     gateway are not linked by it.
 //
-// Both are #442's error in a new costume, and a per-type rule is what is left
+// All are #442's error in a new costume, and a per-type rule is what is left
 // after the general one was refuted: a switch traversed enters and leaves by
 // has_interface, both times, and that IS forwarding. Structurally the two cases
 // are identical — the node is the From of both edges — so only the type
@@ -431,6 +435,7 @@ var terminalEntityTypes = map[string]struct{}{
 var crossOnlyByChangingRelationTypes = map[string]struct{}{
 	TypeNetworkNeighbor:  {},
 	TypeNetworkInterface: {},
+	TypeNetworkAddress:   {},
 }
 
 // CrossingNeedsADifferentRelation reports whether a traversal passing through an

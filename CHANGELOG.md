@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the `sub` claim for an OIDC bearer, `unauthenticated` when auth is off,
   and `local` on MCP over stdio. The author is never taken from the
   request.
+- **`find_path` no longer reports two hosts behind one gateway as connected.**
+  Routes naming the same next-hop address came back `reachable: true` with no
+  convergence, although both only emit towards the gateway. The shared address
+  is now returned as a convergence, with a note saying it is not evidence of a
+  path between the two ends (#555).
 
 ## [0.26.0] - 2026-11-16
 

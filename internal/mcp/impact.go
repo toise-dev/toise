@@ -25,7 +25,7 @@ type ImpactOfInput struct {
 type ImpactedEntity struct {
 	Entity
 	Depth int    `json:"depth" jsonschema:"propagation hops from the failed entity"`
-	Via   string `json:"via" jsonschema:"relation type of the edge that propagated the impact to this entity"`
+	Via   string `json:"via" jsonschema:"relation type of the edge that propagated the impact to this entity, or \"resolved_endpoint\" when it was reached by the read-time endpoint-to-listener resolution rather than a stored relation"`
 }
 
 // ImpactOfOutput is the blast radius, nearest first.
@@ -76,6 +76,7 @@ func (s *Server) impactOf(ctx context.Context, _ *mcpsdk.CallToolRequest, in Imp
 	out.Aliases = len(group) - 1
 	var impacted []ImpactedEntity
 	counts := map[string]int{}
+	var epIndex endpointIndex
 	for d := 1; d <= depth && len(frontier) > 0; d++ {
 		var next []model.EntityID
 		for _, cur := range frontier {
@@ -95,6 +96,21 @@ func (s *Server) impactOf(ctx context.Context, _ *mcpsdk.CallToolRequest, in Imp
 					Entity: entityOut(ent, false), Depth: d, Via: e.rel.Type,
 				})
 				counts[ent.Type]++
+			}
+			// Endpoints that resolve onto cur are not stored as related to it, so
+			// bridge them here; their stored depends_on edges then reach the
+			// dependents on the next level.
+			curEnt, _, _ := g.GetEntity(cur)
+			for _, ep := range epIndex.endpointsFor(g, curEnt) {
+				if _, seen := visited[ep.ID]; seen {
+					continue
+				}
+				visited[ep.ID] = struct{}{}
+				next = append(next, ep.ID)
+				impacted = append(impacted, ImpactedEntity{
+					Entity: entityOut(ep, false), Depth: d, Via: viaResolvedEndpoint,
+				})
+				counts[ep.Type]++
 			}
 		}
 		frontier = next
