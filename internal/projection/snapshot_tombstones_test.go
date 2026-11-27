@@ -158,3 +158,33 @@ func TestSnapshotTombstonesKeepDeletionOrder(t *testing.T) {
 		t.Fatalf("e4 should be tombstoned")
 	}
 }
+
+func TestSnapshotTombstoneSharingLiveIdentity(t *testing.T) {
+	t0 := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+	snapAt := t0.Add(10 * time.Minute)
+
+	a := NewWithTombstoneCap(10)
+	a.SetTombstoneTTL(time.Hour)
+	a.SetClock(func() time.Time { return t0 })
+	a.Apply(entCreatedEvent("old", "h1", t0))
+	a.Apply(entDeletedEvent("old", "h1", t0))
+	a.Apply(entCreatedEvent("new", "h1", t0))
+
+	b := NewWithTombstoneCap(10)
+	b.SetTombstoneTTL(time.Hour)
+	b.SetClock(func() time.Time { return snapAt })
+	for _, ev := range a.SnapshotEvents(snapAt) {
+		b.Apply(ev)
+	}
+
+	id, ok := b.MatchIdentity(model.TypeHost, e1Identity())
+	if !ok || id != model.EntityID("new") {
+		t.Fatalf("MatchIdentity = (%v, %v), want (new, true)", id, ok)
+	}
+	if _, found, deleted := b.GetEntity(model.EntityID("new")); !found || deleted {
+		t.Fatalf("GetEntity(new) = (found=%v, deleted=%v), want (true, false)", found, deleted)
+	}
+	if got := b.EntityCount(); got != 1 {
+		t.Fatalf("EntityCount = %d, want 1", got)
+	}
+}
