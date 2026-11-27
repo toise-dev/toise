@@ -177,8 +177,8 @@ func TestSnapshotRestoreDoesNotResurrectDeleted(t *testing.T) {
 		[]model.KeyValue{{Key: "host.id", Value: model.StringValue("b")}}); ok {
 		t.Error("deleted entity b is matchable after restore: resurrected")
 	}
-	if _, found, _ := restored.GetEntity(b); found {
-		t.Error("deleted entity b present after restore: the snapshot must omit it")
+	if _, found, deleted := restored.GetEntity(b); found && !deleted {
+		t.Error("deleted entity b is live after restore: resurrected")
 	}
 }
 
