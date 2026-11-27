@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Bound the log-shipping target with periodic base segments (#635).**
+  Shipped segments were kept forever, because a restore needs an unbroken
+  chain from sequence 0. The new `log_shipping_retention` key (default `0`:
+  unchanged behavior, nothing is written or deleted; `168h` recommended) and
+  `log_shipping_base_interval` (default `24h`) write a periodic
+  `<tenant>/base-<sequence>.seg.zst` holding the local log up to the last
+  shipped sequence, verify it by reading it back, and only then delete the
+  segments and older bases made redundant by the newest base that is at least
+  `log_shipping_retention` old. Restore starts from the newest base and still
+  rejects any gap or overlap after it. Never put a lifecycle rule on the
+  bucket.
+
 ### Fixed
 
 - **Shipped log segments are now zstd-compressed.** Segments sent to the

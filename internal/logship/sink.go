@@ -9,6 +9,7 @@ package logship
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,6 +25,8 @@ type Sink interface {
 	Get(ctx context.Context, name string) ([]byte, error)
 	// List returns the names under prefix, in lexical order.
 	List(ctx context.Context, prefix string) ([]string, error)
+	// Delete removes name; a missing object is not an error.
+	Delete(ctx context.Context, name string) error
 }
 
 // FileSink is a Sink backed by a local directory tree. Point it at a mounted
@@ -125,4 +128,18 @@ func (f *FileSink) List(ctx context.Context, prefix string) ([]string, error) {
 	}
 	sort.Strings(names)
 	return names, nil
+}
+
+// Delete removes the object name; a missing object is not an error.
+func (f *FileSink) Delete(ctx context.Context, name string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := os.Remove(f.path(name)); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("logship: delete %s: %w", name, err)
+	}
+	return nil
 }

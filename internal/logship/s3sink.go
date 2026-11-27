@@ -104,3 +104,11 @@ func (s *S3Sink) List(ctx context.Context, prefix string) ([]string, error) {
 	sort.Strings(names)
 	return names, nil
 }
+
+// Delete removes the object name; a missing object is not an error.
+func (s *S3Sink) Delete(ctx context.Context, name string) error {
+	if err := s.client.RemoveObject(ctx, s.bucket, s.key(name), minio.RemoveObjectOptions{}); err != nil {
+		return fmt.Errorf("logship s3: delete %s: %w", name, err)
+	}
+	return nil
+}

@@ -35,6 +35,8 @@ for the rationale.
 | `backup_interval` | `TOISE_BACKUP_INTERVAL` | `--backup-interval` | `0` | interval between online backups of every tenant's event log (`0` = off) |
 | `log_shipping_dir` | `TOISE_LOG_SHIPPING_DIR` | `--log-shipping-dir` | (empty) | directory to ship event-log segments to (with `log_shipping_interval`); may be a mounted bucket/NFS; empty = off (ADR 0029) |
 | `log_shipping_interval` | `TOISE_LOG_SHIPPING_INTERVAL` | `--log-shipping-interval` | `0` | interval between event-log segment ships of every tenant (`0` = off) |
+| `log_shipping_retention` | `TOISE_LOG_SHIPPING_RETENTION` | `--log-shipping-retention` | `0` | bound the shipping target with periodic base segments: segments older than the newest base that is at least this old are deleted (`0` = write no base and delete nothing, the historical behavior); `168h` (7 days) is the recommended value, see [backups](operations/backups.md#bounding-the-shipping-target-base-segments) |
+| `log_shipping_base_interval` | `TOISE_LOG_SHIPPING_BASE_INTERVAL` | `--log-shipping-base-interval` | `24h` | interval between base segments; only used when `log_shipping_retention` is above `0` |
 | `log_shipping_s3_bucket` | `TOISE_LOG_SHIPPING_S3_BUCKET` | — | (empty) | ship segments to this S3 bucket instead of a directory (selects S3 mode); AWS S3 or any S3-compatible store (ADR 0029) |
 | `log_shipping_s3_endpoint` | `TOISE_LOG_SHIPPING_S3_ENDPOINT` | — | (empty) | S3 endpoint `host[:port]`, no scheme (e.g. `s3.amazonaws.com`, `minio.internal:9000`) |
 | `log_shipping_s3_region` | `TOISE_LOG_SHIPPING_S3_REGION` | — | (empty) | optional S3 region; ignored by many compatible stores |

@@ -69,6 +69,23 @@ Same segment layout (`<prefix>/<tenant>/<from>-<to>.seg`), same sink-derived cur
     whether the endpoint is a public address. Point the endpoint at a link you
     trust, or leave TLS on.
 
+### Bounding the shipping target: base segments
+
+By default nothing ever removes a shipped segment, because a restore needs an unbroken chain from sequence 0: the target grows for as long as the server runs. `log_shipping_retention` turns on **base segments** to bound it:
+
+```
+log_shipping_interval: 30s
+log_shipping_retention: 168h        # 7 days, the recommended value
+log_shipping_base_interval: 24h     # the default
+```
+
+Every `log_shipping_base_interval`, right after a successful ship, Toise writes `<tenant>/base-<sequence>.seg.zst`: the tenant's local event log up to the last shipped sequence, plus the local prune horizon. It then reads the base back and decodes it in full; only after that does it delete anything. The deletion cut is the **newest base that is at least `log_shipping_retention` old**: every segment ending at or before that base's sequence, and every older base, is removed. If no base is old enough yet, nothing is deleted. Any failure along the way deletes nothing more, is logged, and never interrupts shipping.
+
+- The depth kept in the target is between `log_shipping_retention` and `log_shipping_retention` plus `log_shipping_base_interval`.
+- A restore starts from the newest base, then requires the segments to chain exactly from that base's sequence. The history it yields reaches back to the chosen base's time minus the local `retention_max_age`.
+- The default `0` keeps today's behavior: no base is written and nothing is ever deleted.
+- **Never add a lifecycle or expiry rule on the bucket.** A restore refuses a gap, so an object removed behind Toise's back breaks the chain. Let Toise do the deleting.
+
 Shipping and the cold/scheduled checkpoint are complementary: the checkpoint is a coarse, instantly-openable full copy; the segments are a fine-grained, append-only tail. Keep both for a small RPO **and** a fast restore.
 
 ## Restore (runbook)

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/klauspost/compress/zstd"
 	"google.golang.org/protobuf/proto"
@@ -18,10 +19,12 @@ import (
 )
 
 // EventSource is the slice of the event log the shipper needs: the current max
-// sequence, and a tail scan in sequence order. *store.Store satisfies it.
+// sequence, a tail scan in sequence order, and the local prune horizon so a
+// base segment can carry it. *store.Store satisfies it.
 type EventSource interface {
 	Sequence() uint64
 	ScanFrom(afterSeq uint64, fn func(seq uint64, ev model.Event) error) error
+	PruneHorizon() time.Time
 }
 
 const (
@@ -88,13 +91,20 @@ func decompressSegment(data []byte) ([]byte, error) {
 type Shipper struct {
 	sink Sink
 
-	mu     sync.Mutex
-	cursor map[string]uint64 // tenant -> last shipped seq (cache of the sink-derived value)
+	mu         sync.Mutex
+	cursor     map[string]uint64    // tenant -> last shipped seq (cache of the sink-derived value)
+	now        func() time.Time     // clock, injectable for tests
+	lastBaseAt map[string]time.Time // tenant -> write time of the newest known base
 }
 
 // New returns a Shipper writing to sink.
 func New(sink Sink) *Shipper {
-	return &Shipper{sink: sink, cursor: map[string]uint64{}}
+	return &Shipper{
+		sink:       sink,
+		cursor:     map[string]uint64{},
+		now:        time.Now,
+		lastBaseAt: map[string]time.Time{},
+	}
 }
 
 // Ship exports the events (lastShipped, current] for one tenant as a single
@@ -158,54 +168,93 @@ func (sh *Shipper) Ship(ctx context.Context, tenant string, src EventSource) (in
 // lost object, a partial mirror, two shippers racing one sink), so Replay
 // validates the chain — first segment from 0, each segment resuming exactly
 // where the previous ended — and hard-errors on a gap or overlap rather than
-// silently reconstructing a divergent log. Both the legacy uncompressed
-// (".seg") and compressed (".seg.zst") formats are accepted, so a log shipped
-// before compression was introduced and continued after it replays as one
-// chain.
+// silently reconstructing a divergent log. Restore starts from the newest base
+// when one exists. Both the legacy uncompressed (".seg") and compressed
+// (".seg.zst") formats are accepted, so a log shipped before compression was
+// introduced and continued after it replays as one chain.
 func (sh *Shipper) Replay(ctx context.Context, tenant string, apply func(model.Event) error) error {
+	_, err := sh.replay(ctx, tenant, apply)
+	return err
+}
+
+// replay is the body of Replay: it returns the horizon of the base it started
+// from (the zero time when it replayed without a base).
+func (sh *Shipper) replay(ctx context.Context, tenant string, apply func(model.Event) error) (time.Time, error) {
+	baseSeqs, err := sh.bases(ctx, tenant)
+	if err != nil {
+		return time.Time{}, err
+	}
+	var next uint64 // expected `from` of the next segment; the log starts at 0
+	var horizon time.Time
+	fromBase := false
+	if len(baseSeqs) > 0 {
+		// newest base
+		seq := baseSeqs[0]
+		for _, s := range baseSeqs[1:] {
+			if s > seq {
+				seq = s
+			}
+		}
+		hdr, events, readErr := sh.readBase(ctx, tenant, seq)
+		if readErr != nil {
+			return time.Time{}, fmt.Errorf("logship: reading base for tenant %s: %w", tenant, readErr)
+		}
+		for i := range events {
+			if applyErr := apply(events[i]); applyErr != nil {
+				return time.Time{}, applyErr
+			}
+		}
+		next = seq
+		horizon = hdr.Horizon
+		fromBase = true
+	}
+
 	names, err := sh.segments(ctx, tenant)
 	if err != nil {
-		return err
+		return time.Time{}, err
 	}
 	sort.Slice(names, func(i, j int) bool {
 		fi, _, _ := parseSegmentName(names[i])
 		fj, _, _ := parseSegmentName(names[j])
 		return fi < fj
 	})
-	var next uint64 // expected `from` of the next segment; the log starts at 0
 	for _, name := range names {
 		from, to, ok := parseSegmentName(name)
 		if !ok {
-			return fmt.Errorf("logship: unparseable segment name %q for tenant %s", name, tenant)
+			return time.Time{}, fmt.Errorf("logship: unparseable segment name %q for tenant %s", name, tenant)
+		}
+		if fromBase && to <= next {
+			// segment entirely before the base
+			continue
 		}
 		if from != next {
 			if from < next {
-				return fmt.Errorf("logship: overlapping segment %q for tenant %s: begins at %d, expected %d", name, tenant, from, next)
+				return time.Time{}, fmt.Errorf("logship: overlapping segment %q for tenant %s: begins at %d, expected %d", name, tenant, from, next)
 			}
-			return fmt.Errorf("logship: gap before segment %q for tenant %s: begins at %d, expected %d (a segment is missing)", name, tenant, from, next)
+			return time.Time{}, fmt.Errorf("logship: gap before segment %q for tenant %s: begins at %d, expected %d (a segment is missing)", name, tenant, from, next)
 		}
 		data, err := sh.sink.Get(ctx, name)
 		if err != nil {
-			return err
+			return time.Time{}, err
 		}
 		if strings.HasSuffix(name, segZstExt) {
 			data, err = decompressSegment(data)
 			if err != nil {
-				return fmt.Errorf("logship: decompressing segment %s: %w", name, err)
+				return time.Time{}, fmt.Errorf("logship: decompressing segment %s: %w", name, err)
 			}
 		}
 		events, err := decodeSegment(data)
 		if err != nil {
-			return fmt.Errorf("logship: decoding segment %s: %w", name, err)
+			return time.Time{}, fmt.Errorf("logship: decoding segment %s: %w", name, err)
 		}
 		for i := range events {
 			if err := apply(events[i]); err != nil {
-				return err
+				return time.Time{}, err
 			}
 		}
 		next = to
 	}
-	return nil
+	return horizon, nil
 }
 
 // Tenants returns the distinct tenant ids that have segments in the sink, sorted
@@ -256,6 +305,15 @@ func (sh *Shipper) lastShipped(ctx context.Context, tenant string) (uint64, erro
 			maxSeq = to
 		}
 	}
+	baseSeqs, err := sh.bases(ctx, tenant)
+	if err != nil {
+		return 0, err
+	}
+	for _, seq := range baseSeqs {
+		if seq > maxSeq {
+			maxSeq = seq
+		}
+	}
 	sh.mu.Lock()
 	sh.cursor[tenant] = maxSeq
 	sh.mu.Unlock()
@@ -274,6 +332,9 @@ func (sh *Shipper) segments(ctx context.Context, tenant string) ([]string, error
 	}
 	var out []string
 	for _, n := range names {
+		if isBaseName(n) {
+			continue
+		}
 		if isSegmentName(n) {
 			out = append(out, n)
 		}

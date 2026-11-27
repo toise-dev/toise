@@ -14,7 +14,12 @@ import (
 var fixedTime = time.Unix(1_700_000_000, 0).UTC()
 
 // fakeSource is an in-memory event log: events[i] has sequence i+1.
-type fakeSource struct{ events []model.Event }
+type fakeSource struct {
+	events  []model.Event
+	horizon time.Time
+}
+
+func (f *fakeSource) PruneHorizon() time.Time { return f.horizon }
 
 func (f *fakeSource) Sequence() uint64 { return uint64(len(f.events)) }
 

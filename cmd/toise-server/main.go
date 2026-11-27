@@ -802,6 +802,13 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 						}); err != nil {
 							logger.Error("log shipping failed", "tenant", st.Tenant, "err", err)
 						}
+						if cfg.LogShipRetention.D() > 0 {
+							if err := maint.Observe("logcompact", st.Tenant, func() error {
+								return shipper.Compact(ctx, st.Tenant, st.Store, cfg.LogShipRetention.D(), cfg.LogShipBaseInterval.D())
+							}); err != nil {
+								logger.Error("log shipping compaction failed", "tenant", st.Tenant, "err", err)
+							}
+						}
 						// Operator annotations ride the same store (#348): each
 						// node pushes what it wrote and pulls what the other
 						// wrote, last-writer-wins, tombstones included — the
