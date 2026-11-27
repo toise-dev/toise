@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/klauspost/compress/zstd"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/toise-dev/toise/internal/model"
@@ -23,7 +24,62 @@ type EventSource interface {
 	ScanFrom(afterSeq uint64, fn func(seq uint64, ev model.Event) error) error
 }
 
-const segExt = ".seg"
+const (
+	segExt    = ".seg"     // legacy, uncompressed segments
+	segZstExt = ".seg.zst" // compressed segments written by Ship
+)
+
+// One package-level zstd encoder and decoder, created lazily and safe for
+// concurrent use: EncodeAll/DecodeAll are stateless per call. The decoder caps
+// its memory budget so a corrupt or hostile object cannot make it allocate
+// without bound.
+var (
+	zstdEncOnce sync.Once
+	zstdEnc     *zstd.Encoder
+	zstdEncErr  error
+
+	zstdDecOnce sync.Once
+	zstdDec     *zstd.Decoder
+	zstdDecErr  error
+)
+
+func zstdEncoder() (*zstd.Encoder, error) {
+	zstdEncOnce.Do(func() {
+		zstdEnc, zstdEncErr = zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault))
+	})
+	if zstdEncErr != nil {
+		return nil, zstdEncErr
+	}
+	return zstdEnc, nil
+}
+
+func zstdDecoder() (*zstd.Decoder, error) {
+	zstdDecOnce.Do(func() {
+		zstdDec, zstdDecErr = zstd.NewReader(nil, zstd.WithDecoderMaxMemory(1<<30))
+	})
+	if zstdDecErr != nil {
+		return nil, zstdDecErr
+	}
+	return zstdDec, nil
+}
+
+// compressSegment compresses the framed segment bytes as a single zstd stream.
+func compressSegment(data []byte) ([]byte, error) {
+	enc, err := zstdEncoder()
+	if err != nil {
+		return nil, fmt.Errorf("logship: zstd encoder: %w", err)
+	}
+	return enc.EncodeAll(data, nil), nil
+}
+
+// decompressSegment reverses compressSegment.
+func decompressSegment(data []byte) ([]byte, error) {
+	dec, err := zstdDecoder()
+	if err != nil {
+		return nil, fmt.Errorf("logship: zstd decoder: %w", err)
+	}
+	return dec.DecodeAll(data, nil)
+}
 
 // Shipper exports a tenant's event log to a Sink as immutable, contiguous
 // segments. The cursor (last shipped sequence) is derived from the sink, so the
@@ -42,9 +98,9 @@ func New(sink Sink) *Shipper {
 }
 
 // Ship exports the events (lastShipped, current] for one tenant as a single
-// segment object and returns how many it shipped (0 when already current). The
-// range is closed at the sequence read before the scan, so events appended
-// during the scan ship on the next call.
+// compressed segment object and returns how many it shipped (0 when already
+// current). The range is closed at the sequence read before the scan, so events
+// appended during the scan ship on the next call.
 func (sh *Shipper) Ship(ctx context.Context, tenant string, src EventSource) (int, error) {
 	from, err := sh.lastShipped(ctx, tenant)
 	if err != nil {
@@ -71,9 +127,13 @@ func (sh *Shipper) Ship(ctx context.Context, tenant string, src EventSource) (in
 		return 0, nil
 	}
 
-	seg, err := encodeSegment(events)
+	framed, err := encodeSegment(events)
 	if err != nil {
 		return 0, err
+	}
+	seg, err := compressSegment(framed)
+	if err != nil {
+		return 0, fmt.Errorf("logship: compressing segment %s: %w", segmentName(tenant, from, current), err)
 	}
 	name := segmentName(tenant, from, current)
 	if err := sh.sink.Put(ctx, name, seg); err != nil {
@@ -98,7 +158,10 @@ func (sh *Shipper) Ship(ctx context.Context, tenant string, src EventSource) (in
 // lost object, a partial mirror, two shippers racing one sink), so Replay
 // validates the chain — first segment from 0, each segment resuming exactly
 // where the previous ended — and hard-errors on a gap or overlap rather than
-// silently reconstructing a divergent log.
+// silently reconstructing a divergent log. Both the legacy uncompressed
+// (".seg") and compressed (".seg.zst") formats are accepted, so a log shipped
+// before compression was introduced and continued after it replays as one
+// chain.
 func (sh *Shipper) Replay(ctx context.Context, tenant string, apply func(model.Event) error) error {
 	names, err := sh.segments(ctx, tenant)
 	if err != nil {
@@ -125,6 +188,12 @@ func (sh *Shipper) Replay(ctx context.Context, tenant string, apply func(model.E
 		if err != nil {
 			return err
 		}
+		if strings.HasSuffix(name, segZstExt) {
+			data, err = decompressSegment(data)
+			if err != nil {
+				return fmt.Errorf("logship: decompressing segment %s: %w", name, err)
+			}
+		}
 		events, err := decodeSegment(data)
 		if err != nil {
 			return fmt.Errorf("logship: decoding segment %s: %w", name, err)
@@ -149,7 +218,7 @@ func (sh *Shipper) Tenants(ctx context.Context) ([]string, error) {
 	seen := map[string]struct{}{}
 	var out []string
 	for _, n := range names {
-		if !strings.HasSuffix(n, segExt) {
+		if !isSegmentName(n) {
 			continue
 		}
 		i := strings.IndexByte(n, '/')
@@ -193,32 +262,46 @@ func (sh *Shipper) lastShipped(ctx context.Context, tenant string) (uint64, erro
 	return maxSeq, nil
 }
 
+// isSegmentName reports whether n ends with either segment extension.
+func isSegmentName(n string) bool {
+	return strings.HasSuffix(n, segExt) || strings.HasSuffix(n, segZstExt)
+}
+
 func (sh *Shipper) segments(ctx context.Context, tenant string) ([]string, error) {
 	names, err := sh.sink.List(ctx, tenant+"/")
 	if err != nil {
 		return nil, err
 	}
-	out := names[:0]
+	var out []string
 	for _, n := range names {
-		if strings.HasSuffix(n, segExt) {
+		if isSegmentName(n) {
 			out = append(out, n)
 		}
 	}
 	return out, nil
 }
 
-// segmentName is "<tenant>/<from>-<to>.seg" with zero-padded hex sequences, so
-// lexical order is sequence order.
+// segmentName is "<tenant>/<from>-<to>.seg.zst" with zero-padded hex sequences,
+// so lexical order is sequence order.
 func segmentName(tenant string, from, to uint64) string {
-	return fmt.Sprintf("%s/%016x-%016x%s", tenant, from, to, segExt)
+	return fmt.Sprintf("%s/%016x-%016x%s", tenant, from, to, segZstExt)
 }
 
+// parseSegmentName parses "<tenant>/<from>-<to>.seg" or ".seg.zst" names (the
+// longer suffix is checked first so it is not mistaken for ".seg").
 func parseSegmentName(name string) (from, to uint64, ok bool) {
 	base := name
 	if i := strings.LastIndex(base, "/"); i >= 0 {
 		base = base[i+1:]
 	}
-	base = strings.TrimSuffix(base, segExt)
+	switch {
+	case strings.HasSuffix(base, segZstExt):
+		base = strings.TrimSuffix(base, segZstExt)
+	case strings.HasSuffix(base, segExt):
+		base = strings.TrimSuffix(base, segExt)
+	default:
+		return 0, 0, false
+	}
 	parts := strings.SplitN(base, "-", 2)
 	if len(parts) != 2 {
 		return 0, 0, false

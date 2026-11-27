@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Shipped log segments are now zstd-compressed.** Segments sent to the
+  log-shipping target were raw framed protobuf, and the target keeps them
+  until something removes them, so it grew by gigabytes a day. New segments
+  are written as `<from>-<to>.seg.zst`; restore reads both formats as one
+  validated chain, so an existing shipped log continues without a gap. No
+  configuration change.
 - **A failed liveness sweep no longer leaves entities live and untracked
   (#553).** The sweep stages every expiry into one batch and dropped each
   producer reference as it went; when the batch failed to persist, nothing
