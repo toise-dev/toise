@@ -353,6 +353,52 @@ toise-server delete-tenant --data-dir /var/lib/toise/data acme
 It removes `<data_dir>/acme/` (event log and snapshot) entirely and frees a slot
 under `max_tenants`. The `default` tenant cannot be deleted.
 
+**Reloading tenant settings without a restart.** Send `SIGHUP` to the server and
+it re-reads the configuration file it was started with, validates it in full with
+the same rules as at boot, and applies **only these seven keys**:
+`tenant_allowlist`, `max_tenants`, `tenant_names`, `tenant_retention_max_age`,
+`tenant_tokens`, `tenant_read_tokens` and `tenant_ingest_tokens`. This is how a
+tenant, and the token that serves it, is added (or a token revoked) without
+interrupting anyone else.
+
+```ini
+# /etc/systemd/system/toise.service
+[Service]
+ExecReload=/bin/kill -HUP $MAINPID
+```
+
+```sh
+systemctl reload toise
+```
+
+- **All or nothing.** If the file is invalid (a parse error, an unknown key, a
+  malformed tenant entry), nothing changes, the error is logged and
+  `toise_config_reloads_total{outcome="rejected"}` is incremented. Requests never
+  observe a mix of the old and the new tokens or limits.
+- **Removal.** A token removed from the file is refused from the next request.
+  Removing a tenant from `tenant_allowlist` only prevents it from being created: a
+  tenant that is already open keeps serving, and deleting it stays the offline
+  `delete-tenant` command. Lowering `max_tenants` below the number of open tenants
+  only blocks new creations. A name or retention change reaches open tenants at
+  the next maintenance pass or request.
+- **Authentication cannot be switched on or off.** A reload that would leave the
+  server with no token at all, or give a server without any token its first one,
+  is rejected: that change needs a restart.
+- **Every other key needs a restart.** If another key changed in the file, the
+  reload still applies the seven keys above, logs one warning per other key
+  (`requires a restart; not applied`) and counts the reload as
+  `outcome="partial"`. The warning repeats on each later reload until the server
+  is restarted.
+- **Observability.** `toise_config_reloads_total{outcome}` (`applied`, `partial`,
+  `rejected`, all three always exported) and
+  `toise_config_last_reload_success_timestamp_seconds`. The log line `config
+  reloaded` lists the tenants added to or removed from the allowlist, the tenants
+  whose name or retention changed, and the number of tokens per tenant before and
+  after. Token values and hashes are never logged.
+
+Environment variables and flags keep their precedence and are not re-read: only
+the file can change a reloadable key at runtime.
+
 **Metrics and tenants:** the Toise gauges on `/metrics` (`toise_entities`,
 `toise_events_total`, `toise_store_disk_bytes`, …) are **aggregated across
 tenants** — a sum, except `toise_snapshot_seq` and `toise_store_prune_horizon_seconds`

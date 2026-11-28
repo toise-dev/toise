@@ -36,6 +36,7 @@ Serving external customers adds isolation, stronger auth, and real durability/HA
   - `trust-header` (default) — the `X-Scope-OrgID` header is trusted; correct **behind an authenticating gateway** that sets it.
   - `derive-only` — the tenant is derived from the request's scoped token and the client header is **ignored**; the strict mode for direct external exposure (a client cannot claim another tenant).
 - Bound tenant creation: `tenant_auto_create`, `tenant_allowlist`, `max_tenants`.
+- **Adding a tenant needs no restart:** `tenant_allowlist`, `max_tenants`, `tenant_names`, `tenant_retention_max_age` and the three tenant token lists are re-applied on `SIGHUP` (`systemctl reload` with `ExecReload=/bin/kill -HUP $MAINPID`), all or nothing; every other key still needs a restart. See [Multi-tenancy](../configuration.md#multi-tenancy).
 - **Per-tenant scoped tokens:** `tenant_read_tokens` / `tenant_ingest_tokens` give a customer a token that is both role-scoped *and* tenant-scoped.
 
 ### Authentication

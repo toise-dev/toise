@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Tenants can be added without a restart (#638).** On `SIGHUP` the server
+  re-reads its configuration file, validates it with the boot rules and applies
+  `tenant_allowlist`, `max_tenants`, `tenant_names`,
+  `tenant_retention_max_age`, `tenant_tokens`, `tenant_read_tokens` and
+  `tenant_ingest_tokens` in one atomic swap; an invalid file changes nothing.
+  Every other key still needs a restart and is reported as ignored. New
+  metrics: `toise_config_reloads_total{outcome}` and
+  `toise_config_last_reload_success_timestamp_seconds`.
+
 ### Fixed
 
 - **Shipped log segments are now zstd-compressed.** Segments sent to the
