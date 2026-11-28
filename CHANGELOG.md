@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`toise_producer_last_seen_timestamp_seconds{tenant, producer, scope}`
+  says when each producer last spoke (#474).** Freshness existed on the read
+  surfaces but no series carried it, so a "silent producer" panel or alert
+  could only use late symptoms such as `toise_entities` falling. The gauge is
+  one series per producer and collection method, read from the liveness state
+  the engine already keeps, with no scan of the log. It is filtered by tenant
+  like the other per-tenant series, leaves when the speaker's last reference
+  is swept, and is reseeded after a restart for references that declared an
+  interval. A replica that only receives the shipped log has no liveness and
+  exports nothing for it.
 - **`toise_events_appended_total{change_type}` shows what the log is made
   of.** `toise_events_total` is one number, so nobody could tell a log that
   grows by heartbeats, which coalescing keeps cheap, from one that grows by

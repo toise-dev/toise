@@ -508,7 +508,8 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		logger.Warn("tenants quarantined at boot (stores failed to open, left on disk for recovery)", "count", len(q), "tenants", q)
 	}
 	openTenants := metrics.NewOpenTenants(func() float64 { return float64(reg.TenantCount()) })
-	metricsExtra := append(ingestMetrics.Collectors(), authFailures, quarantined, openTenants)
+	metricsExtra := append(ingestMetrics.Collectors(), authFailures, quarantined, openTenants,
+		metrics.NewProducerLastSeen(producerLastSeen(reg)))
 	metricsExtra = append(metricsExtra, maint.Collectors()...)
 	metricsExtra = append(metricsExtra, exposure.Collectors()...)
 	metricsExtra = append(metricsExtra, promises.Collectors()...)
