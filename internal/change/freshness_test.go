@@ -211,3 +211,58 @@ func TestProducerLastSeenReseededByRestoreLiveness(t *testing.T) {
 		t.Fatalf("zero-interval producer Z should not seed an entry: %v", m)
 	}
 }
+
+func TestProducerLastSeenNotMovedByRestartFloor(t *testing.T) {
+	clock := &contestedClock{t: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)}
+	e := New(projection.New(), &fakeAppender{}, WithClock(clock.now))
+
+	observedAt := clock.t
+	err := e.Batch(func(b *Batch) {
+		b.SetScope("test/method-a")
+		if _, err := b.ObserveEntity(EntityObservation{
+			Type:     model.TypeHost,
+			Identity: []model.KeyValue{kv("host.id", "host-1")},
+			Producer: prodP,
+			Interval: time.Minute,
+		}); err != nil {
+			t.Fatalf("observe P: %v", err)
+		}
+		if _, err := b.ObserveEntity(EntityObservation{
+			Type:     model.TypeHost,
+			Identity: []model.KeyValue{kv("host.id", "host-2")},
+			Producer: prodZ,
+			Interval: 0,
+		}); err != nil {
+			t.Fatalf("observe Z: %v", err)
+		}
+	})
+	if err != nil {
+		t.Fatalf("batch: %v", err)
+	}
+
+	blob, err := e.LivenessBlob()
+	if err != nil {
+		t.Fatalf("LivenessBlob: %v", err)
+	}
+
+	// A restart two hours after the observation: the restart floor moves the
+	// stored deadlines forward, but the reseeded "last spoke" must not move
+	// with them.
+	clock2 := &contestedClock{t: observedAt.Add(2 * time.Hour)}
+	e2 := New(projection.New(), &fakeAppender{}, WithClock(clock2.now))
+	if err := e2.RestoreLiveness(blob); err != nil {
+		t.Fatalf("RestoreLiveness: %v", err)
+	}
+
+	m := seenMap(t, e2)
+	got, ok := m[prodP+"|test/method-a"]
+	if !ok {
+		t.Fatalf("restored engine missing entry for producer P: %v", m)
+	}
+	if diff := got.Sub(observedAt); diff < -time.Second || diff > time.Second {
+		t.Fatalf("LastSeen = %v, want %v (the observation time, not the restart time)", got, observedAt)
+	}
+	if _, ok := m[prodZ+"|test/method-a"]; ok {
+		t.Fatalf("zero-interval producer Z should not seed an entry: %v", m)
+	}
+}

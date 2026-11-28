@@ -46,30 +46,7 @@ func (e *Engine) pruneSpeakers() {
 }
 
 // Caller holds obsMu.
-func (e *Engine) reseedSpeakers() {
-	candidates := make(map[string]time.Time)
-	for _, byKey := range e.refs {
-		for key, ref := range byKey {
-			if ref.interval <= 0 || ref.deadline.IsZero() {
-				continue
-			}
-			c := ref.deadline.Add(-ref.interval)
-			if prev, ok := candidates[key]; !ok || c.After(prev) {
-				candidates[key] = c
-			}
-		}
-	}
-	for _, byKey := range e.relRefs {
-		for key, ref := range byKey {
-			if ref.interval <= 0 || ref.deadline.IsZero() {
-				continue
-			}
-			c := ref.deadline.Add(-ref.interval)
-			if prev, ok := candidates[key]; !ok || c.After(prev) {
-				candidates[key] = c
-			}
-		}
-	}
+func (e *Engine) reseedSpeakers(candidates map[string]time.Time) {
 	e.freshMu.Lock()
 	defer e.freshMu.Unlock()
 	if e.lastSpoke == nil && len(candidates) > 0 {

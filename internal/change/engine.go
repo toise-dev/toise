@@ -1957,6 +1957,22 @@ func (e *Engine) RestoreLiveness(blob []byte) error {
 		return fmt.Errorf("unmarshaling liveness snapshot: %w", err)
 	}
 	now := e.now()
+	// The "last spoke" seed must come from the STORED deadline, before the
+	// restart floor is applied. Deriving it from the floored refs made every
+	// producer appear to have spoken at the instant of the restart, hiding a
+	// producer that was already silent before the restart from a
+	// "time() - last_seen > threshold" alert for one full threshold after
+	// every restart.
+	candidates := make(map[string]time.Time)
+	seed := func(p string, stored time.Time, interval time.Duration) {
+		if interval <= 0 || stored.IsZero() {
+			return
+		}
+		c := stored.Add(-interval)
+		if prev, ok := candidates[p]; !ok || c.After(prev) {
+			candidates[p] = c
+		}
+	}
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()
 	// A blob that does not declare speaker keys recorded no collection method, so
@@ -1993,6 +2009,7 @@ func (e *Engine) RestoreLiveness(blob []byte) error {
 			if kept == 0 && interval > 0 {
 				deadline = time.Time{}
 			}
+			seed(p, deadline, kept)
 			ps[p] = liveRef{deadline: floorDeadline(deadline, kept, now), interval: kept,
 				legacy: legacy && scope == ""}
 		}
@@ -2003,6 +2020,7 @@ func (e *Engine) RestoreLiveness(blob []byte) error {
 		for p, deadline := range producers {
 			interval := snap.RelRefIntervals[id][p]
 			_, scope := splitRefKey(p)
+			seed(p, deadline, interval)
 			ps[p] = liveRef{deadline: floorDeadline(deadline, interval, now), interval: interval,
 				legacy: legacy && scope == ""}
 		}
@@ -2017,11 +2035,12 @@ func (e *Engine) RestoreLiveness(blob []byte) error {
 			continue
 		}
 		interval := snap.RelIntervals[id]
+		seed("", deadline, interval)
 		e.relRefs[model.RelationID(id)] = map[string]liveRef{
 			"": {deadline: floorDeadline(deadline, interval, now), interval: interval},
 		}
 	}
-	e.reseedSpeakers()
+	e.reseedSpeakers(candidates)
 	return nil
 }
 
