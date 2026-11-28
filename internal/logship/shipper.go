@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
@@ -184,82 +185,163 @@ func (sh *Shipper) ReplayWithHorizon(ctx context.Context, tenant string, apply f
 	return sh.replay(ctx, tenant, apply)
 }
 
+type segInfo struct {
+	name string
+	from uint64
+	to   uint64
+}
+
+// sortedSegs parses segment object names and returns them sorted by their
+// starting sequence.
+func sortedSegs(tenant string, names []string) ([]segInfo, error) {
+	segs := make([]segInfo, 0, len(names))
+	for _, name := range names {
+		from, to, ok := parseSegmentName(name)
+		if !ok {
+			return nil, fmt.Errorf("logship: unparseable segment name %q for tenant %s", name, tenant)
+		}
+		segs = append(segs, segInfo{name: name, from: from, to: to})
+	}
+	sort.Slice(segs, func(i, j int) bool {
+		return segs[i].from < segs[j].from
+	})
+	return segs, nil
+}
+
+// chainAfter verifies, using names only, that the segments ending after next
+// form an unbroken chain from next to the last segment. Segments that end at
+// or before next are ignored.
+func chainAfter(tenant string, segs []segInfo, next uint64) error {
+	for _, s := range segs {
+		if s.to <= next {
+			continue
+		}
+		if s.from != next {
+			if s.from < next {
+				return fmt.Errorf("logship: overlapping segment %q for tenant %s: begins at %d, expected %d", s.name, tenant, s.from, next)
+			}
+			return fmt.Errorf("logship: gap before segment %q for tenant %s: begins at %d, expected %d (a segment is missing)", s.name, tenant, s.from, next)
+		}
+		next = s.to
+	}
+	return nil
+}
+
 // replay is the body of Replay: it returns the horizon of the base it started
-// from (the zero time when it replayed without a base).
+// from (the zero time when it replayed without a base). It picks the newest
+// readable base whose following segments chain without a gap, falling back to
+// older bases when a newer one is unreadable, and applies nothing before that
+// choice is made.
 func (sh *Shipper) replay(ctx context.Context, tenant string, apply func(model.Event) error) (time.Time, error) {
 	baseSeqs, err := sh.bases(ctx, tenant)
 	if err != nil {
 		return time.Time{}, err
 	}
-	var next uint64 // expected `from` of the next segment; the log starts at 0
-	var horizon time.Time
-	fromBase := false
-	if len(baseSeqs) > 0 {
-		// newest base
-		seq := baseSeqs[0]
-		for _, s := range baseSeqs[1:] {
-			if s > seq {
-				seq = s
-			}
-		}
-		hdr, events, readErr := sh.readBase(ctx, tenant, seq)
-		if readErr != nil {
-			return time.Time{}, fmt.Errorf("logship: reading base for tenant %s: %w", tenant, readErr)
-		}
-		for i := range events {
-			if applyErr := apply(events[i]); applyErr != nil {
-				return time.Time{}, applyErr
-			}
-		}
-		next = seq
-		horizon = hdr.Horizon
-		fromBase = true
-	}
-
 	names, err := sh.segments(ctx, tenant)
 	if err != nil {
 		return time.Time{}, err
 	}
-	sort.Slice(names, func(i, j int) bool {
-		fi, _, _ := parseSegmentName(names[i])
-		fj, _, _ := parseSegmentName(names[j])
-		return fi < fj
-	})
-	for _, name := range names {
-		from, to, ok := parseSegmentName(name)
-		if !ok {
-			return time.Time{}, fmt.Errorf("logship: unparseable segment name %q for tenant %s", name, tenant)
+	segs, err := sortedSegs(tenant, names)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	var (
+		next       uint64 // expected `from` of the next segment; the log starts at 0
+		horizon    time.Time
+		fromBase   bool
+		baseEvents []model.Event
+	)
+	var skippedNames []string
+	var skippedErrs []error
+
+	// Choose the starting point before applying anything so that a failure
+	// never applies events from a base it then abandons. Bases are tried newest first: if
+	// the chain after the newest base is broken, an older base cannot repair
+	// it either, so the chain error is returned immediately.
+	for i := len(baseSeqs) - 1; i >= 0; i-- {
+		seq := baseSeqs[i]
+		if err := chainAfter(tenant, segs, seq); err != nil {
+			return time.Time{}, errors.Join(append([]error{err}, skippedErrs...)...)
 		}
-		if fromBase && to <= next {
+		hdr, events, readErr := sh.readBase(ctx, tenant, seq)
+		if readErr != nil {
+			skippedNames = append(skippedNames, baseName(tenant, seq))
+			skippedErrs = append(skippedErrs, readErr)
+			continue
+		}
+		next = seq
+		horizon = hdr.Horizon
+		fromBase = true
+		baseEvents = events
+		break
+	}
+
+	if len(baseSeqs) > 0 && !fromBase {
+		// No base was readable; fall back to a chain from 0 only if the
+		// segments reach all the way back to the start of the log. An empty
+		// segment list is not a chain from 0: with a base present, it means the
+		// history lives only in the unreadable bases, and replaying nothing
+		// would be a silent empty restore.
+		if len(segs) == 0 || segs[0].from != 0 {
+			return time.Time{}, fmt.Errorf("logship: no usable starting point for tenant %s: %w", tenant, errors.Join(skippedErrs...))
+		}
+		if err := chainAfter(tenant, segs, 0); err != nil {
+			return time.Time{}, fmt.Errorf("logship: no usable starting point for tenant %s: %w", tenant, errors.Join(skippedErrs...))
+		}
+	}
+
+	if len(skippedErrs) > 0 {
+		usedKey, usedVal := "used", "chain from 0"
+		if fromBase {
+			usedKey, usedVal = "used_base", baseName(tenant, next)
+		}
+		for i := range skippedErrs {
+			slog.Default().Warn("logship: skipping unreadable base",
+				"tenant", tenant,
+				"skipped_base", skippedNames[i],
+				"err", skippedErrs[i],
+				usedKey, usedVal)
+		}
+	}
+
+	for i := range baseEvents {
+		if err := apply(baseEvents[i]); err != nil {
+			return time.Time{}, err
+		}
+	}
+
+	for _, s := range segs {
+		if fromBase && s.to <= next {
 			// segment entirely before the base
 			continue
 		}
-		if from != next {
-			if from < next {
-				return time.Time{}, fmt.Errorf("logship: overlapping segment %q for tenant %s: begins at %d, expected %d", name, tenant, from, next)
+		if s.from != next {
+			if s.from < next {
+				return time.Time{}, fmt.Errorf("logship: overlapping segment %q for tenant %s: begins at %d, expected %d", s.name, tenant, s.from, next)
 			}
-			return time.Time{}, fmt.Errorf("logship: gap before segment %q for tenant %s: begins at %d, expected %d (a segment is missing)", name, tenant, from, next)
+			return time.Time{}, fmt.Errorf("logship: gap before segment %q for tenant %s: begins at %d, expected %d (a segment is missing)", s.name, tenant, s.from, next)
 		}
-		data, err := sh.sink.Get(ctx, name)
+		data, err := sh.sink.Get(ctx, s.name)
 		if err != nil {
 			return time.Time{}, err
 		}
-		if strings.HasSuffix(name, segZstExt) {
+		if strings.HasSuffix(s.name, segZstExt) {
 			data, err = decompressSegment(data)
 			if err != nil {
-				return time.Time{}, fmt.Errorf("logship: decompressing segment %s: %w", name, err)
+				return time.Time{}, fmt.Errorf("logship: decompressing segment %s: %w", s.name, err)
 			}
 		}
 		events, err := decodeSegment(data)
 		if err != nil {
-			return time.Time{}, fmt.Errorf("logship: decoding segment %s: %w", name, err)
+			return time.Time{}, fmt.Errorf("logship: decoding segment %s: %w", s.name, err)
 		}
 		for i := range events {
 			if err := apply(events[i]); err != nil {
 				return time.Time{}, err
 			}
 		}
-		next = to
+		next = s.to
 	}
 	return horizon, nil
 }
