@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`toise_events_appended_total{change_type}` shows what the log is made
+  of.** `toise_events_total` is one number, so nobody could tell a log that
+  grows by heartbeats, which coalescing keeps cheap, from one that grows by
+  flapping, which costs several records per flap. The new counter counts the
+  events appended since process start by change type, summed across tenants,
+  at zero for a type not yet seen. It is incremented in memory on append and
+  resets at restart; nothing scans the log. `toise_events_total` is unchanged.
+
 ### Fixed
 
 - **Shipped log segments are now zstd-compressed.** Segments sent to the

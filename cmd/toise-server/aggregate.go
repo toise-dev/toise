@@ -65,6 +65,16 @@ func (s aggregateStore) Sequence() uint64 {
 	return n
 }
 
+func (s aggregateStore) AppendedByChangeType() map[string]uint64 {
+	out := make(map[string]uint64)
+	for _, st := range s.reg.Stacks() {
+		for k, v := range st.Store.AppendedByChangeType() {
+			out[k] += v
+		}
+	}
+	return out
+}
+
 func (s aggregateStore) DiskUsage() uint64 {
 	var n uint64
 	for _, st := range s.reg.Stacks() {

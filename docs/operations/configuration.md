@@ -182,9 +182,17 @@ log backend, set `log_format: json` (and `log_level` as needed).
 
 `/metrics` exposes (Toise-specific, sampled at scrape time): `toise_build_info`,
 `toise_entities` (+ `toise_entities_by_type{type}`), `toise_relations`,
-`toise_events_total` (events appended to the log), `toise_store_disk_bytes`, and
+`toise_events_total` (events appended to the log), `toise_events_appended_total{change_type}`
+(events appended since process start, by change type; resets at restart), `toise_store_disk_bytes`, and
 `toise_events_pruned_total` / `toise_bytes_pruned_total` (retention pruning) —
 enough to build a Grafana dashboard of the graph's size and the store's growth.
+
+To read `toise_events_appended_total`, take its rate by `change_type`. A high
+`entity.unchanged` rate is cheap: heartbeats are coalesced, so a never-changing
+entity converges to two records. A high rate of `entity.state_changed`,
+`entity.attribute_updated`, or `entity.deleted` / `entity.created` pairs is
+flapping, which costs several records per flap and also keeps the neighboring
+heartbeats from coalescing.
 
 ## Retention — bounding on-disk growth
 

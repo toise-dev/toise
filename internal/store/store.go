@@ -65,6 +65,9 @@ type Store struct {
 	prunedBytes      uint64     // cumulative approximate bytes removed by pruning
 	snapshotSeq      uint64     // reference sequence of the last written snapshot
 	snapshotsWritten uint64     // cumulative snapshots written
+
+	appended        [model.RelationAttributeChanged + 1]uint64 // events appended since open, by change type
+	appendedUnknown uint64                                     // events appended since open outside the known change types
 }
 
 // Open opens (creating if needed) the event log at dir.
@@ -316,7 +319,36 @@ func (s *Store) Append(events ...model.Event) error {
 		return fmt.Errorf("committing %d events: %w", len(events), err)
 	}
 	s.seq = localSeq
+	for _, ev := range events {
+		var ct model.ChangeType
+		switch {
+		case ev.Entity != nil:
+			ct = ev.Entity.ChangeType
+		case ev.Relation != nil:
+			ct = ev.Relation.ChangeType
+		}
+		if ct >= model.EntityCreated && ct <= model.RelationAttributeChanged {
+			s.appended[ct]++
+		} else {
+			s.appendedUnknown++
+		}
+	}
 	return nil
+}
+
+// AppendedByChangeType reports the events appended to the log since this store
+// was opened, by change type. The counts live in memory and reset at restart.
+// Every known change type is present, at 0 when none were appended, plus an
+// "unknown" entry for anything outside the known range.
+func (s *Store) AppendedByChangeType() map[string]uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]uint64, len(s.appended))
+	for ct := model.EntityCreated; ct <= model.RelationAttributeChanged; ct++ {
+		out[ct.String()] = s.appended[ct]
+	}
+	out["unknown"] = s.appendedUnknown
+	return out
 }
 
 // Sequence returns the last assigned sequence (the number of records ever

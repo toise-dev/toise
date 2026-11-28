@@ -357,7 +357,11 @@ under `max_tenants`. The `default` tenant cannot be deleted.
 `toise_events_total`, `toise_store_disk_bytes`, …) are **aggregated across
 tenants** — a sum, except `toise_snapshot_seq` and `toise_store_prune_horizon_seconds`
 which report the high-water mark. They carry no per-tenant label, so the endpoint
-stays single-series and dashboards are unchanged. The maintenance metrics
+stays single-series and dashboards are unchanged. `toise_events_appended_total{change_type}`
+counts the events appended since process start by change type, summed across
+tenants, and resets at restart; a high `entity.unchanged` rate is cheap
+(heartbeats are coalesced), while a high rate of state or attribute changes, or
+of delete/create pairs, is flapping, which also defeats coalescing. The maintenance metrics
 (`toise_maintenance_*`) are the exception: they label by `tenant` (and `op`,
 `outcome`) so a stuck sweep/prune can be traced to its tenant.
 
