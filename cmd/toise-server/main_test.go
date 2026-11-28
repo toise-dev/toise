@@ -887,3 +887,70 @@ func TestRestoreLogFromConfiguredTarget(t *testing.T) {
 		t.Errorf("restored EntityCount = %d, want 1", g.EntityCount())
 	}
 }
+
+// IMPORTS NEEDED: none beyond store, logship, model, filepath, context, testing, time
+
+type horizonSource struct {
+	*store.Store
+	horizon time.Time
+}
+
+func (h *horizonSource) PruneHorizon() time.Time { return h.horizon }
+
+func TestRestoreLogSetsPruneHorizonFromBase(t *testing.T) {
+	segDir := t.TempDir()
+	dst := t.TempDir()
+
+	src, err := store.Open(filepath.Join(t.TempDir(), "acme"), store.DefaultConfig())
+	if err != nil {
+		t.Fatalf("open source store: %v", err)
+	}
+
+	at := time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC)
+	mk := func(id string) model.Event {
+		return model.Event{Entity: &model.EntityEvent{
+			EventID:       model.NewEventID(),
+			ChangeType:    model.EntityCreated,
+			Entity:        model.Entity{ID: model.EntityID(id), Type: model.TypeHost, Identity: []model.KeyValue{{Key: "host.id", Value: model.StringValue(id)}}},
+			EventTime:     at,
+			RecordedAt:    at,
+			SchemaVersion: model.SchemaVersion,
+		}}
+	}
+	if appendErr := src.Append(mk("h1"), mk("h2")); appendErr != nil {
+		t.Fatalf("append: %v", appendErr)
+	}
+
+	hz := at.Add(-time.Hour)
+	hs := &horizonSource{Store: src, horizon: hz}
+
+	sink := mustSink(t, segDir)
+	sh := logship.New(sink)
+	if _, shipErr := sh.Ship(context.Background(), "acme", hs); shipErr != nil {
+		t.Fatalf("ship: %v", shipErr)
+	}
+	if compactErr := sh.Compact(context.Background(), "acme", hs, 24*time.Hour, 12*time.Hour); compactErr != nil {
+		t.Fatalf("compact: %v", compactErr)
+	}
+
+	if closeErr := src.Close(); closeErr != nil {
+		t.Fatalf("close source: %v", closeErr)
+	}
+
+	if restoreErr := runRestoreLog([]string{"--from", segDir, "--data-dir", dst}, func(string) string { return "" }); restoreErr != nil {
+		t.Fatalf("runRestoreLog: %v", restoreErr)
+	}
+
+	rs, openErr := store.Open(filepath.Join(dst, "acme"), store.DefaultConfig())
+	if openErr != nil {
+		t.Fatalf("open restored store: %v", openErr)
+	}
+	defer func() { _ = rs.Close() }()
+
+	if !rs.PruneHorizon().Equal(hz) {
+		t.Fatalf("restored prune horizon = %v, want %v", rs.PruneHorizon(), hz)
+	}
+	if rs.Sequence() != 2 {
+		t.Fatalf("restored sequence = %d, want 2", rs.Sequence())
+	}
+}

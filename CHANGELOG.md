@@ -16,9 +16,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   events appended since process start by change type, summed across tenants,
   at zero for a type not yet seen. It is incremented in memory on append and
   resets at restart; nothing scans the log. `toise_events_total` is unchanged.
+- **Bound the log-shipping target with periodic base segments (#635).**
+  Shipped segments were kept forever, because a restore needs an unbroken
+  chain from sequence 0. The new `log_shipping_retention` key (default `0`:
+  unchanged behavior, nothing is written or deleted; `168h` recommended) and
+  `log_shipping_base_interval` (default `24h`) write a periodic
+  `<tenant>/base-<sequence>.seg.zst` holding the local log up to the last
+  shipped sequence, verify it by reading it back, and only then delete the
+  segments and older bases made redundant by the newest base that is at least
+  `log_shipping_retention` old. Restore starts from the newest base and still
+  rejects any gap or overlap after it. Never put a lifecycle rule on the
+  bucket.
 
 ### Fixed
 
+- **A log restored from a base segment now refuses as-of reads older than the
+  history it holds (#635).** Restore re-appended the events but left the
+  store's prune horizon unset, so an as-of read before the base's history
+  was answered from partial data instead of being refused. Restore now sets
+  the horizon recorded in the base, and a store that holds no events no
+  longer forgets a persisted horizon or snapshot reference when reopened.
 - **Shipped log segments are now zstd-compressed.** Segments sent to the
   log-shipping target were raw framed protobuf, and the target keeps them
   until something removes them, so it grew by gigabytes a day. New segments

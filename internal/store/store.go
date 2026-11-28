@@ -199,22 +199,24 @@ func (s *Store) Healthy() error {
 // after a restart or crash.
 func (s *Store) recoverSeq() error {
 	v, closer, err := s.db.Get(metaSeqKey)
-	if errors.Is(err, pebble.ErrNotFound) {
+	switch {
+	case errors.Is(err, pebble.ErrNotFound):
+		// Fresh store: no events yet. Keep seq at 0 but continue so a
+		// persisted prune horizon or snapshot reference is still restored.
 		s.seq = 0
-		return nil
-	}
-	if err != nil {
+	case err != nil:
 		return fmt.Errorf("reading sequence: %w", err)
-	}
-	n := len(v)
-	if n == 8 {
-		s.seq = binary.BigEndian.Uint64(v)
-	}
-	_ = closer.Close()
-	// A present-but-malformed marker is corruption, not a fresh store: silently
-	// resetting the sequence to 0 would re-issue sequences and clobber the log.
-	if n != 8 {
-		return fmt.Errorf("corrupt sequence marker: %d bytes, want 8", n)
+	default:
+		n := len(v)
+		if n == 8 {
+			s.seq = binary.BigEndian.Uint64(v)
+		}
+		_ = closer.Close()
+		// A present-but-malformed marker is corruption, not a fresh store: silently
+		// resetting the sequence to 0 would re-issue sequences and clobber the log.
+		if n != 8 {
+			return fmt.Errorf("corrupt sequence marker: %d bytes, want 8", n)
+		}
 	}
 
 	if hv, hcloser, herr := s.db.Get(metaPruneHorizonKey); herr == nil {
@@ -254,6 +256,25 @@ func (s *Store) PruneHorizon() time.Time {
 		return time.Time{}
 	}
 	return time.Unix(0, s.pruneHorizon).UTC()
+}
+
+// RestorePruneHorizon persists t as the prune horizon of a store being
+// rebuilt from shipped segments whose oldest history is t, so an as-of
+// read before t is refused instead of answered from partial data. It
+// never moves the horizon backwards: a t that is zero or not after the
+// current horizon is a no-op.
+func (s *Store) RestorePruneHorizon(t time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := t.UnixNano()
+	if t.IsZero() || n <= s.pruneHorizon {
+		return nil
+	}
+	if err := s.db.Set(metaPruneHorizonKey, encodeU64(uint64(n)), pebble.Sync); err != nil {
+		return fmt.Errorf("persisting restored prune horizon: %w", err)
+	}
+	s.pruneHorizon = n
+	return nil
 }
 
 // Append durably writes the given events to the log in a single atomic batch

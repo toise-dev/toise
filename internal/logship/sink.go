@@ -9,7 +9,9 @@ package logship
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -22,8 +24,14 @@ import (
 type Sink interface {
 	Put(ctx context.Context, name string, data []byte) error
 	Get(ctx context.Context, name string) ([]byte, error)
+	// GetPrefix returns at most the first n bytes of the object (fewer if the
+	// object is shorter). Backends with ranged reads use it so callers can
+	// inspect a header without fetching the whole object.
+	GetPrefix(ctx context.Context, name string, n int) ([]byte, error)
 	// List returns the names under prefix, in lexical order.
 	List(ctx context.Context, prefix string) ([]string, error)
+	// Delete removes name; a missing object is not an error.
+	Delete(ctx context.Context, name string) error
 }
 
 // FileSink is a Sink backed by a local directory tree. Point it at a mounted
@@ -92,6 +100,28 @@ func (f *FileSink) Get(ctx context.Context, name string) ([]byte, error) {
 	return data, nil
 }
 
+// GetPrefix reads up to n bytes from the start of the object; a file shorter
+// than n yields its full content.
+func (f *FileSink) GetPrefix(ctx context.Context, name string, n int) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if n <= 0 {
+		return nil, nil
+	}
+	file, err := os.Open(f.path(name))
+	if err != nil {
+		return nil, fmt.Errorf("logship: reading %s: %w", name, err)
+	}
+	defer func() { _ = file.Close() }()
+	buf := make([]byte, n)
+	m, err := io.ReadFull(file, buf)
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		return nil, fmt.Errorf("logship: reading %s: %w", name, err)
+	}
+	return buf[:m], nil
+}
+
 // List returns segment names under prefix in lexical order, skipping the
 // in-flight temp files Put leaves until rename.
 func (f *FileSink) List(ctx context.Context, prefix string) ([]string, error) {
@@ -125,4 +155,18 @@ func (f *FileSink) List(ctx context.Context, prefix string) ([]string, error) {
 	}
 	sort.Strings(names)
 	return names, nil
+}
+
+// Delete removes the object name; a missing object is not an error.
+func (f *FileSink) Delete(ctx context.Context, name string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := os.Remove(f.path(name)); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("logship: delete %s: %w", name, err)
+	}
+	return nil
 }

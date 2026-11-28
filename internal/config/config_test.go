@@ -272,6 +272,16 @@ func TestValidateRejectsSilentMisconfigurations(t *testing.T) {
 		{"ingest_mtls_only without client CA", func(c *Config) { c.IngestMTLSOnly = true }},
 		{"backup_dir without interval", func(c *Config) { c.BackupDir = "/x/backups" }},
 		{"log_shipping_dir without interval", func(c *Config) { c.LogShipDir = "/x/segments" }},
+		{"negative log_shipping_retention", func(c *Config) {
+			c.LogShipRetention = Duration(-time.Hour)
+		}},
+		{"negative log_shipping_base_interval", func(c *Config) {
+			c.LogShipBaseInterval = Duration(-time.Hour)
+		}},
+		{"log_shipping_retention with zero base interval", func(c *Config) {
+			c.LogShipRetention = Duration(168 * time.Hour)
+			c.LogShipBaseInterval = 0
+		}},
 		{"s3 bucket without endpoint", func(c *Config) {
 			c.LogShipS3Bucket = "b"
 			c.LogShipInterval = Duration(time.Hour)
@@ -486,5 +496,25 @@ func TestProductionLockdownNamesWhatItOverrode(t *testing.T) {
 	}
 	if len(cfg.ProductionOverrides) != 0 {
 		t.Errorf("no production profile, yet overrides = %v", cfg.ProductionOverrides)
+	}
+}
+
+func TestLogShippingRetentionDefaults(t *testing.T) {
+	def := Default()
+	if def.LogShipRetention != 0 {
+		t.Fatalf("default LogShipRetention = %v, want 0", def.LogShipRetention)
+	}
+	if def.LogShipBaseInterval != Duration(24*time.Hour) {
+		t.Fatalf("default LogShipBaseInterval = %v, want 24h", def.LogShipBaseInterval)
+	}
+	if err := def.Validate(); err != nil {
+		t.Fatalf("default config does not validate: %v", err)
+	}
+
+	c := Default()
+	c.LogShipRetention = Duration(168 * time.Hour)
+	c.LogShipBaseInterval = Duration(24 * time.Hour)
+	if err := c.Validate(); err != nil {
+		t.Fatalf("retention with positive base interval does not validate: %v", err)
 	}
 }
