@@ -429,3 +429,50 @@ func TestOneAppendIsOneCommitHandle(t *testing.T) {
 		t.Errorf("handle after a round trip = %v, want [%d]", readBack, first)
 	}
 }
+
+func TestRestorePruneHorizon(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir, DefaultConfig())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	if !s.PruneHorizon().IsZero() {
+		t.Fatalf("fresh store horizon = %v, want zero", s.PruneHorizon())
+	}
+
+	h := time.Now().Add(-time.Hour).Truncate(time.Nanosecond)
+	if err := s.RestorePruneHorizon(h); err != nil {
+		t.Fatalf("RestorePruneHorizon: %v", err)
+	}
+	if !s.PruneHorizon().Equal(h) {
+		t.Fatalf("horizon = %v, want %v", s.PruneHorizon(), h)
+	}
+
+	earlier := h.Add(-time.Hour)
+	if err := s.RestorePruneHorizon(earlier); err != nil {
+		t.Fatalf("RestorePruneHorizon(earlier): %v", err)
+	}
+	if !s.PruneHorizon().Equal(h) {
+		t.Fatalf("horizon = %v, want %v (must not move backwards)", s.PruneHorizon(), h)
+	}
+
+	if err := s.RestorePruneHorizon(time.Time{}); err != nil {
+		t.Fatalf("RestorePruneHorizon(zero): %v", err)
+	}
+	if !s.PruneHorizon().Equal(h) {
+		t.Fatalf("horizon = %v, want %v (zero time is a no-op)", s.PruneHorizon(), h)
+	}
+
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	s2, openErr := Open(dir, DefaultConfig())
+	if openErr != nil {
+		t.Fatalf("reopen: %v", openErr)
+	}
+	t.Cleanup(func() { _ = s2.Close() })
+	if !s2.PruneHorizon().Equal(h) {
+		t.Fatalf("reopened horizon = %v, want %v", s2.PruneHorizon(), h)
+	}
+}

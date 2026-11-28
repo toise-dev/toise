@@ -264,6 +264,12 @@ type Config struct {
 	// target. Empty = off (the default).
 	LogShipDir      string   `yaml:"log_shipping_dir"`
 	LogShipInterval Duration `yaml:"log_shipping_interval"`
+	// LogShipRetention bounds how long shipped segments are kept; when 0, no base
+	// segments are written and nothing is ever deleted from the shipping target.
+	// LogShipBaseInterval is the interval between base segments and is only used
+	// when retention > 0.
+	LogShipRetention    Duration `yaml:"log_shipping_retention"`
+	LogShipBaseInterval Duration `yaml:"log_shipping_base_interval"`
 	// LogShipS3* ship segments to an S3-compatible object store instead of a
 	// directory (same LogShipInterval). Setting LogShipS3Bucket selects S3. Works
 	// against AWS S3 and any compatible store (MinIO/Ceph/R2/…) — one config shape.
@@ -342,6 +348,15 @@ func (c Config) Validate() error {
 		if c.LogShipS3Endpoint == "" {
 			return fmt.Errorf("log_shipping_s3_bucket is set but log_shipping_s3_endpoint is empty")
 		}
+	}
+	if c.LogShipRetention < 0 {
+		return fmt.Errorf("log_shipping_retention must not be negative, got %v", c.LogShipRetention)
+	}
+	if c.LogShipBaseInterval < 0 {
+		return fmt.Errorf("log_shipping_base_interval must not be negative, got %v", c.LogShipBaseInterval)
+	}
+	if c.LogShipRetention > 0 && c.LogShipBaseInterval <= 0 {
+		return fmt.Errorf("log_shipping_retention is set but log_shipping_base_interval is not positive: no base segment would ever be written")
 	}
 	if c.IdentityThreshold <= 0 || c.IdentityThreshold > 1 {
 		return fmt.Errorf("identity_confidence_threshold must be in (0,1], got %v", c.IdentityThreshold)
@@ -521,6 +536,7 @@ func Default() Config {
 		AllowUnauthenticatedWrites: true,
 		IdentityThreshold:          0.9,
 		LogShipS3UseSSL:            true,
+		LogShipBaseInterval:        Duration(24 * time.Hour),
 	}
 }
 
@@ -650,6 +666,8 @@ func (c *Config) applyEnv(getenv func(string) string) error {
 		{"TOISE_SNAPSHOT_INTERVAL", &c.SnapshotInterval},
 		{"TOISE_BACKUP_INTERVAL", &c.BackupInterval},
 		{"TOISE_LOG_SHIPPING_INTERVAL", &c.LogShipInterval},
+		{"TOISE_LOG_SHIPPING_RETENTION", &c.LogShipRetention},
+		{"TOISE_LOG_SHIPPING_BASE_INTERVAL", &c.LogShipBaseInterval},
 	} {
 		if v := getenv(e.key); v != "" {
 			parsed, err := time.ParseDuration(v)
@@ -862,6 +880,8 @@ func resolve(args []string, getenv func(string) string) (Config, error) {
 	backupInterval := fs.Duration("backup-interval", cfg.BackupInterval.D(), "interval between online backups of every tenant's event log (0 = off)")
 	logShipDir := fs.String("log-shipping-dir", cfg.LogShipDir, "directory to ship event-log segments to (with --log-shipping-interval); may be a mounted bucket/NFS; empty = off")
 	logShipInterval := fs.Duration("log-shipping-interval", cfg.LogShipInterval.D(), "interval between event-log segment ships of every tenant (0 = off)")
+	logShipRetention := fs.Duration("log-shipping-retention", cfg.LogShipRetention.D(), "keep shipped segments at least this long and bound the target with periodic base segments (0 = keep everything forever)")
+	logShipBaseInterval := fs.Duration("log-shipping-base-interval", cfg.LogShipBaseInterval.D(), "interval between base segments when --log-shipping-retention is set")
 	identityThreshold := fs.Float64("identity-confidence-threshold", cfg.IdentityThreshold, "same_as confidence (0,1] at/above which an alias joins the canonical view (ADR 0020)")
 	auditLog := fs.String("audit-log", cfg.AuditLog, "append-only JSON-line audit file for operator writes (annotate_entity); empty = off")
 	tlsCertFile := fs.String("tls-cert-file", cfg.TLSCertFile, "PEM certificate file; with --tls-key-file, serves HTTP and OTLP over TLS")
@@ -906,6 +926,8 @@ func resolve(args []string, getenv func(string) string) (Config, error) {
 	cfg.BackupInterval = Duration(*backupInterval)
 	cfg.LogShipDir = *logShipDir
 	cfg.LogShipInterval = Duration(*logShipInterval)
+	cfg.LogShipRetention = Duration(*logShipRetention)
+	cfg.LogShipBaseInterval = Duration(*logShipBaseInterval)
 	cfg.IdentityThreshold = *identityThreshold
 	cfg.AuditLog = *auditLog
 	cfg.TLSCertFile = *tlsCertFile

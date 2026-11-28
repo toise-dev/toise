@@ -88,6 +88,28 @@ func (s *S3Sink) Get(ctx context.Context, name string) ([]byte, error) {
 	return data, nil
 }
 
+// GetPrefix reads at most the first n bytes of the object via a ranged GetObject
+// (fewer if the object is shorter).
+func (s *S3Sink) GetPrefix(ctx context.Context, name string, n int) ([]byte, error) {
+	if n <= 0 {
+		return nil, nil
+	}
+	opts := minio.GetObjectOptions{}
+	if err := opts.SetRange(0, int64(n-1)); err != nil {
+		return nil, fmt.Errorf("logship s3: get %s: %w", name, err)
+	}
+	obj, err := s.client.GetObject(ctx, s.bucket, s.key(name), opts)
+	if err != nil {
+		return nil, fmt.Errorf("logship s3: get %s: %w", name, err)
+	}
+	defer func() { _ = obj.Close() }()
+	data, err := io.ReadAll(obj)
+	if err != nil {
+		return nil, fmt.Errorf("logship s3: read %s: %w", name, err)
+	}
+	return data, nil
+}
+
 // List returns the segment names under prefix, sink-relative (the configured key
 // prefix is stripped), in lexical order — the same names Put took.
 func (s *S3Sink) List(ctx context.Context, prefix string) ([]string, error) {
@@ -103,4 +125,12 @@ func (s *S3Sink) List(ctx context.Context, prefix string) ([]string, error) {
 	}
 	sort.Strings(names)
 	return names, nil
+}
+
+// Delete removes the object name; a missing object is not an error.
+func (s *S3Sink) Delete(ctx context.Context, name string) error {
+	if err := s.client.RemoveObject(ctx, s.bucket, s.key(name), minio.RemoveObjectOptions{}); err != nil {
+		return fmt.Errorf("logship s3: delete %s: %w", name, err)
+	}
+	return nil
 }
