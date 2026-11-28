@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/toise-dev/toise/internal/annotations"
@@ -36,6 +37,8 @@ type Stack struct {
 
 // Limits bounds runtime tenant creation (#115). Tenants whose directory
 // already exists always open; the limits apply only to minting new ones.
+// A Limits value stored in the registry is immutable from then on: it is
+// published and replaced whole, never mutated in place.
 type Limits struct {
 	// AutoCreate allows a first write to a new tenant id to create its stack.
 	// Off, only pre-existing tenants (and the default) are served.
@@ -114,8 +117,13 @@ type Registry struct {
 	// aliasConflictReporter is called when two speakers claim one alias value
 	// for different canonical values, so neither resolves.
 	aliasConflictReporter func(tenantID, attributeKey, aliasValue string)
-	limits                Limits
-	logger                *slog.Logger
+	// limits holds the current immutable Limits value; readers load it once
+	// per decision and writers swap the whole pointer, so no request ever
+	// observes a half-updated policy.
+	limits atomic.Pointer[Limits]
+	// policyMu serializes load-modify-store updates of limits.
+	policyMu sync.Mutex
+	logger   *slog.Logger
 	// now is the clock each tenant engine uses (liveness floor at boot, Sweep).
 	// time.Now in production; injectable so tests drive deadlines deterministically
 	// instead of racing the wall clock.
@@ -128,6 +136,27 @@ type Registry struct {
 	mu      sync.Mutex
 	stacks  map[string]*Stack
 	opening map[string]*inflight
+}
+
+// currentLimits returns the currently published Limits, or the zero value if
+// none has been stored yet.
+func (r *Registry) currentLimits() Limits {
+	if l := r.limits.Load(); l != nil {
+		return *l
+	}
+	return Limits{}
+}
+
+// SetTenantPolicy replaces the allowlist and the open-tenant cap atomically. Tenants already open are untouched; the other Limits fields (AutoCreate, TombstoneCap) keep their current values.
+func (r *Registry) SetTenantPolicy(allowlist []string, maxTenants int) {
+	cp := make([]string, len(allowlist))
+	copy(cp, allowlist)
+	r.policyMu.Lock()
+	defer r.policyMu.Unlock()
+	next := r.currentLimits()
+	next.Allowlist = cp
+	next.MaxTenants = maxTenants
+	r.limits.Store(&next)
 }
 
 // inflight is a singleflight slot: the first caller opens the stack outside the
@@ -270,8 +299,10 @@ func openWithClock(dataDir string, storeCfg store.Config, relBuf time.Duration, 
 	if err := migrateLegacy(dataDir, logger); err != nil {
 		return nil, err
 	}
-	r := &Registry{dataDir: dataDir, storeCfg: storeCfg, relBuf: relBuf, limits: limits, logger: logger, now: now,
+	limitsCopy := limits
+	r := &Registry{dataDir: dataDir, storeCfg: storeCfg, relBuf: relBuf, logger: logger, now: now,
 		stacks: make(map[string]*Stack), opening: make(map[string]*inflight)}
+	r.limits.Store(&limitsCopy)
 
 	// Boot opens what already exists (plus the default) regardless of limits:
 	// the limits bound runtime minting, never previously persisted tenants.
@@ -416,7 +447,7 @@ func (r *Registry) ForWrite(rawTenant string) (*Stack, error) {
 	if !ok {
 		return nil, fmt.Errorf("invalid tenant id %q", rawTenant)
 	}
-	if id == tenant.Default && !r.limits.defaultWritable() {
+	if id == tenant.Default && !r.currentLimits().defaultWritable() {
 		return nil, fmt.Errorf("%w: %q is not on the tenant allowlist", tenant.ErrNotAllowed, id)
 	}
 	return r.For(rawTenant)
@@ -424,7 +455,7 @@ func (r *Registry) ForWrite(rawTenant string) (*Stack, error) {
 
 // DefaultWritable reports whether ingest may write to the default tenant.
 func (r *Registry) DefaultWritable() bool {
-	return r.limits.defaultWritable()
+	return r.currentLimits().defaultWritable()
 }
 
 // Peek returns the stack only if it is already open. Query surfaces use it so
@@ -459,7 +490,10 @@ func (r *Registry) ensure(id string, minting bool) (*Stack, error) {
 		return fl.s, fl.err
 	}
 	if minting {
-		if lerr := r.limits.allows(id, len(r.stacks)+len(r.opening)); lerr != nil {
+		// Load once inside the critical section so the check and the slot
+		// insert see one coherent policy snapshot.
+		l := r.currentLimits()
+		if lerr := l.allows(id, len(r.stacks)+len(r.opening)); lerr != nil {
 			r.mu.Unlock()
 			return nil, lerr
 		}
@@ -529,7 +563,7 @@ func (r *Registry) openStack(id string) (*Stack, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening event log for tenant %q: %w", id, err)
 	}
-	graph := projection.NewWithTombstoneCap(r.limits.TombstoneCap)
+	graph := projection.NewWithTombstoneCap(r.currentLimits().TombstoneCap)
 	if r.resGrace != 0 {
 		graph.SetTombstoneTTL(r.resGrace)
 	}
