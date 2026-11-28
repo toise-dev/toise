@@ -236,3 +236,59 @@ func TestReloadNeverShowsMixedState(t *testing.T) {
 		t.Errorf("%d mixed-state observations", n)
 	}
 }
+
+func TestReloadMidRequestKeepsAuthorizedTenant(t *testing.T) {
+	a := NewWithRoles(
+		[]string{"fake-global-token"},
+		nil,
+		nil,
+		map[string][]string{"a": {"fake-scoped-a"}},
+	)
+	a.SetTenantTrustMode(true)
+
+	var mu sync.Mutex
+	var gotTenant string
+	var gotOK bool
+	var ran int32
+
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := a.ReloadScopedTokens(map[string][]string{"b": {"fake-scoped-b"}}, nil, nil); err != nil {
+			t.Fatalf("ReloadScopedTokens failed: %v", err)
+		}
+		tenant, ok := a.EffectiveTenantHTTP(r)
+		mu.Lock()
+		gotTenant, gotOK = tenant, ok
+		mu.Unlock()
+		atomic.StoreInt32(&ran, 1)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	srv := httptest.NewServer(a.HTTPMiddleware(nil)(h))
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatalf("failed to build request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer fake-scoped-a")
+	req.Header.Set("X-Scope-OrgID", "c")
+
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	_ = strings.TrimSpace("")
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("handler did not run: status = %d", resp.StatusCode)
+	}
+	if atomic.LoadInt32(&ran) != 1 {
+		t.Fatalf("handler did not run")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if gotTenant != "a" || !gotOK {
+		t.Fatalf("token removed mid-request must not fall back to the client-supplied tenant: got tenant=%q ok=%v, want tenant=%q ok=true", gotTenant, gotOK, "a")
+	}
+}

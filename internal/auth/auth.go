@@ -646,6 +646,14 @@ func (a *Authenticator) HTTPMiddleware(public map[string]bool) func(http.Handler
 				// read-only token: full/scoped tokens may write, read-only cannot.
 				ctx := WithWritable(r.Context(), a.canWriteHeader(h, m))
 				ctx = WithPrincipal(ctx, tokenPrincipal(h))
+				// Pin the tenant this snapshot authorized, so routing cannot
+				// re-derive it from a newer one: a token removed by a reload in
+				// between would otherwise fall back to the client header.
+				if a.deriveOnly {
+					if id, found := a.tenantForBearer(h, m); found {
+						ctx = context.WithValue(ctx, resolvedTenantKey, id)
+					}
+				}
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
