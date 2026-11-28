@@ -30,6 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A restore falls back to the previous base segment when the newest one
+  is unreadable.** Restore used to start from the newest base only, so one
+  damaged object made the whole shipped backup unusable although an older
+  base and every segment after it were still in the target. It now tries the
+  bases from newest to oldest, chooses before applying anything, warns about
+  every base it skipped, and refuses rather than restoring an empty log.
 - **A log restored from a base segment now refuses as-of reads older than the
   history it holds (#635).** Restore re-appended the events but left the
   store's prune horizon unset, so an as-of read before the base's history
