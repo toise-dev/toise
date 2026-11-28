@@ -22,13 +22,14 @@ func (fakeGraph) CountByType() map[string]int                     { return map[s
 
 type fakeStore struct{}
 
-func (fakeStore) Sequence() uint64         { return 10 }
-func (fakeStore) DiskUsage() uint64        { return 4096 }
-func (fakeStore) PrunedEvents() uint64     { return 0 }
-func (fakeStore) PrunedBytes() uint64      { return 0 }
-func (fakeStore) SnapshotSeq() uint64      { return 0 }
-func (fakeStore) SnapshotsWritten() uint64 { return 0 }
-func (fakeStore) PruneHorizon() time.Time  { return time.Unix(1700000000, 0) }
+func (fakeStore) Sequence() uint64                        { return 10 }
+func (fakeStore) DiskUsage() uint64                       { return 4096 }
+func (fakeStore) PrunedEvents() uint64                    { return 0 }
+func (fakeStore) PrunedBytes() uint64                     { return 0 }
+func (fakeStore) SnapshotSeq() uint64                     { return 0 }
+func (fakeStore) SnapshotsWritten() uint64                { return 0 }
+func (fakeStore) PruneHorizon() time.Time                 { return time.Unix(1700000000, 0) }
+func (fakeStore) AppendedByChangeType() map[string]uint64 { return map[string]uint64{} }
 
 func TestCollector(t *testing.T) {
 	c := NewCollector(fakeGraph{}, fakeStore{}, "1.2.3", "abc123")
