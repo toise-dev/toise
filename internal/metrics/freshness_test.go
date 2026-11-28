@@ -112,3 +112,22 @@ func TestProducerLastSeenSurvivesInvalidUTF8(t *testing.T) {
 		t.Fatalf("expected 2 series, got %d", count)
 	}
 }
+
+func TestProducerLastSeenMergesSanitizedCollisions(t *testing.T) {
+	src := func() []ProducerSeen {
+		return []ProducerSeen{
+			{Tenant: "tenant-a", Producer: "p\xffx", Scope: "test/method-a", LastSeen: time.Unix(1700000000, 0)},
+			{Tenant: "tenant-a", Producer: "p\xfex", Scope: "test/method-a", LastSeen: time.Unix(1700000100, 0)},
+		}
+	}
+	collector := NewProducerLastSeen(src)
+
+	want := `# HELP toise_producer_last_seen_timestamp_seconds Unix time at which a producer last spoke, by tenant, producer and collection method (scope is empty when unknown). Measured on this replica's clock at observation, so it is absent for a replica that only receives the shipped log. A silent producer is not necessarily down. Series leave when the speaker's last liveness reference is swept.
+# TYPE toise_producer_last_seen_timestamp_seconds gauge
+toise_producer_last_seen_timestamp_seconds{producer="p` + "\uFFFD" + `x",scope="test/method-a",tenant="tenant-a"} 1.7000001e+09
+`
+
+	if err := testutil.CollectAndCompare(collector, strings.NewReader(want), "toise_producer_last_seen_timestamp_seconds"); err != nil {
+		t.Fatal(err)
+	}
+}

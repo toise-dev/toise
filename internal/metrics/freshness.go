@@ -42,16 +42,39 @@ func (c *producerLastSeenCollector) Collect(ch chan<- prometheus.Metric) {
 	if c.src == nil {
 		return
 	}
+
+	type key struct {
+		tenant   string
+		producer string
+		scope    string
+	}
+
+	// Producer and scope are producer-supplied: an invalid UTF-8 value
+	// must cost one series, never a panic inside the scrape. Sanitizing
+	// can make distinct raw values collide on the same label set, so
+	// merge them (keeping the latest LastSeen) to avoid emitting a
+	// duplicate series, which would fail the whole scrape.
+	latest := make(map[key]float64)
 	for _, s := range c.src() {
-		// Producer and scope are producer-supplied: an invalid UTF-8 value
-		// must cost one series, never a panic inside the scrape.
+		k := key{
+			tenant:   strings.ToValidUTF8(s.Tenant, "\uFFFD"),
+			producer: strings.ToValidUTF8(s.Producer, "\uFFFD"),
+			scope:    strings.ToValidUTF8(s.Scope, "\uFFFD"),
+		}
+		v := float64(s.LastSeen.UnixNano()) / 1e9
+		if old, ok := latest[k]; !ok || v > old {
+			latest[k] = v
+		}
+	}
+
+	for k, v := range latest {
 		m, err := prometheus.NewConstMetric(
 			producerLastSeenDesc,
 			prometheus.GaugeValue,
-			float64(s.LastSeen.UnixNano())/1e9,
-			strings.ToValidUTF8(s.Tenant, "\uFFFD"),
-			strings.ToValidUTF8(s.Producer, "\uFFFD"),
-			strings.ToValidUTF8(s.Scope, "\uFFFD"),
+			v,
+			k.tenant,
+			k.producer,
+			k.scope,
 		)
 		if err != nil {
 			continue
