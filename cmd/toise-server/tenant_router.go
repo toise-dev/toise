@@ -80,3 +80,11 @@ func (tr *tenantRouter) handlerFor(id string) (http.Handler, bool, error) {
 	tr.handlers[id] = h
 	return h, true, nil
 }
+
+// reset drops all cached handlers so they rebuild lazily with fresh settings
+// after a config reload changed tenant names or retention.
+func (tr *tenantRouter) reset() {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	tr.handlers = make(map[string]http.Handler)
+}

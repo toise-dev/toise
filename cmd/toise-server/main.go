@@ -30,6 +30,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -120,7 +121,8 @@ func main() {
 	storeCfg.AcceptUnknownTypes = cfg.AcceptUnknownTypes
 
 	logger := slog.New(cfg.NewLogHandler(os.Stderr))
-	if err := run(cfg, storeCfg, logger); err != nil {
+	load := func() (config.Config, error) { return config.Load(os.Args[1:], os.Getenv) }
+	if err := runReloadable(cfg, storeCfg, logger, load); err != nil {
 		logger.Error("server failed", "err", err)
 		os.Exit(1)
 	}
@@ -150,6 +152,10 @@ func ingestTLSConfig(base *tls.Config, clientCAFile string) (*tls.Config, error)
 }
 
 func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
+	return runReloadable(cfg, storeCfg, logger, nil)
+}
+
+func runReloadable(cfg config.Config, storeCfg store.Config, logger *slog.Logger, load func() (config.Config, error)) error {
 	// A tracing misconfiguration must not take the service down with it: the
 	// graph is the product, its traces are not.
 	shutdownTracing, err := telemetry.Setup(context.Background(), logger)
@@ -371,6 +377,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	authFailures := metrics.NewAuthFailures()
 	authn.OnFailure(authFailures.Inc)
 	queryMetrics := metrics.NewQueryMetrics() // per-MCP-tool call/duration, shared across tenants
+	configReloads := metrics.NewConfigReloads()
 
 	// An exposed listener without auth or TLS, and shipping that leaves readable,
 	// deserve a loud line at startup: the trusted-network defaults are loopback
@@ -453,6 +460,9 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("tenant_names: %w", err)
 	}
+	var settings atomic.Pointer[tenantSettings]
+	settings.Store(&tenantSettings{names: tenantNames, retention: tenantRetention})
+	var nameRouters []*tenantRouter
 
 	// The GraphQL, MCP and debug-UI surfaces are scoped per tenant: a router builds
 	// one handler per tenant on first use, bound to that tenant's stack, and
@@ -460,7 +470,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	graphqlRouter := newTenantRouter(reg, logger, func(st *registry.Stack) (http.Handler, error) {
 		res := &resolvers.Resolver{
 			Tenant:     st.Tenant,
-			TenantName: tenantNames[st.Tenant],
+			TenantName: settings.Load().names[st.Tenant],
 			Graph:      st.Graph, Store: st.Store, Engine: st.Engine,
 			Annotations: st.Annotations, Audit: auditor,
 			IdentityThreshold: cfg.IdentityThreshold,
@@ -471,7 +481,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		}), nil
 	})
 	mcpRouter := newTenantRouter(reg, logger, func(st *registry.Stack) (http.Handler, error) {
-		return mcp.New(st.Graph, st.Store).SetTenant(st.Tenant).SetTenantName(tenantNames[st.Tenant]).SetCadence(st.Engine).SetObserver(queryMetrics).SetAnnotations(st.Annotations).SetProducerConflicts(receiver.ConflictsFor(st.Tenant)).SetAuditor(auditor).SetIdentityThreshold(cfg.IdentityThreshold).HTTPHandler(), nil
+		return mcp.New(st.Graph, st.Store).SetTenant(st.Tenant).SetTenantName(settings.Load().names[st.Tenant]).SetCadence(st.Engine).SetObserver(queryMetrics).SetAnnotations(st.Annotations).SetProducerConflicts(receiver.ConflictsFor(st.Tenant)).SetAuditor(auditor).SetIdentityThreshold(cfg.IdentityThreshold).HTTPHandler(), nil
 	})
 	if cfg.DeriveOnlyTenancy() || cfg.OIDCEnabled() {
 		// Route to the effective tenant: a derive-only scoped token's own tenant,
@@ -481,6 +491,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		mcpRouter.resolve = authn.EffectiveTenantHTTP
 	}
 
+	nameRouters = append(nameRouters, graphqlRouter, mcpRouter)
 	mux := http.NewServeMux()
 	mux.Handle("/graphql", graphqlRouter)
 	mux.Handle("/mcp", mcpRouter)
@@ -515,6 +526,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 	metricsExtra = append(metricsExtra, discards.Collectors()...)
 	metricsExtra = append(metricsExtra, aliasConflicts.Collectors()...)
 	metricsExtra = append(metricsExtra, queryMetrics.Collectors()...)
+	metricsExtra = append(metricsExtra, configReloads.Collectors()...)
 	// Annotation counts per tenant, so a replica-local overlay is at least
 	// measurable (#365): log shipping replicates the log, not the sidecar, so a
 	// difference between the pair is real and otherwise silent.
@@ -571,13 +583,14 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 			if derr != nil {
 				return nil, derr
 			}
-			return h.SetTenantName(tenantNames[st.Tenant]), nil
+			return h.SetTenantName(settings.Load().names[st.Tenant]), nil
 		})
 		if cfg.DeriveOnlyTenancy() || cfg.OIDCEnabled() {
 			debugRouter.resolve = authn.EffectiveTenantHTTP
 		} else {
 			debugRouter.resolve = tenant.FromHTTPWithQuery
 		}
+		nameRouters = append(nameRouters, debugRouter)
 		mux.Handle("/", debugRouter)
 	}
 	// Auth wraps the data surfaces; the liveness probes stay public because a
@@ -621,6 +634,24 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 		stop()
 		wg.Wait()
 	}()
+
+	if load != nil {
+		reloader := NewReloader(ReloaderDeps{
+			Load:     load,
+			Initial:  cfg,
+			Auth:     authn,
+			Registry: reg,
+			Settings: &settings,
+			OnNamesChanged: func() {
+				for _, tr := range nameRouters {
+					tr.reset()
+				}
+			},
+			Metrics: configReloads,
+			Logger:  logger,
+		})
+		reloader.WatchSIGHUP(ctx, &wg)
+	}
 
 	if sweep := cfg.LivenessSweepInterval.D(); sweep > 0 {
 		wg.Add(1)
@@ -679,7 +710,7 @@ func run(cfg config.Config, storeCfg store.Config, logger *slog.Logger) error {
 						// to its own bound, an unlisted one to the global default —
 						// retention is what a multi-tenant offer prices (#350).
 						maxAge := storeCfg.RetentionMaxAge
-						if d, ok := tenantRetention[st.Tenant]; ok {
+						if d, ok := settings.Load().retention[st.Tenant]; ok {
 							maxAge = d
 						}
 						if maxAge > 0 {
