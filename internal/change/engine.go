@@ -93,6 +93,12 @@ type Engine struct {
 	refs    map[model.EntityID]map[string]liveRef
 	relRefs map[model.RelationID]map[string]liveRef
 
+	// lastSpoke is when each speaker last spoke, by engine clock, for the
+	// per-producer freshness gauge. It has its own lock so a scrape never waits
+	// on an observation batch. See freshness.go.
+	freshMu   sync.Mutex
+	lastSpoke map[string]time.Time
+
 	// contested tracks, per entity, the distinct display names observed recently,
 	// so an identity shared by two producers — whose display name alternates —
 	// can be named as a condition. Guarded by obsMu.
@@ -792,6 +798,7 @@ func (e *Engine) observeEntityLocked(obs EntityObservation) (model.Event, error)
 	} else {
 		speakers[key] = liveRef{}
 	}
+	e.noteSpoke(obs.Producer, e.currentScope())
 	e.trackDisplayName(entityID, obs, prevName)
 	// A new/updated entity may be the missing endpoint of a parked edge — but
 	// only retry the buffer when this entity is one some edge actually waits on,
@@ -1411,6 +1418,7 @@ func (e *Engine) Sweep() (SweepResult, error) {
 	// went silent disappears from the index. One speaker's silence never
 	// retracts another speaker's claim.
 	e.aliases.sweep(now)
+	e.pruneSpeakers()
 
 	e.graph.PruneTombstones()
 	return res, errors.Join(errs...)
@@ -1518,6 +1526,7 @@ func (e *Engine) observeRelationLocked(obs RelationObservation) (model.Event, bo
 		// edge follows within one interval instead of never.
 		refs[key] = e.inheritedRef(from, key)
 	}
+	e.noteSpoke(obs.Producer, e.currentScope())
 
 	var ct model.ChangeType
 	if existing, ok := e.getRelation(rel.ID); ok {
@@ -1948,6 +1957,22 @@ func (e *Engine) RestoreLiveness(blob []byte) error {
 		return fmt.Errorf("unmarshaling liveness snapshot: %w", err)
 	}
 	now := e.now()
+	// The "last spoke" seed must come from the STORED deadline, before the
+	// restart floor is applied. Deriving it from the floored refs made every
+	// producer appear to have spoken at the instant of the restart, hiding a
+	// producer that was already silent before the restart from a
+	// "time() - last_seen > threshold" alert for one full threshold after
+	// every restart.
+	candidates := make(map[string]time.Time)
+	seed := func(p string, stored time.Time, interval time.Duration) {
+		if interval <= 0 || stored.IsZero() {
+			return
+		}
+		c := stored.Add(-interval)
+		if prev, ok := candidates[p]; !ok || c.After(prev) {
+			candidates[p] = c
+		}
+	}
 	e.obsMu.Lock()
 	defer e.obsMu.Unlock()
 	// A blob that does not declare speaker keys recorded no collection method, so
@@ -1984,6 +2009,7 @@ func (e *Engine) RestoreLiveness(blob []byte) error {
 			if kept == 0 && interval > 0 {
 				deadline = time.Time{}
 			}
+			seed(p, deadline, kept)
 			ps[p] = liveRef{deadline: floorDeadline(deadline, kept, now), interval: kept,
 				legacy: legacy && scope == ""}
 		}
@@ -1994,6 +2020,7 @@ func (e *Engine) RestoreLiveness(blob []byte) error {
 		for p, deadline := range producers {
 			interval := snap.RelRefIntervals[id][p]
 			_, scope := splitRefKey(p)
+			seed(p, deadline, interval)
 			ps[p] = liveRef{deadline: floorDeadline(deadline, interval, now), interval: interval,
 				legacy: legacy && scope == ""}
 		}
@@ -2008,10 +2035,12 @@ func (e *Engine) RestoreLiveness(blob []byte) error {
 			continue
 		}
 		interval := snap.RelIntervals[id]
+		seed("", deadline, interval)
 		e.relRefs[model.RelationID(id)] = map[string]liveRef{
 			"": {deadline: floorDeadline(deadline, interval, now), interval: interval},
 		}
 	}
+	e.reseedSpeakers(candidates)
 	return nil
 }
 

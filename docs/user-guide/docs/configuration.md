@@ -367,6 +367,21 @@ of delete/create pairs, is flapping, which also defeats coalescing. The maintena
 (`toise_maintenance_*`) are the exception: they label by `tenant` (and `op`,
 `outcome`) so a stuck sweep/prune can be traced to its tenant.
 
+`toise_producer_last_seen_timestamp_seconds{tenant, producer, scope}` is the Unix
+time (seconds) at which a producer last spoke, one series per producer and
+collection method (`scope` is empty when the producer named none). It is the
+engine clock at observation, not the event's own time, and it is read from the
+liveness state already in memory, never by scanning the log. Alert on silence
+with `time() - toise_producer_last_seen_timestamp_seconds > <threshold>`, sized
+to the producer's export cadence plus slack. A silent producer is not
+necessarily down: it may only have stopped exporting, or lost its route to
+Toise. A series leaves when the speaker's last liveness reference is swept, so
+the cardinality is bounded by the fleet (one series per producer and method).
+A replica that only receives the shipped log has no liveness and exports
+nothing for it. Like the other per-tenant series it is filtered by the scrape
+token's tenant, and fully visible with a global token or when `metrics_public`
+is on.
+
 !!! warning "Authentication is not yet bound to a tenant"
     A valid bearer token may set any `X-Scope-OrgID`. Isolation therefore relies on
     the upstream OTel Collector authenticating each client and stamping its tenant;

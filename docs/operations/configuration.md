@@ -194,6 +194,18 @@ entity converges to two records. A high rate of `entity.state_changed`,
 flapping, which costs several records per flap and also keeps the neighboring
 heartbeats from coalescing.
 
+`toise_producer_last_seen_timestamp_seconds{tenant, producer, scope}` answers
+"when did this producer last speak": Unix seconds on the engine clock at the
+last observation, one series per producer and collection method (`scope` empty
+when unknown). To alert on a silent producer, use
+`time() - toise_producer_last_seen_timestamp_seconds > <threshold>`, sized to
+the producer's cadence plus slack. Silent does not mean down: the producer may
+have stopped exporting while still running. A series disappears once the
+speaker's last liveness reference is swept, so cardinality is bounded by the
+fleet. A replica that only receives the shipped log has no liveness and
+exports nothing for it. The series are filtered by tenant like the others,
+and fully visible with a global token or when `metrics_public` is on.
+
 ## Retention — bounding on-disk growth
 
 Two mechanisms keep the Pebble event log from growing without bound, both run on
