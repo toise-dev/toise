@@ -494,3 +494,59 @@ tenant_ingest_tokens: ["acme:fake-ingest-token-1", "beta:fake-ingest-token-2"]
 	cancel()
 	wg.Wait()
 }
+
+func TestReloadRefusesNewTokenForUnlistedTenant(t *testing.T) {
+	baseYAML := `auth_tokens: ["fake-global-token"]
+tenant_allowlist: ["acme"]
+tenant_ingest_tokens: ["acme:fake-ingest-token-1"]`
+	h := newReloadHarness(t, baseYAML)
+
+	// Adding a token for a tenant that is off the non-empty allowlist must
+	// be rejected: during the swap window the new token could create the
+	// tenant, which neither configuration permits.
+	yamlString := `auth_tokens: ["fake-global-token"]
+tenant_allowlist: ["acme"]
+tenant_ingest_tokens: ["acme:fake-ingest-token-1", "ghost:fake-ingest-token-9"]`
+	h.write(yamlString)
+	err := h.reloader.Reload(context.Background())
+	if err == nil {
+		t.Fatal("Reload succeeded; want rejection")
+	}
+	if !strings.Contains(err.Error(), "ghost") {
+		t.Fatalf("Reload error = %q; want it to name tenant %q", err.Error(), "ghost")
+	}
+	if strings.Contains(err.Error(), "fake-ingest-token-9") {
+		t.Fatalf("Reload error = %q; must not leak token values", err.Error())
+	}
+	if strings.Contains(h.logs(), "fake-ingest-token-9") {
+		t.Fatal("logs leaked token value fake-ingest-token-9")
+	}
+	if got := h.outcome("rejected"); got != 1 {
+		t.Fatalf("outcome(rejected) = %v; want 1", got)
+	}
+	if h.ingestAllowed("ghost", "fake-ingest-token-9") {
+		t.Fatal("new token for unlisted tenant ghost was accepted; want rejected")
+	}
+	if !h.ingestAllowed("acme", "fake-ingest-token-1") {
+		t.Fatal("existing token for listed tenant acme stopped working")
+	}
+	if _, err := h.registry.ForWrite("ghost"); !errors.Is(err, tenant.ErrNotAllowed) {
+		t.Fatalf("ForWrite(ghost) error = %v; want tenant.ErrNotAllowed", err)
+	}
+
+	// Adding the tenant to the allowlist together with its token is allowed
+	// and the token must work after the reload.
+	fixedYAML := `auth_tokens: ["fake-global-token"]
+tenant_allowlist: ["acme", "ghost"]
+tenant_ingest_tokens: ["acme:fake-ingest-token-1", "ghost:fake-ingest-token-9"]`
+	h.write(fixedYAML)
+	if err := h.reloader.Reload(context.Background()); err != nil {
+		t.Fatalf("Reload with ghost allowlisted failed: %v", err)
+	}
+	if !h.ingestAllowed("ghost", "fake-ingest-token-9") {
+		t.Fatal("token for newly allowlisted tenant ghost not accepted after reload")
+	}
+	if !h.ingestAllowed("acme", "fake-ingest-token-1") {
+		t.Fatal("existing token for acme stopped working after second reload")
+	}
+}

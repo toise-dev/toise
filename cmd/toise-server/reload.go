@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -10,6 +11,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -61,6 +63,78 @@ func redactReloadError(err error) string {
 	return backtickQuoted.ReplaceAllString(err.Error(), "<redacted>")
 }
 
+// tokensForUnlistedTenants returns the tenant ids for which the pending
+// configuration introduces at least one new token while leaving the tenant
+// outside a non-empty allowlist. Because the hot reload swaps tokens before
+// it swaps the tenant creation policy, such a token could transiently create
+// a tenant that neither the running nor the pending configuration permits,
+// so the reload must be rejected. A tenant is reported only when all of the
+// following hold: the allowlist is non-empty; the tenant is absent from it;
+// the tenant is not "default" (always allowed); isOpen reports that the
+// tenant is not already open (an open tenant is never created, so its tokens
+// are harmless); and next contains at least one token for the tenant that
+// prev does not (a token carried over unchanged is not new). next and prev
+// map tenant ids to token lists and are the union over the three roles. The
+// returned ids are sorted and deduplicated; nil is returned when no tenant
+// qualifies. Token values are never included in the result.
+func tokensForUnlistedTenants(allowlist []string, isOpen func(string) bool, next, prev map[string][]string) []string {
+	if len(allowlist) == 0 {
+		return nil
+	}
+	allowed := make(map[string]bool, len(allowlist))
+	for _, id := range allowlist {
+		allowed[id] = true
+	}
+	var tenants []string
+	for tenant, tokens := range next {
+		if tenant == "default" || allowed[tenant] {
+			continue
+		}
+		if isOpen != nil && isOpen(tenant) {
+			continue
+		}
+		oldTokens := make(map[string]bool, len(prev[tenant]))
+		for _, tok := range prev[tenant] {
+			oldTokens[tok] = true
+		}
+		for _, tok := range tokens {
+			if !oldTokens[tok] {
+				tenants = append(tenants, tenant)
+				break
+			}
+		}
+	}
+	// Deduplicate (map keys are unique, but be explicit) and sort.
+	seen := make(map[string]bool, len(tenants))
+	deduped := tenants[:0]
+	for _, id := range tenants {
+		if !seen[id] {
+			seen[id] = true
+			deduped = append(deduped, id)
+		}
+	}
+	for i := 1; i < len(deduped); i++ {
+		for j := i; j > 0 && deduped[j] < deduped[j-1]; j-- {
+			deduped[j], deduped[j-1] = deduped[j-1], deduped[j]
+		}
+	}
+	if len(deduped) == 0 {
+		return nil
+	}
+	return deduped
+}
+
+// unionTokens merges per-role tenant token maps into one tenant -> tokens map.
+func unionTokens(maps ...map[string][]string) map[string][]string {
+	out := make(map[string][]string)
+	for _, m := range maps {
+		for id, toks := range m {
+			out[id] = append(out[id], toks...)
+		}
+	}
+	return out
+}
+
 func (r *Reloader) Reload(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -108,6 +182,14 @@ func (r *Reloader) Reload(ctx context.Context) error {
 	retention, err := next.TenantRetentionMap()
 	if err != nil {
 		return reject(err)
+	}
+	prevFull, _ := r.current.TenantTokensMap()
+	prevRead, _ := r.current.TenantReadTokensMap()
+	prevIngest, _ := r.current.TenantIngestTokensMap()
+	isOpen := func(id string) bool { _, ok := r.deps.Registry.Peek(id); return ok }
+	if ghosts := tokensForUnlistedTenants(next.TenantAllowlist, isOpen,
+		unionTokens(full, read, ingest), unionTokens(prevFull, prevRead, prevIngest)); len(ghosts) > 0 {
+		return reject(fmt.Errorf("new tokens for tenants missing from tenant_allowlist: %s (add them to the allowlist in the same edit)", strings.Join(ghosts, ", ")))
 	}
 	// Last fallible step: everything below cannot fail, so a successful
 	// reload is never left half-applied.
