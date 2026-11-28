@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -42,13 +43,19 @@ func (c *producerLastSeenCollector) Collect(ch chan<- prometheus.Metric) {
 		return
 	}
 	for _, s := range c.src() {
-		ch <- prometheus.MustNewConstMetric(
+		// Producer and scope are producer-supplied: an invalid UTF-8 value
+		// must cost one series, never a panic inside the scrape.
+		m, err := prometheus.NewConstMetric(
 			producerLastSeenDesc,
 			prometheus.GaugeValue,
 			float64(s.LastSeen.UnixNano())/1e9,
-			s.Tenant,
-			s.Producer,
-			s.Scope,
+			strings.ToValidUTF8(s.Tenant, "\uFFFD"),
+			strings.ToValidUTF8(s.Producer, "\uFFFD"),
+			strings.ToValidUTF8(s.Scope, "\uFFFD"),
 		)
+		if err != nil {
+			continue
+		}
+		ch <- m
 	}
 }

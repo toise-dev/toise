@@ -77,3 +77,38 @@ func TestProducerLastSeenScopedPerTenant(t *testing.T) {
 		t.Fatalf("expected tenant-b producer series in all-tenants output")
 	}
 }
+
+func TestProducerLastSeenSurvivesInvalidUTF8(t *testing.T) {
+	src := func() []ProducerSeen {
+		return []ProducerSeen{
+			{
+				Tenant:   "tenant-a",
+				Producer: "11111111-2222-4333-8444-555555555555",
+				Scope:    "test/method-a",
+				LastSeen: time.Unix(1700000000, 0),
+			},
+			{
+				Tenant:   "tenant-a",
+				Producer: "bad\xff\xfeproducer",
+				Scope:    "test/\xffmethod",
+				LastSeen: time.Unix(1700000000, 0),
+			},
+		}
+	}
+
+	collector := NewProducerLastSeen(src)
+
+	var count int
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("CollectAndCount panicked: %v", r)
+			}
+		}()
+		count = testutil.CollectAndCount(collector, "toise_producer_last_seen_timestamp_seconds")
+	}()
+
+	if count != 2 {
+		t.Fatalf("expected 2 series, got %d", count)
+	}
+}
