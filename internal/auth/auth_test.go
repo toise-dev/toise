@@ -17,7 +17,7 @@ func TestTokensHashedAtRest(t *testing.T) {
 	a := NewWithRoles([]string{full}, []string{reader}, nil, map[string][]string{"acme": {scopedTok}})
 
 	// Configured tokens still authenticate (behavior preserved).
-	if !a.valid(full, surfaceRead) || !a.valid(reader, surfaceRead) || !a.valid(scopedTok, surfaceRead) {
+	if !a.valid(full, surfaceRead, a.loadSets()) || !a.valid(reader, surfaceRead, a.loadSets()) || !a.valid(scopedTok, surfaceRead, a.loadSets()) {
 		t.Fatal("configured tokens must still authenticate after hashing at rest")
 	}
 
@@ -36,7 +36,7 @@ func TestTokensHashedAtRest(t *testing.T) {
 		}
 	}
 	check(a.tokens, a.readTokens)
-	for _, toks := range a.scoped {
+	for _, toks := range a.loadSets().full {
 		check(toks)
 	}
 }
@@ -314,32 +314,32 @@ func TestPerTenantRBAC(t *testing.T) {
 		)
 
 	// Read-only scoped token: reads its tenant only, never ingests, never another tenant, never writes.
-	if !a.allowedForTenant("acme-read", "acme", surfaceRead) {
+	if !a.allowedForTenant("acme-read", "acme", surfaceRead, a.loadSets()) {
 		t.Error("read-scoped token must be allowed to read its tenant")
 	}
-	if a.allowedForTenant("acme-read", "acme", surfaceIngest) {
+	if a.allowedForTenant("acme-read", "acme", surfaceIngest, a.loadSets()) {
 		t.Error("read-scoped token must NOT ingest")
 	}
-	if a.allowedForTenant("acme-read", "other", surfaceRead) {
+	if a.allowedForTenant("acme-read", "other", surfaceRead, a.loadSets()) {
 		t.Error("read-scoped token must NOT touch another tenant")
 	}
-	if a.canWriteHeader("Bearer acme-read") {
+	if a.canWriteHeader("Bearer acme-read", a.loadSets()) {
 		t.Error("read-scoped token must not be write-capable")
 	}
 
 	// Ingest-only scoped token: ingests its tenant only, never reads.
-	if !a.allowedForTenant("acme-ingest", "acme", surfaceIngest) {
+	if !a.allowedForTenant("acme-ingest", "acme", surfaceIngest, a.loadSets()) {
 		t.Error("ingest-scoped token must be allowed to ingest its tenant")
 	}
-	if a.allowedForTenant("acme-ingest", "acme", surfaceRead) {
+	if a.allowedForTenant("acme-ingest", "acme", surfaceRead, a.loadSets()) {
 		t.Error("ingest-scoped token must NOT read")
 	}
 
 	// Full scoped token: both surfaces of its tenant, and write-capable.
-	if !a.allowedForTenant("acme-full", "acme", surfaceRead) || !a.allowedForTenant("acme-full", "acme", surfaceIngest) {
+	if !a.allowedForTenant("acme-full", "acme", surfaceRead, a.loadSets()) || !a.allowedForTenant("acme-full", "acme", surfaceIngest, a.loadSets()) {
 		t.Error("full scoped token must read and ingest its tenant")
 	}
-	if !a.canWriteHeader("Bearer acme-full") {
+	if !a.canWriteHeader("Bearer acme-full", a.loadSets()) {
 		t.Error("full scoped token must be write-capable")
 	}
 

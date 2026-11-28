@@ -19,8 +19,10 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"strings"
+	"sync/atomic"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -87,19 +89,35 @@ const (
 	surfaceIngest                // OTLP/gRPC ingest
 )
 
+// scopedSets holds the tenant-scoped token maps. It is immutable once
+// published: ReloadScopedTokens and WithScopedRoleTokens build a fresh value
+// and atomically swap it, so a request never observes a mix of old and new
+// maps. The maps are never mutated in place.
+type scopedSets struct {
+	full   map[string][][]byte // tenant id -> full-role tokens (both surfaces) valid only for that tenant
+	read   map[string][][]byte // tenant id -> read-only tokens, that tenant's read surfaces only (per-tenant RBAC)
+	ingest map[string][][]byte // tenant id -> ingest-only tokens, that tenant's ingest only (per-tenant RBAC)
+}
+
+// emptyScopedSets is the shared stand-in for an unset pointer so the zero-value
+// Authenticator behaves as having no scoped tokens. Never mutated.
+var emptyScopedSets scopedSets
+
 // Authenticator validates bearer tokens and authorizes them per tenant and per
 // surface. Global tokens are valid for every tenant; a tenant-scoped token is
 // authorized only for its own tenant (#104). Role-restricted global tokens are
 // valid on one surface only. The zero/empty value is disabled (everything
 // passes), so callers can wire it unconditionally.
 type Authenticator struct {
-	tokens       [][]byte            // global, both surfaces, every tenant
-	readTokens   [][]byte            // global, read surface only
-	ingestTokens [][]byte            // global, ingest surface only
-	scoped       map[string][][]byte // tenant id -> full-role tokens (both surfaces) valid only for that tenant
-	scopedRead   map[string][][]byte // tenant id -> read-only tokens, that tenant's read surfaces only (per-tenant RBAC)
-	scopedIngest map[string][][]byte // tenant id -> ingest-only tokens, that tenant's ingest only (per-tenant RBAC)
-	onFailure    func()              // optional, observed on every rejected authentication
+	tokens       [][]byte // global, both surfaces, every tenant
+	readTokens   [][]byte // global, read surface only
+	ingestTokens [][]byte // global, ingest surface only
+	// sets holds the three tenant-scoped maps behind an atomic pointer so they
+	// can be replaced wholesale at runtime (ReloadScopedTokens) without a
+	// request ever seeing half of the swap. loadSets never returns nil.
+	sets atomic.Pointer[scopedSets]
+	// onFailure is optional, observed on every rejected authentication.
+	onFailure func()
 	// deriveOnly is the ADR 0028 anti-spoofing mode: when set, a tenant-scoped
 	// token's tenant is derived from its binding and the client-supplied
 	// X-Scope-OrgID / tenant.id is ignored. Off by default (trust-header).
@@ -136,6 +154,16 @@ type Authenticator struct {
 	// default (the zero value), the safe default for a struct whose zero value
 	// must be the safest.
 	unauthenticatedWrites bool
+}
+
+// loadSets returns the currently published scopedSets. It never returns nil:
+// an unset pointer yields the shared empty value, so the zero-value
+// Authenticator works without special cases.
+func (a *Authenticator) loadSets() *scopedSets {
+	if s := a.sets.Load(); s != nil {
+		return s
+	}
+	return &emptyScopedSets
 }
 
 // SetTenantExemptPaths names HTTP paths that require a valid read token but do
@@ -209,6 +237,10 @@ func (a *Authenticator) UnauthenticatedWritesAllowed() bool {
 // token, an unknown token, or one bound to multiple tenants returns ("", false)
 // — those keep header-based tenant selection even in derive-only mode.
 func (a *Authenticator) TenantForBearer(h string) (string, bool) {
+	return a.tenantForBearer(h, a.loadSets())
+}
+
+func (a *Authenticator) tenantForBearer(h string, m *scopedSets) (string, bool) {
 	t := bearer(h)
 	if t == "" {
 		return "", false
@@ -220,8 +252,8 @@ func (a *Authenticator) TenantForBearer(h string) (string, bool) {
 	// A scoped token of any role (full/read/ingest) derives its tenant; collect
 	// the distinct tenants it is bound to and derive only when there is exactly one.
 	seen := map[string]struct{}{}
-	for _, m := range []map[string][][]byte{a.scoped, a.scopedRead, a.scopedIngest} {
-		for tid, toks := range m {
+	for _, mm := range []map[string][][]byte{m.full, m.read, m.ingest} {
+		for tid, toks := range mm {
 			if matchAny(got, toks) {
 				seen[tid] = struct{}{}
 			}
@@ -251,11 +283,15 @@ func (a *Authenticator) TenantForBearerGRPC(ctx context.Context) (string, bool) 
 // is derived from its binding (the client X-Scope-OrgID is ignored); otherwise it
 // falls back to the header. ok mirrors tenant.FromHTTP (false = invalid header).
 func (a *Authenticator) EffectiveTenantHTTP(r *http.Request) (string, bool) {
+	return a.effectiveTenantHTTP(r, a.loadSets())
+}
+
+func (a *Authenticator) effectiveTenantHTTP(r *http.Request, m *scopedSets) (string, bool) {
 	if id, ok := r.Context().Value(resolvedTenantKey).(string); ok && id != "" {
 		return id, true
 	}
-	if a.deriveOnly && a.Enabled() {
-		if id, ok := a.TenantForBearer(r.Header.Get("Authorization")); ok {
+	if a.deriveOnly && a.enabledWith(m) {
+		if id, ok := a.tenantForBearer(r.Header.Get("Authorization"), m); ok {
 			return id, true
 		}
 	}
@@ -276,7 +312,8 @@ func (a *Authenticator) EffectiveTenantHTTP(r *http.Request) (string, bool) {
 // that one falls back to the client-supplied header, which decides nothing here
 // — a caller must not widen its own scope by naming a tenant.
 func (a *Authenticator) MetricsScope(r *http.Request) (tenantID string, all bool) {
-	if !a.Enabled() {
+	m := a.loadSets()
+	if !a.enabledWith(m) {
 		return "", true
 	}
 	if id, ok := r.Context().Value(resolvedTenantKey).(string); ok && id != "" {
@@ -290,7 +327,7 @@ func (a *Authenticator) MetricsScope(r *http.Request) (tenantID string, all bool
 	if got := hashToken(t); matchAny(got, a.tokens) || matchAny(got, a.readTokens) {
 		return "", true
 	}
-	if id, ok := a.TenantForBearer(h); ok {
+	if id, ok := a.tenantForBearer(h, m); ok {
 		return id, false
 	}
 	return "", false
@@ -302,13 +339,23 @@ func (a *Authenticator) MetricsScope(r *http.Request) (tenantID string, all bool
 // that override is a spoofing channel. locked is false in trust-header mode or
 // for a global token; ok mirrors tenant.FromGRPC.
 func (a *Authenticator) EffectiveTenantGRPC(ctx context.Context) (id string, locked, ok bool) {
-	if a.deriveOnly && a.Enabled() {
-		if t, found := a.TenantForBearerGRPC(ctx); found {
+	m := a.loadSets()
+	if a.deriveOnly && a.enabledWith(m) {
+		if t, found := a.tenantForBearerGRPC(ctx, m); found {
 			return t, true, true
 		}
 	}
 	id, ok = tenant.FromGRPC(ctx)
 	return id, false, ok
+}
+
+func (a *Authenticator) tenantForBearerGRPC(ctx context.Context, m *scopedSets) (string, bool) {
+	md, _ := metadata.FromIncomingContext(ctx)
+	vals := md.Get("authorization")
+	if len(vals) == 0 {
+		return "", false
+	}
+	return a.tenantForBearer(vals[0], m)
 }
 
 // OnFailure registers fn to run on every rejected authentication, HTTP or
@@ -342,19 +389,44 @@ func NewWithRoles(both, readOnly, ingestOnly []string, scoped map[string][]strin
 	a.tokens = toBytes(both)
 	a.readTokens = toBytes(readOnly)
 	a.ingestTokens = toBytes(ingestOnly)
-	a.scoped = hashScopedMap(scoped)
+	a.sets.Store(&scopedSets{full: hashScopedMap(scoped)})
 	return a
 }
 
 // WithScopedRoleTokens adds per-tenant role-scoped tokens — read-only and
 // ingest-only — authorized only for their tenant and matching surface
-// (per-tenant RBAC, ADR 0028). Full-role tenant tokens stay in scoped. Returns a
+// (per-tenant RBAC, ADR 0028). Full-role tenant tokens stay in place. Returns a
 // for chaining; call before serving.
 func (a *Authenticator) WithScopedRoleTokens(read, ingest map[string][]string) *Authenticator {
-	a.scopedRead = hashScopedMap(read)
-	a.scopedIngest = hashScopedMap(ingest)
+	prev := a.loadSets()
+	a.sets.Store(&scopedSets{
+		full:   prev.full,
+		read:   hashScopedMap(read),
+		ingest: hashScopedMap(ingest),
+	})
 	return a
 }
+
+// ReloadScopedTokens replaces all three tenant-scoped token maps atomically, so
+// a request in flight never sees a mix of the old and new maps. It is safe for
+// concurrent use with serving requests. The swap must not change whether auth
+// is enabled — turning authentication on or off under live traffic is a restart
+// decision, not a reload — so when enabled-ness would differ nothing changes
+// and an error is returned.
+func (a *Authenticator) ReloadScopedTokens(full, read, ingest map[string][]string) error {
+	next := &scopedSets{
+		full:   hashScopedMap(full),
+		read:   hashScopedMap(read),
+		ingest: hashScopedMap(ingest),
+	}
+	if a.enabledWith(a.loadSets()) != a.enabledWith(next) {
+		return errReloadTogglesAuth
+	}
+	a.sets.Store(next)
+	return nil
+}
+
+var errReloadTogglesAuth = errors.New("token reload would turn authentication on or off: restart required")
 
 // hashScopedMap hashes a tenant -> tokens map into tenant -> token hashes,
 // dropping blanks. Returns nil when nothing is left (so Enabled stays accurate).
@@ -376,12 +448,12 @@ func hashScopedMap(m map[string][]string) map[string][][]byte {
 
 // scopedRoleSet returns the role-scoped token map that grants surface s — read
 // tokens for the read surface, ingest tokens for ingest. Full scoped tokens
-// (a.scoped) grant both surfaces and are checked separately.
-func (a *Authenticator) scopedRoleSet(s surface) map[string][][]byte {
+// (m.full) grant both surfaces and are checked separately.
+func scopedRoleSet(s surface, m *scopedSets) map[string][][]byte {
 	if s == surfaceIngest {
-		return a.scopedIngest
+		return m.ingest
 	}
-	return a.scopedRead
+	return m.read
 }
 
 func toBytes(toks []string) [][]byte {
@@ -410,14 +482,20 @@ func tokenPrincipal(h string) string {
 	return "token:" + hex.EncodeToString(hashToken(bearer(h))[:4])
 }
 
+// enabledWith reports whether the configuration represented by m — together
+// with the global token sets and the OIDC state — requires a credential.
+func (a *Authenticator) enabledWith(m *scopedSets) bool {
+	return len(a.tokens) > 0 || len(a.readTokens) > 0 || len(a.ingestTokens) > 0 ||
+		len(m.full) > 0 || len(m.read) > 0 || len(m.ingest) > 0 ||
+		a.oidc != nil || a.oidcDeclared
+}
+
 // Enabled reports whether any token or OIDC is configured (i.e. auth is
 // enforced). An OIDC-only deployment (no static tokens) still enforces auth —
 // from the moment it is DECLARED, not from the moment its verifier is built, so
 // a caller that asks before discovery is not told that nothing authenticates.
 func (a *Authenticator) Enabled() bool {
-	return len(a.tokens) > 0 || len(a.readTokens) > 0 || len(a.ingestTokens) > 0 ||
-		len(a.scoped) > 0 || len(a.scopedRead) > 0 || len(a.scopedIngest) > 0 ||
-		a.oidc != nil || a.oidcDeclared
+	return a.enabledWith(a.loadSets())
 }
 
 // matchAny reports, in constant time per candidate, whether token equals any of
@@ -443,18 +521,18 @@ func (a *Authenticator) roleSet(s surface) [][]byte {
 // valid reports whether token is accepted on the surface (authentication only):
 // a full token, or a role token matching the surface, or any tenant-scoped
 // token. Per-tenant authorization is allowedForTenant.
-func (a *Authenticator) valid(token string, s surface) bool {
+func (a *Authenticator) valid(token string, s surface, m *scopedSets) bool {
 	got := hashToken(token)
 	full := matchAny(got, a.tokens)
 	role := matchAny(got, a.roleSet(s))
 	scoped := false
-	for _, toks := range a.scoped {
+	for _, toks := range m.full {
 		if matchAny(got, toks) {
 			scoped = true
 		}
 	}
 	// A role-scoped token grants only its matching surface.
-	for _, toks := range a.scopedRoleSet(s) {
+	for _, toks := range scopedRoleSet(s, m) {
 		if matchAny(got, toks) {
 			scoped = true
 		}
@@ -466,11 +544,11 @@ func (a *Authenticator) valid(token string, s surface) bool {
 // global tokens (full, or role matching the surface) may touch every tenant; a
 // full scoped token only its own; a role-scoped token only its own and only on
 // the matching surface (per-tenant RBAC, ADR 0028).
-func (a *Authenticator) allowedForTenant(token, tenantID string, s surface) bool {
+func (a *Authenticator) allowedForTenant(token, tenantID string, s surface, m *scopedSets) bool {
 	got := hashToken(token)
 	full := matchAny(got, a.tokens)
 	role := matchAny(got, a.roleSet(s))
-	scoped := matchAny(got, a.scoped[tenantID]) || matchAny(got, a.scopedRoleSet(s)[tenantID])
+	scoped := matchAny(got, m.full[tenantID]) || matchAny(got, scopedRoleSet(s, m)[tenantID])
 	return full || role || scoped
 }
 
@@ -484,19 +562,19 @@ func bearer(h string) string {
 	return strings.TrimSpace(h[len(prefix):])
 }
 
-func (a *Authenticator) validHeader(h string, s surface) bool {
+func (a *Authenticator) validHeader(h string, s surface, m *scopedSets) bool {
 	t := bearer(h)
-	return t != "" && a.valid(t, s)
+	return t != "" && a.valid(t, s, m)
 }
 
-func (a *Authenticator) headerAllowedForTenant(h, tenantID string, s surface) bool {
+func (a *Authenticator) headerAllowedForTenant(h, tenantID string, s surface, m *scopedSets) bool {
 	t := bearer(h)
-	return t != "" && a.allowedForTenant(t, tenantID, s)
+	return t != "" && a.allowedForTenant(t, tenantID, s, m)
 }
 
 // canWriteHeader reports whether the bearer is a write-capable token: a full
 // global token or any tenant-scoped token. Read-only tokens are not.
-func (a *Authenticator) canWriteHeader(h string) bool {
+func (a *Authenticator) canWriteHeader(h string, m *scopedSets) bool {
 	t := bearer(h)
 	if t == "" {
 		return false
@@ -505,7 +583,7 @@ func (a *Authenticator) canWriteHeader(h string) bool {
 	if matchAny(got, a.tokens) {
 		return true
 	}
-	for _, toks := range a.scoped {
+	for _, toks := range m.full {
 		if matchAny(got, toks) {
 			return true
 		}
@@ -521,7 +599,8 @@ func (a *Authenticator) AllowedForTenantGRPC(ctx context.Context, tenantID strin
 	if a.ingestMTLSOnly {
 		return true // ingest is gated by mutual TLS, not a per-tenant bearer (#262)
 	}
-	if !a.Enabled() {
+	m := a.loadSets()
+	if !a.enabledWith(m) {
 		return true
 	}
 	md, _ := metadata.FromIncomingContext(ctx)
@@ -529,7 +608,7 @@ func (a *Authenticator) AllowedForTenantGRPC(ctx context.Context, tenantID strin
 	if len(vals) == 0 {
 		return false
 	}
-	return a.headerAllowedForTenant(vals[0], tenantID, surfaceIngest)
+	return a.headerAllowedForTenant(vals[0], tenantID, surfaceIngest, m)
 }
 
 // HTTPMiddleware wraps next, requiring a valid read-surface bearer token on every
@@ -550,21 +629,22 @@ func (a *Authenticator) HTTPMiddleware(public map[string]bool) func(http.Handler
 				next.ServeHTTP(w, r)
 				return
 			}
+			m := a.loadSets()
 			h := r.Header.Get("Authorization")
-			if a.validHeader(h, surfaceRead) {
+			if a.validHeader(h, surfaceRead, m) {
 				// Static token authenticated for reads; now authorize it for the
 				// request's EFFECTIVE tenant — in derive-only that is the scoped
 				// token's own tenant (so a scoped token is always allowed for it),
 				// not the client header. An invalid tenant header passes through —
 				// the tenant router rejects it with a 400 and better context.
-				if id, ok := a.EffectiveTenantHTTP(r); ok && !a.tenantExempt[r.URL.Path] && !a.allowedForTenant(bearer(h), id, surfaceRead) {
+				if id, ok := a.effectiveTenantHTTP(r, m); ok && !a.tenantExempt[r.URL.Path] && !a.allowedForTenant(bearer(h), id, surfaceRead, m) {
 					a.failed()
 					http.Error(w, "token not authorized for this tenant", http.StatusForbidden)
 					return
 				}
 				// Tag the request so write handlers (annotate) can reject a
 				// read-only token: full/scoped tokens may write, read-only cannot.
-				ctx := WithWritable(r.Context(), a.canWriteHeader(h))
+				ctx := WithWritable(r.Context(), a.canWriteHeader(h, m))
 				ctx = WithPrincipal(ctx, tokenPrincipal(h))
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
@@ -626,12 +706,13 @@ func (a *Authenticator) checkContext(ctx context.Context) error {
 		// this surface, decoupled from the read surfaces' tokens (#262).
 		return nil
 	}
-	if !a.Enabled() {
+	m := a.loadSets()
+	if !a.enabledWith(m) {
 		return nil
 	}
 	md, _ := metadata.FromIncomingContext(ctx)
 	vals := md.Get("authorization")
-	if len(vals) == 0 || !a.validHeader(vals[0], surfaceIngest) {
+	if len(vals) == 0 || !a.validHeader(vals[0], surfaceIngest, m) {
 		a.failed()
 		return status.Error(codes.Unauthenticated, "missing or invalid bearer token")
 	}
