@@ -41,6 +41,7 @@ type Storer interface {
 	SnapshotSeq() uint64
 	SnapshotsWritten() uint64
 	PruneHorizon() time.Time
+	AppendedByChangeType() map[string]uint64
 }
 
 // AnonymousReferenceCounter supplies the total of live entities carrying at
@@ -87,6 +88,7 @@ type Collector struct {
 	vendorComparable *prometheus.Desc
 	vendorRetired    *prometheus.Desc
 	anonEntities     *prometheus.Desc
+	appended         *prometheus.Desc
 }
 
 // NewCollector builds a collector over the graph and store, stamping build info
@@ -121,6 +123,9 @@ func NewCollector(g Grapher, s Storer, version, commit string) *Collector {
 			"Total approximate bytes removed by retention pruning.", nil, nil),
 		snapshotSeq: prometheus.NewDesc("toise_snapshot_seq",
 			"Reference sequence of the last projection snapshot written (0 if none).", nil, nil),
+		appended: prometheus.NewDesc("toise_events_appended_total",
+			"Events appended to the log since process start, by change type. Resets at restart.",
+			[]string{"change_type"}, nil),
 		snapshots: prometheus.NewDesc("toise_snapshots_written_total",
 			"Total projection snapshots written.", nil, nil),
 		serialOverlaps: prometheus.NewDesc("toise_identity_serial_overlaps",
@@ -183,6 +188,7 @@ func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.entitiesByType
 	ch <- c.relations
 	ch <- c.events
+	ch <- c.appended
 	ch <- c.diskBytes
 	ch <- c.prunedEvents
 	ch <- c.prunedBytes
@@ -204,6 +210,9 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	ch <- prometheus.MustNewConstMetric(c.entities, prometheus.GaugeValue, float64(c.graph.EntityCount()))
 	ch <- prometheus.MustNewConstMetric(c.relations, prometheus.GaugeValue, float64(c.graph.RelationCount()))
 	ch <- prometheus.MustNewConstMetric(c.events, prometheus.CounterValue, float64(c.store.Sequence()))
+	for changeType, n := range c.store.AppendedByChangeType() {
+		ch <- prometheus.MustNewConstMetric(c.appended, prometheus.CounterValue, float64(n), changeType)
+	}
 	ch <- prometheus.MustNewConstMetric(c.diskBytes, prometheus.GaugeValue, float64(c.store.DiskUsage()))
 	ch <- prometheus.MustNewConstMetric(c.prunedEvents, prometheus.CounterValue, float64(c.store.PrunedEvents()))
 	ch <- prometheus.MustNewConstMetric(c.prunedBytes, prometheus.CounterValue, float64(c.store.PrunedBytes()))
